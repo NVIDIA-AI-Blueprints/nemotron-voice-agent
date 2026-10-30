@@ -6,10 +6,10 @@
 * ``Frontend``: the cascade's own model, which the talker, the writer and the normalizer call. Each call states what it
   is in a :class:`CallSpec` (its role, the actions its decision may take, its schema hint), and gets one
   ``TalkerDecision``.
-* ``Backend``, the thinker, is in the delegation core (``delegation_core.backend.providers``).
+* ``Backend``, the backend model provider, is in the delegation core (``delegation_core.backend.providers``).
 
 Adding a provider is one subclass with its ``name``, one entry in ``FRONTENDS`` (``models/__init__.py``), and the name
-in ``config.yaml``. Prompts, retries, the talker's floor and the guards live outside these classes, so every provider
+in ``config.yaml``. Prompts, retries and the talker's floor live outside these classes, so every provider
 gets them unchanged. Every call's output limit is the slot's ``max_tokens``, so the settings decide it, not the code.
 """
 
@@ -26,7 +26,7 @@ from examples.frontend_backend_live.models.retry import with_retries
 from ..config_manager.schema import ModelEndpoint, ReliabilityConfig
 from .decision import TalkerDecision
 
-# A call's output limit when the slot's settings give none: the chat provider's default.
+# A call's output limit when the slot's settings give none.
 DEFAULT_MAX_OUTPUT_TOKENS = 512
 
 

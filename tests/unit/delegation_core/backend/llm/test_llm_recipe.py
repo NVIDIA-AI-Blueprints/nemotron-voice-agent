@@ -7,10 +7,9 @@
 
 import unittest
 
-from delegation_core.backend.providers import BACKENDS, Backend
+from delegation_core.backend.providers import Backend
 from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
 from delegation_core.backend.providers.openai_responses import OpenAIResponsesBackend
-from delegation_core.tables import pick
 from tests.unit.contracts.backend import ProviderContract, a_round, call_events, message_events
 from tests.unit.delegation_core.backend.llm.doubles import (
     ENDPOINT,
@@ -58,21 +57,6 @@ class OpenAIResponsesProviderTests(ProviderContract, unittest.IsolatedAsyncioTes
 class RecipeProviderTests(ProviderContract, unittest.IsolatedAsyncioTestCase):
     def make_provider(self, script):
         return EchoBackend(ENDPOINT, LIMITS, calls=script == "call")
-
-
-class ProviderTableTests(unittest.TestCase):
-    def test_the_table_is_a_plain_mapping_of_each_provider_by_its_name(self):
-        self.assertEqual(
-            dict(BACKENDS), {"chat-completions": ChatCompletionsBackend, "openai-responses": OpenAIResponsesBackend}
-        )
-        for name, provider in BACKENDS.items():
-            self.assertEqual(provider.name, name)
-
-    def test_a_provider_added_by_the_recipe_is_picked_by_its_name(self):
-        table = {**BACKENDS, EchoBackend.name: EchoBackend}
-        self.assertIs(pick(table, "echo", "backend provider"), EchoBackend)
-        with self.assertRaisesRegex(ValueError, "Unknown backend provider 'ech'; known: chat-completions, echo"):
-            pick(table, "ech", "backend provider")
 
 
 if __name__ == "__main__":

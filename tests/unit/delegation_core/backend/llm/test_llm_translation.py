@@ -49,19 +49,19 @@ class ToolChoiceTests(unittest.TestCase):
 
 
 class CutCallTests(unittest.TestCase):
-    def test_a_call_in_a_reply_cut_by_the_token_limit_is_never_emitted(self):
-        events = run(
-            [chunk("Booking"), chunk(tool_calls=[fragment(0, "c1", "book", '{"seat": "1')]), chunk(finish="length")]
-        )
-        self.assertEqual(items(events, "function_call"), [])
-        self.assertEqual(events[-1]["type"], "response.incomplete")
-        self.assertEqual(events[-1]["response"]["incomplete_details"], {"reason": "max_output_tokens"})
-        self.assertEqual(events[-1]["response"]["output"][0]["type"], "message")
-
-    def test_a_filtered_reply_emits_no_call_either(self):
-        events = run([chunk(tool_calls=[fragment(0, "c1", "book", "{}")]), chunk(finish="content_filter")])
-        self.assertEqual(items(events, "function_call"), [])
-        self.assertEqual(events[-1]["response"]["incomplete_details"], {"reason": "content_filter"})
+    def test_a_call_in_a_reply_cut_short_by_the_token_limit_or_a_filter_is_never_emitted(self):
+        cases = {
+            "length": ('{"seat": "1', "max_output_tokens"),  # the call itself was cut
+            "content_filter": ('{"seat": "1A"}', "content_filter"),  # a whole call, never emitted either
+        }
+        for finish, (arguments, reason) in cases.items():
+            with self.subTest(finish):
+                call = chunk(tool_calls=[fragment(0, "c1", "book", arguments)])
+                events = run([chunk("Booking"), call, chunk(finish=finish)])
+                self.assertEqual(items(events, "function_call"), [])
+                self.assertEqual(events[-1]["type"], "response.incomplete")
+                self.assertEqual(events[-1]["response"]["incomplete_details"], {"reason": reason})
+                self.assertEqual(events[-1]["response"]["output"][0]["type"], "message")
 
     def test_a_stream_that_ends_inside_a_call_is_broken(self):
         translator = ChatResponseTranslator("test/model")
@@ -70,8 +70,13 @@ class CutCallTests(unittest.TestCase):
         with self.assertRaises(BrokenStreamError):
             translator.finish()
 
-    def test_a_whole_call_is_emitted(self):
-        events = run([chunk(tool_calls=[fragment(0, "c1", "book", '{"seat": "1A"}')]), chunk(finish="tool_calls")])
+    def test_with_one_call_per_reply_a_cut_second_call_never_costs_the_whole_first(self):
+        chunks = [
+            chunk(tool_calls=[fragment(0, "c1", "book", '{"seat": "1A"}')]),
+            chunk(tool_calls=[fragment(1, "c2", "pay", '{"card": "4')]),
+            chunk(finish="length"),  # after the reply ended with its first call: it changes nothing
+        ]
+        events = run(chunks, single_call=True)
         [call] = items(events, "function_call")
         self.assertEqual((call["name"], json.loads(call["arguments"])), ("book", {"seat": "1A"}))
         self.assertEqual(events[-1]["type"], "response.completed")

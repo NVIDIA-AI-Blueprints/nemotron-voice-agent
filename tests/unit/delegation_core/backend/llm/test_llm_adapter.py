@@ -9,14 +9,12 @@ import asyncio
 import json
 import unittest
 
-from delegation_core.backend.adapters import ADAPTERS
 from delegation_core.backend.conductors import StartEach, SteerOpenWork
 from delegation_core.backend.llm import LlmAdapter, LlmRun, LlmSettings, LlmSource
 from delegation_core.backend.port import OneShotSource
 from delegation_core.backend.providers import ChatCompletionsBackend, OpenAIResponsesBackend
 from delegation_core.backend.tools import CafeTools
 from delegation_core.config import ModelEndpoint
-from delegation_core.tables import pick
 from tests.unit.contracts.backend import BackendAdapterContract, ScriptedBackend, call_round, check_events, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     ENDPOINT,
@@ -70,10 +68,7 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
     def build(self, block, tools=lambda: []):
         return LlmSource.from_settings(block, endpoints=lookup, tools=tools, vocabulary=None)
 
-    def test_the_adapter_table_loads_the_source(self):
-        self.assertIs(pick(ADAPTERS, "llm", "backend adapter")(), LlmSource)
-
-    def test_the_frozen_block_parses_and_its_names_become_classes(self):
+    def test_the_block_parses_and_its_names_become_classes(self):
         block = {
             "provider": "openai-responses",
             "conductor": "start_each",
@@ -83,7 +78,6 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             "idle_timeout_seconds": 10.5,
             "server_tool_timeout_seconds": 30,
             "unlisted_models": "fallback",
-            "round_cap_note": "Answer now.",
         }
         settings = self.build(block).settings
         self.assertIs(settings.provider, OpenAIResponsesBackend)
@@ -105,7 +99,6 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             "a boolean count": ({"provider_retries": True}, "whole number"),
             "no rounds": ({"max_tool_rounds": 0}, "at least 1"),
             "a negative wait": ({"idle_timeout_seconds": -1}, "positive"),
-            "an empty note": ({"round_cap_note": " "}, "non-empty"),
             "not a mapping": ("fast", "mapping"),
         }
         for name, (block, message) in cases.items():
@@ -145,7 +138,6 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
     def test_the_adapter_gives_its_rule_and_runs(self):
         session = source(ScriptedBackend([text_round("Done.")]), settings=LlmSettings(conductor=StartEach)).new()
         self.assertIsInstance(session, LlmAdapter)
-        self.assertIsInstance(session.conductor(), StartEach)
         self.assertIsInstance(session.conductor(), StartEach)
         self.assertIsInstance(adapter(ScriptedBackend([])).conductor(), SteerOpenWork)
         self.assertEqual(LlmAdapter.max_running, 1)

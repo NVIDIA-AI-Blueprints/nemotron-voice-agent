@@ -14,12 +14,19 @@ import httpx
 from loguru import logger
 from openai import APIConnectionError, InternalServerError, RateLimitError
 
+
+class StreamErrorEvent(Exception):
+    """A round's stream opened with an error event and no HTTP status, such as an overloaded server's."""
+
+
 # Errors that can clear up on their own: connection failures and client timeouts (APITimeoutError is an
-# APIConnectionError), 429, 5xx, and httpx's network and protocol errors; any other 4xx would fail again.
+# APIConnectionError), 429, 5xx, an error event that opens a stream, and httpx's network and protocol errors; any other
+# 4xx would fail again.
 TRANSIENT: tuple[type[BaseException], ...] = (
     APIConnectionError,
     RateLimitError,
     InternalServerError,
+    StreamErrorEvent,
     httpx.TimeoutException,
     httpx.NetworkError,
     httpx.RemoteProtocolError,

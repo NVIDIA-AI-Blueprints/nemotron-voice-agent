@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from delegation_core.backend.conductors import SteerOpenWork
 from delegation_core.backend.llm import LlmAdapter
 from delegation_core.backend.port import BackendRun, TaskContext
 
@@ -32,12 +33,29 @@ class AgentAdapter:
         self.workers: LlmAdapter = source.workers.new()
         self._conductor: LlmConductor | None = None
 
-    def conductor(self) -> LlmConductor:
-        """The session's conductor, with its own memory; the IM asks once per session, and gets the same one again."""
+    @staticmethod
+    def rule(max_running: int) -> type[SteerOpenWork] | None:
+        """The rule that places requests instead of the model conductor (``None``: the model conductor places them).
+
+        With one task at a time (``max_running`` 1) it is the steer rule, as the backend LLM's: no model call places a
+        request.
+        """
+        return SteerOpenWork if max_running == 1 else None
+
+    def conductor(self) -> LlmConductor | SteerOpenWork:
+        """The session's conductor, with its own memory; the IM asks once per session, and gets the same one again.
+
+        Where a rule places requests (:meth:`rule`), it is that rule, which holds no state.
+        """
+        rule = self.rule(self.max_running)
+        if rule is not None:
+            return rule()
         if self._conductor is None:
             source = self.source
             settings, model = source.settings.conductor, source.conductor_endpoint.model
-            self._conductor = LlmConductor(source.conductor_provider, source.vocabulary, settings, model)
+            self._conductor = LlmConductor(
+                source.conductor_provider, source.vocabulary, settings, model, self.max_running
+            )
         return self._conductor
 
     def start(self, task: TaskContext) -> BackendRun:

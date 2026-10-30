@@ -35,7 +35,7 @@ IceServers = Callable[[Request], list[dict]]
 
 
 class CoreClient:
-    """The gateway's one delegation core client: the root's ``core`` hook runs once, on first use.
+    """The gateway's one delegation core client: the root's ``core`` hook builds it on first use.
 
     It is a ``ResponsesClient`` a session's server delegation gets at once; the core is built when the first
     ``responses`` session or console round uses it. Concurrent first uses wait for the one build; a failed build is
@@ -44,7 +44,7 @@ class CoreClient:
     """
 
     def __init__(self, hook: CoreHook):
-        """Build the client with the root's ``hook``, which returns the core's client (or an awaitable of it)."""
+        """Keep the root's ``hook``, which returns the core's client (or an awaitable of it); nothing is built yet."""
         self.hook = hook
         self._client: ResponsesClient | None = None
         self._building: asyncio.Future | None = None
@@ -133,8 +133,8 @@ class LiveGateway:
             factory: Builds each session's frontend adapter.
             settings: The operator settings; read from the environment when omitted.
             core: The root's hook that builds the one client of the delegation core every ``responses`` session and
-                every console round uses; a coroutine function or a plain one, run once, on first use
-                (:class:`CoreClient`). Without it, ``responses`` sessions and console rounds are refused.
+                every console round uses; a coroutine function or a plain one, run on first use (:class:`CoreClient`).
+                Without it, ``responses`` sessions and console rounds are refused.
             ice_servers: The ICE servers (TURN included) of each WebRTC session's peer, for the creating request.
         """
         self.factory = factory
@@ -215,6 +215,7 @@ class LiveGateway:
                     core=self.core,
                     codec=codec,
                     max_session_seconds=self.settings.max_session_seconds,
+                    max_appends_per_minute=self.settings.max_appends_per_minute,
                     on_closed=self._on_closed,
                 )
             except BaseException:  # no core for a responses session: the adapter built for it is released

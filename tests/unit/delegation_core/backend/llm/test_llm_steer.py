@@ -105,7 +105,7 @@ class SteerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(landing["instructions"], "NEW instructions.")
         self.assertIn("set_decaf", [tool.get("name") for tool in landing["tools"]])
 
-    async def test_one_restart_per_work_the_next_steering_waits_for_the_round_to_end(self):
+    async def test_one_restart_per_run_the_next_steering_waits_and_an_answer_leaves_it_with_the_im(self):
         first_gate, first = gated("One latte.")
         second_gate, second = gated("Two lattes.", "resp_2")
         provider = ScriptedProvider(first, second, text_round("Two oat lattes.", "resp_3"))
@@ -124,11 +124,11 @@ class SteerTests(unittest.IsolatedAsyncioTestCase):
         rest = await read_rest(events, task)
         self.assertEqual(
             [(m["content"][0]["text"], m["phase"]) for m in items_of(rest, "message")],
-            [("Two lattes.", "commentary"), ("Two oat lattes.", "final_answer")],
+            [("Two lattes.", "final_answer")],
         )
-        self.assertEqual(task.settled, [("steer_1", "applied"), ("steer_2", "applied")])
-        self.assertEqual(provider.opened, 3)
-        self.assertEqual((count(provider.payloads[2], TWO), count(provider.payloads[2], OAT)), (1, 1))
+        self.assertEqual(task.settled, [("steer_1", "applied")])  # steer_2 waits: the IM starts it next
+        self.assertEqual(provider.opened, 2)
+        self.assertEqual((count(provider.payloads[1], TWO), count(provider.payloads[1], OAT)), (1, 0))
 
     async def test_steering_after_a_call_lands_at_the_next_round_and_the_call_runs(self):
         provider = ScriptedProvider(call_round("lookup", {}), text_round("Done.", "resp_2"))
@@ -148,25 +148,9 @@ class SteerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(count(provider.payloads[1], TWO), 1)
         self.assertNotIn("response.incomplete", kinds(rest))
 
-    async def test_steering_while_waiting_for_the_app_lands_with_its_outputs(self):
-        provider = ScriptedProvider(call_round("get_menu", {}), text_round("Done.", "resp_2"))
-        task = IMTask()
-        run = adapter(provider).start(task)
-        async for event in run.events():
-            task.see(event)
-        task.steer_with(TWO)
-        run.steer()
-        task.give_outputs([{"type": "function_call_output", "call_id": "call_1", "output": "{}"}])
-        await run.resume()
-        await read_rest(run.events(), task)
-        sent = provider.payloads[1]["input"]
-        self.assertEqual(
-            [item.get("type") or "message" for item in sent[-3:]], ["function_call", "function_call_output", "message"]
-        )
-        self.assertEqual((sent[-1], task.settled), (TWO[0], [("steer_1", "applied")]))
-
-    async def test_every_batch_waiting_at_a_safe_point_lands_in_the_next_round_together(self):
-        # Two requests joined while the work waited for the app: both reach the next round, not one round each.
+    async def test_every_batch_waiting_for_the_app_lands_after_its_outputs_in_the_next_round_together(self):
+        # Two requests joined while the work waited for the app: both reach the next round, after the app's outputs,
+        # not one round each.
         provider = ScriptedProvider(call_round("get_menu", {}), text_round("Two, with oat milk.", "resp_2"))
         task = IMTask()
         run = adapter(provider).start(task)
@@ -179,7 +163,9 @@ class SteerTests(unittest.IsolatedAsyncioTestCase):
         await run.resume()
         await read_rest(run.events(), task)
         self.assertEqual(len(provider.payloads), 2)
-        self.assertEqual(provider.payloads[1]["input"][-2:], [TWO[0], OAT[0]])
+        sent = provider.payloads[1]["input"]
+        self.assertEqual([item.get("type") for item in sent[-4:-2]], ["function_call", "function_call_output"])
+        self.assertEqual(sent[-2:], [TWO[0], OAT[0]])
         self.assertEqual(task.settled, [("steer_1", "applied"), ("steer_2", "applied")])
 
     async def test_two_pulls_take_a_batch_once_and_a_retry_does_not_send_it_twice(self):

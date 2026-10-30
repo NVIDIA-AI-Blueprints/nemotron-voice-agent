@@ -5,8 +5,9 @@
 #
 # The agent's conductor is a model: for each request it calls one of the control tools (texts.control_tools) to start
 # work (one task, or several independent tasks that run in parallel), steer open work or one task of it, cancel it, or
-# answer a status question from the work records; the IM carries each decision out. When the conductor's call fails,
-# times out or leaves a request unplaced, the backend LLM's steer rule places it: it joins the newest open Work, or
+# answer a status question from the work records; the IM carries each decision out. A request that comes while no Work
+# is open starts one with no conductor call (backend.llm-agent.conductor.when_idle: start). When the conductor's call
+# fails, times out or leaves a request unplaced, the IM's steer rule places it: it joins the newest open Work, or
 # starts one when none is open. The workers are the backend LLM's runs, up to backend.llm-agent.max_running tasks at
 # once. Every key of backend.llm-agent has its default in delegation_core/backend/agent/settings.py; core.yaml lists
 # the ones this example sets.

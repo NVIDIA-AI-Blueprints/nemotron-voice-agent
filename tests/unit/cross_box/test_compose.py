@@ -40,16 +40,12 @@ class LiveRecipeTests(unittest.TestCase):
             if compose_default(environment.get("EXAMPLE_SELECTION", "")) == LIVE_EXAMPLE
         }
 
-    def test_the_live_recipes_are_the_three_profiles(self):
+    def test_only_the_three_live_recipes_set_live_enabled_and_they_default_it_to_true(self):
         self.assertEqual(self.live, LIVE_RECIPES)
-
-    def test_each_live_recipe_defaults_live_enabled_to_true(self):
         for name in sorted(self.live):
             with self.subTest(service=name):
                 self.assertEqual(self.environments[name].get("LIVE_ENABLED"), DEFAULT_ON)
                 self.assertEqual(compose_default(self.environments[name]["LIVE_ENABLED"]), "true")
-
-    def test_no_other_recipe_sets_live_enabled(self):
         others = {name for name, environment in self.environments.items() if "LIVE_ENABLED" in environment}
         self.assertEqual(others - self.live, set())
 

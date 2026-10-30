@@ -22,6 +22,7 @@ import asyncio
 import json
 from collections import deque
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from delegation_core.backend.port import (
@@ -47,8 +48,11 @@ from delegation_core.backend.port import (
     message_phase,
 )
 from delegation_core.backend.providers import Backend, ProviderLimits
-from delegation_core.config import ModelEndpoint
+from delegation_core.config import CoreSettings, ModelEndpoint
 from tests.unit.contracts.base import ContractCase, collect
+
+# The core's texts as core.yaml words them (TaskContext.texts): a run's error outputs, not-run outputs and notes.
+TEXTS = CoreSettings.load(Path(__file__).resolve().parents[3] / "src/examples/frontend_backend_live/core.yaml").texts
 
 # ----------------------------------------------------------------------------------------------- the event rules
 
@@ -202,7 +206,7 @@ class ScriptedBackend(Backend):
 class NoTools:
     """A tool source with no tools: what a task gets when the IM offers no work tool."""
 
-    label = "voiceclaw"
+    label = "delegation_core"
 
     def tools(self) -> list[dict]:
         return []
@@ -214,8 +218,9 @@ class NoTools:
 class FakeTaskContext:
     """A ``TaskContext`` for an adapter's tests: it serves a request and a history, and records every report.
 
-    The app's functions are those the request declares (``declared``); every other call is the backend's. The test
-    hands the app's outputs over with :meth:`give_outputs` and steering with :meth:`steer_with`.
+    The app's functions are those the request declares (``declared``); every other call is the backend's, and a call it
+    refuses gets ``texts.not_run_output``. Its texts are core.yaml's. The test hands the app's outputs over with
+    :meth:`give_outputs` and steering with :meth:`steer_with`.
     """
 
     def __init__(
@@ -229,6 +234,7 @@ class FakeTaskContext:
         task_id: str = "W1.1",
     ):
         self.work_id, self.task_id = work_id, task_id
+        self.texts = TEXTS
         self.instructions, self.declared = instructions, list(declared)
         self.items = list(history or [{"type": "message", "role": "user", "content": "Do the task."}])
         self.work_tools = tools or NoTools()
@@ -280,6 +286,9 @@ class FakeTaskContext:
         names = {tool.get("name") for tool in self.declared}
         return "app" if call.get("name") in names else "backend"
 
+    def refusal(self, call_id: str) -> str:
+        return self.texts.not_run_output
+
     def tool_started(self, call: dict, source: str) -> None:
         self.started.append((call.get("call_id", ""), source))
         self.order.append(f"started:{call.get('call_id')}")
@@ -329,8 +338,8 @@ class BackendAdapterContract(ContractCase):
     * ``release()``: let the ``slow`` round go on;
     * ``sent_instructions() -> list[str]``: the instructions its backend was sent, every model call.
 
-    The harness binds it to a real runtime (Hermes over ACP, under its own test marker) whose model endpoint is scripted
-    for each scenario: there is no fake ACP agent.
+    The harness binds it to a real runtime (Hermes over ACP, in ``test_harness_real_hermes.py``) whose model endpoint
+    is scripted for each scenario.
     """
 
     def make_adapter(self, scenario: str) -> BackendAdapter:
@@ -432,8 +441,8 @@ class BackendAdapterContract(ContractCase):
         self.assertEqual(sum(e["type"] == "response.created" for e in events), 1)
 
     async def test_the_task_reads_the_composed_instructions(self):
-        await self.run_task("answer", self.task(instructions="COMPOSED-INSTRUCTIONS v2 note"))
-        self.assertIn("COMPOSED-INSTRUCTIONS v2 note", self.sent_instructions())
+        await self.run_task("answer", self.task(instructions="COMPOSED-INSTRUCTIONS voice note"))
+        self.assertIn("COMPOSED-INSTRUCTIONS voice note", self.sent_instructions())
 
     async def test_the_adapter_offers_a_conductor_and_a_run_limit(self):
         adapter = self.make_adapter("answer")

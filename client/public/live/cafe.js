@@ -142,7 +142,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * One cart and its orders, in this page (tools.py's `CafeTools`). No real order is ever placed. `latency`: the delay of
- * each tool's call, in ms (tests pass none); `now()`: the clock of an order's `placed_at`.
+ * each tool's call, in ms, by tool name (a tool it leaves out has none); `now()`: the clock of an order's
+ * `placed_at`.
  */
 export class CafeTools {
   constructor({ latency = LATENCY_MS, now = () => new Date() } = {}) {
@@ -260,7 +261,6 @@ export class CafeTools {
         cart,
         total: cart.total,
         confirmation_summary: cart.lines.map((x) => `${x.quantity} ${x.name}`).join(", "),
-        next_step: "Read back the order and ask the user to confirm.",
       };
     }
     this.orderSeq += 1;

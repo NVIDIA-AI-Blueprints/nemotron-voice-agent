@@ -7,10 +7,11 @@
 
 import asyncio
 
+from examples.frontend_backend_live.cascade.heard_log import Heard
 from examples.frontend_backend_live.cascade.ports import ReadyResult
-from examples.frontend_backend_live.cascade.utterances import LineKind, Outcome
+from examples.frontend_backend_live.cascade.utterances import Outcome
 from examples.frontend_backend_live.models.decision import TalkerDecision
-from tests.unit.frontend_backend_live.cascade.doubles import Call, settle
+from tests.unit.frontend_backend_live.cascade.doubles import PROMPTS, Call, settle
 
 
 class PlayoutCall(Call):
@@ -19,7 +20,7 @@ class PlayoutCall(Call):
         self.playout = self.session.playout
 
     def agent_lines(self):
-        return [entry.text for entry in self.session.heard_log.entries if entry.kind.value == "Agent"]
+        return [entry.text for entry in self.session.heard_log.entries if entry.kind == Heard.AGENT]
 
 
 class OutcomeTests(PlayoutCall):
@@ -41,8 +42,8 @@ class OutcomeTests(PlayoutCall):
         self.playout.started()
         self.playout.played("Let me pull up")
         self.playout.cut()
-        self.assertEqual(self.memory()[-1], ("assistant", "Let me pull up [cut off]"))
-        self.assertEqual(self.agent_lines(), ["Let me pull up [cut off]"])  # what the next delegation carries
+        self.assertEqual(self.memory()[-1], ("assistant", "Let me pull up" + PROMPTS.cut_mark))
+        self.assertEqual(self.agent_lines(), ["Let me pull up" + PROMPTS.cut_mark])  # what the next delegation carries
         self.assertEqual(self.session.utterances.told_text("item_1"), "Let me pull up")
 
     async def test_a_line_that_started_with_no_words_reported_stays_cut_whole(self):
@@ -54,8 +55,8 @@ class OutcomeTests(PlayoutCall):
         self.playout.started()
         self.playout.cut()
         self.assertEqual(self.session.utterances.recent[-1].outcome, Outcome.CUT)
-        self.assertEqual(self.memory()[-1], ("assistant", "We open at seven. [cut off]"))
-        self.assertEqual(self.agent_lines(), ["We open at seven. [cut off]"])
+        self.assertEqual(self.memory()[-1], ("assistant", "We open at seven." + PROMPTS.cut_mark))
+        self.assertEqual(self.agent_lines(), ["We open at seven." + PROMPTS.cut_mark])
         self.assertFalse(await self.session.utterances.resume())  # where it was cut is not known: nothing is repeated
 
     async def test_a_line_nobody_heard_leaves_the_records(self):
@@ -72,13 +73,13 @@ class OutcomeTests(PlayoutCall):
         await self.playout_call()
         self.session.presenter.ready(ReadyResult("D1", "m1", "Latte added."))
         await self.said(1)
-        self.assertIn(("user", "Backend result (reference data): Latte added."), self.memory())
+        self.assertIn(("user", PROMPTS.result_label + "Latte added."), self.memory())
         self.session.interrupted()
         self.playout.cut()
-        self.assertNotIn(("user", "Backend result (reference data): Latte added."), self.memory())
+        self.assertNotIn(("user", PROMPTS.result_label + "Latte added."), self.memory())
         await self.said(2)
         self.assertEqual(self.spoken, ["Latte added.", "Latte added."])
-        self.assertEqual(self.memory().count(("user", "Backend result (reference data): Latte added.")), 1)
+        self.assertEqual(self.memory().count(("user", PROMPTS.result_label + "Latte added.")), 1)
 
     async def test_a_cut_settles_only_the_lines_handed_before_the_interruption(self):
         await self.playout_call([TalkerDecision("speak", "First line."), TalkerDecision("speak", "Second line.")])
@@ -131,13 +132,3 @@ class SilenceTests(PlayoutCall):
         await asyncio.sleep(0.15)  # the second never starts either: not heard, and not said a third time
         self.assertEqual(len(self.spoken), 2)
         self.assertNotIn(("assistant", "Hello there."), self.memory())
-
-    async def test_a_silent_result_line_is_said_once_more_then_requeued(self):
-        await self.playout_call()
-        self.session.presenter.ready(ReadyResult("D1", "m1", "Latte added."))
-        await self.said(1)
-        self.playout.silent()
-        await self.said(2)
-        retried = self.session.utterances.recent[-1]
-        self.assertTrue(retried.retried)
-        self.assertEqual(retried.kind, LineKind.RESULT)

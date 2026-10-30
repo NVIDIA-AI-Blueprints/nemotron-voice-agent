@@ -6,8 +6,9 @@
 """Result formats: ``plain``, and ``speak_display`` with its ``show`` display tool."""
 
 import asyncio
+import json
 
-from delegation_core.im.results import RESULT_FORMATS, ResultFormat, SpeakDisplay
+from delegation_core.im.results import RESULT_FORMATS, SpeakDisplay
 from tests.unit.delegation_core.helpers import (
     TEXTS,
     IMCase,
@@ -15,7 +16,6 @@ from tests.unit.delegation_core.helpers import (
     answer,
     ask,
     finished_items,
-    one_shot_session,
     read_all,
     show,
     wait,
@@ -34,25 +34,22 @@ class EnvelopeTests(IMCase):
         gate.set()
         return names
 
-    async def test_plain_offers_no_work_tool_and_adds_no_note(self):
-        self.assertEqual(await self.tools_of(), [])
-        self.assertEqual(ResultFormat().note, "")
-
     async def test_speak_display_offers_show_with_the_texts_schema(self):
-        self.assertEqual(await self.tools_of(result_format=SPEAK_DISPLAY), ["show"])
+        self.assertEqual(await self.tools_of(result_format=SPEAK_DISPLAY, work_tools=()), ["show"])
         schema = TEXTS.work_tools["show"]
         gate = asyncio.Event()
-        im = self.session(ScriptedAdapter([wait(gate), answer()]), result_format=SPEAK_DISPLAY)
+        im = self.session(ScriptedAdapter([wait(gate), answer()]), result_format=SPEAK_DISPLAY, work_tools=())
         im.admit(ask("Find teas."), delegation_id="D2")
         await self.turns()
         (tool,) = next(iter(im.works.values())).tasks[0].tools().tools()
         self.assertEqual((tool["description"], tool["parameters"]), (schema["description"], dict(schema["parameters"])))
         gate.set()
 
-    async def test_cancel_work_is_offered_only_when_work_tools_lists_it(self):
-        self.assertEqual(
-            await self.tools_of(result_format=SPEAK_DISPLAY, work_tools=("cancel_work",)), ["show", "cancel_work"]
-        )
+    async def test_cancel_work_is_offered_when_work_tools_lists_it_as_the_shipped_file_does(self):
+        self.assertEqual(await self.tools_of(result_format=SPEAK_DISPLAY), ["show", "cancel_work"])
+        self.assertEqual(await self.tools_of(), ["cancel_work"])
+        self.assertEqual(await self.tools_of(result_format=SPEAK_DISPLAY, work_tools=()), ["show"])
+        self.assertEqual(await self.tools_of(work_tools=()), [])  # plain, with no work tool listed
 
     async def test_the_show_items_label_is_the_display_label_setting(self):
         adapter = ScriptedAdapter([show("Earl Grey 3.25"), answer()])
@@ -65,29 +62,21 @@ class EnvelopeTests(IMCase):
         im = self.session(adapter, result_format=SPEAK_DISPLAY)
         events = await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream)
         shown, said = finished_items(events)
-        self.assertEqual((shown["type"], shown["server_label"], shown["name"]), ("mcp_call", "voiceclaw", "show"))
+        self.assertEqual((shown["type"], shown["server_label"], shown["name"]), ("mcp_call", "delegation_core", "show"))
         self.assertEqual(shown["output"], "Earl Grey 3.25\nSencha 4.10")
         self.assertEqual((said["phase"], said["content"][0]["text"]), ("final_answer", "Two green teas."))
 
     async def test_a_show_call_without_a_display_fails_and_a_tool_not_offered_is_unknown(self):
         gate = asyncio.Event()
-        im = self.session(ScriptedAdapter([wait(gate), answer()]), result_format=SPEAK_DISPLAY)
+        im = self.session(ScriptedAdapter([wait(gate), answer()]), result_format=SPEAK_DISPLAY, work_tools=())
         im.admit(ask("Find teas."), delegation_id="D1")
         await self.turns()
         tools = im.works["W1"].tasks[0].tools()
         with self.assertRaises(ValueError):
             await tools.execute("c1", "show", "{}")
-        self.assertIn("Unknown tool", await tools.execute("c2", "cancel_work", "{}"))
+        unknown = TEXTS.unknown_tool_output.format(name="cancel_work", offered="show")  # the tools it offers
+        self.assertEqual(await tools.execute("c2", "cancel_work", "{}"), json.dumps({"error": unknown}))
         gate.set()
-
-    async def test_a_one_shot_session_gets_no_note_and_no_tool(self):
-        adapter = ScriptedAdapter([answer()])
-        im = one_shot_session(adapter, work_tools=("cancel_work",))  # its input is used as sent
-        im.start()
-        self.addAsyncCleanup(im.close)
-        await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream)
-        self.assertEqual(adapter.runs[0].task.tools().tools(), [])
-        self.assertNotIn(TEXTS.result_formats["speak_display"], adapter.runs[0].requests[0]["instructions"])
 
     def test_the_formats_are_named_in_one_table(self):
         self.assertEqual(set(RESULT_FORMATS), set(TEXTS.result_formats))

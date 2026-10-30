@@ -20,7 +20,6 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from delegation_core.backend.providers.translation import thinking_enabled
-from examples.frontend_backend_live.cascade.lines import catalog_lines
 from tests.unit.core_helpers import FakeStream
 from tests.unit.goldens.harness import (
     ENDPOINT,
@@ -43,6 +42,8 @@ STATUS_TIMER_CONFIG = replace(
     GOLDEN_LIVE_CONFIG,
     delegation=replace(GOLDEN_LIVE_CONFIG.delegation, progress_after_seconds=0.5, progress_max_per_delegation=1),
 )
+# X1's progress line, as the writer words it after a quiet spell.
+PASTRIES_PROGRESS = "I'm going through our pastries now."
 # X1's quiet spell is half a second, and its timer looks every eighth of a second while the floor is idle: eight looks
 # while the joined round is held span two quiet spells, in which a line the shared count allowed would come.
 TWO_QUIET_SPELLS_OF_LOOKS = 8
@@ -52,8 +53,8 @@ class Pause:
     """A point in a scripted model reply where the stream stops until the test calls :meth:`release`.
 
     Put it in a step's chunk list: the stream yields the chunks before it, then waits. A request cancelled while it
-    waits (a fold drops the running round) never resumes. A held reply still runs under its timeouts (10 s for a
-    backend round and for a writer attempt in the engine tests' config), so release it well within that.
+    waits (steering restarts the running round) never resumes. A held reply still runs under its role's timeouts
+    (10 s for a writer attempt, ``core.yaml``'s for a backend round), so release it well within them.
     """
 
     def __init__(self, name, on_change):
@@ -93,7 +94,7 @@ class PausingStream(FakeStream):
 
 
 class JoinGoldens(GoldenCase):
-    """A request that joins delegated work: folded into a running round, or merged into a waiting delegation."""
+    """A request that joins delegated work: it steers into a running round, or joins a Work that waits for the app."""
 
     def setUp(self):
         super().setUp()
@@ -124,9 +125,9 @@ class JoinGoldens(GoldenCase):
     def engine_pending(self):
         """The harness's reasons, except busy work while a reply is held at a pause.
 
-        A held reply waits for the test, as a client-tool round waits for the client, so the call can go quiet. Since
-        The presenter words and speaks results in its own task: a writer's reply held at a pause (X1) holds the
-        result it words, so its reason goes too, while a held backend reply leaves the results to be spoken.
+        A held reply waits for the test, as a client-tool round waits for the client, so the call can go quiet. The
+        presenter words and speaks results in its own task: a writer's reply held at a pause holds the result it words,
+        so its reason goes too, while a held backend reply leaves the results to be spoken.
         """
         reasons = super().engine_pending()
         holding = [pause for pause in self.pauses if pause.holding]
@@ -165,7 +166,7 @@ class JoinGoldens(GoldenCase):
                 decision("speak", "You have a table for two on Saturday at seven."),
             ],
             backend=[
-                # Never released: the fold drops this round.
+                # Never released: the steering restarts this round.
                 [first, *answer_round("Friday at seven is free.")],
                 [restarted, *answer_round("Booked a table for two on Saturday at seven.")],
             ],
@@ -190,10 +191,10 @@ class JoinGoldens(GoldenCase):
 
         The caller asks about a table; the talker delegates with a lead-in. The backend round streams the start of
         its answer and is held before it finishes; the backend LLM holds a round's text to its end, so nothing of it
-        reaches the client. The caller corrects the request and the talker delegates again without a lead-in, so the
-        voice says its own. The round is restarted with both requests, the newer one is named the taker, and
-        the partial text is never spoken: the caller hears the lead-ins, then the restarted round's answer, which the
-        writer words knowing both were said.
+        reaches the client. The caller corrects the request and the talker delegates again without a lead-in; the
+        caller already heard the Friday work acknowledged, so the voice says no fixed line. The round is restarted
+        with both requests, the newer one is named the taker, and the partial text is never spoken: the caller hears
+        the first lead-in, then the restarted round's answer, which the writer words knowing that lead-in was said.
         """
         # Thinking off: the chat-completions translator streams text as it arrives instead of holding it to the end.
         self.assertFalse(thinking_enabled(ENDPOINT.extra_params))
@@ -262,8 +263,8 @@ class JoinGoldens(GoldenCase):
         """X1: a quiet spell's line, then a request joins and the taker shares its count.
 
         The quiet-spell timer is set to half a second, one line per delegation, which joined work shares. The first
-        request's backend round is held, and the quiet spell says the voice's still-working line, the first
-        delegation's one line (the backend wrote no progress note to say instead). A second request steers into
+        request's backend round is held, and after the quiet spell the writer words a progress line about it, the
+        first delegation's one line (the backend wrote no progress note). A second request steers into
         the running round, which restarts with both; the IM names the second request the taker, which carries the
         first one's count. The restarted round is held for a second, longer than the quiet spell, and no quiet spell
         says a second line. Then the answer is spoken, worded knowing the lead-in and the line already said.
@@ -272,6 +273,7 @@ class JoinGoldens(GoldenCase):
         await self.serve(
             frontend=[
                 decision("delegate", "Let me look at the pastries."),
+                decision("speak", PASTRIES_PROGRESS),
                 decision("delegate", "I'll check the croissant too."),
                 decision("speak", "We have a croissant and a blueberry muffin, and the croissant is vegan."),
             ],
@@ -282,11 +284,10 @@ class JoinGoldens(GoldenCase):
             ],
             live_config=STATUS_TIMER_CONFIG,
         )
-        still_working = catalog_lines().still_working
         await self.say("What pastries do you have?")
         await self.wait_held(first)
         # The first request's one line; after it, the shared count keeps every later quiet spell silent.
-        await self.wait_spoken(still_working)
+        await self.wait_spoken(PASTRIES_PROGRESS)
         await self.wait_quiet()
         await self.say("Is the croissant vegan?")
         await self.wait_held(joined)
@@ -298,5 +299,5 @@ class JoinGoldens(GoldenCase):
         await self.wait_quiet()
         await self.close()
         self.assertTrue(first.cancelled)
-        self.assertEqual(self.tts.utterances.count(still_working), 1)
+        self.assertEqual(self.tts.utterances.count(PASTRIES_PROGRESS), 1)
         self.assert_golden("X1")

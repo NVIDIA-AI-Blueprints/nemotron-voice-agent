@@ -66,7 +66,7 @@ class DelegationCore:
 
     def one_shot_session(self) -> IMSession:
         """A new one-shot IM session for one stateless request, on a new adapter of the one-shot source."""
-        from delegation_core.im.oneshot import OneShotSession  # the IM's session kind for one stateless request
+        from delegation_core.im.oneshot import OneShotSession
 
         return OneShotSession(
             self.one_shot_source.new_one_shot(),
@@ -135,7 +135,7 @@ def build_core(
         endpoints: A model name to its endpoint; ``None`` gives the default the root resolved from ``backend.slot``.
         defaults: What a request leaves out: the default model and the instructions the root resolved from
             ``backend.prompt``.
-        adapters: The adapter table; a test injects its own.
+        adapters: The adapter table (``ADAPTERS`` by default).
         observe: The core's trace hook (its own log lines by default); a root passes nothing of the frontend's.
 
     Raises:
@@ -150,7 +150,10 @@ def build_core(
             f"backend has a block for an adapter it does not know: {', '.join(unknown)}; "
             f"known: {', '.join(sorted(adapters))}"
         )
-    vocabulary = ControlVocabulary(settings.texts.control_tools, settings.texts.conductor_prompt)
+    texts = settings.texts
+    vocabulary = ControlVocabulary(
+        texts.control_tools, texts.conductor_prompt, texts.refusal("idle"), texts.failed_output
+    )
     tools = tool_sources(backend.tools)
     sources = {
         name: pick(adapters, name, "backend adapter")().from_settings(
@@ -164,7 +167,7 @@ def build_core(
             f"backend.one_shot_adapter {backend.one_shot_adapter!r} cannot serve one-shot sessions: name an adapter "
             "whose source offers new_one_shot(), such as llm"
         )
-    from delegation_core.im.results import CALL_REPORTS, RESULT_FORMATS  # the IM's tables
+    from delegation_core.im.results import CALL_REPORTS, RESULT_FORMATS
 
     name = settings.delegation.result_format
     result_format = pick(RESULT_FORMATS, name, "result format")(settings.texts.result_formats[name])

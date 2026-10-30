@@ -22,12 +22,12 @@ from pathlib import Path
 from unittest import mock
 
 import delegation_core
-from delegation_core.backend.harness.acp.transports import TRANSPORTS, StdioTransport, WebSocketTransport
+from delegation_core.backend.harness.acp.transports import StdioTransport, WebSocketTransport
 from delegation_core.backend.harness.protocol import Role, RuntimeLaunch
 from delegation_core.backend.harness.runtime import RuntimeOpener, RuntimeProcess
 from delegation_core.backend.harness.settings import HarnessSettings
 from delegation_core.backend.harness.workdir import MARKER, WorkFolder
-from tests.unit.delegation_core.backend.harness.doubles import FakeClient, scratch
+from tests.unit.delegation_core.backend.harness.doubles import AGENT_BLOCKS, PROMPTS, FakeClient, scratch
 
 # A process that makes a work folder, says where, holds it until its stdin ends, then crashes (it never removes it).
 HOLDER = (
@@ -106,6 +106,8 @@ class WorkFolderTests(unittest.TestCase):
 
     def test_the_process_environment_is_the_allowlist_the_agents_needs_and_env_only(self):
         block = {
+            "prompts": PROMPTS,
+            "agents": AGENT_BLOCKS,
             "command": ["hermes", "acp"],
             "env": {"HERMES_HOME": "/srv/hermes"},
             "pass_env": ["PATH", "UNSET_NAME"],
@@ -131,7 +133,8 @@ class _StubbornClient(FakeClient):
 class RuntimeProcessTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_runtime_that_cannot_start_leaves_no_work_folder(self):
         root = scratch("harness-work-")
-        opener = RuntimeOpener(HarnessSettings.parse({"command": ["/nonexistent/runtime"], "work_root": str(root)}))
+        block = {"prompts": PROMPTS, "command": ["/nonexistent/runtime"], "work_root": str(root)}
+        opener = RuntimeOpener(HarnessSettings.parse(block))
         with self.assertRaises(FileNotFoundError):
             await opener.open(Role("workers", "w"))
         self.assertEqual(list(root.iterdir()), [])
@@ -266,7 +269,7 @@ class StdioTransportTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(reap, group)
         began = time.monotonic()
         await transport.close()
-        self.assertLess(time.monotonic() - began, 1)  # under half a grace step, where a zombie made it wait out three
+        self.assertLess(time.monotonic() - began, 1)  # under half a grace step: no close step waits for the zombie
         self.assertEqual(set(group_states(group).values()), {"Z"})  # nothing of its group runs; the zombie stays
 
 
@@ -371,9 +374,6 @@ class WebSocketTransportTests(unittest.IsolatedAsyncioTestCase):
         server.close()
         await server.wait_closed()
 
-    def test_the_table_names_both_transports(self):
-        self.assertEqual(dict(TRANSPORTS), {"stdio": StdioTransport, "websocket": WebSocketTransport})
-
     def test_it_needs_a_websocket_url_and_stdio_a_command(self):
         for url in (None, "", "http://agent:8790/acp"):
             with self.subTest(url=url), self.assertRaisesRegex(ValueError, "ws:// or wss:// URL"):
@@ -395,6 +395,7 @@ class ConnectTimeoutTests(unittest.IsolatedAsyncioTestCase):
         server = await asyncio.start_server(hold, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
         block = {
+            "prompts": PROMPTS,
             "transport": "websocket",
             "url": f"ws://127.0.0.1:{port}/acp",
             "start_timeout_seconds": 0.5,

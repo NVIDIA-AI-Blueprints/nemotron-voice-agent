@@ -50,7 +50,7 @@ class AgentSource:
             vocabulary: The conductor's instructions and control tools.
             make_provider: Makes a worker's provider on an endpoint; by default the worker settings' provider class.
             make_conductor_provider: Makes the conductor's provider on its endpoint; by default the conductor settings'
-                provider class, with the worker settings' limits (a test injects scripted ones).
+                provider class, with the worker settings' limits.
 
         Raises:
             ValueError: The catalog does not list the conductor's model.
@@ -92,14 +92,20 @@ class AgentSource:
         return replace(endpoint, extra_params={**endpoint.extra_params, "temperature": conductor.temperature})
 
     def describe(self) -> dict:
-        """What it serves, as plain JSON for ``GET /v1/live/info``: no credentials."""
+        """What it serves, as plain JSON for ``GET /v1/live/info``: no credentials.
+
+        Its ``conductor`` is what places requests: the model conductor's settings, or the name of the rule that places
+        them instead (``AgentAdapter.rule``).
+        """
         default, worker = self.endpoints(None), self.settings.worker
+        rule = AgentAdapter.rule(self.settings.max_running)
+        conductor = {**self.settings.conductor.describe(), "model": self.conductor_endpoint.model}
         return {
             "adapter": self.name,
             "model": default.model,
             "base_url": default.base_url,
             "max_running": self.settings.max_running,
-            "conductor": {**self.settings.conductor.describe(), "model": self.conductor_endpoint.model},
+            "conductor": rule.name if rule is not None else conductor,
             "worker": {
                 "provider": worker.provider.name,
                 "unlisted_models": worker.unlisted_models.name,

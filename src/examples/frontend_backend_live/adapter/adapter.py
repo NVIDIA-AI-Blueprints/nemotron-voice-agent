@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The cascade adapter: serves a live session with speech in, the talker, commentary, and speech out.
+"""The cascade adapter: serves a live session with speech in, the talker, the writer, and speech out.
 
 It builds the Pipecat pipeline (speech-to-text, user aggregator, :class:`LiveTalkerProcessor`, text-to-speech) around a
 :class:`CascadeSession`. The client supplies the prompts and tools; the server supplies the models and the speech
@@ -15,16 +15,24 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
 from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
-from examples.frontend_backend_live.adapter.preroll import SpeechPreroll
 from examples.frontend_backend_live.adapter.readiness import EndpointReadiness
-from examples.frontend_backend_live.adapter.services import (
+from examples.frontend_backend_live.cascade.agent import LiveAgent, build_agent
+from examples.frontend_backend_live.cascade.memory import ContextConversation, message_text, split_messages
+from examples.frontend_backend_live.cascade.session import CascadeSession
+from examples.frontend_backend_live.cascade.settings import CascadeSettings
+from examples.frontend_backend_live.cascade.talker.talker import PromptPart
+from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
+from examples.frontend_backend_live.media.playout import SpeechPlayout
+from examples.frontend_backend_live.media.preroll import SpeechPreroll
+from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
+from examples.frontend_backend_live.media.services import (
     SPEECH_MODES,
     SpeechMode,
     build_stt,
@@ -32,13 +40,8 @@ from examples.frontend_backend_live.adapter.services import (
     speech_mode,
     speech_server,
 )
-from examples.frontend_backend_live.cascade.agent import LiveAgent, build_agent
-from examples.frontend_backend_live.cascade.memory import ContextConversation, message_text, split_messages
-from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
-from examples.frontend_backend_live.cascade.session import CascadeSession
-from examples.frontend_backend_live.cascade.settings import CascadeSettings
-from examples.frontend_backend_live.cascade.talker.talker import PromptPart
-from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
+from examples.frontend_backend_live.media.turns import TURN_ENDS, TurnEnd
+from examples.frontend_backend_live.models import FRONTENDS
 from examples.frontend_backend_live.tables import pick
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, build_user_aggregator_params
 from live.protocol import SessionConfig, approx_tokens
@@ -47,8 +50,13 @@ if TYPE_CHECKING:
     from examples.frontend_backend_live.adapter.contract import ServiceCatalog, ServiceReadiness
     from live.ports import DelegationPort, MediaConnection, SessionPort
 
-LIVE_AUDIO_IN_RATE = PIPELINE_AUDIO_IN_SAMPLE_RATE  # the rate the cascade hears the caller at: NVA's shared input rate
+LIVE_AUDIO_IN_RATE = PIPELINE_AUDIO_IN_SAMPLE_RATE  # the rate the cascade hears the caller at: the shared input rate
 SEED_ROLES = {"developer": "developer", "user": "user", "assistant": "assistant"}
+
+
+def own_instructions(config: SessionConfig) -> str | None:
+    """The session's own instructions; ``None`` when it sets none or blank ones, which get the server's default."""
+    return config.instructions if (config.instructions or "").strip() else None
 
 
 def seed_messages(config: SessionConfig, instructions: str) -> list[dict]:
@@ -63,12 +71,13 @@ def seed_messages(config: SessionConfig, instructions: str) -> list[dict]:
 # ------------------------------------------------------------------------------------------- the settings
 @dataclass(frozen=True)
 class CascadeAdapterSettings:
-    """``CascadeAdapter.Settings``: the validated ``frontend.cascade`` block and the text-to-speech mode.
+    """``CascadeAdapter.Settings``: the validated ``frontend.cascade`` block, the turn end and the text-to-speech mode.
 
     The cascade's own share of the block is checked here too, so a bad value fails the root's read.
     """
 
     live: LiveConfig
+    turn_end: TurnEnd  # ``speech.turn_end``, with the block's seconds
     tts_mode: str = "per_sentence"
 
     @classmethod
@@ -77,13 +86,16 @@ class CascadeAdapterSettings:
 
         Raises:
             ConfigError: The block, or a part of it, is malformed, or a key belongs elsewhere (the message says where).
-            ValueError: ``speech.tts_mode`` names no TTS mode (the message lists them), or the cascade refuses its share
-                of the block (an unknown ``result_wording``, a ``compact_at`` above 1).
+            ValueError: ``provider`` names no frontend provider, ``speech.tts_mode`` no TTS mode, or ``speech.turn_end``
+                no turn end (each message lists the known ones), the turn end refuses its seconds, or the cascade
+                refuses its share of the block (an unknown ``result_wording``, a ``compact_at`` above 1).
         """
         live = LiveConfig.parse(block)
+        pick(FRONTENDS, live.provider, "frontend.cascade.provider")
         pick(SPEECH_MODES, live.speech.tts_mode, "speech.tts_mode")
+        turn_end = pick(TURN_ENDS, live.speech.turn_end, "speech.turn_end")(live.speech)
         CascadeSettings.from_live_config(live)  # the cascade's own rules, checked now rather than at a session's start
-        return cls(live=live, tts_mode=live.speech.tts_mode)
+        return cls(live=live, turn_end=turn_end, tts_mode=live.speech.tts_mode)
 
 
 # ------------------------------------------------------------------------------------------- the adapter
@@ -119,7 +131,8 @@ class CascadeAdapter(PipelineHost):
             instructions: The talker's instructions.
             stt: The speech-to-text service.
             tts: The text-to-speech service.
-            user_params: Optional user-aggregator parameters (tests supply a transcript-driven turn strategy).
+            user_params: The user aggregator's parameters, from the turn end. Without them the session gets the
+                shared ones.
             frontend_client: Optional injected chat client for the frontend.
             speech: How ``tts`` takes a line, which must match its synthesis mode. By default it is the mode ``tts``
                 already runs in (``services.speech_mode``), for a host that built the text-to-speech itself.
@@ -149,7 +162,8 @@ class CascadeAdapter(PipelineHost):
         """Build one session's adapter: the talker's endpoint and instructions, and its own speech services.
 
         The session's voice reaches the text-to-speech, and the TTS mode its synthesis mode, through the services'
-        body overrides. Nothing connects until :meth:`start`.
+        body overrides. The turn end (``speech.turn_end``) builds the speech-to-text and the user aggregator's
+        settings, which must agree on when the speech-to-text finalizes. Nothing connects until :meth:`start`.
         """
         live = settings.live
         voice = session.audio.output.voice
@@ -161,15 +175,16 @@ class CascadeAdapter(PipelineHost):
             connection,
             live_config=live,
             frontend_endpoint=catalog.model(live.slot, overrides),
-            instructions=session.instructions or catalog.prompt(live.prompt),
-            stt=build_stt(overrides, catalog.service("asr")),
+            instructions=own_instructions(session) or catalog.prompt(live.prompt),
+            stt=build_stt(overrides, catalog.service("asr"), settings.turn_end),
             tts=build_tts({**overrides, "tts_synthesis_mode": speech.synthesis_mode}, catalog.service("tts")),
+            user_params=settings.turn_end.user_params(welcome_enabled=False),
             speech=speech,
         )
 
     @classmethod
     def describe(cls, settings: CascadeAdapterSettings, catalog: ServiceCatalog) -> dict:
-        """The adapter's half of ``GET /v1/live/info``: its talker, prompt set, guards, speech and instructions."""
+        """The adapter's half of ``GET /v1/live/info``: its talker, prompt set and speech."""
         live = settings.live
         endpoint = catalog.model(live.slot)
         return {
@@ -181,9 +196,7 @@ class CascadeAdapter(PipelineHost):
                 "prompt": live.prompt,
             },
             "prompt_version": live.prompt_version,
-            "guards": asdict(live.guards),
-            "speech": {"tts_mode": settings.tts_mode},
-            "instructions": {"frontend": catalog.prompt(live.prompt)},
+            "speech": {"tts_mode": settings.tts_mode, "turn_end": live.speech.turn_end, **settings.turn_end.describe()},
         }
 
     @classmethod
@@ -200,10 +213,11 @@ class CascadeAdapter(PipelineHost):
 
     # ---------------------------------------------------------------------------------- start
     async def start(self, session: SessionPort, delegation: DelegationPort) -> None:
-        """Build the cascade and the pipeline, start the cascade (its presenter and silence timer) and the pipeline.
+        """Build the pipeline and the cascade, start the cascade (its presenter and silence timer) and the pipeline.
 
         The cascade delegates to ``delegation``, the session's delegation part (its server delegation, or in client
-        mode its client delegation). It returns once the pipeline runs.
+        mode its client delegation), and hears the playout tracker the host places after the output. It returns once
+        the pipeline runs.
         """
         self.session, self.delegation = session, delegation
         self.agent = build_agent(self.live_config, self.frontend_endpoint, frontend_client=self.frontend_client)
@@ -213,26 +227,25 @@ class CascadeAdapter(PipelineHost):
             context, user_params=self.user_params or build_user_aggregator_params(False)
         ).user()
         self.live = LiveTalkerProcessor()
-        self.cascade = CascadeSession(
-            self.agent,
-            self.live_config,
-            ContextConversation(context),
-            delegation=self.delegation,
-            say=self.live.speak,
-            interrupt=self.live.interrupt,
-            reports_playout=True,  # the playout tracker reports what each line played
-            reports_sentences=self.speech.reports_sentences,
-        )
-        self.live.attach(self.cascade)
-        self.cascade.start()
-        speech_out = [self.tts, *self.speech.text_hold(), SpeechPreroll(self.live_config.tts_preroll_ms)]
+        speech_playout = SpeechPlayout(self.speech)
+        speech_out = [*speech_playout.speech_out(self.tts), SpeechPreroll(self.live_config.tts_preroll_ms)]
         processors = self.audio_pipeline(
             [self.stt, user_aggregator, self.live, *speech_out],
             transport=self.transport,
             connection=self.connection,
             audio_in_rate=LIVE_AUDIO_IN_RATE,
         )
-        self.playout.listen(self.cascade.playout)
+        self.cascade = speech_playout.cascade(
+            self.playout,
+            self.agent,
+            self.live_config,
+            ContextConversation(context),
+            delegation=self.delegation,
+            say=self.live.speak,
+            interrupt=self.live.interrupt,
+        )
+        self.live.attach(self.cascade)
+        self.cascade.start()
         await self.run_pipeline(processors, stt=self.stt, tts=self.tts)
 
     def context_tokens(self) -> int | None:
@@ -262,7 +275,8 @@ class CascadeAdapter(PipelineHost):
         if self.delegation.reports_events:
             backend = {
                 "busy": bool(self.cascade.worknote.open()),
-                "pending": self.cascade.heard_log.transcript(),  # the labeled lines the next delegation carries
+                # The lines the next delegation carries, each as its kind and the labeled line the backend reads.
+                "pending": [{"kind": kind, "text": text} for kind, text in self.cascade.heard_log.lines()],
             }
         return json.loads(json.dumps({"frontend": frontend, "backend": backend}, default=str))
 
@@ -271,40 +285,41 @@ class CascadeAdapter(PipelineHost):
 
         ``messages`` is the talker's voice history as its next call sends it (the set labels a caller turn that follows
         reference data), and ``prompt`` the instructions that call sends, as ``{source, text}`` parts in order, the
-        provider's reply format last. The delegation part adds the backend's part.
+        provider's reply format last. Each message carries its kind (``EntryKind``). The delegation part adds the
+        backend's part.
         """
         if self.cascade is None:
             return None
-        messages = self.cascade.conversation.messages()
+        messages = self.cascade.conversation.labeled()
         _, history = split_messages(messages)
+        kinds = self.cascade.conversation.kinds()
         return {
             "model": self.frontend_endpoint.model,
             "prompt": self._talker_prompt(messages),
-            "messages": self.agent.talker.labeled(history),
+            "messages": [{**message, "kind": kind} for message, kind in zip(history, kinds, strict=True)],
         }
 
     def _talker_prompt(self, messages: list[dict]) -> list[dict]:
         """The talker's routing instructions by source, as the talker lays them out (``Talker.routing_parts``).
 
         The client's instructions are the seed's system message, then each instruction append, joined as the talker's
-        memory joins them; the provider's own reply format, when it adds one, comes last.
+        memory joins them; the provider's own reply format, when it adds one, comes after them, and the runtime data the
+        call sends after the conversation (``Talker.runtime_data``) last.
         """
-        base = (
-            "session.instructions" if self.config.instructions else f"prompts.yaml: {self.live_config.prompt} + channel"
-        )
+        base = "session.instructions" if own_instructions(self.config) else f"prompts.yaml: {self.live_config.prompt}"
         instructions = [PromptPart(base, self.instructions)]
         instructions += [
             PromptPart("session.instructions.append", message_text(m), "\n\n")
             for m in messages[1:]
             if m.get("role") in ("system", "developer")
         ]
-        parts = [
-            {"source": part.source, "text": part.text}
-            for part in self.agent.talker.routing_parts(instructions, self.cascade.turns.work_line())
-        ]
+        talker = self.agent.talker
+        parts = [{"source": part.source, "text": part.text} for part in talker.routing_parts(instructions)]
         frontend = self.agent.frontend
         if frontend.reply_format:
             parts.append({"source": f"reply format ({frontend.name} frontend)", "text": frontend.reply_format})
+        runtime = talker.runtime_data(self.cascade.turns.work_line())
+        parts.append({"source": "runtime data, after the conversation", "text": runtime})
         return parts
 
     # ----------------------------------------------------------------------------- shutdown

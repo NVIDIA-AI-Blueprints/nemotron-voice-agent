@@ -15,6 +15,7 @@ from examples.frontend_backend_live.cascade.ports import Ending
 from examples.frontend_backend_live.cascade.worknote import WorkNote
 from tests.unit.contracts.endings import load, official_events
 from tests.unit.frontend_backend_live.cascade.doubles import (
+    WORK,
     RecordingDisplay,
     RecordingResults,
     completed,
@@ -24,18 +25,22 @@ from tests.unit.frontend_backend_live.cascade.doubles import (
     in_progress,
     incomplete,
     mcp_call,
+    mcp_started,
     message,
+    progress_update,
     prompt_set,
     queued,
+    running_state,
+    work_item,
 )
 
 # The IM's own lines, as the fixture marks them ([key]): the reader never reads them, only says them.
 TEXTS = {
-    "handover_line": "Handled together with your newer request.",
+    "handover_line": "Handled together with your newer request (D2).",  # as the IM writes it when D2 takes over
     "cancelled_line": "Stopped for your newer request.",
     "unconfirmed_line": "I could not confirm that the earlier request stopped; check before trying it again.",
 }
-LABEL = "voiceclaw"
+LABEL = "delegation_core"
 
 
 class Reading:
@@ -110,28 +115,6 @@ class EndingsFixtureTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(outcome["progress"], expected["progress"], "progress")
                 reading.reader.close()
 
-    async def test_a_cancel_line_is_said_like_any_result_and_the_handover_line_is_never_said(self):
-        # An unconfirmed stop is said as such. The cancel is the older delegation's answer; a handover's one
-        # commentary line is progress, and the taker carries the work.
-        scenarios = load()
-        for name, said in (
-            (
-                "cancelled_for_a_newer_request_stopped",
-                [("ready", "D2", "Done."), ("ready", "D1", TEXTS["cancelled_line"])],
-            ),
-            (
-                "cancelled_for_a_newer_request_unconfirmed",
-                [("ready", "D2", "Done."), ("ready", "D1", TEXTS["unconfirmed_line"])],
-            ),
-            ("handed_over_with_the_taker_named", [("ready", "D2", "Done.")]),
-        ):
-            with self.subTest(name):
-                reading = Reading()
-                reading.delegated("D1", "D2")
-                for delegation_id, event in official_events(scenarios[name], TEXTS):
-                    reading.reader.on_delegation_event(delegation_id, event)
-                self.assertEqual([call for call in reading.results.calls if call[0] == "ready"], said)
-
 
 class EndingLineTests(unittest.IsolatedAsyncioTestCase):
     """Each ending says the voice's own line, as written, decided by structure."""
@@ -201,12 +184,36 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
         reading = Reading()
         reading.delegated("D1")
         reading.hand("D1", created("r1"), queued("r1"))
-        self.assertIn('waiting to start: "request D1"', reading.note.line())
+        self.assertIn(work_item(1, WORK.waiting, "request D1"), reading.note.line())
         reading.hand("D1", in_progress("r1"), message("Looking at the menu.", phase="commentary"))
         reading.hand("D1", mcp_call("cafe", "get_menu"), function_call("check_hours"))
         line = reading.note.line()
-        self.assertIn("running for 0 s, now using get menu, check hours", line)
-        self.assertIn('latest update: "Looking at the menu."', line)
+        # The backend's call ended; the app's call runs until the app answers.
+        self.assertIn(running_state(0, "check hours", ended=[("get menu", "completed")]), line)
+        self.assertIn(progress_update("Looking at the menu."), line)
+
+    async def test_a_backend_call_runs_from_its_start_and_ends_with_its_official_status(self):
+        reading = Reading()
+        reading.delegated("D1")
+        reading.hand("D1", created("r1"), in_progress("r1"), mcp_started(LABEL, "show", item_id="d1"))
+        opened = {"type": "response.output_item.added", "item": message("", status="in_progress")["item"]}
+        reading.hand("D1", opened, mcp_started("airline", "get_user_details"))
+        running = running_state(0, "get user details")  # the display and a message are no calls
+        self.assertIn(work_item(1, running, "request D1"), reading.note.line())
+        reading.hand("D1", mcp_call("airline", "get_user_details", status="failed"))
+        reading.hand("D1", mcp_started("airline", "get_reservation_details", item_id="mcp_2"))
+        state = running_state(0, "get reservation details", ended=[("get user details", "failed")])
+        self.assertIn(work_item(1, state, "request D1"), reading.note.line())
+
+    async def test_a_kept_line_is_progress_once_a_call_starts_on_its_response(self):
+        reading = Reading()
+        reading.delegated("D1", "D2")
+        reading.hand("D2", created("r2"), queued("r2"))
+        reading.hand("D1", created("r1"), in_progress("r1"), message("Checking flights.", phase="commentary"))
+        self.assertNotIn("Checking flights.", reading.note.line())  # D2 may still name r1
+        reading.hand("D1", mcp_started("airline", "search_flights"))  # its response went on: the line was progress
+        update = progress_update("Checking flights.")
+        self.assertIn(work_item(1, running_state(0, "search flights"), "request D1", update), reading.note.line())
 
     async def test_every_final_answer_is_one_ready_result_and_the_entry_reads_said_next(self):
         reading = Reading()
@@ -247,7 +254,7 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
         failed_show["item"]["status"] = "failed"
         reading.hand("D1", created("r1"), in_progress("r1"), failed_show)
         self.assertEqual(reading.display.calls, [])
-        self.assertEqual([entry.step for entry in reading.note.open()], [()])
+        self.assertEqual([entry.calls for entry in reading.note.open()], [{}])
         reading.hand("D1", mcp_call(LABEL, "show", item_id="mcp_2"), message("Done."), completed("r1"))
         self.assertEqual(reading.display.kinds(), ["shown", "answered", "ended"])
 
@@ -313,12 +320,12 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
         reading.hand("D1", created("r1"), in_progress("r1"), message("Checking flights.", phase="commentary"))
         self.assertNotIn("Checking flights.", reading.note.line())  # D2 or D3 may still name r1
         reading.hand("D1", function_call("search_flights"))  # its response goes on: the line was progress
-        self.assertIn('latest update: "Checking flights."', reading.note.line())
+        self.assertIn(progress_update("Checking flights."), reading.note.line())
         reading.hand("D1", message("Comparing prices.", phase="commentary", item_id="m2"))
         reading.hand("D2", in_progress("r2"))  # D2 started without naming r1; D3 still may
         self.assertNotIn("Comparing prices.", reading.note.line())
         reading.hand("D3", in_progress("r3"))  # no delegation can name r1 any more: the line is progress
-        self.assertIn('latest update: "Comparing prices."', reading.note.line())
+        self.assertIn(progress_update("Comparing prices."), reading.note.line())
 
     async def test_an_older_response_that_ends_before_its_takers_naming_arrives_is_handed_over_and_says_nothing(self):
         # Each response has a stream of its own, so the IM's order across them may not hold at the reader: here the
@@ -445,18 +452,7 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AppWaitTests(unittest.IsolatedAsyncioTestCase):
-    """The app wait runs on its own clock: its line once, and the delegation stays watched."""
-
-    async def test_the_app_wait_line_is_said_once_and_a_late_result_is_still_said(self):
-        reading = Reading(app_wait_seconds=0.05)
-        reading.delegated("D1")
-        reading.hand("D1", created("r1"), in_progress("r1"), function_call("get_menu"), completed("r1"))
-        await asyncio.sleep(0.15)
-        notices = [call for call in reading.results.calls if call[0] == "notice"]
-        self.assertEqual(notices, [("notice", "D1", catalog_lines().app_wait_line)])
-        self.assertIn("D1", reading.note)  # still watched
-        reading.hand("D1", created("r2"), queued("r2"), in_progress("r2"), message("Tea."), completed("r2"))
-        self.assertEqual(reading.results.calls[-1], ("ready", "D1", "Tea."))
+    """The app wait runs on its own clock: a continuation stops it, and none runs when it is off."""
 
     async def test_a_continuation_before_the_wait_runs_out_stops_it(self):
         reading = Reading(app_wait_seconds=0.05)

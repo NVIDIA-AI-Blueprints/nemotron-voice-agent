@@ -21,21 +21,6 @@ ENTRY = {"model_id": "test/model", "base_url": "http://localhost:1/v1"}
 
 
 class BotRootTests(unittest.TestCase):
-    def setUp(self):
-        pipeline.bot_root.cache_clear()
-        self.addCleanup(pipeline.bot_root.cache_clear)
-        # The bot asks the adapter class only whether it can host it (hosts_rtvi); the cascade it builds itself.
-        self.enterContext(patch.object(pipeline, "frontend_adapters", return_value={"cascade": StubAdapter}))
-
-    def test_the_bot_builds_its_core_from_the_profile_config_yaml_names(self):
-        with patch.object(pipeline.ExampleCatalog, "read", return_value=ExampleCatalog({"llm": [ENTRY]})):
-            state = pipeline.bot_root()
-        self.assertEqual({name: dict(block) for name, block in state.core.backend.tools.items()}, {"cafe": {}})
-        self.assertEqual(state.core.delegation.result_format, "speak_display")
-        self.assertEqual(state.cascade.display_label, state.core.delegation.display_label)
-        self.assertEqual((state.cascade.provider, state.cascade.slot), ("chat-completions", "llm"))
-        self.assertEqual(state.catalog.model("llm").model, "test/model")
-
     def test_the_sessions_backend_choice_reaches_the_cores_lookup(self):
         body = {"thinker_model_id": "org/picked", "thinker_base_url": "http://picked/v1", "model_id": "org/front"}
         self.assertEqual(pipeline.backend_overrides(body), {"model_id": "org/picked", "base_url": "http://picked/v1"})

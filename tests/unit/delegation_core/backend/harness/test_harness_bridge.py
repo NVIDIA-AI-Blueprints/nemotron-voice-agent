@@ -9,6 +9,7 @@ The core's tests may not import ``mcp``, so the client side is plain JSON-RPC ov
 """
 
 import asyncio
+import dataclasses
 import json
 import unittest
 
@@ -16,9 +17,9 @@ import httpx
 
 from delegation_core.backend.harness.bridge import ConductorDoor, McpBridge, WorkerDoor
 from delegation_core.backend.harness.protocol import AppCall, CallRunning, CallSettled
-from delegation_core.backend.harness.settings import Bridge, HarnessPrompts
-from tests.unit.contracts.backend import MENU_FUNCTION, FakeTaskContext
-from tests.unit.delegation_core.backend.harness.doubles import vocabulary
+from delegation_core.backend.harness.settings import Bridge
+from tests.unit.contracts.backend import MENU_FUNCTION, TEXTS, FakeTaskContext
+from tests.unit.delegation_core.backend.harness.doubles import until, vocabulary
 
 ACCEPT = "application/json, text/event-stream"
 
@@ -43,6 +44,20 @@ class Tools:
 class Refusing(FakeTaskContext):
     def route(self, call):
         return "refused" if call.get("name") == "lookup" else super().route(call)
+
+    def refusal(self, call_id):
+        return self.texts.stopped_output  # the IM refused it because its work is stopping
+
+
+class Raising(FakeTaskContext):
+    """A task whose ``route()`` raises, with a failed_output of its own: the door's answer shows whose text it is."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.texts = dataclasses.replace(self.texts, failed_output="{name} broke: {error}")
+
+    def route(self, call):
+        raise RuntimeError("the gate broke")
 
 
 class McpClient:
@@ -80,7 +95,6 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.bridge = McpBridge(Bridge("127.0.0.1", 0, None))
         await self.bridge.start()
         self.http = httpx.AsyncClient(timeout=10)
-        self.prompts = HarnessPrompts()
 
     async def asyncTearDown(self):
         await self.http.aclose()
@@ -89,7 +103,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
     def worker(self, task=None):
         self.task = task or FakeTaskContext(declared=[MENU_FUNCTION])
         self.mailbox = asyncio.Queue()
-        door = WorkerDoor("w1", self.task, (Tools(),), self.mailbox, prompts=self.prompts, tool_timeout_seconds=0.3)
+        door = WorkerDoor("w1", self.task, (Tools(),), self.mailbox, tool_timeout_seconds=0.3)
         server = self.bridge.open(door)
         return door, McpClient(server.url, server.token)
 
@@ -138,22 +152,37 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((type(running), type(settled)), (CallRunning, CallSettled))
         self.assertEqual(json.loads(running.call["arguments"]), {"q": "teas"})
 
-    async def test_a_failure_is_a_plain_result_never_an_error_flag(self):
+    async def test_a_failure_is_a_plain_result_in_the_cores_words_never_an_error_flag(self):
         door, client = self.worker()
         await client.connect(self.http)
-        for name, outcome in (("broken", "failed"), ("slow", "unclear"), ("nothing", "failed")):
+        failed = TEXTS.failed_output.format(name="broken", error="RuntimeError: the shop is closed")
+        offered = "get_menu, lookup, broken, slow"  # the door's tools
+        unknown = TEXTS.unknown_tool_output.format(name="nothing", offered=offered)
+        cases = {
+            "broken": ("failed", json.dumps({"error": failed})),
+            "slow": ("unclear", TEXTS.owed_output),
+            "nothing": ("failed", json.dumps({"error": unknown})),
+        }
+        for name, (outcome, reply) in cases.items():
             with self.subTest(name):
                 result = await client.call(self.http, name, {})
                 self.assertFalse(result["isError"])  # three error results pause the server name in Hermes
+                self.assertEqual(result["content"][0]["text"], reply)
                 call_id = self.task.started[-1][0]
                 self.assertEqual(self.task.outcomes[call_id][1], outcome)
-        self.assertEqual(result["content"][0]["text"], '{"error": "Unknown tool: nothing"}')
 
-    async def test_a_call_the_im_refuses_is_not_run_and_answered_not_run(self):
+    async def test_a_call_that_raises_in_the_worker_door_is_answered_with_its_tasks_failed_output(self):
+        door, client = self.worker(Raising(declared=[MENU_FUNCTION]))
+        await client.connect(self.http)
+        result = await client.call(self.http, "lookup", {})
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["content"][0]["text"], "lookup broke: RuntimeError: the gate broke")
+
+    async def test_a_call_the_im_refuses_is_not_run_and_answered_with_the_ims_reason(self):
         door, client = self.worker(Refusing(declared=[MENU_FUNCTION]))
         await client.connect(self.http)
         result = await client.call(self.http, "lookup", {})
-        self.assertEqual(result["content"][0]["text"], self.prompts.not_run)
+        self.assertEqual(result["content"][0]["text"], TEXTS.stopped_output)
         self.assertEqual(self.task.started, [])  # never reported: the IM gave it its output
         self.assertTrue(self.mailbox.get_nowait().refused)
 
@@ -172,6 +201,27 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.bridge.close(door, "Stopped.")
         self.assertEqual((await second)["content"][0]["text"], "Stopped.")
 
+    async def test_a_rebound_door_keeps_its_name_and_token_and_serves_only_the_same_toolset(self):
+        # A session kept for the next task keeps its door: the runtime holds its token and the tools it listed.
+        door, client = self.worker()
+        await client.connect(self.http)
+        name, token = door.name, door.token
+        later = FakeTaskContext(declared=[MENU_FUNCTION], work_id="W2", task_id="W2.1")
+        self.assertTrue(door.rebind(later, (Tools(),)))
+        self.assertEqual((door.name, door.token, self.bridge.doors[token]), (name, token, door))
+        result = await client.call(self.http, "lookup", {})
+        self.assertEqual(result["content"][0]["text"], '{"found": "lookup"}')
+        self.assertEqual(([label for _, label in later.started], self.task.started), (["shop"], []))
+        self.assertFalse(door.rebind(FakeTaskContext(), (Tools(),)))  # without get_menu: another toolset
+        menu = asyncio.ensure_future(client.call(self.http, "get_menu", {}))
+        await until(lambda: door.held, timeout=5)
+        self.assertFalse(door.rebind(FakeTaskContext(declared=[MENU_FUNCTION]), (Tools(),)))  # it holds a call
+        door.held[0].reply("{}")
+        await menu
+        self.bridge.close(door, "")
+        self.assertFalse(door.rebind(FakeTaskContext(declared=[MENU_FUNCTION]), (Tools(),)))  # retired
+        self.assertIs(door.task, later)
+
     async def test_the_conductor_door_turns_each_call_into_a_decision_answered_with_the_outcome(self):
         placed = []
 
@@ -179,7 +229,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             placed.append(decision)
             return "Started W1 with W1.1."
 
-        door = ConductorDoor("c1", vocabulary(), "Not applied: nothing to place.")
+        door = ConductorDoor("c1", vocabulary())
         server = self.bridge.open(door)
         client = McpClient(server.url, server.token)
         await client.connect(self.http)
@@ -189,14 +239,29 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             ["start_work", "steer_work", "cancel_work", "answer_status"],
         )
         idle = await client.call(self.http, "start_work", {"delegations": ["d1"]})
-        self.assertEqual(idle["content"][0]["text"], "Not applied: nothing to place.")
+        self.assertEqual(idle["content"][0]["text"], "Not applied: no request waits to be placed now.")
         door.bind(place)
         result = await client.call(self.http, "start_work", {"delegations": ["d1"]})
         self.assertEqual(result["content"][0]["text"], "Started W1 with W1.1.")
         self.assertEqual(len(placed), 1)
         bad = await client.call(self.http, "cancel_work", {})
         self.assertFalse(bad["isError"])
-        self.assertIn("Not applied: cancel_work: missing work_id", bad["content"][0]["text"])
+        self.assertEqual(json.loads(bad["content"][0]["text"]), {"error": "cancel_work: missing work_id"})
+
+    async def test_a_control_call_that_raises_is_answered_with_the_vocabularys_failed_answer(self):
+        async def place(decision):
+            raise RuntimeError("the IM broke")
+
+        words = vocabulary()
+        words.failed = "{name} broke: {error}"  # a template of its own: the answer shows whose text it is
+        door = ConductorDoor("c1", words)
+        door.bind(place)
+        server = self.bridge.open(door)
+        client = McpClient(server.url, server.token)
+        await client.connect(self.http)
+        result = await client.call(self.http, "start_work", {"delegations": ["d1"]})
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["content"][0]["text"], "start_work broke: RuntimeError: the IM broke")
 
 
 if __name__ == "__main__":

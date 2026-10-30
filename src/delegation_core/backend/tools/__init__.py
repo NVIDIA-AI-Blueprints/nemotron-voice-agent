@@ -5,7 +5,7 @@
 
 A tool source implements ``ToolSource`` (``backend/port.py``) and builds itself from its ``backend.tools`` block, which
 names URLs and keys by environment variable so it holds no secret. Each IM session gets a fresh set, so per-session
-state such as a cart is never shared. Adding a tool set is one class and one entry here.
+state is never shared. Adding a tool set is one class and one entry here.
 """
 
 from collections.abc import Mapping

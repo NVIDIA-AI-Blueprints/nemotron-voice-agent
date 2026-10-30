@@ -18,7 +18,6 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
-    TTSTextFrame,
     UserStartedSpeakingFrame,
 )
 from pipecat.observers.base_observer import FramePushed
@@ -167,31 +166,25 @@ class ObserverTests(unittest.IsolatedAsyncioTestCase):
         deltas = [e for e in collector.events if e["type"] == "session.input_transcript.delta"]
         self.assertEqual([(d["delta"], d["start_ms"], d["end_ms"]) for d in deltas], [("hello there ", 0, 500)])
 
-    async def test_the_observer_leaves_the_output_transcript_to_the_playout_tracker(self):
-        # Output words are sent as their audio plays, by the playout tracker after the output transport
-        # (tests/unit/frontend_backend_live/adapter/test_playout.py), never at synthesis by the observer.
-        session, collector = await started_session()
-        self.addAsyncCleanup(session.close)
-        audio = OutputAudioRawFrame(audio=bytes(9600), sample_rate=24000, num_channels=1)  # 200 ms
-        await self.observed(
-            session,
-            [
-                ("tts", audio),
-                ("tts", TTSTextFrame(text="Hi", aggregated_by="word")),
-                ("tts", audio),
-                ("tts", TTSTextFrame(text="there", aggregated_by="word")),
-                ("other", TTSTextFrame(text="ignored", aggregated_by="word")),
-            ],
-        )
-        words = [e for e in collector.events if e["type"] == "session.output_transcript.delta"]
-        self.assertEqual(words, [])
-
     async def test_a_nonfatal_pipeline_error_is_reported_to_the_client(self):
         session, collector = await started_session()
         self.addAsyncCleanup(session.close)
         await self.observed(session, [("other", ErrorFrame(error="TTS hiccup", fatal=False))])
+        notice = next(e for e in collector.events if e["type"] == "info")  # the session goes on: a notice
+        self.assertEqual((notice["code"], notice["message"]), ("pipeline_error", "TTS hiccup"))
+        self.assertNotIn("error", collector.kinds())
+
+    async def test_an_error_that_leaves_its_processor_unusable_is_reported_as_an_error(self):
+        # The worker ends the pipeline for it (ProcessorUnusablePolicy.END), and the session closes after the error.
+        session, collector = await started_session()
+        self.addAsyncCleanup(session.close)
+        tts = Probe()
+        await tts.set_usable(False)
+        run = ErrorFrame(error="3 consecutive TTS contexts completed with no audio", processor=tts)
+        await self.observed(session, [("tts", run)])
         error = next(e for e in collector.events if e["type"] == "error")["error"]
-        self.assertEqual((error["code"], error["message"]), ("pipeline_error", "TTS hiccup"))
+        self.assertEqual((error["code"], error["message"]), ("pipeline_error", run.error))
+        self.assertNotIn("info", collector.kinds())
 
     async def test_an_error_each_processor_pushes_on_is_reported_once(self):
         # The observer sees every push of a frame, and an error crosses the pipeline processor by
@@ -200,7 +193,7 @@ class ObserverTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(session.close)
         first, again = ErrorFrame(error="TTS hiccup", fatal=False), ErrorFrame(error="TTS hiccup", fatal=False)
         await self.observed(session, [("tts", first), ("stt", first), ("other", first), ("tts", again)])
-        errors = [e["error"]["message"] for e in collector.events if e["type"] == "error"]
+        errors = [e["message"] for e in collector.events if e["type"] == "info"]
         self.assertEqual(errors, ["TTS hiccup", "TTS hiccup"])
 
     async def test_one_silent_tts_context_is_not_reported_but_a_run_of_them_is(self):
@@ -209,7 +202,7 @@ class ObserverTests(unittest.IsolatedAsyncioTestCase):
         silent = ErrorFrame(error="TTS context 418dbda7-d63e-4c92-809d-144a06adf57c completed with no audio")
         run = ErrorFrame(error="3 consecutive TTS contexts completed with no audio")
         await self.observed(session, [("other", silent), ("other", run)])
-        errors = [e["error"]["message"] for e in collector.events if e["type"] == "error"]
+        errors = [e["message"] for e in collector.events if e["type"] == "info"]
         self.assertEqual(errors, ["3 consecutive TTS contexts completed with no audio"])
 
 

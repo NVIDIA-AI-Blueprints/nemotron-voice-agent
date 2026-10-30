@@ -3,7 +3,7 @@
 
 """Progress notes: the short ``commentary`` lines the IM writes on the carrying delegation's response while work runs.
 
-Notes never join a backend history: the voice reads them to answer "how is it going?" from real progress.
+Notes never join a backend history: the voice frontend reads them to answer "how is it going?" from real progress.
 """
 
 from __future__ import annotations

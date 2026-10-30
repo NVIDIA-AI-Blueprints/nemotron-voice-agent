@@ -63,7 +63,7 @@ class Renderer:
             names[item.get("call_id", "")] = item.get("name", "")
             return self.prompts.call.format(name=item.get("name", ""), arguments=item.get("arguments") or "{}")
         if kind == "function_call_output":
-            name = names.get(item.get("call_id", ""), "the call")
+            name = names.get(item.get("call_id", ""), self.prompts.unnamed_call)
             return self.prompts.output.format(name=name, output=item.get("output") or "")
         if kind != "message":
             return ""

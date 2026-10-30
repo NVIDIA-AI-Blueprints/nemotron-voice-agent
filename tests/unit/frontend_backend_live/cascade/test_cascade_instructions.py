@@ -8,11 +8,11 @@
 from examples.frontend_backend_live.cascade.settings import CascadeSettings
 from examples.frontend_backend_live.cascade.utterances import Outcome
 from examples.frontend_backend_live.models.decision import TalkerDecision
-from tests.unit.frontend_backend_live.cascade.doubles import Call
+from tests.unit.frontend_backend_live.cascade.doubles import PROMPTS, Call
 
 
 class Waits:
-    """A talker that answers ``wait``: v1 and v2, the sets these tests read, do not declare it (only v3 does)."""
+    """A talker that answers ``wait`` to everything."""
 
     async def decide(self, instructions, history, work_in_progress="", *, work_open=False):
         return TalkerDecision("wait")
@@ -38,7 +38,8 @@ class InstructionTests(Call):
         self.assertEqual(self.spoken, ["Your flight leaves at nine from gate twelve."])  # nothing more is said
         self.assertEqual(self.session.utterances.recent[-1].outcome, Outcome.CUT)
         self.assertEqual(
-            self.memory()[-2:], [("assistant", "Your flight [cut off]"), ("developer", "Stop speaking immediately.")]
+            self.memory()[-2:],
+            [("assistant", "Your flight" + PROMPTS.cut_mark), ("developer", "Stop speaking immediately.")],
         )
 
     async def test_a_turn_with_no_words_after_an_instructions_cut_resumes_nothing(self):
@@ -75,8 +76,7 @@ class InstructionTests(Call):
         await self.session.on_instruction("Reply in Spanish from now on.")
         self.assertIn("Reply in Spanish from now on.", self.frontend.calls[0]["instructions"])
         transcript = self.port.requests[0][0]["content"][0]["text"]
-        self.assertIn("App instruction: Reply in Spanish from now on.", transcript)
-        self.assertNotIn("Current instruction", transcript)
+        self.assertIn(f"{PROMPTS.transcript.instruction}: Reply in Spanish from now on.", transcript)
         self.assertEqual(self.spoken, ["Un momento."])
 
     async def test_an_instruction_survives_every_compaction(self):

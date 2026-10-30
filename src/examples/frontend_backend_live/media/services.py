@@ -5,7 +5,7 @@
 
 ``speech.tts_mode`` names one of :data:`SPEECH_MODES`, the two ways the text-to-speech can take a line. Each keeps a
 line's text behind its audio in its own way, so that whatever follows the audio output sees a sentence's text only once
-its audio has played (the playout facts, ``adapter/playout.py``):
+its audio has played (the playout facts, ``media/playout.py``):
 
 * :class:`PerSentence` (the default) sends one request per sentence. Pipecat yields a sentence's audio before its text,
   so nothing needs holding.
@@ -13,21 +13,23 @@ its audio has played (the playout facts, ``adapter/playout.py``):
   each sentence's text before the audio arrives. :class:`LineTextHold` therefore holds a line's text until all its
   audio has been produced: a stitched line that is cut reports none of its text as heard.
 
-A host that builds the text-to-speech itself (the composition root, from the catalog) gets the mode the service
+A host that builds the text-to-speech itself (the repository UI bot, from the catalog) gets the mode the service
 already runs in from :func:`speech_mode`.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any, ClassVar, Protocol
 
 from loguru import logger
 from pipecat.frames.frames import CancelFrame, EndFrame, InterruptionFrame, TTSStoppedFrame, TTSTextFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor, FrameProcessorSetup
 from pipecat.services.nvidia.stt import NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 
+from examples.frontend_backend_live.media.turns import TurnEnd
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from utils import NVCF_GRPC_SERVER, is_nvcf, load_ipa_dictionary, nvidia_api_key
@@ -38,8 +40,11 @@ def speech_server(entry: Mapping[str, Any]) -> str:
     return str(entry.get("server") or NVCF_GRPC_SERVER)
 
 
-def build_stt(body: dict, default_asr: dict) -> NvidiaForceEouSTTService:
-    """Build the streaming speech-to-text service from the catalog entry and body overrides."""
+def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaForceEouSTTService:
+    """Build the streaming speech-to-text service from the catalog entry and body overrides.
+
+    ``turn_end`` builds it, so that it finalizes what it heard when that turn end needs it (``media/turns.py``).
+    """
     server = body.get("asr_server", "") or speech_server(default_asr)
     kwargs: dict = {"api_key": nvidia_api_key(), "server": server, "use_ssl": is_nvcf(server)}
     function_id = body.get("asr_function_id", "") or default_asr.get("function_id", "")
@@ -52,13 +57,30 @@ def build_stt(body: dict, default_asr: dict) -> NvidiaForceEouSTTService:
     if language:
         kwargs["settings"].language = language
     logger.info(f"ASR: server={server}, function_id={function_id or '(default)'}, language={language or '(default)'}")
-    return NvidiaForceEouSTTService(**kwargs, stop_history=400)
+    return turn_end.stt(**kwargs, stop_history=400)
+
+
+class OffLoopSetupTTS(NvidiaTTSService):
+    """The NVIDIA text-to-speech, its setup's blocking calls run in a worker thread.
+
+    ``NvidiaTTSService.setup`` opens its client and fetches the server's synthesis config with blocking gRPC calls. On
+    the event loop, a slow server holds every session of the process while one starts, so sessions that start together
+    wait in line and can miss their start deadline. In a thread, a slow server delays only its own session.
+    """
+
+    async def setup(self, setup: FrameProcessorSetup):
+        """The parent's setup, with its client, synthesis config and zero-shot prompt loaded off the event loop."""
+        await super(NvidiaTTSService, self).setup(setup)
+        await asyncio.to_thread(self._initialize_client)
+        self._config = await asyncio.to_thread(self._create_synthesis_config)
+        await asyncio.to_thread(self._load_zero_shot_audio_prompt)
+        logger.debug(f"Initialized NvidiaTTSService with model: {self._settings.model}")
 
 
 def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
     """Build the text-to-speech service from the catalog entry and body overrides.
 
-    The service takes the pipeline's output rate when it starts: a live session's is NVA's
+    The service takes the pipeline's output rate when it starts: a live session's is the shared
     ``PIPELINE_AUDIO_OUT_SAMPLE_RATE``, which every Magpie deployment accepts.
     """
     server = body.get("tts_server", "") or speech_server(default_tts)
@@ -78,6 +100,9 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
         "use_ssl": is_nvcf(server),
         "text_filters": [NemotronSpeechTextFilter()],
         "custom_dictionary": load_ipa_dictionary(),
+        # A line with no audio (a rate-limited request, say) is the cascade's to retry or write off
+        # (speech.start_timeout_seconds, speech.retry_silent_lines): it costs that line, never the call.
+        "max_consecutive_zero_audio_contexts": 0,
     }
     if function_id or model:
         kwargs["model_function_map"] = {"function_id": function_id, "model_name": model}
@@ -86,7 +111,7 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
     logger.info(
         f"TTS: server={server}, voice={voice}, model={model or '(default)'}, synthesis_mode={mode or '(default)'}"
     )
-    return NvidiaTTSService(**kwargs)
+    return OffLoopSetupTTS(**kwargs)
 
 
 # ------------------------------------------------------------------------------------------- the TTS modes

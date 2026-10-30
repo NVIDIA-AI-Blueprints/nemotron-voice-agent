@@ -5,8 +5,9 @@
 
 Each round is sent the whole history. ``response.created`` is emitted only once the first chunk arrives, so the
 first-event limit and its retries cover the whole opening, and nothing is retried after a chunk arrived.
-``parallel_tool_calls: false`` keeps only the reply's first call; ``reasoning.effort: none`` turns thinking off where
-the endpoint's ``chat_template_kwargs`` has ``enable_thinking``; ``text.format`` becomes ``response_format``.
+``parallel_tool_calls: false`` keeps only the reply's first call and stops reading once a second call starts;
+``reasoning.effort: none`` turns thinking off where the endpoint's ``chat_template_kwargs`` has ``enable_thinking``;
+``text.format`` becomes ``response_format``.
 """
 
 from __future__ import annotations
@@ -110,6 +111,8 @@ class ChatCompletionsBackend(Backend):
                 events = translator.feed(chunk)
                 for event in events:
                     yield event
+                if translator.first_call_whole:
+                    break  # one call per round, and it is whole: the model's later output is never read
                 if not events:
                     yield None
             if not opened:

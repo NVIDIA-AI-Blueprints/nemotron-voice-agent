@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103, D107
 
-"""Gateway edge cases, one test each: frames, close reasons, WebRTC readiness, settings, codecs and fault reports."""
+"""Gateway edge cases, one test each: frames, close reasons, WebRTC, the mount, codecs, logs and fault reports."""
 
 import asyncio
 import json
@@ -22,8 +22,7 @@ from loguru import logger
 from starlette.websockets import WebSocketDisconnect
 
 from live.gateway import LiveGateway, LiveSettings
-from live.gateway.settings import positive_setting
-from live.gateway.websocket import close_reason, run_primary_websocket
+from live.gateway.websocket import run_primary_websocket
 from live.media.audio import ALAW, SAMPLE_CODECS, ULAW, ALaw, LinearPcm, MuLaw, WireCodec
 from live.media.connection import LiveWebRTCConnection
 from live.mount import mount_live
@@ -97,10 +96,6 @@ class BinaryFrameTests(unittest.TestCase):
 
 
 class CloseReasonTests(unittest.TestCase):
-    def test_a_clean_websocket_close_is_a_remote_hangup_and_any_other_a_lost_connection(self):
-        self.assertEqual([close_reason(code) for code in (1000, 1001)], ["remote_hangup", "remote_hangup"])
-        self.assertEqual([close_reason(code) for code in (1006, 1011, None)], ["connection_lost"] * 3)
-
     def test_a_websocket_client_that_closes_ends_its_session_by_its_close_code(self):
         # Driven frame by frame: Starlette's TestClient may cancel the handler as it leaves, which a server does not.
         for code, reason in ((1000, "remote_hangup"), (1001, "remote_hangup"), (1006, "connection_lost")):
@@ -187,28 +182,7 @@ class WebRTCHangUpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reasons[0], "remote_hangup")
 
 
-# --------------------------------------------------------------------------------------------- settings and mount
-class SettingsTests(unittest.TestCase):
-    def test_an_empty_setting_is_the_default_and_a_bad_one_stops_startup_with_its_name(self):
-        with patch.dict(os.environ, {"LIVE_MAX_SESSIONS": "", "LIVE_MAX_SESSION_SECONDS": " 60 "}):
-            settings = LiveSettings.from_env()
-        self.assertEqual((settings.max_sessions, settings.max_session_seconds), (LiveSettings.max_sessions, 60))
-        for value in ("eight", "0", "-3", "2.5"):
-            with (
-                self.subTest(value=value),
-                patch.dict(os.environ, {"LIVE_MAX_SESSIONS": value}),
-                self.assertRaisesRegex(ValueError, "LIVE_MAX_SESSIONS"),
-            ):
-                LiveSettings.from_env()
-        with patch.dict(os.environ, {"LIVE_MAX_SESSIONS": "eight"}), self.assertRaises(ValueError):
-            mount_live(FastAPI(), factory=lambda *args: None)  # the server does not start
-        self.assertEqual(positive_setting("LIVE_UNSET_FOR_TEST", 7), 7)
-
-    def test_the_defaults_are_written_once_as_the_dataclass_fields(self):
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(LiveSettings.from_env(), LiveSettings())
-
-
+# ---------------------------------------------------------------------------------------------------- the mount
 class WorkerTests(unittest.TestCase):
     def test_several_workers_serve_no_live_route_and_say_why(self):
         app = FastAPI()
@@ -238,13 +212,6 @@ class NotFoundTests(unittest.TestCase):
                 self.assertEqual(client.get("/somewhere").json(), {"page": "index.html"})
         with TestClient(enabled) as client:
             self.assertEqual(client.get("/v1/live/info").status_code, 200)  # a real live route still answers
-
-
-class TokenlessWarningTests(unittest.TestCase):
-    def test_the_startup_warning_names_the_delegate_route(self):
-        with patch.dict(os.environ, {"LIVE_API_TOKEN": ""}), patch("live.mount.logger") as log:
-            mount_live(FastAPI(), factory=lambda *args: None)
-        self.assertIn("POST /v1/live/delegate", log.warning.call_args.args[0])
 
 
 # ------------------------------------------------------------------------------------------------------ G.711

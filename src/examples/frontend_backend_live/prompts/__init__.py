@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prompt sets for the cascade's own model calls. A set is one module, chosen by name, and is plain text only.
+"""Prompt sets for the cascade's own model calls and its delegations' input. A set is one module of plain text only.
 
-``PROMPT_SETS`` lists every set by name; ``config.yaml`` chooses one with ``prompt_version``. A new set is one module
-that builds its ``PROMPT_SET`` (see ``promptset.py``) and one entry here.
+``PROMPT_SETS`` lists every set by name: one set, ``default`` (``default.py``), which a configuration that names none
+also gets. ``config.yaml`` chooses a set with ``prompt_version``. A new set is one module that builds its
+``PROMPT_SET`` (see ``promptset.py``) and one entry here.
 """
 
-from . import v1, v2, v3
-from .promptset import CallHints, NormalizerPrompt, PromptSet, WriterNotes
+from . import default
+from .promptset import CallHints, NormalizerPrompt, PromptSet, TranscriptText, WorkTexts, WriterNotes
 
 __all__ = [
     "DEFAULT_PROMPT_SET",
@@ -16,15 +17,17 @@ __all__ = [
     "CallHints",
     "NormalizerPrompt",
     "PromptSet",
+    "TranscriptText",
+    "WorkTexts",
     "WriterNotes",
     "get_prompt_set",
 ]
 
 # The set a configuration gets when it names none.
-DEFAULT_PROMPT_SET = "v2"
+DEFAULT_PROMPT_SET = "default"
 
-# v3 is listed for measurement; no shipped configuration names it.
-PROMPT_SETS = {prompts.name: prompts for prompts in (v1.PROMPT_SET, v2.PROMPT_SET, v3.PROMPT_SET)}
+# Every set by its name: the one set, default.
+PROMPT_SETS = {"default": default.PROMPT_SET}
 
 
 def get_prompt_set(name: str) -> PromptSet:

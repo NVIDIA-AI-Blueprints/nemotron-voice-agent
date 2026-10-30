@@ -4,10 +4,10 @@
 """The harness's settings: the ``backend.harness`` block and the default of every key.
 
 A profile names only what differs from these defaults. :meth:`HarnessSettings.parse` checks the block when the core is
-built and turns each name (``protocol``, ``steer``, ``permission``, and the protocol's own, such as ``transport`` and
-``agent``) into its class, so the protocol's packages load then, never at import. The block says only how to reach the
-agent, by ``command`` or ``url``, and which ``agent`` class reads it; the agent's model, key, tools and home are its
-operator's, and nothing here writes its configuration.
+built and turns each name (``protocol``, ``steer``, ``session``, ``permission``, and the protocol's own, such as
+``transport`` and ``agent``) into its class, so the protocol's packages load then, never at import. The block says only
+how to reach the agent, by ``command`` or ``url``, and which ``agent`` class reads it; the agent's model, key, tools and
+home are its operator's, and nothing here writes its configuration.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from delegation_core.tables import pick
 
-from .protocol import PERMISSIONS, PROTOCOLS, STEERING
+from .protocol import PERMISSIONS, PROTOCOLS, SESSIONS, STEERING
 
 
 @dataclass(frozen=True)
@@ -58,34 +58,26 @@ class Bridge:
 
 @dataclass(frozen=True)
 class HarnessPrompts:
-    """The words the harness adds to what its agent reads (model-facing text lives in YAML).
+    """The words the harness adds to what its agent reads, from ``backend.harness.prompts`` in the core's file.
 
-    Each template's fields are filled by ``harness/render.py``; a profile may reword any of them.
+    Each template's fields are filled by ``harness/render.py``; the calls the bridge answers itself read the core's
+    texts (a worker's door through ``TaskContext.texts``, the conductor's through its ``ControlTools``).
     """
 
     # The conductor's input for one decide(): the new requests, the work records, the conversation it has not read.
-    conductor_input: str = (
-        "New requests to place:\n{arrivals}\n\n"
-        "Work records:\n{works}\n\n"
-        "Conversation since your last turn:\n{conversation}"
-    )
-    arrival: str = "[{delegation}] {text}"
-    work: str = "[{work}] {state}, carried by {carrier}; requests: {requests}\n{tasks}"
-    task: str = "  task {task}: {state} for {seconds} s{brief}; steps: {steps}; newest note: {note}"
-    brief: str = ', brief "{brief}"'
-    none: str = "none"
+    conductor_input: str
+    arrival: str
+    work: str
+    task: str
+    brief: str
+    none: str  # an empty part
     # A worker's first prompt and its parts: the task's view of the conversation, as a transcript.
-    worker_input: str = "The conversation and your task:\n\n{transcript}"
-    user: str = "{text}"
-    assistant: str = "Assistant: {text}"
-    call: str = "Assistant called {name} with {arguments}"
-    output: str = "{name} returned: {output}"
-    # The plain results the bridge gives the agent for calls it does not run or cannot report.
-    not_run: str = "Not run: the caller said something new."
-    stopped: str = "Stopped: the caller no longer wants this."
-    unclear: str = "Outcome unknown: check whether it happened before retrying."
-    # The conductor's control call that comes when no request waits to be placed.
-    no_placement: str = "Not applied: no request waits to be placed now."
+    worker_input: str
+    user: str
+    assistant: str
+    call: str
+    output: str
+    unnamed_call: str  # the name an output's call reads as when the call is not in the transcript
 
     # Each template and the fields it is given.
     FIELDS = {
@@ -103,17 +95,21 @@ class HarnessPrompts:
 
     @classmethod
     def parse(cls, raw: Any) -> HarnessPrompts:
-        """Validate ``backend.harness.prompts``: known keys only, each non-empty text, each template's fields known.
+        """Validate ``backend.harness.prompts``: every key present, each non-empty text, each template's fields known.
 
         Raises:
-            ValueError: An unknown key, a value that is not text, or a template naming a field it is not given.
+            ValueError: An unknown or missing key, a value that is not text, or a template naming a field it is not
+                given.
         """
         if not isinstance(raw, Mapping):
             raise ValueError("backend.harness.prompts must be a mapping")
-        known = {f.name for f in fields(cls)}
-        unknown = set(raw) - known
+        known = [f.name for f in fields(cls)]
+        unknown = set(raw) - set(known)
         if unknown:
             raise ValueError(f"backend.harness.prompts has unknown keys: {', '.join(sorted(map(str, unknown)))}")
+        missing = [key for key in known if key not in raw]
+        if missing:
+            raise ValueError(f"backend.harness.prompts is missing {', '.join(missing)}")
         for key, value in raw.items():
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"backend.harness.prompts.{key} must be non-empty text")
@@ -124,7 +120,8 @@ class HarnessPrompts:
         return cls(**raw)
 
 
-# Every key of backend.harness and its default (core.yaml names the agent and how to reach it: command or url).
+# Every key of backend.harness and its default (core.yaml names the agent and how to reach it: command or url). The
+# prompts have none: core.yaml words every one.
 DEFAULTS: Mapping[str, Any] = {
     "protocol": "acp",
     "agent": "acp",
@@ -134,6 +131,7 @@ DEFAULTS: Mapping[str, Any] = {
     "max_running": 3,
     "turns_per_process": None,
     "steer": "next_prompt",
+    "session": "task",
     "runtime_label": "runtime",
     "permission": "reject",
     "start_timeout_seconds": 60,
@@ -161,7 +159,7 @@ SECONDS = (
 )
 # Where the sessions' work folders go when work_root is null: outside any git checkout, and outside /tmp, where a stray
 # .git folder of another program could make /tmp a project root for an agent's search for project files.
-DEFAULT_WORK_ROOT = "~/.cache/voiceclaw/harness"
+DEFAULT_WORK_ROOT = "~/.cache/delegation-core/harness"
 
 
 def _strings(where: str, value: Any) -> tuple[str, ...]:
@@ -209,9 +207,10 @@ def _path(value: Any, where: str) -> Path:
 class HarnessSettings:
     """The harness's settings, every name already turned into what it names (made by :meth:`parse`)."""
 
-    names: Mapping[str, str]  # protocol, agent, transport, steer, permission: the names, for describe()
+    names: Mapping[str, str]  # protocol, agent, transport, steer, session, permission: the names, for describe()
     protocol: Any  # the HarnessProtocol (harness/protocol.py), with the agent behind it
     steering: Any  # a SteerStrategy
+    sessions: Any  # a SessionPolicy
     permission: Any  # a PermissionAnswer
     command: tuple[str, ...]
     url: str | None
@@ -245,12 +244,13 @@ class HarnessSettings:
         if unknown:
             raise ValueError(f"backend.harness has unknown keys: {', '.join(sorted(map(str, unknown)))}")
         raw = {**DEFAULTS, **block}
-        names = {key: raw[key] for key in ("protocol", "agent", "transport", "steer", "permission")}
+        names = {key: raw[key] for key in ("protocol", "agent", "transport", "steer", "session", "permission")}
         command = _strings("command", raw["command"]) if raw["command"] else ()
         url = _url(raw["url"])
         protocol = pick(PROTOCOLS, names["protocol"], "harness protocol")().from_settings({**raw, "command": command})
         agent = protocol.agent
         steering = pick(STEERING, names["steer"], "harness steering")().from_settings(raw)
+        sessions = pick(SESSIONS, names["session"], "harness session")().from_settings(raw)
         permission = pick(PERMISSIONS, names["permission"], "permission answer")()()
         values: dict[str, Any] = {"max_running": _count(raw["max_running"], "max_running")}
         set_turns = raw["turns_per_process"]
@@ -281,6 +281,7 @@ class HarnessSettings:
             names=names,
             protocol=protocol,
             steering=steering,
+            sessions=sessions,
             permission=permission,
             command=command,
             url=url,

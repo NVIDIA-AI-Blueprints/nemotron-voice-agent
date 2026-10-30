@@ -8,10 +8,7 @@ import asyncio
 import os
 import sys
 import unittest
-from contextlib import contextmanager
 from unittest.mock import patch
-
-from loguru import logger
 
 import examples_registry
 import live.mount
@@ -26,7 +23,7 @@ HOOKS = {
     "describe": "examples.frontend_backend_live.factory:describe",
     "core": "examples.frontend_backend_live.factory:core",
 }
-LIVE_SETTINGS = ("LIVE_ENABLED", "LIVE_API_TOKEN", "LIVE_ADAPTER_FACTORY", "LIVE_ENGINE_FACTORY")
+LIVE_SETTINGS = ("LIVE_ENABLED", "LIVE_API_TOKEN", "LIVE_ADAPTER_FACTORY")
 
 
 def entry(**changes) -> dict:
@@ -42,23 +39,7 @@ def selection(key: str | None) -> examples_registry.Selection:
     return examples_registry.Selection(key, True, (key,), key)
 
 
-@contextmanager
-def warnings_logged():
-    """Collect the warning lines loguru writes meanwhile."""
-    lines: list[str] = []
-    sink = logger.add(lines.append, level="WARNING", format="{message}")
-    try:
-        yield lines
-    finally:
-        logger.remove(sink)
-
-
 class RegistryTests(unittest.TestCase):
-    def test_the_example_names_its_three_hooks_and_no_other_example_has_any(self):
-        self.assertEqual(examples_registry.EXAMPLES[FBL]["live"], HOOKS)
-        others = {key: example["live"] for key, example in examples_registry.EXAMPLES.items() if key != FBL}
-        self.assertEqual(set(others.values()), {None})
-
     def test_a_live_block_is_checked_when_the_registry_loads(self):
         loaded = examples_registry._load_examples({"examples": {"x": entry(live=dict(HOOKS))}})
         self.assertEqual(loaded["x"]["live"], HOOKS)
@@ -84,11 +65,11 @@ class RegistryTests(unittest.TestCase):
         async def factory(*args):
             return args
 
-        stand_in = module("tests_l8_live_hooks", factory=factory, not_callable=1)
+        stand_in = module("tests_live_hooks", factory=factory, not_callable=1)
         with patch.dict(sys.modules, stand_in):
-            self.assertIs(examples_registry.resolve_hook("tests_l8_live_hooks:factory", "live.factory"), factory)
+            self.assertIs(examples_registry.resolve_hook("tests_live_hooks:factory", "live.factory"), factory)
             with self.assertRaisesRegex(RuntimeError, "live.core target is not callable"):
-                examples_registry.resolve_hook("tests_l8_live_hooks:not_callable", "live.core")
+                examples_registry.resolve_hook("tests_live_hooks:not_callable", "live.core")
         with self.assertRaisesRegex(RuntimeError, "Example bot must be 'module.path:attr'"):
             examples_registry.resolve_bot({"bot": "no-function"})
 
@@ -125,6 +106,13 @@ class ServeDecisionTests(MountCase):
                 patch.dict(os.environ, {"LIVE_ENABLED": value, "LIVE_API_TOKEN": "t"}),
             ):
                 self.assertEqual(bool(self.mount()), served)
+        self.mounts.clear()
+        with (
+            self.subTest(LIVE_ENABLED="false", pinned=FBL),
+            patch.object(examples_registry, "_SELECTION", selection(FBL)),
+            patch.dict(os.environ, {"LIVE_ENABLED": "false"}),
+        ):
+            self.assertEqual(self.mount(), {})
 
     def test_a_token_serves_the_routes(self):
         with patch.dict(os.environ, {"LIVE_API_TOKEN": "secret"}):
@@ -179,42 +167,11 @@ class HookTests(MountCase):
             asyncio.run(kwargs[name](*(("c", "websocket", None) if name == "factory" else ())))
         self.assertEqual([spec for _, spec, _, _ in self.calls], ["custom.module:build", HOOKS["core"]])
 
-    def test_the_old_setting_still_works_with_one_deprecation_line(self):
-        with patch.dict(os.environ, {"LIVE_ENGINE_FACTORY": "custom.module:build"}), warnings_logged() as lines:
-            kwargs = self.mount()
-        asyncio.run(kwargs["factory"]("c", "websocket", None))
-        self.assertEqual(self.calls[0][1], "custom.module:build")
-        self.assertEqual(lines, ["LIVE_ENGINE_FACTORY is deprecated: set LIVE_ADAPTER_FACTORY instead.\n"])
-
-    def test_the_new_setting_wins_over_the_old_one(self):
-        both = {"LIVE_ADAPTER_FACTORY": "new.module:build", "LIVE_ENGINE_FACTORY": "old.module:build"}
-        with patch.dict(os.environ, both):
-            kwargs = self.mount()
-        asyncio.run(kwargs["factory"]("c", "websocket", None))
-        self.assertEqual(self.calls[0][1], "new.module:build")
-
-    def test_a_setting_that_names_the_removed_engine_module_stops_startup(self):
-        for name in ("LIVE_ENGINE_FACTORY", "LIVE_ADAPTER_FACTORY"):
-            for spec in (
-                "examples.frontend_backend_live.engine.factory:create_engine",
-                "examples.frontend_backend_live.engine:create_engine",
-            ):
-                with (
-                    self.subTest(setting=name, spec=spec),
-                    patch.dict(os.environ, {name: spec}),
-                    self.assertRaisesRegex(
-                        RuntimeError,
-                        f"{name}=.*removed: set LIVE_ADAPTER_FACTORY to "
-                        "examples.frontend_backend_live.factory:create_frontend_adapter",
-                    ),
-                ):
-                    server._mount_live(object())
-
 
 class RealMountTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"LIVE_ENABLED": "true"}))
-        for name in ("LIVE_API_TOKEN", "LIVE_ADAPTER_FACTORY", "LIVE_ENGINE_FACTORY"):
+        for name in ("LIVE_API_TOKEN", "LIVE_ADAPTER_FACTORY"):
             os.environ.pop(name, None)
         # create_app binds the selected example's services process-wide; leave no binding behind.
         self.addCleanup(clear_service_context)

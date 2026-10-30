@@ -5,16 +5,20 @@
 
 :meth:`AgentSettings.parse` checks the block when the core is built, so an unknown key, a fraction where a whole number
 is due, or an unknown name fails the build. The ``worker`` block takes the backend LLM's keys (``backend.llm``) except
-``conductor``, since the agent's conductor has its own block.
+``conductor``, since the agent's conductor has its own block. ``conductor.when_idle`` names how requests are placed
+while no Work is open: ``start`` starts one Work for them with no model call, as the steer rule does; ``decide`` asks
+the model, as for any request.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
-from typing import Any
+from typing import Any, ClassVar, Protocol
 
+from delegation_core.backend.conductors import OPEN_STATES
 from delegation_core.backend.llm import LlmSettings
+from delegation_core.backend.port import ConductorInput, Start
 from delegation_core.backend.providers import BACKENDS, Backend, ChatCompletionsBackend
 from delegation_core.tables import pick
 
@@ -57,18 +61,54 @@ def _name(where: str, value: Any) -> str | None:
     return value
 
 
+class IdleRule(Protocol):
+    """How the conductor places the requests that come while no Work is open (``conductor.when_idle``)."""
+
+    name: ClassVar[str]  # its name in backend.llm-agent.conductor.when_idle
+
+    def decision(self, given: ConductorInput) -> Start | None:
+        """A Start of ``given``'s new requests, placed with no model call; ``None``: the model decides."""
+
+
+class StartWhenIdle:
+    """``start``: while no Work is open, the new requests start one together, with no model call."""
+
+    name: ClassVar[str] = "start"
+
+    def decision(self, given: ConductorInput) -> Start | None:
+        """A Start of every new request while no Work in ``given`` is open; ``None`` while one is: the model decides."""
+        if any(work.state in OPEN_STATES for work in given.works):
+            return None
+        return Start(tuple(arrival.delegation_id for arrival in given.arrivals))
+
+
+class DecideWhenIdle:
+    """``decide``: the model places every request, also while no Work is open."""
+
+    name: ClassVar[str] = "decide"
+
+    def decision(self, given: ConductorInput) -> None:
+        """None: the model decides."""
+        return None
+
+
+# Each rule for the requests that come while no Work is open, by its name in backend.llm-agent.conductor.when_idle.
+WHEN_IDLE: Mapping[str, IdleRule] = {rule.name: rule for rule in (StartWhenIdle(), DecideWhenIdle())}
+
+
 @dataclass(frozen=True)
 class ConductorSettings:
     """How the agent's conductor model is called: one call per ``decide()``, each decision through a control tool."""
 
     provider: type[Backend] = ChatCompletionsBackend  # chat-completions | openai-responses (providers.BACKENDS)
     model: str | None = None  # a model of the catalog; None: the backend's default (the slot's)
-    # A decision round that takes longer places nothing more; the backend LLM's steer rule places its requests.
+    # A decision round that takes longer places nothing more; the IM's steer rule places its requests.
     timeout_seconds: float = 20.0
     memory_tokens: int = 8000  # the conductor's own memory of earlier decision rounds, kept or dropped whole
     max_output_tokens_per_request: int = 256  # the round's output cap, for each new request it places
     temperature: float | None = 0.0  # sampling for a placement; None: the endpoint's own
     reasoning_effort: str | None = "none"  # the official reasoning.effort (none: thinking off); None: the model's own
+    when_idle: IdleRule = WHEN_IDLE["start"]  # start | decide: how requests are placed while no Work is open
 
     @classmethod
     def parse(cls, block: Mapping[str, Any]) -> ConductorSettings:
@@ -96,6 +136,8 @@ class ConductorSettings:
             )
         if "reasoning_effort" in block:
             values["reasoning_effort"] = _name(f"{where}.reasoning_effort", block["reasoning_effort"])
+        if "when_idle" in block:
+            values["when_idle"] = pick(WHEN_IDLE, block["when_idle"], "conductor idle rule")
         return cls(**values)
 
     def describe(self) -> dict:
@@ -107,6 +149,7 @@ class ConductorSettings:
             "max_output_tokens_per_request": self.max_output_tokens_per_request,
             "temperature": self.temperature,
             "reasoning_effort": self.reasoning_effort,
+            "when_idle": self.when_idle.name,
         }
 
 

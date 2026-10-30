@@ -89,7 +89,7 @@ class OneShotSession(IMSession):
 
     def history_for(self, work: WorkRun, task: TaskRun) -> TaskHistory:
         """The input as sent, never trimmed or cut."""
-        return TaskHistory(work.input, None, None)
+        return TaskHistory(work.input, None, None, self.texts.cut_output)
 
     def commentary(self, task: TaskRun, message: dict) -> None:
         """A round's message that is not its answer is written as it is (no notes in a one-shot session)."""

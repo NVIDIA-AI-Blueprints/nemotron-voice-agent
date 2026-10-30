@@ -74,7 +74,7 @@ class CallNotes(CallReports):
         task.progress(task.step_line(call_id))
 
 
-# The result formats by the name ``delegation.result_format`` gives; a composition root picks one at build.
+# The result formats by the name ``delegation.result_format`` gives; the core's builder picks one.
 RESULT_FORMATS: Mapping[str, type[ResultFormat]] = {"plain": ResultFormat, "speak_display": SpeakDisplay}
 # How backend-run calls reach the wire, by the name ``delegation.backend_calls`` gives; picked at build.
 CALL_REPORTS: Mapping[str, type[CallReports]] = {"items": CallReports, "notes": CallNotes}

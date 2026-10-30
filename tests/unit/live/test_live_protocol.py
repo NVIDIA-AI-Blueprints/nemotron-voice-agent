@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import unittest
+from unittest import mock
 
 import anyio
 from pydantic import ValidationError
@@ -38,29 +39,6 @@ class SchemaTests(unittest.TestCase):
             with self.subTest(patch=patch), self.assertRaises(ProtocolError) as error:
                 responses_config().updated(patch)
             self.assertEqual((error.exception.code, error.exception.param), ("immutable_field_update", param))
-
-    def test_a_client_mode_session_takes_its_acknowledgement_delay_and_refuses_backend_settings(self):
-        # A client delegation's update may set acknowledgement_delay_ms; null and {} change nothing.
-        for config in (SessionConfig(model="live-1"), SessionConfig(model="live-1", delegation={"type": "client"})):
-            with self.subTest(config=config.delegation):
-                delayed = config.updated({"delegation": {"type": "client", "acknowledgement_delay_ms": 800}})
-                self.assertEqual(delayed.delegation.acknowledgement_delay_ms, 800)
-                self.assertEqual(delayed.updated({"delegation": None}), delayed)
-                self.assertEqual(delayed.updated({"delegation": {}}), delayed)
-                for patch, refusal in (
-                    ({"delegation": {"type": "responses"}}, ("immutable_field_update", "session.delegation.type")),
-                    (
-                        {"delegation": {"responses": {"model": "x"}}},
-                        ("unknown_parameter", "session.delegation.responses"),
-                    ),
-                    (
-                        {"triggers": [{"event_type": "session.input_transcript.delta"}]},
-                        ("invalid_value", "session.triggers"),
-                    ),
-                ):
-                    with self.subTest(patch=patch), self.assertRaises(ProtocolError) as error:
-                        config.updated(patch)
-                    self.assertEqual((error.exception.code, error.exception.param), refusal)
 
     def test_a_sparse_nested_update_merges(self):
         original = responses_config()
@@ -227,11 +205,13 @@ class NamingEngine(FakeAdapter):
 
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
-    async def start(self, config=None, engine=None, transport="websocket"):
+    async def start(self, config=None, engine=None, transport="websocket", **options):
         self.engine = engine or FakeAdapter()
         config = config or responses_config()
         codec = wire_codec(config) if transport == "websocket" else None  # only the WebSocket edge hands one in
-        self.session = LiveProtocolSession(config, transport, self.engine.parts(), core=self.engine.core, codec=codec)
+        self.session = LiveProtocolSession(
+            config, transport, self.engine.parts(), core=self.engine.core, codec=codec, **options
+        )
         self.primary, self.sideband = Collector(), Collector()
         self.connections = {"primary": self.session.subscribe(self.primary.send, "primary")}
         await self.session.start("start_1")
@@ -380,17 +360,6 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([e["error"]["param"] for e in new], [param], fields)
         self.assertEqual(self.engine.appended, [])
 
-    async def test_a_non_null_delegation_id_is_refused_in_responses_mode(self):
-        await self.start()  # a responses session: no append belongs to a client delegation
-        for kind in ("session.instructions.append", "session.thinking.append", "session.commentary.append"):
-            with self.subTest(kind=kind):
-                await self.handle({"type": kind, "event_id": "a1", "delegation_id": "item_1", "content": "ok"})
-                error = self.primary.events[-1]["error"]
-                self.assertEqual(
-                    (error["code"], error["param"], error["client_event_id"]), ("invalid_value", "delegation_id", "a1")
-                )
-        self.assertEqual(self.engine.appended, [])
-
     async def test_client_mode_appends_may_name_an_issued_delegation_only(self):
         await self.start(config=SessionConfig(model="live-1"))
         issued = await self.session.delegation.delegate([])  # the session's client delegation announces it
@@ -441,6 +410,64 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     (error["code"], error["param"], error["client_event_id"]), ("invalid_value", "delegation_id", "a1")
                 )
         self.assertEqual(len(self.engine.appended), 3)
+
+    async def test_an_append_past_the_limit_per_minute_is_refused_and_neither_delivered_nor_acknowledged(self):
+        await self.start(max_appends_per_minute=2)
+        note = {"type": "session.thinking.append", "delegation_id": None}
+        await self.handle({**note, "event_id": "blank", "content": " "})  # refused by its checks: not counted
+        for label in ("n1", "n2", "n3"):
+            await self.handle({**note, "event_id": label, "content": label})
+        await self.handle({**note, "event_id": "blank2", "content": " "})  # past the limit: its own check first
+        self.assertEqual(self.engine.appended, [("thinking", "n1"), ("thinking", "n2")])
+        acks = [e["client_event_id"] for e in self.primary.events if e["type"] == "session.thinking.appended"]
+        self.assertEqual(acks, ["n1", "n2"])
+        errors = [e["error"] for e in self.primary.events if e["type"] == "error"]
+        self.assertEqual(
+            [(e["code"], e["client_event_id"]) for e in errors],
+            [("invalid_value", "blank"), ("rate_limit_exceeded", "n3"), ("invalid_value", "blank2")],
+        )
+        self.assertEqual(errors[1]["message"], "Too many appends: at most 2 per minute")
+
+    async def test_appends_are_accepted_again_once_the_minute_has_passed(self):
+        # The refused append is not counted: once the first two leave the window, two more fit.
+        await self.start(max_appends_per_minute=2)
+        note = {"type": "session.thinking.append", "delegation_id": None, "content": "note"}
+        with mock.patch("live.session.appends.time") as clock:  # the appends module's clock only, not the event loop's
+            for at, label in ((0, "a"), (0, "b"), (59, "c"), (61, "d"), (61, "e"), (61, "f")):
+                clock.monotonic.return_value = 1000.0 + at
+                await self.handle({**note, "event_id": label})
+        acks = [e["client_event_id"] for e in self.primary.events if e["type"] == "session.thinking.appended"]
+        self.assertEqual(acks, ["a", "b", "d", "e"])
+        errors = [e["error"] for e in self.primary.events if e["type"] == "error"]
+        self.assertEqual(
+            [(e["code"], e["client_event_id"]) for e in errors],
+            [("rate_limit_exceeded", "c"), ("rate_limit_exceeded", "f")],
+        )
+        self.assertEqual(len(self.engine.appended), 4)
+
+    async def test_the_minute_slides_with_each_append(self):
+        # "b" at 50 s is still within the minute at 62 s, so "d" is refused although "a" has left it.
+        await self.start(max_appends_per_minute=2)
+        note = {"type": "session.thinking.append", "delegation_id": None, "content": "note"}
+        with mock.patch("live.session.appends.time") as clock:
+            for at, label in ((0, "a"), (50, "b"), (61, "c"), (62, "d")):
+                clock.monotonic.return_value = 1000.0 + at
+                await self.handle({**note, "event_id": label})
+        acks = [e["client_event_id"] for e in self.primary.events if e["type"] == "session.thinking.appended"]
+        self.assertEqual(acks, ["a", "b", "c"])
+        errors = [e["error"] for e in self.primary.events if e["type"] == "error"]
+        self.assertEqual([(e["code"], e["client_event_id"]) for e in errors], [("rate_limit_exceeded", "d")])
+
+    async def test_the_three_kinds_of_append_count_against_one_limit(self):
+        await self.start(max_appends_per_minute=3)
+        kinds = ("session.instructions.append", "session.thinking.append", "session.commentary.append")
+        for kind in kinds * 2:
+            await self.handle({"type": kind, "event_id": kind, "delegation_id": None, "content": "ok"})
+        self.assertEqual([item[0] for item in self.engine.appended], ["instructions", "thinking", "commentary"])
+        errors = [e["error"] for e in self.primary.events if e["type"] == "error"]
+        self.assertEqual(
+            [(e["code"], e["client_event_id"]) for e in errors], [("rate_limit_exceeded", kind) for kind in kinds]
+        )
 
     async def test_response_commands_require_responses_mode_and_pass_through(self):
         await self.start()

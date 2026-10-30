@@ -5,31 +5,30 @@
 
 ``show`` (offered by the ``speak_display`` result format) returns the display it was given as an ``mcp_call`` item, and
 ``cancel_work`` (when ``delegation.work_tools`` lists it) stops the task after its current step. Their descriptions and
-parameters are the core's texts (``texts.work_tools``).
+parameters are the core's texts (``texts.work_tools``), and so is the output of a call to a name they do not offer
+(``texts.unknown_tool_output``).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from delegation_core.config import Texts
 
 
 class WorkTools:
     """One task's work tools (``port.ToolSource``)."""
 
-    def __init__(
-        self,
-        names: tuple[str, ...],
-        schemas: Mapping[str, Mapping[str, Any]],
-        cancel: Callable[[], str],
-        label: str,
-    ):
-        """Offer ``names``, worded by ``schemas`` (``texts.work_tools``); ``cancel`` stops the task after its step.
+    def __init__(self, names: tuple[str, ...], texts: Texts, cancel: Callable[[], str], label: str):
+        """Offer ``names``, worded by ``texts`` (``texts.work_tools``); ``cancel`` stops the task after its step.
 
         ``label`` is the server label of the display's ``mcp_call`` items (``delegation.display_label``).
         """
-        self.names, self.schemas, self.cancel, self.label = names, schemas, cancel, label
+        self.names, self.texts, self.cancel, self.label = names, texts, cancel, label
+        self.schemas = texts.work_tools
         self._run = {"show": self._show, "cancel_work": self._cancel_work}
 
     def tools(self) -> list[dict]:
@@ -52,7 +51,8 @@ class WorkTools:
         """
         run = self._run.get(name) if name in self.names else None
         if run is None:
-            return json.dumps({"error": f"Unknown tool {name}"})
+            offered = ", ".join(self.names) or self.texts.none
+            return json.dumps({"error": self.texts.unknown_tool_output.format(name=name, offered=offered)})
         try:
             given = json.loads(arguments or "{}")
         except ValueError:

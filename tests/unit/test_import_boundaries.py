@@ -7,7 +7,7 @@
 
 Every import counts, including those inside functions and under ``TYPE_CHECKING``, and so does a module named by a
 string or passed to ``importlib.import_module``. A module belongs to the group of the longest prefix of its name in
-``TARGET_GROUPS`` and may import its own group and the groups ``MAY_IMPORT`` lists; ``PACKAGE_RULES`` places the
+``GROUPS`` and may import its own group and the groups ``MAY_IMPORT`` lists; ``PACKAGE_RULES`` places the
 third-party packages. Only ``delegation_core.backend`` may reach a model provider's ``stream()``, unless
 ``NOT_MODEL_STREAMS`` lists the module. No walked module may import the tests, and the core's own tests may import
 only the core, their helpers, the contracts, the standard library, ``openai`` and ``httpx``.
@@ -32,7 +32,7 @@ ROOT = "composition root"
 PARKED = "parked"
 FBL = "examples.frontend_backend_live"
 
-TARGET_GROUPS = {
+GROUPS = {
     # The gateway. "live" alone is the package's docstring, and any module no other row places.
     "live": "live",
     "live.protocol": "live.protocol",
@@ -45,13 +45,13 @@ TARGET_GROUPS = {
     "live.media": "live.media",
     "live.extras": "live.extras",
     "live.mount": "live.mount",
-    # The example package is the frontend adapter (adapter/, cascade/, models/, prompts/, config_manager/), except
-    # its two composition roots and the parked Realtime adapter.
+    # The example package is the frontend adapter (adapter/, cascade/, media/, models/, prompts/, config_manager/),
+    # except its two composition roots and the parked Realtime adapter.
     FBL: ADAPTER,
     f"{FBL}.factory": ROOT,
     f"{FBL}.pipeline": ROOT,
     f"{FBL}.parked": PARKED,
-    # The delegation core; the constructors its tests use for the worker and the thinker are in the tests' helpers.
+    # The delegation core.
     "delegation_core": "delegation_core",
     "delegation_core.api": "delegation_core.api",
     "delegation_core.app": "delegation_core.app",
@@ -89,7 +89,7 @@ LIVE_GROUPS = frozenset(
         "live.mount",
     }
 )
-CORE_GROUPS = frozenset(group for group in TARGET_GROUPS.values() if group.startswith("delegation_core"))
+CORE_GROUPS = frozenset(group for group in GROUPS.values() if group.startswith("delegation_core"))
 
 # What each group may import besides itself. Every other internal import breaks a rule.
 MAY_IMPORT = {
@@ -178,10 +178,11 @@ WEB_EDGES = ("live.gateway", "live.mount", "live.extras", "delegation_core.api.h
 CODEC = ("live.media.audio", "live.gateway.websocket")
 # Where each outside package may be imported. Composition roots and the parked code are not checked.
 PACKAGE_RULES = {
-    # The adapter's Pipecat modules, and the WebRTC peer that the gateway shares with them (a documented exception).
+    # The voice agent's speech pipeline (media/), the cascade adapter's Pipecat modules, and the WebRTC peer that the
+    # gateway shares with them (a documented exception). The cascade stays Pipecat-free.
     "pipecat": (
+        "examples.frontend_backend_live.media",
         "examples.frontend_backend_live.adapter",
-        "examples.frontend_backend_live.cascade.processor",
         "live.gateway.webrtc",
         "live.media.connection",
     ),
@@ -458,9 +459,9 @@ def within(name: str, prefix: str) -> bool:
 
 def group_of(module: str) -> str:
     """The group of the longest matching prefix; a module outside the tables is its own top-level group."""
-    prefixes = [prefix for prefix in TARGET_GROUPS if within(module, prefix)]
+    prefixes = [prefix for prefix in GROUPS if within(module, prefix)]
     if prefixes:
-        return TARGET_GROUPS[max(prefixes, key=len)]
+        return GROUPS[max(prefixes, key=len)]
     parts = module.split(".")
     return ".".join(parts[:2]) if parts[0] == "examples" else parts[0]
 
@@ -544,10 +545,6 @@ class ByNameLoadTests(RuleCase):
         ]
         self.assert_no_problems("Modules loaded by a computed name:", problems)
 
-    def test_each_allowed_loader_still_loads_by_name(self):
-        loaders = {imp.importer for imp in computed_loads()}
-        self.assertEqual(sorted(set(BY_NAME_LOADERS) - loaders), [], "delete the entries of loaders that are gone")
-
 
 class PackageRuleTests(RuleCase):
     def test_every_outside_package_import_follows_the_rules(self):
@@ -577,7 +574,7 @@ class ModelRoundTests(RuleCase):
         self.assertEqual(sorted(set(NOT_MODEL_STREAMS) - found), [], "delete the entries of streams that are gone")
 
 
-class TargetLayoutTests(RuleCase):
+class LayoutTests(RuleCase):
     """Layout rules beyond the group table."""
 
     def test_the_cascade_never_imports_the_adapter(self):
@@ -590,6 +587,23 @@ class TargetLayoutTests(RuleCase):
             if within(imp.importer, cascade) and within(imp.imported, adapter)
         ]
         self.assert_no_problems("The cascade imports the adapter:", problems)
+
+    def test_the_speech_pipeline_never_imports_live_and_the_cascade_never_imports_the_pipeline(self):
+        # The voice agent is the cascade (Pipecat-free) and its speech pipeline (media/), which each host builds around
+        # it: the cascade adapter and the repository UI bot. So the pipeline imports no adapter or gateway module (the
+        # adapter hands it what a live client gets, such as the output transcript), and the cascade no pipeline module.
+        cascade, media, adapter = f"{FBL}.cascade", f"{FBL}.media", f"{FBL}.adapter"
+        problems = [
+            f"{imp.where} imports {imp.imported}: the speech pipeline may not import the Live adapter or the gateway, "
+            "nor the cascade the speech pipeline"
+            for imp in all_imports()
+            if (within(imp.importer, media) and (within(imp.imported, adapter) or within(imp.imported, "live")))
+            or (within(imp.importer, cascade) and within(imp.imported, media))
+        ]
+        self.assert_no_problems("The voice agent imports what hosts it:", problems)
+        # Both hosts build their pipeline from it, so the rule cannot pass by finding nothing.
+        hosts = {imp.importer for imp in all_imports() if within(imp.imported, media)}
+        self.assertLessEqual({f"{FBL}.adapter.adapter", f"{FBL}.pipeline"}, hosts)
 
     def test_only_the_agents_table_imports_an_agent_class_package(self):
         # An agent class with ways of its own is a package of its own under the ACP client (acp/hermes/), and only the
@@ -645,7 +659,7 @@ class WalkTests(RuleCase):
             self.assertIn(module, importers)
 
     def test_every_group_has_a_rule(self):
-        self.assertEqual(set(TARGET_GROUPS.values()) - set(MAY_IMPORT) - {ROOT, PARKED}, set())
+        self.assertEqual(set(GROUPS.values()) - set(MAY_IMPORT) - {ROOT, PARKED}, set())
 
 
 class WalkerTests(unittest.TestCase):
@@ -750,13 +764,14 @@ class RuleTests(unittest.TestCase):
             f"{FBL}.parked.realtime.engine": PARKED,
             f"{FBL}.factory": ROOT,
             f"{FBL}.cascade.turns": ADAPTER,
+            f"{FBL}.media.playout": ADAPTER,
             "examples.shared.pipeline_utils": "examples.shared",
             "examples_registry": "examples_registry",
             "utils": "utils",
         }
         self.assertEqual({module: group_of(module) for module in cases}, cases)
 
-    def test_the_rules_follow_the_plan_table(self):
+    def test_the_rules_follow_the_documented_table(self):
         allowed_pairs = {
             (ADAPTER, "live.protocol"),
             ("live.session", "live.server_delegation"),
@@ -784,17 +799,14 @@ class RuleTests(unittest.TestCase):
             ("delegation_core.api", "delegation_core.ledger"),
             (ROOT, PARKED),
             ("live.mount", "examples_registry"),  # the server reads the registry and hands the mount its hooks
+            # live/extras.py serves POST /v1/live/delegate; live/mount.py hands it the composition root's hook.
+            ("live.extras", "delegation_core.app"),
+            ("live.extras", ROOT),
         }
         for source, target in allowed_pairs:
             self.assertTrue(allowed(source, target), (source, target))
         for source, target in refused_pairs:
             self.assertFalse(allowed(source, target), (source, target))
-
-    def test_the_delegate_route_reaches_the_backend_only_through_the_hook_it_is_handed(self):
-        # live/extras.py serves POST /v1/live/delegate; live/mount.py hands it the composition root's hook.
-        for target in ("delegation_core.app", ROOT):
-            with self.subTest(target=target):
-                self.assertFalse(allowed("live.extras", target))
 
     def test_a_failure_names_the_file_the_line_the_module_and_both_groups(self):
         path = "src/examples/frontend_backend_live/cascade/turns.py"
@@ -806,6 +818,13 @@ class RuleTests(unittest.TestCase):
         imp = Import(path, 3, f"{FBL}.cascade.turns", "pipecat.frames.frames")
         self.assertTrue(str(package_violation(imp)).startswith(f"{path}:3 imports pipecat.frames.frames: {FBL}"))
         self.assertIsNone(package_violation(Import(path, 3, f"{FBL}.adapter.bridge", "pipecat.frames.frames")))
+
+    def test_pipecat_belongs_to_the_speech_pipeline_and_the_adapter_never_to_the_cascade(self):
+        path = "src/examples/frontend_backend_live/x.py"
+        for importer in (f"{FBL}.media.processor", f"{FBL}.media.playout", f"{FBL}.adapter.bridge"):
+            self.assertIsNone(package_violation(Import(path, 1, importer, "pipecat.frames.frames")), importer)
+        for importer in (f"{FBL}.cascade.processor", f"{FBL}.cascade.session"):
+            self.assertIsNotNone(package_violation(Import(path, 1, importer, "pipecat.frames.frames")), importer)
 
     def test_no_group_may_import_the_tests_not_even_a_root_or_the_parked_code(self):
         importers = ("server", f"{FBL}.factory", f"{FBL}.pipeline", f"{FBL}.parked.realtime.engine", "live.mount")

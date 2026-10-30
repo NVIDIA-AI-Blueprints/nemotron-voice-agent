@@ -8,6 +8,8 @@ timing, stops and every response the client reads; the adapter owns model rounds
 worker sessions. Only Responses shapes and the types below pass between them. There are three levels:
 :class:`AdapterSource` (one per delegation core, chosen by ``backend.adapter``), :class:`BackendAdapter` (one per IM
 session, with its :class:`Conductor` and ``max_running``) and :class:`BackendRun` (one per task).
+With ``delegation.hold_answers_while_deciding``, a task whose held answer becomes a progress note gets
+:meth:`BackendAdapter.start` again, so one task can run in more than one :class:`BackendRun`.
 
 **Works and tasks.** One request, or several joined requests, is one Work. A Work holds one or more tasks, and a task
 is one worker: one :class:`BackendRun`, which reads and reports through its own :class:`TaskContext`. A conductor may
@@ -31,16 +33,19 @@ connected, always has exactly one task per Work.
 * **E5 How the iteration ends.** After a round whose ``final_answer`` completed (the task answered); after a round
   with calls the app runs (the task waits: once the outputs are in, the IM calls :meth:`BackendRun.resume`, then
   :meth:`BackendRun.events` again); or by raising (the task failed). After :meth:`BackendRun.stop` it yields nothing
-  more.
+  more. An answer ends the iteration also while steering waits: steering never turns it into commentary, and a
+  batch the adapter took and did not apply is settled ``not_applied``, which the IM starts as the next request.
 * **E6 Every step the IM must see.** Each call the backend runs is reported by :meth:`TaskContext.tool_started`
   before it runs and :meth:`TaskContext.tool_outcome` when it ends, every outcome with an output, and a ``call_id``
   never runs twice. Steering reaches the IM only through :meth:`TaskContext.settle`. Nothing that read or changed the
   world stays out of the IM's sight.
 * **E7 Reading and retries.** An adapter that owns its model rounds reads :meth:`TaskContext.history` and
   :meth:`TaskContext.request` at the start of each model call, and takes boundary input at each safe point. An adapter
-  whose runtime owns the rounds (a harness) sends ``history()`` in the worker's first prompt and steering through
-  :meth:`TaskContext.take_boundary_input`. No attempt that dispatched a call or delivered an item is retried; an
-  attempt that did neither may be retried (an empty round once, never in a one-shot session).
+  whose runtime owns the rounds (a harness) sends ``history()`` in a worker session's first prompt and steering
+  through :meth:`TaskContext.take_boundary_input`; a session it keeps from an earlier task reads only the items that
+  follow, and only when ``history()`` begins with exactly the items that session was shown or wrote. No attempt that
+  dispatched a call or delivered an item is retried; an attempt that did neither may be retried (an empty round once,
+  never in a one-shot session).
 * **E8 Time.** A task ends or raises within the adapter's own limits (first event, silence, tool and turn timeouts),
   and :meth:`BackendRun.stop` returns within the adapter's stop limit. The IM's ``delegation.work_timeout_seconds`` is
   only the backstop, through its stop door, which waits at most ``delegation.stop_timeout_seconds`` for a stop.
@@ -53,11 +58,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, Self, runtime_checkable
 
 if TYPE_CHECKING:
-    from delegation_core.config import ModelEndpoint
+    from delegation_core.config import ModelEndpoint, Texts
 
 # Who runs a call: ``app`` for a function the request declared (the round ends and the task waits), ``backend`` for any
-# other, ``refused`` for one the IM will not run (after a stop, on a name clash, or while newer input waits to land, so
-# the backend re-plans with that input first); a refused call gets an output that says why.
+# other, ``refused`` for one the IM will not run (after a stop, on a name clash, while newer input waits to land, so
+# the backend re-plans with that input first, or for an app call that repeats the newest call that ran, which its task
+# made and the app answered, with no request since); a refused call gets an output that says why (a repeated call: the
+# app's answer).
 Route = Literal["app", "backend", "refused"]
 # How a call the backend ran ended; ``unclear`` means it may have taken effect without reporting in time, and the IM
 # answers it with ``texts.owed_output`` so the backend checks before it tries again.
@@ -99,12 +106,14 @@ def message_phase(item: dict) -> Phase:
 class ToolSource(Protocol):
     """Tools that run on the server side: a tool set the backend runs (``backend.tools``) or the IM's work tools.
 
-    One instance serves one IM session, so per-session state (a cart) is never shared. A source class builds an
-    instance from its YAML block with ``from_settings(block)``; the root makes a fresh set for each IM session
-    (:data:`ToolSources`). It must be idempotent per ``call_id``: a repeated call adds nothing a second time.
+    One instance serves one IM session, so per-session state is never shared. A source class builds an instance from
+    its YAML block with ``from_settings(block)``; the root makes a fresh set for each IM session (:data:`ToolSources`).
+    It must be idempotent per ``call_id``: a repeated call adds nothing a second time.
     """
 
-    label: str  # the server label of its calls' ``mcp_call`` items: "cafe", "hermes", "voiceclaw" ...
+    # The server label of its calls' mcp_call items: its name in backend.tools for a server tool source,
+    # delegation.display_label for the IM's work tools.
+    label: str
 
     def tools(self) -> list[dict]:
         """The function tools it offers, in the Responses shape (``{"type": "function", "name", ...}``)."""
@@ -141,6 +150,9 @@ class TaskContext(Protocol):
 
     work_id: str
     task_id: str
+    # The core's texts (texts in the core's file): they word the error outputs, not-run outputs and notes a run adds,
+    # such as texts.unknown_tool_output, texts.failed_output and texts.round_cap_note.
+    texts: Texts
 
     def request(self) -> dict:
         """The settings of the task's next model call: model, composed instructions and the app's functions.
@@ -157,7 +169,9 @@ class TaskContext(Protocol):
 
         The shared conversation, then the Work's input (every request it carries, each with the records block), the
         task's brief as ``texts.task_line`` when the conductor wrote one, and the task's own rounds. Steering that was
-        never applied is not in it.
+        never applied is not in it. When a Work ends, its requests (without the records block) and then each task's own
+        items join the shared conversation in order, so a later task's view begins with the items of the view of the
+        Work's first task, until the budget trims it or something else closes in between.
         """
 
     def position(self) -> int:
@@ -171,6 +185,9 @@ class TaskContext(Protocol):
 
     def route(self, call: dict) -> Route:
         """Who runs this call (:data:`Route`); asked once per call, before it runs."""
+
+    def refusal(self, call_id: str) -> str:
+        """The output the IM gave a call it refused (``route()`` said ``refused``): the not-run text that says why."""
 
     def tool_started(self, call: dict, source: str) -> None:
         """Report a call the backend runs as it starts; ``source`` is the label of the source that runs it."""
@@ -213,9 +230,9 @@ class BackendRun(Protocol):
     def steer(self) -> None:
         """A wake-up: steering waits. The adapter takes it with ``take_boundary_input()`` at its next safe point.
 
-        The LLM run redoes a round still streaming with nothing dispatched, once per Work; otherwise the steering
+        The LLM run redoes a round still streaming with nothing dispatched, once per run; otherwise the steering
         joins the next round. A harness worker uses the strategy its settings name (native steer, next prompt, or
-        cancel and re-prompt).
+        cancel and re-prompt). A round that answers first ends the task (E5).
         """
 
     async def resume(self) -> None:
@@ -284,7 +301,10 @@ class DecisionTarget(Protocol):
     * a Cancel of an ended Work or task does nothing;
     * a delegation placed twice in one ``decide()`` keeps its first placement (two Starts, a Start and a Steer, an
       Answer for a delegation already placed in a Work);
-    * an unknown Work or task is refused.
+    * an unknown Work or task is refused;
+    * with more than one task at a time, a Start (a Steer that becomes one included) whose tasks would make the running
+      and queued tasks of open Works more than the adapter's ``max_running`` is refused, so the steer rule places its
+      requests unless another decision does.
 
     The outcome texts come from ``texts.outcomes``.
     """
@@ -359,13 +379,18 @@ Place = Callable[[Decision], Awaitable[str]]
 
 
 class ControlTools(Protocol):
-    """A model conductor's vocabulary: its instructions and its control tools, from the core's texts.
+    """A model conductor's vocabulary from the core's texts: instructions, control tools, and idle and failed answers.
 
-    ``delegation_core.backend.control.ControlVocabulary`` implements it from ``texts.conductor_prompt`` and
-    ``texts.control_tools``.
+    ``delegation_core.backend.control.ControlVocabulary`` implements it from ``texts.conductor_prompt``,
+    ``texts.control_tools``, ``texts.refusal_reasons.idle`` and ``texts.failed_output``.
     """
 
-    prompt: str  # the conductor's instructions (texts.conductor_prompt); a rule conductor reads none
+    prompt: str  # texts.conductor_prompt, which holds {max_running}; a rule conductor reads none
+    idle: str  # the outcome of a control call that comes before a decide() takes its calls (a harness's session)
+    failed: str  # the answer to a control call that raised (a harness's session): holds {name} and {error}
+
+    def instructions(self, max_running: int) -> str:
+        """The conductor's instructions: ``prompt`` with the tasks its backend runs at once filled in."""
 
     def conductor_tools(self) -> list[dict]:
         """The four control tools, as Responses function tools."""
@@ -395,7 +420,9 @@ class Conductor(Protocol):
       conductor has not yet said which Work the arrival concerns; calls already running are never cut.
 
     The backend LLM's conductor is a rule (``backend.llm.conductor``: ``steer`` or ``start_each``); the LLM agent's is
-    one model call per ``decide()``; the harness's is its main session.
+    one model call per ``decide()``, or none while no Work is open (``backend.llm-agent.conductor.when_idle``); the
+    harness's is an agent session in a runtime process of its own. When they run one task at a time (``max_running``
+    1), theirs is the steer rule: every request joins the newest open Work or starts one, with no model call.
     """
 
     async def decide(self, given: ConductorInput, place: Place) -> None:

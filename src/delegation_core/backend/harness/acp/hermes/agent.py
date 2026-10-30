@@ -3,40 +3,42 @@
 
 """Hermes over ACP (``backend.harness.agent: hermes``): the connection facts specific to Hermes.
 
-Checked against ``hermes acp`` (stdio) at commit ``af26acab737db4382815aadcd73c06755471ab52``; from ``eb75627faf`` on,
-``hermes acp`` is a viewer of Hermes's gateway daemon and these facts need checking again. Paths are Hermes's.
+These facts hold for ``hermes acp`` over stdio at the tested Hermes commit that ``docs/design/architecture.md`` names
+(Deploy Hermes); a ``hermes acp`` that connects to Hermes's gateway daemon may differ. The paths name files of Hermes's
+source.
 
 * **Instructions.** ``session/new`` has no instructions field. Hermes builds the system prompt once from ``SOUL.md`` and
   the project context of the session's ``cwd``: the nearest ``.hermes.md``, else an ``AGENTS.md`` chain from the git
   root (``agent/prompt_builder.py``). So instructions go into the session's folder, pinned with an empty ``.git`` so no
-  parent file reaches it. A file that fails Hermes's threat scan is replaced by a ``[BLOCKED: ...]`` line (``:83-111``),
-  so the texts avoid its patterns ("you are now a", "do not tell the user", ...).
-* **Commands and the steer.** A prompt starting with ``/`` runs as a command (``acp_adapter/server.py:834-844``), so it
-  gets ``command_guard``. ``/steer <text>`` (``commands.py:287-301``) appends the text as a user row after the running
+  parent file reaches it. A file that fails Hermes's threat scan is replaced by a ``[BLOCKED: ...]`` line, so the texts
+  avoid its patterns ("you are now a", "do not tell the user", ...).
+* **Commands and the steer.** A prompt starting with ``/`` runs as a command (``acp_adapter/server.py``), so it gets
+  ``command_guard``. ``/steer <text>`` (``acp_adapter/commands.py``) appends the text as a user row after the running
   tool batch, or before the next model call, and never aborts a model call; its reply is the ack. A command's name ends
-  at the first space (``commands.py:94-95``). An idle session runs a steer's text as a prompt (``server.py:719-727``).
+  at the first space. An idle session runs a steer's text as a prompt.
 * **Messages.** Each model call's message has its own UUID ``messageId``, shared with its reasoning; Hermes's own
-  replies have none (``acp_adapter/events.py:185-236``). A tool card's title is ``<tool>: <preview>`` and the preview
-  may hold raw arguments (``acp_adapter/tools.py:193-198``). MCP tools are named ``mcp__<server>__<tool>``.
+  replies have none (``acp_adapter/events.py``). A tool card's title is ``<tool>: <preview>`` and the preview may hold
+  raw arguments (``acp_adapter/tools.py``). MCP tools are named ``mcp__<server>__<tool>``.
 * **Turn endings.** Provider errors, Hermes's own exits and an idle cancel's poisoned prompt also end in ``end_turn``,
-  with one chunk of Hermes's own text, and usage is the session's running total (``turn_finalizer.py``). So a turn is
-  answered only when its usage moved and its message came from a model call; a one-chunk reply that is a turn's only
-  text cannot be told apart from Hermes's own on the wire, so it fails the task.
-* **Cancel.** A cancel on an idle session makes the next prompt end unprocessed (``agent/turn_facade_lease.py:374-400``)
-  and a cancelled prompt's text is put before the next prompt (``server.py:201-211``), so a cancel goes only to a
-  running prompt and a cancelled session is never used again.
-* **Turns.** One process runs at most 4 turns at once (``server.py:46``); a turn in a client tool holds its slot.
+  with one chunk of Hermes's own text, and usage is the session's running total (``agent/turn_finalizer.py``). So a
+  turn is answered only when its usage moved and its message came from a model call; a one-chunk reply that is a
+  turn's only text cannot be told apart from Hermes's own on the wire, so it fails the task.
+* **Cancel.** An idle session's cancel makes the next prompt end unprocessed (``agent/turn_facade_lease.py``), so a
+  cancel goes only to a running prompt. A cancelled turn ends ``cancelled``, and its prompt's text is put before the
+  session's next prompt (``acp_adapter/server.py``).
+* **Turns.** One process runs at most 4 turns at once (``acp_adapter/server.py``); a turn in a client tool holds its
+  slot.
 * **Only our tools.** ``HERMES_ACP_SKIP_CONFIGURED_MCP=1`` skips only the startup connect to the configured MCP servers
-  (``acp_adapter/entry.py:210-216``); each ``session/new`` still waits for them (``acp_adapter/session.py:557-566``).
-  The operator's ``platform_toolsets.acp: [no_mcp]`` keeps their tools out (``hermes_cli/tools_config.py:692-704``).
+  (``acp_adapter/entry.py``); each ``session/new`` still waits for them (``acp_adapter/session.py``). The operator's
+  ``platform_toolsets.acp: [no_mcp]`` keeps their tools out (``hermes_cli/tools_config.py``).
 * **The bridge.** Hermes keys MCP servers by name per process, pauses a name for a minute after three error results in
-  a row (``tools/mcp_tool.py:476``), fails an MCP connect silently, and probes an MCP URL with HEAD and GET. So the
-  bridge gives each session a fresh name, never sets ``isError``, takes ``tools/list`` as readiness, and answers any
-  method but POST with 405.
-* **Permissions.** Hermes asks only before dangerous terminal commands and file edits
-  (``acp_adapter/permissions.py:128-153``); the session's MCP tools never ask.
+  a row (``tools/mcp_tool.py``), fails an MCP connect silently, and probes an MCP URL with HEAD and GET. So the bridge
+  gives each session a fresh name, never sets ``isError``, takes ``tools/list`` as readiness, and answers any method
+  but POST with 405.
+* **Permissions.** Hermes asks only before dangerous terminal commands and file edits (``acp_adapter/permissions.py``);
+  the session's MCP tools never ask.
 * **Close.** Hermes has no session close; on end-of-file on stdin it ends its sessions and exits 0
-  (``acp_adapter/entry.py:226-231``).
+  (``acp_adapter/entry.py``).
 """
 
 from __future__ import annotations
@@ -74,19 +76,17 @@ class HermesAgent(AcpAgent):
     turns_per_process: ClassVar[int | None] = 4
     keys: ClassVar[frozenset[str]] = frozenset({"instructions_file", "steer_command", "command_guard"})
 
-    def __init__(
-        self, *, instructions_file: str = ".hermes.md", steer_command: str = "/steer ", command_guard: str = "Request: "
-    ):
+    def __init__(self, *, instructions_file: str = ".hermes.md", steer_command: str = "/steer ", command_guard: str):
         """Hermes's file of instructions, its steer command, and the guard put before a prompt starting with ``/``."""
         self.instructions_file, self.steer_command, self.command_guard = instructions_file, steer_command, command_guard
 
     @classmethod
     def from_settings(cls, block: Mapping[str, Any]) -> HermesAgent:
-        """Build it from ``backend.harness.agents.hermes``; every key has its default.
+        """Build it from ``backend.harness.agents.hermes``, which must hold ``command_guard`` (it has no default).
 
         Raises:
             ValueError: An unknown key, a value that is empty or not text, an instructions file Hermes does not read, a
-                steer command with no space at its end, or a guard that would start a command itself.
+                steer command with no space at its end, or a guard that is missing or would start a command itself.
         """
         cls.check_keys(block)
         for key, value in block.items():
@@ -102,7 +102,9 @@ class HermesAgent(AcpAgent):
                 "backend.harness.agents.hermes.steer_command must end with a space: Hermes reads a command's name up "
                 "to the first space (quote it in YAML)"
             )
-        if block.get("command_guard", "").lstrip().startswith("/"):
+        if "command_guard" not in block:
+            raise ValueError("backend.harness.agents.hermes is missing command_guard")
+        if block["command_guard"].lstrip().startswith("/"):
             raise ValueError(
                 'backend.harness.agents.hermes.command_guard must not start with "/": Hermes would run it as a command'
             )

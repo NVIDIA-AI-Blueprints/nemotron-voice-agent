@@ -193,6 +193,8 @@ class AdapterChoiceTests(BuilderCase):
         self.assertIs(source.endpoints, endpoints)
         self.assertIsInstance(source.vocabulary, ControlVocabulary)
         self.assertEqual(source.vocabulary.prompt, SHIPPED.texts.conductor_prompt)
+        answers = (source.vocabulary.idle, source.vocabulary.failed)
+        self.assertEqual(answers, (SHIPPED.texts.refusal("idle"), SHIPPED.texts.failed_output))
         self.assertEqual(
             [tool["name"] for tool in source.vocabulary.conductor_tools()],
             ["start_work", "steer_work", "cancel_work", "answer_status"],
@@ -323,11 +325,6 @@ class CoreTests(BuilderCase):
 
 # ---------------------------------------------------------------------------------------- crossings
 class CrossingTests(unittest.TestCase):
-    def test_the_builder_takes_no_apology_and_no_frontend_hook(self):
-        self.assertNotIn("apology", build_core.__kwdefaults__ or {})
-        self.assertNotIn("apology", build_core.__code__.co_varnames)
-        self.assertIs(build_core.__kwdefaults__["observe"], log_trace)
-
     def test_the_core_builds_with_no_module_of_the_frontend_loaded(self):
         # A fresh interpreter: build a core from the shipped file with a test table, then list what got imported.
         script = f"""
@@ -360,9 +357,10 @@ print(sorted(name for name in sys.modules if name.startswith(("examples", "live"
 
 # ------------------------------------------------------------------------------------------------ the profiles
 class ProfileTests(unittest.TestCase):
-    def test_the_ui_bot_profile_runs_the_cafe_tools_and_the_envelope(self):
+    def test_the_ui_bot_profile_runs_the_cafe_tools_the_cafe_prompt_and_the_envelope(self):
         ui_bot = CoreSettings.load(FBL / "core.ui-bot.yaml")
         self.assertEqual({name: dict(block) for name, block in ui_bot.backend.tools.items()}, {"cafe": {}})
+        self.assertEqual((ui_bot.backend.prompt, SHIPPED.backend.prompt), ("thinker", "backend"))
         self.assertEqual(ui_bot.delegation.result_format, "speak_display")
         self.assertEqual(replace(ui_bot.delegation, result_format="plain"), SHIPPED.delegation)
         self.assertEqual(ui_bot.texts, SHIPPED.texts)
@@ -380,9 +378,6 @@ class ProfileTests(unittest.TestCase):
     def test_the_shipped_core_reports_an_unlisted_model(self):
         self.assertEqual(SHIPPED.backend.blocks["llm"]["unlisted_models"], "report")
         self.assertEqual((SHIPPED.backend.adapter, SHIPPED.backend.one_shot_adapter), ("llm", "llm"))
-
-    def test_the_voice_note_defaults_to_v2(self):
-        self.assertEqual(DelegationSettings().voice_note, "v2")
 
 
 # ------------------------------------------------------------------------------------------------ the real core

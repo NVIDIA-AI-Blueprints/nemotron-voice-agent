@@ -188,7 +188,6 @@ class CafeTools:
                 "cart": cart,
                 "total": cart["total"],
                 "confirmation_summary": ", ".join(f"{x['quantity']} {x['name']}" for x in cart["lines"]),
-                "next_step": "Read back the order and ask the user to confirm.",
             }
         self.order_seq += 1
         self.last_order = {

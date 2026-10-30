@@ -5,19 +5,13 @@
 // frontend wants help, never what with, so the page rebuilds the request from its transcript and the cart, runs
 // stateless rounds through `POST /v1/live/delegate` with the tools in this browser, and sends the final answer as one
 // `session.commentary.append`. Delegations run one at a time (ClientQueue), so two loops never change the cart at
-// once, and every step checks the call's stop signal so a loop never outlives its session.
+// once, and every step checks the call's stop signal so a loop never outlives its session. The lines the page sends
+// of its own are the example's, from `GET /v1/live/info` (`lines`).
 
 import { finalAnswers, progressLines } from "./delegations.js";
 
 /** Rounds that may run tools; one more round then answers with the last tools' outputs. */
 export const TOOL_ROUNDS = 6;
-/** The silent note that work started; the cart demo's own words. */
-export const STARTED_LINE = "Working on that now. Nothing has been ordered yet.";
-/** Said when no answer came and no tool ran. */
-export const FAILED_LINE = "I could not get that done, and nothing was changed. Please ask me again.";
-/** Said when no answer came after a tool ran: never "could not complete", since an order may have been placed. */
-export const PARTLY_DONE_LINE = "I may have only partly finished that, and some of it may already be done. " +
-  "Please check before asking again.";
 /** An append holds at most 500 tokens; this many characters stay well inside it. */
 export const MAX_APPEND_CHARS = 1200;
 
@@ -43,21 +37,18 @@ export class Transcript {
     if (this.lines.length > 40) this.lines.shift();
   }
 
-  /** The newest `turns` lines as "role: text", leaving out lines of seven characters or fewer. */
+  /** The newest `turns` lines as "role: text", leaving out lines with no transcribed text. */
   context(turns = 8) {
     return this.lines.slice(-turns)
+      .filter((line) => line.text.trim())
       .map((line) => `${line.role}: ${line.text.trim()}`)
-      .filter((line) => line.length > 7)
       .join("\n");
   }
 }
 
-/** The request the page rebuilds for one delegation, from its transcript and the cart. */
+/** The request the page rebuilds for one delegation: its transcript and the application's state (the cart), as data. */
 export function rebuiltRequest(transcript, cart) {
-  return `Recent voice transcript (may contain errors or corrections):\n${transcript || "(nothing transcribed yet)"}\n\n` +
-    `Current cart state: ${JSON.stringify(cart)}\n\n` +
-    "The voice assistant delegated the user's latest request to you. Handle it and return " +
-    "a short result suitable for reading aloud.";
+  return `Recent voice transcript:\n${transcript || "(nothing transcribed yet)"}\n\nApplication state:\n${JSON.stringify(cart)}`;
 }
 
 /** Runs tasks one at a time, in the order they were given; a task that fails does not stop the next. */
@@ -112,9 +103,11 @@ export function roundPoster({ fetch, headers, model, instructions, tools }) {
  * fills with the delegation's items. `round(input, signal)`: one route round (roundPoster). `runTool(call)`: runs one
  * function call in this browser and returns its `function_call_output` item. `send(event)`: false when the data
  * channel is not open. `view`: `stage(key, spec)`, `status(text, tone)` and `log(entry)` draw the card and the log.
+ * `lines`: the example's lines (`GET /v1/live/info`): `app_started` is the silent note that work started, and with
+ * no answer the caller hears `unclear` once a tool ran, else `apology`. An empty line is not sent.
  */
 export async function runClientDelegation({
-  delegationId, transcript, history, cart, round, runTool, send, nextEventId, signal, view, model,
+  delegationId, transcript, history, cart, round, runTool, send, nextEventId, signal, view, model, lines,
 }) {
   let toolRan = false;
   const stopped = () => {
@@ -130,8 +123,17 @@ export async function runClientDelegation({
   };
   if (signal.aborted) return stopped();
   view.status("running", "running");
+  if (!lines) {
+    view.stage("nolines", {
+      cls: "warn",
+      label: "no lines from GET /v1/live/info",
+      text: "This page sends none of its own lines: no note that work started, and no line if no answer comes.",
+    });
+  }
+  const configured = (name) => lines?.[name] || "";  // an empty append is refused, so an empty line is not sent
 
-  send({ type: "session.thinking.append", event_id: nextEventId("progress"), delegation_id: delegationId, content: STARTED_LINE });
+  const started = configured("app_started");
+  if (started) send({ type: "session.thinking.append", event_id: nextEventId("progress"), delegation_id: delegationId, content: started });
   const request = rebuiltRequest(transcript, cart());
   history.push({ type: "message", role: "user", content: [{ type: "input_text", text: request }] });
   view.stage("reconstruct", {
@@ -216,15 +218,21 @@ export async function runClientDelegation({
   } else if (!answer) {
     status = "no answer";
   }
-  const line = status === "answered" ? answer : (toolRan ? PARTLY_DONE_LINE : FAILED_LINE);
+  // With no answer, the failure line the frontend adapter chooses for its own delegations: `unclear` once a tool ran,
+  // since what it did is not known, else `apology`.
+  const line = status === "answered" ? answer : configured(toolRan ? "unclear" : "apology");
   view.stage("answer", {
     cls: status === "answered" ? "answer" : "warn",
     label: status === "answered" ? `our backend's verified result (${model})` : "no answer: the caller hears instead",
-    text: line,
+    text: line || "(no line: nothing is said)",
   });
 
   // The only thing the frontend receives; client delegation lets the page validate, redact or drop it first.
   if (signal.aborted) return stopped();
+  if (!line) {
+    view.status(status, "failed");
+    return { status, answer: "" };
+  }
   const sent = send({
     type: "session.commentary.append",
     event_id: nextEventId("result"),

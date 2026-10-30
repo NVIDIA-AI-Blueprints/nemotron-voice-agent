@@ -23,21 +23,47 @@ from examples.frontend_backend_live.models import Frontend
 from examples.frontend_backend_live.prompts import PromptSet, get_prompt_set
 from tests.unit.contracts.delegation_port import ScriptedDelegationPort
 
-# The work-note texts that the prompt set's v1 and v2 texts must equal byte for byte.
-WORK_IN_PROGRESS = """Work in progress (requests you delegated earlier; each answer is spoken automatically when it
-arrives):
-{items}
-Do not delegate again to ask for progress or to repeat one of these requests. If the caller asks how it is going,
-speak a short status."""
-NO_WORK_IN_PROGRESS = (
-    "Work in progress: none. Nothing is being checked or done for the caller right now: only a delegation starts work."
-)
-TYPED_REQUEST_LABEL = "a typed request"
-ANSWER_READY_LABEL = "answer ready, said next"
 
-
-def prompt_set(version: str = "v1") -> PromptSet:
+def prompt_set(version: str = "default") -> PromptSet:
     return get_prompt_set(version)
+
+
+# The default set, whose words the cascade writes in these tests, and its words for the work note, which tests build
+# the lines they expect with.
+PROMPTS = prompt_set()
+WORK = PROMPTS.work_texts
+WORK_IN_PROGRESS, NO_WORK_IN_PROGRESS = PROMPTS.work_in_progress, PROMPTS.no_work_in_progress
+ANSWER_READY_LABEL = PROMPTS.answer_ready_label
+
+
+def work_item(number, state, request, update=""):
+    """One entry of the work note, as the default set words it; ``update`` is its worded progress line, if any."""
+    return WORK.item.format(number=number, state=state, request=request, update=update)
+
+
+def running_state(seconds, steps="", ended=()):
+    """The state of running work, as the default set words it: the calls that ``ended`` (name, status), then ``steps``.
+
+    ``steps`` are the tools it uses now, when it uses some.
+    """
+    finished = ", ".join(WORK.ended_call.format(name=name, status=status) for name, status in ended)
+    state = WORK.running.format(seconds=seconds) + (WORK.ended.format(steps=finished) if finished else "")
+    return state + (WORK.steps.format(steps=steps) if steps else "")
+
+
+def progress_update(progress):
+    """An entry's newest progress line, as the default set words it."""
+    return WORK.update.format(progress=progress)
+
+
+def runtime_data(call: dict) -> str:
+    """The runtime data a talker call sends after its conversation (the work line and the cue): its last entry."""
+    return call["history"][-1]["content"]
+
+
+def conversation(call: dict) -> list[dict]:
+    """The conversation a talker call sends, without the runtime data after it."""
+    return call["history"][:-1]
 
 
 ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")
@@ -71,7 +97,7 @@ class ScriptedFrontend(Frontend):
         return step
 
 
-def agent(frontend: Frontend, version: str = "v1") -> LiveAgent:
+def agent(frontend: Frontend, version: str = "default") -> LiveAgent:
     prompts = prompt_set(version)
     return LiveAgent(frontend, prompts, Talker(frontend, prompts), CommentaryWriter(frontend, prompts))
 
@@ -172,9 +198,15 @@ def function_call(name, call_id="call_1"):
     return {"type": "response.output_item.done", "item": {**item, "status": "completed"}}
 
 
-def mcp_call(label, name, item_id="mcp_1", output="{}"):
+def mcp_call(label, name, item_id="mcp_1", output="{}", status="completed"):
     item = {"id": item_id, "type": "mcp_call", "server_label": label, "name": name, "arguments": "{}"}
-    return {"type": "response.output_item.done", "item": {**item, "output": output, "status": "completed"}}
+    return {"type": "response.output_item.done", "item": {**item, "output": output, "status": status}}
+
+
+def mcp_started(label, name, item_id="mcp_1"):
+    """A backend call starts, as the IM writes it: its item ``in_progress``, with no output yet."""
+    item = {"id": item_id, "type": "mcp_call", "server_label": label, "name": name, "arguments": "{}"}
+    return {"type": "response.output_item.added", "item": {**item, "output": None, "status": "in_progress"}}
 
 
 def completed(response_id):
@@ -223,7 +255,7 @@ class Call(unittest.IsolatedAsyncioTestCase):
         say=None,
         display=None,
         lines=None,
-        version="v1",
+        version="default",
     ):
         self.frontend = ScriptedFrontend(script)
         self.port = port or ScriptedDelegationPort()

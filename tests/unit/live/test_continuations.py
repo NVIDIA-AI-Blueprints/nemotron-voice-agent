@@ -233,15 +233,6 @@ class ResultItemTests(ContinuationCase):
         self.assertEqual((request["metadata"]["live_delegation_id"], request["input"]), (delegation_id, results))
         self.assertEqual(self.errors(), [])
 
-    async def test_a_repeat_is_passed_on_for_the_core_to_judge(self):
-        await self.start(waiting("resp_a", function_call("c1")))
-        await self.delegate()
-        await self.send({"type": "response.item.create", "item": output("c1", "first")})
-        await self.send({"type": "response.item.create", "item": output("c1", "second")})
-        [request] = await self.create("rc1")
-        self.assertEqual(request["input"], [output("c1", "first"), output("c1", "second")])
-        self.assertEqual(self.errors(), [])
-
     async def test_a_repeat_the_core_refuses_reaches_the_client_as_its_mistake_with_the_cores_reason(self):
         class JudgingCore(ContinuationCore):
             async def create_response(self, params):

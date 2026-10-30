@@ -5,15 +5,22 @@
 """``GET /v1/live/info``'s example half, composed by the root."""
 
 import asyncio
+import tempfile
 import threading
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import yaml
+
 from examples.frontend_backend_live import factory
-from examples.frontend_backend_live.prompts.catalog import role_instructions
+from examples.frontend_backend_live.cascade.lines import catalog_lines
+from examples.frontend_backend_live.prompts.catalog import CATALOG_PATH, role_instructions
 from tests.unit.contracts.base import ContractCase
 from tests.unit.frontend_backend_live.root.root_helpers import StubAdapter, clear_root_caches, stub_root
+from utils import load_yaml_file
 
 # What each backend adapter's source says of itself (its describe()), as the core adds it to its own.
 CORE_HALVES = {
@@ -32,6 +39,14 @@ CONSOLE_KEYS = (
     ("frontend", "model"),
     ("frontend", "provider"),
     ("prompt_version",),
+    # and the lines that client-mode.js, runToolCalls and the append presets send
+    ("lines", "apology"),
+    ("lines", "unclear"),
+    ("lines", "still_working"),
+    ("lines", "intro"),
+    ("lines", "app_started"),
+    # and the other append presets, by append type
+    ("presets",),
 )
 
 
@@ -66,7 +81,7 @@ class DescribeTests(DescribeCase):
     def test_the_console_keys_are_there_under_each_backend_adapter(self):
         for name, core_half in CORE_HALVES.items():
             with self.subTest(adapter=name):
-                factory.sample_tools.cache_clear()
+                factory.console_sample.cache_clear()
                 info = self.describe(core_half)
                 for path in CONSOLE_KEYS:
                     value = info
@@ -87,15 +102,33 @@ class DescribeTests(DescribeCase):
                 "slot": "thinker-llm",
                 "model": "org/back",
                 "base_url": "http://back/v1",
-                "prompt": "thinker",
+                "prompt": "backend",  # the core's own default, for a request with no instructions
             },
         )
         self.assertEqual(info["backend"]["provider"], "chat-completions")  # the console's backend badge
         self.assertEqual(info["backend_models"], ["org/back", "org/other"])  # the default first
+        # Both prefills are the cafe demo's prompts, which the console runs with the cafe's sample tools.
         self.assertEqual(
-            info["instructions"], {"frontend": "the talker's instructions", "backend": role_instructions("thinker")}
+            info["instructions"], {"frontend": role_instructions("talker"), "backend": role_instructions("thinker")}
         )
         self.assertEqual(info["warnings"], [])
+
+    def test_the_console_gets_the_lines_the_frontend_adapter_says_from_the_catalog(self):
+        lines = catalog_lines()
+        self.assertEqual(
+            self.describe(CORE_HALVES["llm"])["lines"],
+            {
+                "apology": lines.apology,
+                "unclear": lines.unclear,
+                "still_working": lines.still_working,
+                "intro": lines.intro,
+                "app_started": lines.app_started,
+            },
+        )
+
+    def test_the_console_gets_the_catalogs_append_presets_as_written(self):
+        block = load_yaml_file(CATALOG_PATH).get("console_presets") or {}
+        self.assertEqual(self.describe(CORE_HALVES["llm"])["presets"], block)
 
     def test_the_adapters_warnings_reach_the_console(self):
         warned = {**StubAdapter.describe(None, self.state.catalog), "warnings": ["the talker is degraded"]}
@@ -109,6 +142,16 @@ class DescribeTests(DescribeCase):
         self.describe(CORE_HALVES["llm"])
         self.assertEqual(len(self.blocks), 1)  # built once
 
+    def test_the_backend_prefill_and_the_sample_tools_come_from_the_ui_bot_profile_together(self):
+        shipped = factory.ui_bot_core(self.state.config)
+        profile = replace(shipped, backend=replace(shipped.backend, prompt="talker", tools={"kiosk": {}}))
+        with patch.object(factory, "ui_bot_core", return_value=profile) as read:
+            info = self.describe(CORE_HALVES["llm"])
+        self.assertEqual(info["instructions"]["backend"], role_instructions("talker"))  # as the UI bot's backend starts
+        self.assertEqual(self.blocks, [{"kiosk": {}}])
+        self.assertEqual(read.call_count, 1)  # one read of the profile for both
+        self.assertEqual(info["backend"]["prompt"], self.state.core.backend.prompt)  # the core keeps its own default
+
     def test_describe_reads_off_the_event_loop(self):
         threads = []
 
@@ -121,7 +164,35 @@ class DescribeTests(DescribeCase):
         self.assertIsNot(threads[0], threading.main_thread())
 
 
-class ShippedSampleToolsTests(ContractCase, unittest.TestCase):
+class ConsolePresetsTests(unittest.TestCase):
+    def setUp(self):
+        self.catalog = Path(self.enterContext(tempfile.TemporaryDirectory())) / "prompts.yaml"
+        self.enterContext(patch.object(factory, "CATALOG_PATH", self.catalog))
+
+    def write(self, contents: dict) -> None:
+        self.catalog.write_text(yaml.safe_dump(contents), encoding="utf-8")
+
+    def test_the_presets_are_the_blocks_pairs_and_none_without_it(self):
+        presets = {"session.thinking.append": [["Store state", "The machine is busy."]]}
+        self.write({"console_presets": presets})
+        self.assertEqual(factory.console_presets(), presets)
+        self.write({"lines": {}})
+        self.assertEqual(factory.console_presets(), {})
+
+    def test_a_malformed_block_is_refused(self):
+        malformed = {
+            "a text": "Say hi.",
+            "a preset that is a text": {"session.thinking.append": ["Say hi."]},
+            "a preset that is no text": {"session.thinking.append": [["Count", 3]]},
+        }
+        for name, block in malformed.items():
+            with self.subTest(malformed=name):
+                self.write({"console_presets": block})
+                with self.assertRaisesRegex(ValueError, "console_presets must map each append type"):
+                    factory.console_presets()
+
+
+class ShippedSampleTests(ContractCase, unittest.TestCase):
     def setUp(self):
         clear_root_caches(self)
         self.enterContext(patch.object(factory, "root", return_value=stub_root()))
@@ -129,7 +200,7 @@ class ShippedSampleToolsTests(ContractCase, unittest.TestCase):
     def test_the_shipped_profiles_sample_tools_are_the_cafe_demos(self):
         from delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
 
-        self.assertEqual(factory.sample_tools(), CAFE_TOOLS)
+        self.assertEqual(factory.console_sample().tools, CAFE_TOOLS)
 
 
 if __name__ == "__main__":

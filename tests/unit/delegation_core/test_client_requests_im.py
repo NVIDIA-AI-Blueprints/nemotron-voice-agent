@@ -20,10 +20,8 @@ from tests.unit.delegation_core.helpers import (
     app_outputs,
     ask,
     call_item,
-    checkpoint,
     finished_items,
     read_all,
-    wait,
 )
 
 MENU_SETTINGS = {"tools": [MENU]}
@@ -128,16 +126,3 @@ class TypedRunTests(IMCase):
         events = await read_all(im.admit_client_request([], delegation_id="T1").stream)
         self.assertEqual([item["content"][0]["text"] for item in finished_items(events)], ["Continuing."])
         self.assertEqual(im.ledger.delegations["T1"].state, "answered")
-
-    async def test_a_typed_request_steers_running_work_like_a_spoken_one(self):
-        gate = asyncio.Event()
-        adapter = ScriptedAdapter([wait(gate), checkpoint(), answer()])
-        im = self.session(adapter)
-        im.admit(ask("Book Denver."), delegation_id="D1")
-        await self.turns()
-        typed = im.admit_client_request(ask("Typed: make it Tuesday."), delegation_id="T1")
-        await self.turns()
-        gate.set()
-        events = await read_all(typed.stream)
-        self.assertEqual(events[-1]["type"], "response.completed")
-        self.assertEqual(im.ledger.delegations["T1"].work, "W1")

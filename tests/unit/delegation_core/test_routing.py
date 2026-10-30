@@ -18,6 +18,7 @@ from tests.unit.delegation_core.helpers import (
     IMCase,
     ScriptedAdapter,
     ScriptStep,
+    StartEach,
     answer,
     app_outputs,
     ask,
@@ -118,19 +119,6 @@ class RoutingTests(IMCase):
         self.assertEqual([item["call_id"] for item in outputs], ["call_a", "call_b", "call_c"])
         self.assertEqual([item["output"] for item in outputs], ["output call_a", "menu", "output call_c"])
         self.assertEqual(run.boundaries[-2].outputs, tuple(outputs))  # resume() handed them over, in call order
-
-    async def test_a_call_after_a_stop_was_asked_is_refused_and_answered_by_the_im(self):
-        gate = asyncio.Event()
-        im = self.session(ScriptedAdapter([wait(gate), answer()]))
-        im.admit(ask("Book it."), delegation_id="D1")
-        await self.turns()
-        task = im.works["W1"].tasks[0]
-        task.request_stop(ForNewerRequest())
-        self.assertEqual(task.route(call_item("book", {}, "call_book")), "refused")
-        given = task.take_boundary_input()
-        self.assertEqual(given.outputs[0]["output"], TEXTS.stopped_output)
-        self.assertEqual(im.ledger.actions["call_book"].state, "not_run")
-        self.assertFalse(im.ledger.tasks["W1.1"].acted)
 
     async def test_a_call_routed_while_steering_waits_is_refused_until_the_steering_lands(self):
         gate = asyncio.Event()
@@ -304,22 +292,9 @@ class RoutingTests(IMCase):
         self.assertEqual(im.ledger.actions["call_cancel"].state, "done")  # the IM records it all the same
         self.assertEqual(events[-1]["response"]["output"][-1]["content"][0]["text"], "Stopped as asked.")
 
-    async def test_a_function_the_app_and_a_work_tool_both_name_is_refused(self):
-        gate = asyncio.Event()
-        speak_display = SpeakDisplay(TEXTS.result_formats["speak_display"])
-        show = {"type": "function", "name": "show", "parameters": {"type": "object", "properties": {}}}
-        im = self.session(ScriptedAdapter([wait(gate), answer()]), result_format=speak_display)
-        im.admit(ask("Show it."), delegation_id="D1", settings={"tools": [show, MENU]})
-        await self.turns()
-        task = im.works["W1"].tasks[0]
-        self.assertEqual(task.route(call_item("show", {"display": "x"}, "c1")), "refused")
-        self.assertEqual(task.route(call_item("get_menu", {}, "c2")), "app")
-        self.assertEqual(task.route(call_item("lookup", {}, "c3")), "backend")
-        gate.set()
-
     async def test_each_refusal_gives_the_backend_its_own_reason(self):
         # The not-run output names the reason: newer input waits, the work is stopping (a stop request or its own
-        # cancel_work), or the app and a work tool name the same function.
+        # cancel_work), or the app and a work tool name the same function. A refused call never runs.
         gates = [asyncio.Event() for _ in range(4)]
         speak_display = SpeakDisplay(TEXTS.result_formats["speak_display"])
         show = {"type": "function", "name": "show", "parameters": {"type": "object", "properties": {}}}
@@ -341,6 +316,7 @@ class RoutingTests(IMCase):
             call = call_item("show" if name == "a name clash" else "book", {}, f"call_{number}")
             self.assertEqual(task.route(call), "refused", name)
             reasons[name] = task.take_boundary_input().outputs[0]["output"]
+            self.assertEqual(im.ledger.actions[call["call_id"]].state, "not_run", name)
             gates[number].set()
         self.assertEqual(
             reasons,
@@ -392,3 +368,221 @@ class UnclearCallTests(IMCase):
         (item,) = [item for item in finished_items(events) if item["type"] == "mcp_call"]
         self.assertEqual((item["status"], item["output"]), ("incomplete", TEXTS.owed_output))
         self.assertIn("response.mcp_call.failed", [event["type"] for event in events])
+
+
+# The app's functions of the repeated-call tests: a lookup and a write (the cafe's cart, client/public/live/cafe.js).
+USER = {"type": "function", "name": "get_user_details", "parameters": {"type": "object", "properties": {}}}
+CART = {"type": "function", "name": "manage_cart", "parameters": {"type": "object", "properties": {}}}
+APP = {"tools": [USER, CART]}
+
+
+class AppCallRound(ScriptStep):
+    """A round that calls the app's function ``name``; the task's events end only when the call goes to the app."""
+
+    def __init__(self, name: str, arguments: dict, call_id: str):
+        """Call ``name`` with ``arguments`` as ``call_id``."""
+        self.call = call_item(name, arguments, call_id)
+
+    async def play(self, run):
+        for event in run.round_events([self.call]):
+            yield event
+        run.routes.append(run.task.route(self.call))
+        self.ends = run.routes[-1] == "app"
+
+
+class RepeatedCallTests(IMCase):
+    async def answered(self, im, events, output, delegation_id="D1"):
+        """The app's ``output`` for the call ``events`` ended with: the continuation's events."""
+        return await read_all(
+            im.admit_client_request(app_outputs(events, output), delegation_id=delegation_id, settings=APP).stream
+        )
+
+    def outputs(self, run):
+        return {item["call_id"]: item["output"] for item in run.histories[-1] if item["type"] == "function_call_output"}
+
+    async def test_an_app_call_that_repeats_the_newest_call_is_answered_from_the_record_and_never_reaches_the_app(self):
+        lookup = {"user_id": "noh_mlr_9847"}
+        steps = [AppCallRound("get_user_details", lookup, "call_1"), AppCallRound("get_user_details", lookup, "call_2")]
+        adapter = ScriptedAdapter([*steps, answer("Please spell your user id.")])
+        im = self.session(adapter)
+        first = await read_all(im.admit(ask("Find my account."), delegation_id="D1", settings=APP).stream)
+        rest = await self.answered(im, first, "Error: user not found")
+        self.assertEqual([item["type"] for item in finished_items(rest)], ["message"])  # the repeat never went out
+        self.assertEqual(adapter.runs[0].routes, ["app", "refused"])
+        repeated = TEXTS.repeated_call_output.format(output="Error: user not found")
+        self.assertEqual(self.outputs(adapter.runs[0]), {"call_1": "Error: user not found", "call_2": repeated})
+        self.assertEqual((im.ledger.actions["call_1"].state, im.ledger.actions["call_2"].state), ("done", "not_run"))
+
+    async def test_arguments_compare_as_data_so_their_order_does_not_matter_but_their_values_do(self):
+        steps = [
+            AppCallRound("get_user_details", {"user_id": "a", "detail": 1}, "call_1"),
+            AppCallRound("get_user_details", {"detail": 1, "user_id": "a"}, "call_2"),  # the same data
+            AppCallRound("get_user_details", {"user_id": "a", "detail": True}, "call_3"),  # true is not 1
+        ]
+        adapter = ScriptedAdapter(steps)
+        im = self.session(adapter)
+        first = await read_all(im.admit(ask("Find a."), delegation_id="D1", settings=APP).stream)
+        rest = await self.answered(im, first, "Found a.")
+        self.assertEqual(adapter.runs[0].routes, ["app", "refused", "app"])
+        self.assertEqual(
+            [item["call_id"] for item in finished_items(rest) if item["type"] == "function_call"], ["call_3"]
+        )
+
+    async def test_a_call_that_ran_in_between_sends_the_repeat_to_the_app(self):
+        lookup = {"user_id": "noh_mlr_9847"}
+        steps = [
+            AppCallRound("get_user_details", lookup, "call_1"),
+            own_call("lookup", call_id="call_2"),
+            AppCallRound("get_user_details", lookup, "call_3"),
+        ]
+        adapter = ScriptedAdapter(steps)
+        im = self.session(adapter)
+        first = await read_all(im.admit(ask("Find my account."), delegation_id="D1", settings=APP).stream)
+        rest = await self.answered(im, first, "Error: user not found")
+        self.assertEqual(adapter.runs[0].routes, ["app", "backend", "app"])
+        self.assertEqual(
+            [item["call_id"] for item in finished_items(rest) if item["type"] == "function_call"], ["call_3"]
+        )
+
+    async def test_a_call_the_app_never_answered_is_not_answered_from_the_record(self):
+        # One round calls the same lookup twice: the app has answered neither, so both reach it.
+        lookup = {"user_id": "noh_mlr_9847"}
+        streamed = asyncio.Event()
+        streamed.set()
+        calls = [call_item("get_user_details", lookup, "call_1"), call_item("get_user_details", lookup, "call_2")]
+        adapter = ScriptedAdapter([StreamedRound(streamed, *calls)])
+        im = self.session(adapter)
+        events = await read_all(im.admit(ask("Find my account."), delegation_id="D1", settings=APP).stream)
+        self.assertEqual(adapter.runs[0].routes, ["app", "app"])
+        sent = [item["call_id"] for item in finished_items(events) if item["type"] == "function_call"]
+        self.assertEqual(sent, ["call_1", "call_2"])
+
+    async def test_a_new_requests_identical_add_reaches_the_app_and_its_repeat_within_that_request_does_not(self):
+        # "Add a latte." and then "Add another latte.": the caller asked again, so the second add reaches the app. The
+        # model's repeat of it within that request is answered from the record, so the cart gets two lattes.
+        latte = {"action": "add", "item_id": "lat"}
+        first = [AppCallRound("manage_cart", latte, "call_1"), answer("Added a latte.")]
+        second = [
+            AppCallRound("manage_cart", latte, "call_2"),
+            AppCallRound("manage_cart", latte, "call_3"),
+            answer("Added another latte."),
+        ]
+        adapter = ScriptedAdapter(first, second)
+        im = self.session(adapter)
+        events = await read_all(im.admit(ask("Add a latte."), delegation_id="D1", settings=APP).stream)
+        await self.answered(im, events, '{"cart": ["lat"]}')
+        events = await read_all(im.admit(ask("Add another latte."), delegation_id="D2", settings=APP).stream)
+        self.assertEqual(
+            [item["call_id"] for item in finished_items(events) if item["type"] == "function_call"], ["call_2"]
+        )
+        rest = await self.answered(im, events, '{"cart": ["lat", "lat"]}', "D2")
+        self.assertEqual([item["type"] for item in finished_items(rest)], ["message"])  # call_3 never went out
+        self.assertEqual((adapter.runs[0].routes, adapter.runs[1].routes), (["app"], ["app", "refused"]))
+        repeated = TEXTS.repeated_call_output.format(output='{"cart": ["lat", "lat"]}')
+        self.assertEqual(self.outputs(adapter.runs[1])["call_3"], repeated)
+
+    async def test_a_repeat_after_a_request_steered_into_the_work_reaches_the_app(self):
+        # "Find my account." and, while that work runs, "Try it again.", spoken or typed: the request joins the Work as
+        # steering and asks for the same lookup again, so the repeat reaches the app.
+        lookup = {"user_id": "noh_mlr_9847"}
+        for kind in ("spoken", "typed"):
+            with self.subTest(kind):
+                gate = asyncio.Event()
+                steps = [AppCallRound("get_user_details", lookup, "call_1"), wait(gate)]
+                adapter = ScriptedAdapter([*steps, AppCallRound("get_user_details", lookup, "call_2")])
+                im = self.session(adapter)
+                events = await read_all(im.admit(ask("Find my account."), delegation_id="D1", settings=APP).stream)
+                im.admit_client_request(app_outputs(events, "Error: user not found"), delegation_id="D1", settings=APP)
+                await self.turns()
+                admit = im.admit if kind == "spoken" else im.admit_client_request
+                steered = admit(ask("Try it again."), delegation_id="D2", settings=APP)
+                await self.turns()
+                gate.set()
+                events = await asyncio.wait_for(read_all(steered.stream), 2)
+                self.assertEqual(im.ledger.steerings["S1"].state, "applied")
+                self.assertEqual(adapter.runs[0].routes, ["app", "app"])
+                self.assertEqual(
+                    [item["call_id"] for item in finished_items(events) if item["type"] == "function_call"], ["call_2"]
+                )
+
+    async def test_a_request_that_comes_while_the_call_waits_for_the_app_sends_its_repeat_to_the_app(self):
+        # "Try it again." comes after the lookup went to the app and before its output: it came after the call ran.
+        lookup = {"user_id": "noh_mlr_9847"}
+        steps = [AppCallRound("get_user_details", lookup, "call_1"), AppCallRound("get_user_details", lookup, "call_2")]
+        adapter = ScriptedAdapter([*steps, answer("Found it.")])
+        im = self.session(adapter)
+        events = await read_all(im.admit(ask("Find my account."), delegation_id="D1", settings=APP).stream)
+        steered = im.admit(ask("Try it again."), delegation_id="D2", settings=APP)
+        await self.turns()
+        im.admit_client_request(app_outputs(events, "Error: user not found"), delegation_id="D1", settings=APP)
+        events = await asyncio.wait_for(read_all(steered.stream), 2)
+        self.assertEqual(im.ledger.steerings["S1"].state, "applied")
+        self.assertEqual(adapter.runs[0].routes, ["app", "app"])
+        self.assertEqual(
+            [item["call_id"] for item in finished_items(events) if item["type"] == "function_call"], ["call_2"]
+        )
+
+    async def test_typed_messages_that_come_with_the_apps_outputs_send_the_repeat_to_the_app(self):
+        # The continuation brings the add's output and the caller's typed "Add another latte.", which asks anew.
+        latte = {"action": "add", "item_id": "lat"}
+        steps = [AppCallRound("manage_cart", latte, "call_1"), AppCallRound("manage_cart", latte, "call_2")]
+        adapter = ScriptedAdapter([*steps, answer("Added another latte.")])
+        im = self.session(adapter)
+        events = await read_all(im.admit(ask("Add a latte."), delegation_id="D1", settings=APP).stream)
+        items = [*app_outputs(events, '{"cart": ["lat"]}'), *ask("Add another latte.")]
+        rest = await read_all(im.admit_client_request(items, delegation_id="D1", settings=APP).stream)
+        self.assertEqual(adapter.runs[0].routes, ["app", "app"])
+        self.assertEqual(
+            [item["call_id"] for item in finished_items(rest) if item["type"] == "function_call"], ["call_2"]
+        )
+
+    async def test_an_identical_call_of_another_task_reaches_the_app(self):
+        # "Add a latte." and "Add another latte." both come before the first add runs, and each starts a Work of its
+        # own. The newest call that ran is another task's, so the second Work's identical add reaches the app.
+        latte = {"action": "add", "item_id": "lat"}
+        gate = asyncio.Event()
+        first = [AppCallRound("manage_cart", latte, "call_1"), answer("Added a latte.")]
+        second = [wait(gate), AppCallRound("manage_cart", latte, "call_2"), answer("Added another latte.")]
+        adapter = ScriptedAdapter(first, second, max_running=2, conductor=StartEach())
+        im = self.session(adapter)
+        one = im.admit(ask("Add a latte."), delegation_id="D1", settings=APP)
+        two = im.admit(ask("Add another latte."), delegation_id="D2", settings=APP)
+        await self.answered(im, await asyncio.wait_for(read_all(one.stream), 2), '{"cart": ["lat"]}')
+        gate.set()
+        events = await asyncio.wait_for(read_all(two.stream), 2)
+        self.assertEqual((adapter.runs[0].routes, adapter.runs[1].routes), (["app"], ["app"]))
+        self.assertEqual(
+            [item["call_id"] for item in finished_items(events) if item["type"] == "function_call"], ["call_2"]
+        )
+
+    async def test_a_work_that_took_two_asks_for_the_same_add_sends_both_adds_to_the_app(self):
+        # "Add another latte." comes while the first round still streams: the commit gate refuses that round's add, and
+        # the task plans again with both asks. A Work that took two requests may ask for the same change twice, so its
+        # second identical add reaches the app.
+        latte = {"action": "add", "item_id": "lat"}
+        streamed = asyncio.Event()
+        script = [
+            StreamedRound(streamed, call_item("manage_cart", latte, "call_1")),
+            AppCallRound("manage_cart", latte, "call_2"),
+            AppCallRound("manage_cart", latte, "call_3"),
+            answer("Two lattes are in the cart."),
+        ]
+        adapter = ScriptedAdapter(script)
+        im = self.session(adapter)
+        first = im.admit(ask("Add a latte."), delegation_id="D1", settings=APP)
+        await self.turns()
+        second = im.admit(ask("Add another latte."), delegation_id="D2", settings=APP)
+        await self.turns()
+        streamed.set()
+        await asyncio.wait_for(read_all(first.stream), 2)
+        events = await asyncio.wait_for(read_all(second.stream), 2)
+        self.assertEqual(im.ledger.steerings["S1"].state, "applied")
+        events = await self.answered(im, events, '{"cart": ["lat"]}', "D2")
+        self.assertEqual(
+            [item["call_id"] for item in finished_items(events) if item["type"] == "function_call"], ["call_3"]
+        )
+        rest = await self.answered(im, events, '{"cart": ["lat", "lat"]}', "D2")
+        self.assertEqual([item["type"] for item in finished_items(rest)], ["message"])
+        self.assertEqual(adapter.runs[0].routes, ["refused", "app", "app"])
+        outputs = {"call_1": TEXTS.not_run_output, "call_2": '{"cart": ["lat"]}', "call_3": '{"cart": ["lat", "lat"]}'}
+        self.assertEqual(self.outputs(adapter.runs[0]), outputs)

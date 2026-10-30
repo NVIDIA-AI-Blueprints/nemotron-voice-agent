@@ -6,7 +6,9 @@
 **Opening.** The first ``events()`` takes a turn of the workers' process, readies the session's folder with the
 instructions the IM composed, opens the session's bridge door and ``session/new``, and requires the agent to list the
 door's tools (one retry under a new server name, then the task fails). The first prompt is the task's ``history()`` as
-a transcript, after any blocks the agent class puts first.
+a transcript, after any blocks the agent class puts first. A session the session policy kept
+(``backend.harness.session``) takes the task instead when it fits (:meth:`WorkerRun._adopt`), and its prompt is only
+the items of ``history()`` that follow the ones it was shown or wrote.
 
 **Rounds.** The agent runs its own model calls; a round is what the IM reads as one, from ``response.created`` to one
 terminal. A round ends when a new model message begins after tool activity (a round's calls come after its messages);
@@ -24,11 +26,14 @@ usage across all of a session's turns.
 ``applied`` once a tool result came after the ack and a new model call began, or a new model message began while the
 session's transcript held a tool row. A batch not taken by the turn's end goes as the next prompt. A steer that reaches
 an idle session runs as a turn of its own, so the run reads until every prompt has returned.
+A turn that answered ends the task even while steering waits: each batch it did not take goes back to the IM
+``not_applied``, and the IM starts it as the next request; only a turn without an answer goes on with it.
 
 **Stops** are level-triggered and never cleared: ``session/cancel`` only while a prompt is outstanding, the door
 retired, then a wait for every prompt to end within ``stop_timeout_seconds`` (``stopped``, else ``unconfirmed``); the
 session is never used again. A turn past ``turn_timeout_seconds`` of reading time is cancelled the same way and fails
-the task.
+the task. Only the session of a task that answered, with nothing of the task left in it, is ever kept
+(:meth:`WorkerRun._kept`).
 """
 
 from __future__ import annotations
@@ -44,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from delegation_core.backend.port import Steering, StopOutcome, TaskContext
+from delegation_core.backend.port import BoundaryInput, Steering, StopOutcome, TaskContext
 from delegation_core.ids import uid
 
 from .bridge import WorkerDoor
@@ -67,6 +72,7 @@ from .protocol import (
     Wake,
 )
 from .runtime import give_back
+from .sessions import KeptSession, keys
 
 if TYPE_CHECKING:
     from .adapter import HarnessAdapter
@@ -158,9 +164,10 @@ class WorkerRun:
     def __init__(self, task: TaskContext, host: HarnessAdapter):
         """Run ``task`` on ``host``'s agent; nothing is opened before :meth:`events`."""
         self.task, self.host = task, host
-        self.settings, self.prompts, self.agent = host.settings, host.settings.prompts, host.settings.agent
+        self.settings, self.agent = host.settings, host.settings.agent
         self.round = 0
         self.done = False  # the task answered or failed: events() yields nothing more
+        self.answered = False  # the task answered
         self.stopped = False  # level: set by stop(), never cleared
         self.waits = False  # the last round ended with an app call: the iteration ends until resume()
         self.runtime: Runtime | None = None
@@ -168,6 +175,8 @@ class WorkerRun:
         self.door: WorkerDoor | None = None
         self.mailbox: Mailbox = asyncio.Queue()
         self.turn: _Turn | None = None
+        self.instructions = ""  # the composed instructions the session was opened with
+        self.shown: list[tuple] = []  # the keys of every item the session was shown or wrote, in the IM's order
         # The prompts sent whose end the run has not read yet: the turn is over when none is left, in mailbox order
         # (the session's own outstanding set runs ahead of the mailbox).
         self.open_prompts: set[int] = set()
@@ -227,20 +236,20 @@ class WorkerRun:
         batch ends and puts it after the results.
         """
         self.task.trace("tools.completed", round=self.round)
-        boundary = self.task.take_boundary_input()
+        boundary = self._boundary()
         outputs = {item.get("call_id"): item for item in boundary.outputs}
         before = set(self.sent)
         steering = boundary.steering
         while steering is not None:
             self.settings.steering.deliver(self, steering)
-            steering = self.task.take_boundary_input().steering
+            steering = self._boundary().steering
         steers = [number for number in self.sent if number not in before]
         if steers and self.session is not None:
             with contextlib.suppress(TimeoutError):
                 async with asyncio.timeout(self.settings.ready_timeout_seconds):
                     await asyncio.gather(*(self.session.ended(number) for number in steers))
         for held in self.forwarded:
-            held.reply(output_text(outputs.get(held.call_id)) or self.prompts.unclear)
+            held.reply(output_text(outputs.get(held.call_id)) or self.task.texts.owed_output)
         self.forwarded = []
 
     async def stop(self) -> StopOutcome:
@@ -259,7 +268,7 @@ class WorkerRun:
         session = self.session
         if session is not None and session.outstanding:
             await session.cancel()
-        self._close_door()
+        self._close_door(self.task.texts.stopped_output)
         if session is not None:
             try:
                 async with asyncio.timeout(self.settings.stop_timeout_seconds):
@@ -271,11 +280,18 @@ class WorkerRun:
         return outcome
 
     async def release(self) -> None:
-        """Retire the door and the session; give back the run's turn of its runtime process.
+        """Keep the session for a later task when the session policy takes it; else retire the door and the session.
 
-        Safe to call twice: the second call finds no runtime.
+        Either way the run's turn of its runtime process is given back: a kept session holds none while it waits. Safe
+        to call twice: the second call finds no runtime.
         """
-        self._close_door()
+        kept = self._kept()
+        if kept is not None and self.settings.sessions.keep(self.host, kept):
+            self.runtime = self.session = self.door = None
+            kept.runtime.leave()
+            self.task.trace("harness.session_kept", server=kept.door.name, session=kept.session.id)
+            return
+        self._close_door(self.task.texts.stopped_output)
         session = self.session
         if session is not None:
             session.retire()
@@ -283,15 +299,82 @@ class WorkerRun:
         if runtime is not None:
             give_back(runtime, session)
 
-    def _close_door(self) -> None:
+    def _close_door(self, text: str) -> None:
+        """Close the session's door; the app calls it holds end with ``text``."""
         if self.door is not None:
-            self.host.bridge.close(self.door, self.prompts.stopped)
+            self.host.bridge.close(self.door, text)
+
+    def _kept(self) -> KeptSession | None:
+        """The session as a later task may take it: only once its task answered and nothing of the task is left in it.
+
+        No stopped, failed or timed-out task's session qualifies, nor one with a prompt, a batch or a call of the task
+        still open, or whose client has ended. Nor does one sent a cancel: its turn may answer before the cancel
+        reaches the agent, and an idle agent takes a cancel for its next prompt (Hermes ends that one unprocessed).
+        """
+        session, door, runtime = self.session, self.door, self.runtime
+        if session is None or door is None or runtime is None or not self.answered or self.stopped:
+            return None
+        if self.turn is not None and self.turn.cancelled_by_us:
+            return None
+        left = (session.outstanding, self.reprompts, self.next_prompts, self.sent, self.forwarded, self.app_queue)
+        if any(left) or self.running or self.cards_open or door.held or not runtime.client.alive:
+            return None
+        shown = list(self.shown)
+        return KeptSession(
+            runtime, session, door, self.mailbox, self.instructions, shown, self.total, self.usage, self.tool_rows
+        )
 
     # ------------------------------------------------------------------------------------------------ opening
     async def _open(self) -> None:
-        """Open the session (see the module's docstring) and send the first prompt."""
+        """Take the session the session policy kept when it fits, else open one (the module's docstring); prompt it."""
+        kept = self.settings.sessions.take(self.host)
+        if kept is not None and self._adopt(kept):
+            return
         self.runtime = await self.host.shared(self.host.workers)
         await self._open_session(self.task.request().get("instructions") or "")
+
+    def _adopt(self, kept: KeptSession) -> bool:
+        """Take over ``kept`` when it fits, and prompt it with the items it has not read; else retire it (``False``).
+
+        It fits when its client is alive, it was opened with this task's instructions, its process has a turn free, its
+        door serves this task's toolset (:meth:`WorkerDoor.rebind`), and this task's ``history()``, steering that came
+        before the prompt included, begins with exactly the items it was shown or wrote, with more after them. The
+        session's usage counters carry over, since ACP counts usage across all of a session's turns.
+        """
+        instructions = self.task.request().get("instructions") or ""
+        fits = kept.runtime.client.alive and kept.instructions == instructions
+        if not (fits and self.host.take_place(kept.runtime)):
+            kept.retire(self.host.bridge)
+            return False
+        if not kept.door.rebind(self.task, self.host.tools):
+            return self._retire_kept(kept)
+        try:
+            history = self.task.history()
+            # Steering joins at the end: it is applied only if the history before it begins with what the session read.
+            if keys(history)[: len(kept.shown)] == kept.shown:
+                self._apply_before_prompt([])
+                history = self.task.history()
+        except BaseException:  # the task fails (its history is over the budget): the session leaves nothing behind
+            self._retire_kept(kept)
+            raise
+        shown = keys(history)
+        if shown[: len(kept.shown)] != kept.shown or len(shown) == len(kept.shown):
+            return self._retire_kept(kept)
+        self.runtime, self.session, self.door, self.mailbox = kept.runtime, kept.session, kept.door, kept.mailbox
+        while not self.mailbox.empty():  # what reached it after its task's run ended: nothing of this task
+            self.mailbox.get_nowait()
+        self.instructions, self.shown = instructions, shown
+        self.total, self.usage, self.tool_rows = kept.total, kept.usage, kept.tool_rows
+        rest = history[len(kept.shown) :]
+        self.task.trace("harness.session_reused", server=kept.door.name, session=kept.session.id, items=len(rest))
+        self._start_turn(self.session.prompt(self.host.renderer.transcript(rest)))
+        return True
+
+    def _retire_kept(self, kept: KeptSession) -> bool:
+        """A kept session that does not fit gives back the place it took and is retired; ``False``."""
+        kept.runtime.leave()
+        kept.retire(self.host.bridge)
+        return False
 
     async def _open_session(self, instructions: str, batches: tuple[Steering, ...] = ()) -> None:
         """A fresh session in the run's runtime, whose first prompt is the history with ``batches`` applied."""
@@ -304,7 +387,6 @@ class WorkerRun:
                 self.task,
                 self.host.tools,
                 mailbox,
-                prompts=self.prompts,
                 tool_timeout_seconds=self.settings.tool_timeout_seconds,
             )
             server, session = self.host.bridge.open(door), None
@@ -316,17 +398,18 @@ class WorkerRun:
             except BaseException:  # a failed or cancelled opening leaves no door and no session behind
                 if session is not None:
                     session.retire()
-                self.host.bridge.close(door, self.prompts.stopped)
+                self.host.bridge.close(door, self.task.texts.stopped_output)
                 raise
             if listed:
                 break
             session.retire()
-            self.host.bridge.close(door, self.prompts.stopped)
+            self.host.bridge.close(door, self.task.texts.stopped_output)
             logger.warning(f"harness.session_not_ready task={self.task.task_id} server={name} attempt={attempt}")
         else:
             raise RuntimeError("The agent did not list the session's tools: its MCP connection to the bridge failed")
         self.mailbox, self.door, self.session = mailbox, door, session
         self.total, self.usage = 0, None  # a fresh session's counters start at 0 (ACP: usage across all turns)
+        self.instructions = instructions
         self.task.trace(
             "harness.session_opened", server=name, session=session.id, seconds=round(time.monotonic() - started, 3)
         )
@@ -334,7 +417,9 @@ class WorkerRun:
             await self.release()
             return
         self._apply_before_prompt(list(batches))
-        text = "\n\n".join([*blocks, self.host.renderer.worker_input(self.task.history())])
+        history = self.task.history()
+        self.shown = keys(history)
+        text = "\n\n".join([*blocks, self.host.renderer.worker_input(history)])
         self._start_turn(session.prompt(text))
 
     def _apply_before_prompt(self, batches: list[Steering]) -> None:
@@ -344,7 +429,7 @@ class WorkerRun:
         history carries them in that order.
         """
         for steering in self._collect(batches):
-            self.task.settle(steering, "applied")
+            self._applied(steering)
             self.task.trace("harness.steer_applied", round=self.round, steering=steering.id, how="first_prompt")
 
     async def _listed(self, door: WorkerDoor) -> bool:
@@ -428,6 +513,7 @@ class WorkerRun:
                     }
                 )
         items += [dict(call) for call in self.calls]
+        self.shown += keys(items)
         for index, item in enumerate(items):
             opening = {**item, "status": "in_progress"}
             if item["type"] == "message":
@@ -456,10 +542,10 @@ class WorkerRun:
 
     def _between_rounds(self) -> None:
         """A safe point: outputs join the history, and every waiting steering batch goes to the strategy."""
-        steering = self.task.take_boundary_input().steering
+        steering = self._boundary().steering
         while steering is not None:
             self.settings.steering.deliver(self, steering)
-            steering = self.task.take_boundary_input().steering
+            steering = self._boundary().steering
 
     # ------------------------------------------------------------------------------------------------ endings
     async def _finish_next_call(self) -> AsyncIterator[dict]:
@@ -504,12 +590,21 @@ class WorkerRun:
         turn = self.turn
         if self.stopped:
             return
+        failure = self._turn_failure(turn)
+        candidate = self._candidate()
+        reason = failure or self._unparsed(turn, candidate)
+        if reason is None:  # the answer, also while steering waits: what the turn did not take goes back to the IM
+            self._leave_unapplied(turn)
+            self.task.trace("harness.answered", round=self.round, seconds=round(time.monotonic() - turn.started, 3))
+            async for event in self._close(candidate, self._turn_usage(turn)):
+                yield event
+            self.done = self.answered = True
+            return
         if self.reprompts and (turn.cancelled_by_us or turn.stop == "end_turn"):
             async for event in self._close(None):
                 yield event
             await self._reopen()
             return
-        failure = self._turn_failure(turn)
         if failure is not None:
             async for event in self._fail(failure, self._last_text()):
                 yield event
@@ -523,15 +618,18 @@ class WorkerRun:
                 yield event
             self._prompt_next_now()
             return
-        candidate = self._candidate()
-        reason = self._unparsed(turn, candidate)
-        if reason is not None:
-            async for event in self._fail(reason, self._last_text()):
-                yield event
-        self.task.trace("harness.answered", round=self.round, seconds=round(time.monotonic() - turn.started, 3))
-        async for event in self._close(candidate, self._turn_usage(turn)):
+        async for event in self._fail(reason, self._last_text()):
             yield event
-        self.done = True
+
+    def _leave_unapplied(self, turn: _Turn) -> None:
+        """The turn answered: every batch it took and did not apply goes back to the IM ``not_applied``, once."""
+        batches = [*self.next_prompts, *turn.early, *self.reprompts]
+        batches += [sent.steering for sent in self.sent.values() if not sent.settled]
+        self.next_prompts, self.reprompts, self.sent, turn.early = [], [], {}, []
+        for steering in batches:
+            self.task.settle(steering, "not_applied")
+        if batches:
+            self.task.trace("harness.steer_left", round=self.round, batches=len(batches))
 
     def _turn_failure(self, turn: _Turn) -> str | None:
         if turn.error is not None:
@@ -575,11 +673,22 @@ class WorkerRun:
 
         So a batch settled next joins after the outputs of the calls before it, in the agent's own order.
         """
-        steering = self.task.take_boundary_input().steering
+        steering = self._boundary().steering
         while steering is not None:
             batches.append(steering)
-            steering = self.task.take_boundary_input().steering
+            steering = self._boundary().steering
         return batches
+
+    def _boundary(self) -> BoundaryInput:
+        """A safe point (``TaskContext.take_boundary_input``): the outputs that join are items the session has read."""
+        boundary = self.task.take_boundary_input()
+        self.shown += keys(boundary.outputs)
+        return boundary
+
+    def _applied(self, steering: Steering) -> None:
+        """Settle ``steering`` ``applied``: its items join the history, and the session has read them."""
+        self.task.settle(steering, "applied")
+        self.shown += keys(steering.items)
 
     def _prompt_next_now(self) -> None:
         """Send every batch the turn did not take as the next prompt; each is ``applied`` once sent."""
@@ -589,14 +698,14 @@ class WorkerRun:
         text = "\n\n".join(self.host.renderer.steering(steering) for steering in batches)
         prompt = self.session.prompt(text)
         for steering in batches:
-            self.task.settle(steering, "applied")
+            self._applied(steering)
         self.task.trace("harness.steer_prompted", round=self.round, batches=len(batches))
         self._start_turn(prompt)
 
     async def _reopen(self) -> None:
         """After a cancel for steering: a fresh session, its first prompt the history with the batches."""
         batches, self.reprompts = self.reprompts, []
-        self._close_door()
+        self._close_door(self.task.texts.not_run_output)
         if self.session is not None:
             self.session.retire()
         self.sent, self.next_prompts, self.app_queue, self.forwarded = {}, [], deque(), []
@@ -679,7 +788,7 @@ class WorkerRun:
         for sent in delivering:
             if not sent.settled:
                 sent.settled = True
-                self.task.settle(sent.steering, "applied")
+                self._applied(sent.steering)
                 self.task.trace("harness.steer_applied", round=self.round, steering=sent.steering.id)
         self.sent = {prompt: sent for prompt, sent in self.sent.items() if not sent.settled}
 
@@ -759,7 +868,7 @@ class WorkerRun:
             sent.result_after_ack = True
         call = self.runtime_calls.pop(event.call_id, None)
         if call is not None:
-            self.task.tool_outcome(event.call_id, event.output or "(no output)", "failed" if event.failed else "done")
+            self.task.tool_outcome(event.call_id, event.output, "failed" if event.failed else "done")
         self._ready_app()
         self._cancel_for_reprompt()
 
@@ -802,7 +911,7 @@ class WorkerRun:
             self.task.trace("harness.steer_acked", round=self.round, steering=sent.steering.id)
         elif turn.activity_after_main and not sent.settled:  # it ran as a turn of its own after the turn ended
             sent.settled = True
-            self.task.settle(sent.steering, "applied")
+            self._applied(sent.steering)
             self.task.trace("harness.steer_applied", round=self.round, steering=sent.steering.id, how="turn")
 
     def app_call(self, event: AppCall) -> None:
@@ -862,11 +971,14 @@ class WorkerRun:
 
     def _refuse(self, held: HeldCall) -> None:
         self.calls.append(held.call)
-        held.reply(self.prompts.not_run)
+        held.reply(self.task.refusal(held.call_id))
 
     def _misrouted(self, held: HeldCall) -> None:
-        """An app function the IM routes to the backend (it never should): reported failed, answered with the error."""
-        output = json.dumps({"error": f"{held.call['name']} is the app's function; the harness cannot run it"})
+        """An app function the IM routes to the backend (it never should): reported failed, answered with the error.
+
+        The error is the core's ``texts.misrouted_output``.
+        """
+        output = json.dumps({"error": self.task.texts.misrouted_output.format(name=held.call["name"])})
         self.calls.append(held.call)
         self.task.tool_started(held.call, self.settings.runtime_label)
         self.task.tool_outcome(held.call_id, output, "failed")

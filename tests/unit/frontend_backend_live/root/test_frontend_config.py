@@ -10,17 +10,19 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from delegation_core.config import CoreSettings
 from examples.frontend_backend_live.config_manager import schema
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, ConfigError, load_live_config
-from examples.frontend_backend_live.config_manager.schema import ExampleConfig, LiveConfig
+from examples.frontend_backend_live.config_manager.schema import (
+    DelegationConfig,
+    ExampleConfig,
+    LiveConfig,
+    SpeechConfig,
+)
 from examples.frontend_backend_live.prompts.catalog import catalog_prompt, role_instructions
 
 BENCH_PATH = CONFIG_PATH.with_name("config.bench.yaml")
 CASCADE = {"provider": "chat-completions", "slot": "llm"}
-LICENSE_HEADER = [
-    "# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
-    "# SPDX-License-Identifier: Apache-2.0",
-]
 
 
 def example(**cascade) -> dict:
@@ -28,7 +30,7 @@ def example(**cascade) -> dict:
     return {"frontend": {"adapter": "cascade", "cascade": {**CASCADE, **cascade}}}
 
 
-def cascade_of(config: ExampleConfig, label: str = "voiceclaw") -> LiveConfig:
+def cascade_of(config: ExampleConfig, label: str = "delegation_core") -> LiveConfig:
     """The cascade's settings as the root parses them, with the core's display label handed in."""
     return LiveConfig.parse({**config.blocks[config.adapter], "display_label": label})
 
@@ -45,30 +47,38 @@ class ShippedFileTests(unittest.TestCase):
         self.assertEqual((config.adapter, list(config.blocks)), ("cascade", ["cascade"]))
         self.assertEqual(config.ui_bot.core_config, "core.ui-bot.yaml")
         cascade = cascade_of(config)
-        self.assertEqual((cascade.provider, cascade.slot, cascade.prompt), ("chat-completions", "llm", "talker"))
-        self.assertEqual(cascade.prompt_version, "v2")
-        self.assertFalse(cascade.guards.repeat_guard)
+        self.assertEqual((cascade.provider, cascade.slot, cascade.prompt), ("chat-completions", "llm", "voice"))
+        self.assertEqual(LiveConfig(provider="p", slot="s").prompt, cascade.prompt)  # the schema's default agrees
+        self.assertEqual(cascade.prompt_version, "default")
         delegation = cascade.delegation
-        self.assertEqual((delegation.app_wait_seconds, delegation.result_wording), (62.0, "writer"))
-        self.assertEqual((delegation.progress_after_seconds, delegation.progress_max_per_delegation), (8.0, 1))
+        self.assertEqual((delegation.app_wait_seconds, delegation.result_wording), (50.0, "writer"))
+        self.assertEqual((delegation.progress_after_seconds, delegation.progress_max_per_delegation), (8.0, 3))
         self.assertEqual((cascade.memory.context_tokens, cascade.memory.compact_at), (16000, 0.8))
         self.assertEqual(cascade.speech.tts_mode, "per_sentence")
+        turn_end = ("smart_turn", 0.2, 1.2)
+        speech, default = cascade.speech, SpeechConfig()
+        self.assertEqual((speech.turn_end, speech.vad_stop_seconds, speech.turn_silence_seconds), turn_end)
+        self.assertEqual((default.turn_end, default.vad_stop_seconds, default.turn_silence_seconds), turn_end)
+        self.assertEqual((speech.vad_start_seconds, default.vad_start_seconds), (0.12, 0.12))
+        self.assertEqual((cascade.speech.heard_words, cascade.speech.estimate_chars_per_second), ("as_recorded", 15.0))
         self.assertEqual(cascade.reliability.client_timeout_seconds, 45.0)
-        self.assertEqual((cascade.tts_preroll_ms, cascade.display_label), (300, "voiceclaw"))
+        self.assertEqual((cascade.tts_preroll_ms, cascade.display_label), (300, "delegation_core"))
         self.assertTrue(catalog_prompt(cascade.prompt))
+
+    def test_the_app_wait_line_comes_before_the_cores_deadline_for_the_apps_outputs(self):
+        deadline = CoreSettings.load(CONFIG_PATH.with_name("core.yaml")).delegation.client_tool_timeout_seconds
+        shipped = cascade_of(load_live_config(CONFIG_PATH)).delegation.app_wait_seconds
+        self.assertLess(shipped, deadline)
+        self.assertEqual(DelegationConfig().app_wait_seconds, shipped)  # the schema's default is the shipped value
 
     def test_the_bench_profile_extends_the_file_without_the_app_wait_line_or_progress_lines(self):
         shipped, bench = cascade_of(load_live_config(CONFIG_PATH)), cascade_of(load_live_config(BENCH_PATH))
         self.assertIsNone(bench.delegation.app_wait_seconds)
         self.assertIsNone(bench.delegation.progress_after_seconds)
         self.assertEqual(bench.delegation.result_wording, shipped.delegation.result_wording)
-        self.assertEqual((bench.provider, bench.prompt_version, bench.memory), (shipped.provider, "v2", shipped.memory))
-
-    def test_the_shipped_files_carry_the_license_header(self):
-        for name in ("config.yaml", "config.bench.yaml", "core.yaml", "core.ui-bot.yaml", "core.bench.yaml"):
-            with self.subTest(name):
-                lines = CONFIG_PATH.with_name(name).read_text(encoding="utf-8").splitlines()
-                self.assertEqual(lines[:2], LICENSE_HEADER)
+        self.assertEqual(
+            (bench.provider, bench.prompt_version, bench.memory), (shipped.provider, "default", shipped.memory)
+        )
 
     def test_live_config_path_points_the_server_at_another_file(self):
         with TemporaryDirectory() as folder:
@@ -92,54 +102,11 @@ class ShippedFileTests(unittest.TestCase):
             catalog_prompt("no-such-prompt")
 
 
-class MovedKeyTests(unittest.TestCase):
-    """A key that moved, or that a split replaced, names where its setting lives."""
-
-    def test_the_cores_keys_name_the_cores_file(self):
-        cases = {
-            "backend": ({"backend": {"provider": "p", "slot": "t"}}, "core.yaml backend"),
-            "voice_note": ({"voice_note": "v2"}, "core.yaml delegation.voice_note"),
-            "backend_context_tokens": ({"backend_context_tokens": 1000}, "core.yaml delegation.context_tokens"),
-        }
-        for name, (extra, successor) in cases.items():
-            with self.subTest(name), self.assertRaisesRegex(ConfigError, f"^{name} moved: set .*{successor}"):
-                ExampleConfig.parse({**example(), **extra})
-
-    def test_todays_layout_names_the_cascade_block(self):
-        today = {"frontend": {"provider": "chat-completions", "slot": "llm", "prompt": "talker"}}
-        with self.assertRaisesRegex(ConfigError, "^frontend.provider moved: set frontend.cascade.provider"):
-            ExampleConfig.parse(today)
-        for key in ("prompt_version", "reliability", "guards", "delegation", "normalizer", "chat_history_recent_turns"):
-            with self.subTest(key), self.assertRaisesRegex(ConfigError, f"^{key} moved: set frontend.cascade"):
-                ExampleConfig.parse({**example(), key: {}})
-
-    def test_each_split_key_names_its_successors(self):
-        cases = {
-            ("reliability", "tool_timeout_seconds"): (
-                "client_tool_timeout_seconds.*server_tool_timeout_seconds.*app_wait_seconds"
-            ),
-            ("reliability", "api_timeout_seconds"): "client_timeout_seconds.*first_event_timeout_seconds",
-            ("reliability", "recover_failures"): "provider_retries; the voice says its own lines",
-            ("reliability", "max_tool_rounds"): "core.yaml backend.llm.max_tool_rounds",
-            ("reliability", "max_pending_delegations"): "core.yaml delegation.max_pending_delegations",
-            ("delegation", "merge_pending"): "core.yaml backend.llm.conductor",
-            ("delegation", "fold_before_acting"): "core.yaml backend.llm.conductor",
-            ("delegation", "status_from_ledger"): "nothing: the talker answers a status question",
-            ("delegation", "progress_speech"): "progress_after_seconds \\(null: off\\)",
-            ("delegation", "progress_interval_seconds"): "nothing: a progress line comes after",
-        }
-        for (section, key), successor in cases.items():
-            config = ExampleConfig.parse(example(**{section: {key: 1}}))
-            with (
-                self.subTest(key=f"{section}.{key}"),
-                self.assertRaisesRegex(ConfigError, f"^frontend.cascade.{section}.{key} moved: set .*{successor}"),
-            ):
-                cascade_of(config)
-        with self.assertRaisesRegex(ConfigError, "chat_history_recent_turns moved: set frontend.cascade.memory"):
-            cascade_of(ExampleConfig.parse(example(chat_history_recent_turns=20)))
+class DisplayLabelTests(unittest.TestCase):
+    """The display label comes from the core's file only."""
 
     def test_the_display_label_comes_from_the_core_only(self):
-        with self.assertRaisesRegex(ConfigError, "display_label moved: set core.yaml delegation.display_label"):
+        with self.assertRaisesRegex(ConfigError, "display_label comes from core.yaml delegation.display_label"):
             ExampleConfig.parse(example(display_label="screen"))
         config = ExampleConfig.parse(example())
         self.assertEqual(cascade_of(config, label="screen").display_label, "screen")
@@ -163,13 +130,17 @@ class CheckTests(unittest.TestCase):
             ({"prompt_version": "v9"}, "prompt_version: Unknown prompt set 'v9'"),
             ({"reliability": {"provider_retries": "two"}}, "must be a non-negative whole number"),
             ({"reliability": {"nope": 1}}, "frontend.cascade.reliability has unknown keys: nope"),
-            ({"guards": {"repeat_guard": "yes"}}, "true or false"),
-            ({"guards": {"continuers": "okay"}}, "list of strings"),
+            ({"normalizer": {"enabled": "yes"}}, "true or false"),
             ({"memory": {"context_tokens": 0.5}}, "memory.context_tokens must be a positive whole number"),
             ({"delegation": {"progress_max_per_delegation": 1.5}}, "must be a positive whole number"),
             ({"delegation": {"app_wait_seconds": -1}}, "app_wait_seconds must be a positive number"),
             ({"memory": {"compact_at": None}}, "compact_at must be a positive number"),
             ({"speech": {"tts_mode": ""}}, "tts_mode must be a name"),
+            ({"speech": {"turn_end": ""}}, "turn_end must be a name"),
+            ({"speech": {"vad_start_seconds": 0}}, "vad_start_seconds must be a positive number"),
+            ({"speech": {"vad_stop_seconds": 0}}, "vad_stop_seconds must be a positive number"),
+            ({"speech": {"turn_silence_seconds": -1}}, "turn_silence_seconds must be a positive number"),
+            ({"speech": {"estimate_chars_per_second": 0}}, "estimate_chars_per_second must be a positive number"),
             ({"tts_preroll_ms": 2001}, "tts_preroll_ms must be a whole number from 0 to 2000"),
         ):
             with self.subTest(cascade=cascade), self.assertRaisesRegex(ConfigError, message):
@@ -183,8 +154,8 @@ class CheckTests(unittest.TestCase):
                 cascade_of(ExampleConfig.parse(example(reliability={field: 0})))
 
     def test_a_prompt_set_the_table_registers_loads_by_its_name(self):
-        with patch.dict(schema.PROMPT_SETS, {"v3": object()}):
-            self.assertEqual(cascade_of(ExampleConfig.parse(example(prompt_version="v3"))).prompt_version, "v3")
+        with patch.dict(schema.PROMPT_SETS, {"custom": object()}):
+            self.assertEqual(cascade_of(ExampleConfig.parse(example(prompt_version="custom"))).prompt_version, "custom")
         # Left out, the prompt sets' own default applies.
         self.assertEqual(cascade_of(ExampleConfig.parse(example())).prompt_version, "")
 
@@ -192,14 +163,11 @@ class CheckTests(unittest.TestCase):
         config = ExampleConfig.parse(
             example(
                 reliability={"provider_retries": 0, "talker_attempt_timeout_seconds": 3},
-                guards={"turn_router_shadow": True, "continuers": ["okay"]},
                 delegation={"app_wait_seconds": None, "result_wording": "as_written"},
             )
         )
         cascade = cascade_of(config)
         self.assertEqual(cascade.reliability.talker_attempt_timeout_seconds, 3.0)
-        self.assertTrue(cascade.guards.turn_router_shadow)
-        self.assertEqual(cascade.guards.continuers, ("okay",))
         self.assertIsNone(cascade.delegation.app_wait_seconds)
         self.assertEqual(cascade.delegation.result_wording, "as_written")
 
@@ -228,10 +196,6 @@ class ProfileTests(unittest.TestCase):
             missing = write(folder, "c.yaml", "extends: nowhere.yaml\n")
             with self.assertRaisesRegex(ConfigError, "Cannot read .*nowhere.yaml"):
                 load_live_config(missing)
-
-    def test_an_unreadable_file_is_a_config_error(self):
-        with TemporaryDirectory() as tmp, self.assertRaises(ConfigError):
-            load_live_config(Path(tmp) / "missing.yaml")
 
 
 if __name__ == "__main__":

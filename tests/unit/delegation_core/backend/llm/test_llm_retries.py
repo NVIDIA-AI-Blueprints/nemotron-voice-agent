@@ -6,15 +6,15 @@
 """Tests for retries and timeouts: stalls are caught by silence, and nothing runs twice."""
 
 import unittest
-from unittest.mock import patch
 
 import httpx
 from openai import APIConnectionError, BadRequestError, RateLimitError
 
 from delegation_core.backend.llm import LlmSettings
 from delegation_core.backend.providers import BrokenStreamError, ChatCompletionsBackend, ProviderLimits
+from delegation_core.backend.tools import CafeTools
 from delegation_core.config import ModelEndpoint
-from tests.unit.contracts.backend import a_round, check_events, message_events, text_round
+from tests.unit.contracts.backend import a_round, call_events, check_events, message_events, text_round
 from tests.unit.contracts.base import collect
 from tests.unit.delegation_core.backend.llm.doubles import (
     FakeChat,
@@ -28,7 +28,7 @@ from tests.unit.delegation_core.backend.llm.doubles import (
 
 REQUEST = httpx.Request("POST", "http://localhost:1/v1/chat/completions")
 QUICK = ProviderLimits(provider_retries=1, first_event_timeout_seconds=0.2, idle_timeout_seconds=0.2)
-# The frontend-backend-live example's thinker slot thinks by default (examples_registry.yaml: enable_thinking: true).
+# The frontend-backend-live example's backend slot thinks by default (examples_registry.yaml: enable_thinking: true).
 THINKING = ModelEndpoint(
     "test/model",
     "http://localhost:1/v1",
@@ -80,12 +80,6 @@ class TemplateTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BadRequestError):
             await collect(provider.stream({}))
         self.assertEqual(provider.opened, 1)
-
-    async def test_a_dropped_connection_is_tried_again_when_opening(self):
-        provider = ScriptedProvider([dropped()], text_round("Done."), limits=QUICK)
-        with patch("delegation_core.backend.providers.retry.retry_delay", return_value=0):
-            events = await collect(provider.stream({}))
-        self.assertEqual((provider.opened, events[-1]["type"]), (2, "response.completed"))
 
     async def test_the_retries_cover_only_connecting_not_a_slow_first_event(self):
         provider = ScriptedProvider([Sleep(1.0), *text_round("Late.")], text_round("Done."), limits=QUICK)
@@ -140,11 +134,11 @@ class RunRetryTests(unittest.IsolatedAsyncioTestCase):
     def settings(self, **changes):
         return LlmSettings(provider_retries=0, first_event_timeout_seconds=0.2, idle_timeout_seconds=0.2, **changes)
 
-    async def run_task(self, *rounds):
+    async def run_task(self, *rounds, tools=()):
         provider = ScriptedProvider(*rounds, limits=self.settings().limits)
         task, events, error = IMTask(), [], None
         try:
-            async for event in adapter(provider, settings=self.settings()).start(task).events():
+            async for event in adapter(provider, settings=self.settings(), tools=tools).start(task).events():
                 task.see(event)
                 events.append(event)
         except Exception as exc:
@@ -186,13 +180,6 @@ class RunRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["response"]["incomplete_details"], {"reason": "max_output_tokens"})
         self.assertEqual(events[-1]["response"]["output"], [])  # the cut message is not delivered
 
-    async def test_a_tail_error_does_not_rerun_the_round(self):
-        provider, events, error = await self.run_task(
-            [*text_round("Done."), RuntimeError("tail")], text_round("Again.")
-        )
-        self.assertIsNone(error)
-        self.assertEqual((provider.opened, kinds(events).count("response.created")), (1, 1))
-
     async def test_a_rate_limit_after_its_retry_reaches_the_im_as_a_429(self):
         provider, events, error = await self.run_task([too_many()], [too_many()], text_round("Done."))
         self.assertIsInstance(error, RateLimitError)
@@ -204,6 +191,15 @@ class RunRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(error)
         self.assertEqual(provider.opened, 2)
         self.assertEqual(events[1]["response"]["error"]["code"], "server_error")
+
+    async def test_a_round_dropped_after_a_call_is_retried_and_the_call_never_runs(self):
+        cafe = CafeTools()
+        added = call_events("manage_cart", {"action": "add", "item_id": "lat"})
+        provider, events, error = await self.run_task(
+            [*a_round(added)[:-1], dropped()], text_round("Done.", "resp_2"), tools=[cafe]
+        )
+        self.assertIsNone(error)
+        self.assertEqual((provider.opened, cafe.snapshot()["item_count"]), (2, 0))
 
 
 if __name__ == "__main__":

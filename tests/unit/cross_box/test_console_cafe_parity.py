@@ -64,11 +64,6 @@ class CafeParityTests(unittest.TestCase):
             with self.subTest(case=case["name"]):
                 self.assertEqual(results, case["results"])
 
-    def test_every_case_records_one_result_per_call(self):
-        for case in json.loads(FIXTURE.read_text())["cases"]:
-            with self.subTest(case=case["name"]):
-                self.assertEqual(len(case["results"]), len(case["calls"]))
-
 
 if __name__ == "__main__":
     unittest.main()

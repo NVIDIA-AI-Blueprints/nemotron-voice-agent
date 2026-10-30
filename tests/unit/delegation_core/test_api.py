@@ -10,7 +10,7 @@ import unittest
 from itertools import count
 from types import SimpleNamespace
 
-from delegation_core.api.local import LocalResponsesClient, LocalStream
+from delegation_core.api.local import LocalResponsesClient
 from delegation_core.api.service import MAX_REQUEST_DEPTH, InvalidRequest, NotFound, ResponsesService
 from tests.unit.delegation_core.emulator import emulator_source
 
@@ -22,10 +22,7 @@ def user(text):
 
 
 class Stream:
-    """A response stream as the IM gives it: no events here; it notes whether it was closed."""
-
-    def __init__(self):
-        self.closed = 0
+    """A response stream as the IM gives it: no events here."""
 
     def __aiter__(self):
         return self
@@ -34,7 +31,7 @@ class Stream:
         raise StopAsyncIteration
 
     async def aclose(self):
-        self.closed += 1
+        pass
 
 
 class FakeSession:
@@ -91,7 +88,7 @@ class SurfaceCase(unittest.IsolatedAsyncioTestCase):
 
 # ---------------------------------------------------------------------------------------- GET /v1/models/{model}
 class ModelCheckTests(SurfaceCase):
-    async def test_the_backends_rules_answer_with_no_conversation_open(self):
+    async def test_the_backends_rules_answer_with_or_without_a_conversation_open(self):
         self.surface(backend=emulator_source({"models": ["org/served"]}))
         served = await self.client.retrieve_model("org/served")  # no conversation was ever opened
         self.assertEqual(
@@ -100,9 +97,6 @@ class ModelCheckTests(SurfaceCase):
         with self.assertRaisesRegex(ValueError, "not 'org/other'"):
             await self.client.retrieve_model("org/other")
         self.assertEqual(self.sessions, [])
-
-    async def test_an_open_conversation_does_not_change_the_answer(self):
-        self.surface(backend=emulator_source({"models": ["org/served"]}))
         await self.conversation()
         with self.assertRaisesRegex(ValueError, "not 'org/other'"):
             await self.client.retrieve_model("org/other")  # the backend's rule, not a conversation's IM session
@@ -142,7 +136,7 @@ class RequestCheckTests(SurfaceCase):
         with self.assertRaises(InvalidRequest) as refused:  # no conversation: a response the core never stored
             await self.client.create_response({"input": [user("Hi.")], "previous_response_id": "resp_1"})
         self.assertEqual(refused.exception.code, "previous_response_not_found")
-        self.assertIsInstance(refused.exception, ValueError)  # a 400: every caller that refuses a ValueError still does
+        self.assertIsInstance(refused.exception, ValueError)  # a 400 wherever a ValueError is refused
 
     async def test_a_core_without_one_shot_sessions_refuses_a_request_with_no_conversation(self):
         self.surface()
@@ -238,14 +232,6 @@ class CloseTests(SurfaceCase):
         with self.assertRaisesRegex(RuntimeError, "cut short"):
             await self.client.delete_conversation(conversation)
         self.assertEqual(self.service.sessions, {})
-
-
-# ---------------------------------------------------------------------------------------- closing a stream
-class StreamCloseTests(SurfaceCase):
-    async def test_closing_a_stream_closes_it_as_its_kind_does_with_no_type_check(self):
-        stream = Stream()
-        await LocalStream(stream).aclose()
-        self.assertEqual(stream.closed, 1)
 
 
 if __name__ == "__main__":

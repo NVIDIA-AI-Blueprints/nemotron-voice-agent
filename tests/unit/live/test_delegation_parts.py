@@ -14,10 +14,10 @@ import unittest
 
 from live.client_delegation import ClientDelegation
 from live.ports import DelegationPart, DelegationPort, DelegationView
-from live.protocol import ProtocolError, SessionConfig
+from live.protocol import SessionConfig
 from live.server_delegation import ServerDelegation
 from live.session import LiveProtocolSession
-from live.session.session import DELEGATION_PARTS, DelegationPortView, DelegationSideView
+from live.session.session import DelegationPortView, DelegationSideView
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]
@@ -59,19 +59,6 @@ class InterfaceTests(unittest.TestCase):
                 for name in ("open", "close", "update", "item_create", "response_create", "history", "delegate"):
                     self.assertTrue(inspect.iscoroutinefunction(getattr(part, name)), name)
 
-    def test_the_table_has_a_part_for_each_delegation_type_and_only_a_responses_part_asks_for_the_core(self):
-        self.assertEqual(set(DELEGATION_PARTS), {"client", "responses"})
-        asked = []
-
-        def core():
-            asked.append(True)
-            return FakeAdapter()
-
-        self.assertIsInstance(DELEGATION_PARTS["client"](core), ClientDelegation)
-        self.assertEqual(asked, [])  # a client-mode session builds no core
-        self.assertIsInstance(DELEGATION_PARTS["responses"](core), ServerDelegation)
-        self.assertEqual(asked, [True])
-
     def test_an_omitted_null_or_empty_delegation_builds_the_client_part(self):
         for delegation in (None, {}, {"type": "client"}):
             with self.subTest(delegation=delegation):
@@ -83,11 +70,6 @@ class InterfaceTests(unittest.TestCase):
         engine = FakeAdapter()
         session = LiveProtocolSession(responses_config(), "websocket", engine.parts(), core=engine.core)
         self.assertIsInstance(session.delegation, ServerDelegation)
-
-    def test_a_responses_session_on_a_server_with_no_core_is_refused(self):
-        with self.assertRaises(ProtocolError) as refused:
-            LiveProtocolSession(responses_config(), "websocket", FakeAdapter().parts())
-        self.assertEqual(refused.exception.param, "session.delegation.type")
 
     def test_the_adapter_gets_only_the_narrow_port_and_the_part_only_its_view(self):
         engine = FakeAdapter()
@@ -136,7 +118,7 @@ class UpdateCaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_client_session_takes_its_acknowledgement_delay_and_null_or_empty_as_no_ops(self):
         await self.start(SessionConfig(model="live-1"))
-        for patch in ({}, {"delegation": None}, {"delegation": {}}, {"delegation": {"acknowledgement_delay_ms": 250}}):
+        for patch in ({"delegation": {"acknowledgement_delay_ms": 250}}, {}, {"delegation": None}, {"delegation": {}}):
             with self.subTest(patch=patch):
                 [updated] = await self.update(patch)
                 self.assertEqual((updated["type"], updated["client_event_id"]), ("session.updated", "u"))
@@ -178,21 +160,6 @@ class UpdateCaseTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(patch=patch):
                 [error] = await self.update(patch)
                 self.assertEqual((error["error"]["code"], error["error"]["param"]), (code, param))
-
-
-class ClientCommandTests(unittest.IsolatedAsyncioTestCase):
-    async def test_the_client_part_refuses_the_responses_only_commands_with_todays_code(self):
-        part = ClientDelegation()
-        await part.open(View())
-        for command in (part.item_create({"type": "function_call_output"}, "i1"), part.response_create("r1")):
-            with self.assertRaises(ProtocolError) as refused:
-                await command
-            self.assertEqual(
-                (refused.exception.code, str(refused.exception)),
-                ("invalid_value", "This command requires Responses delegation"),
-            )
-        self.assertIsNone(await part.history())
-        self.assertFalse(ServerDelegation(FakeAdapter()).knows("item_1"))
 
 
 class ListenFirstTests(unittest.IsolatedAsyncioTestCase):

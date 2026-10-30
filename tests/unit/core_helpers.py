@@ -11,9 +11,6 @@ package; the tests of the other parts import from here too.
 
 from __future__ import annotations
 
-import asyncio
-import json
-
 import httpx
 from openai import APITimeoutError
 from openai.types.chat import ChatCompletionChunk
@@ -44,7 +41,7 @@ def answer_text(event: dict) -> str | None:
     return message_text(messages[-1]) if messages else None
 
 
-# ------------------------------------------------------------------- a scripted backend model and server tools
+# ---------------------------------------------------------------------------------- a scripted backend model
 # The core's endpoint and provider limits for these doubles, in the core's own types.
 ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")
 LIMITS = ProviderLimits(provider_retries=1, first_event_timeout_seconds=2.0, idle_timeout_seconds=2.0)
@@ -64,44 +61,6 @@ def _text_round(text: str, response_id: str = "resp") -> list[dict]:
         {"type": "response.output_item.done", "output_index": 0, "item": item},
         {"type": "response.completed", "response": {"id": response_id, "status": "completed", "output": [item]}},
     ]
-
-
-def _call_round(name: str, arguments: dict, call_id: str = "call_1") -> list[dict]:
-    """A backend round that calls ``name``: one function call, as a provider's translation writes it."""
-    item = {
-        "id": f"fc_{call_id}",
-        "type": "function_call",
-        "status": "completed",
-        "call_id": call_id,
-        "name": name,
-        "arguments": json.dumps(arguments),
-    }
-    return [
-        {"type": "response.created", "response": {"id": "resp_call", "status": "in_progress"}},
-        {"type": "response.output_item.done", "output_index": 0, "item": item},
-        {"type": "response.completed", "response": {"id": "resp_call", "status": "completed", "output": [item]}},
-    ]
-
-
-class RecordingTools:
-    def __init__(self, result='{"ok": true}'):
-        self.result, self.calls = result, []
-
-    async def execute(self, call_id, name, arguments):
-        self.calls.append((call_id, name, arguments))
-        return self.result
-
-
-class SlowTools(RecordingTools):
-    """Tool execution that waits until released, so a task stays in its tool step."""
-
-    def __init__(self):
-        super().__init__('{"ok": true}')
-        self.gate = asyncio.Event()
-
-    async def execute(self, call_id, name, arguments):
-        await self.gate.wait()
-        return await super().execute(call_id, name, arguments)
 
 
 # ------------------------------------------------------------------------ a scripted chat-completions client

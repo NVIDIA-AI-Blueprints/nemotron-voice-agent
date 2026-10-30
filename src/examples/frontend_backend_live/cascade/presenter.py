@@ -1,13 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The presenter's inbox: everything the voice says on its own, worded and said together when the caller is idle.
+"""The presenter's inbox: everything the voice says on its own, worded as it arrives and said together at idle.
 
-Items are queued by plain calls, so backend work never waits on the voice. When the floor lets it prepare, the
-presenter takes everything queued and words every result and commentary in one ``ResultWording`` call; if the talker's
-memory moved or more items came before the floor is idle, it words again with everything. A delegation's end or
-handover is applied in its turn, in order with its results. A delivery that raises is requeued once; a line nobody
-heard is requeued by the utterances.
+Items are queued by plain calls, so backend work never waits on the voice. As soon as items are queued, even while the
+caller speaks or a turn is decided, the presenter takes everything queued and words every result and commentary in one
+``ResultWording`` call. At idle it says that line while its stamp holds: no item came since, and the notes (what the
+caller was told about the batch's delegations, the requests opened after them) and the talker's memory, but for the
+turns the talker decides, are as they were when it was worded. A caller turn alone keeps the stamp, so after a turn the
+talker waited on, the line is said at once; a reply, a lead-in, an instruction, the application's context, a new
+request or a new item moves it, and everything is worded again once no caller turn waits or is decided (a decision
+moves it again): after a reply or a lead-in, while that line plays. A move cuts a wording under way short. A
+delegation's end or handover is applied in its turn, in order with its results. A delivery that raises is requeued once;
+a line nobody heard is requeued by the utterances. A result reads "answer ready" in the work note until the caller
+hears it, even in part. After a quiet spell, the quiet task words a short progress line about open work from the work
+note, beside the inbox, and says it only if nothing moved while it was worded.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ import asyncio
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 from loguru import logger
 
@@ -26,7 +33,8 @@ from examples.frontend_backend_live.cascade.ports import DisplaySink, ReadyResul
 from examples.frontend_backend_live.cascade.settings import CascadeSettings
 from examples.frontend_backend_live.cascade.utterances import Line, LineKind, Utterances
 from examples.frontend_backend_live.cascade.wording import RESULT_WORDINGS
-from examples.frontend_backend_live.cascade.worknote import WorkNote
+from examples.frontend_backend_live.cascade.worknote import OpenWork, WorkNote
+from examples.frontend_backend_live.cascade.writer.wording import Instruction
 from examples.frontend_backend_live.tables import pick
 
 if TYPE_CHECKING:
@@ -42,7 +50,7 @@ class Item:
 
     line_kind: ClassVar[LineKind]  # the kind of a line it is said in (the first of a mixed line's)
     worded: ClassVar[bool] = False  # worded with the batch's other worded items, or said as written
-    answers: ClassVar[bool] = False  # a delegation's result: "said next" in the work note until it is said
+    answers: ClassVar[bool] = False  # a delegation's result: "answer ready" in the work note until it is heard
 
     def record(self, memory: TalkerMemory, line: Line) -> tuple[str, ...]:
         """Write what it adds to the talker's memory with ``line``; return the delegations it tells the caller about."""
@@ -74,16 +82,6 @@ class Commentary(Item):
         return ()
 
 
-class Status(Item):
-    """A progress line about a delegation, said after a quiet spell."""
-
-    line_kind = LineKind.STATUS
-
-    def record(self, memory: TalkerMemory, line: Line) -> tuple[str, ...]:
-        """Nothing in memory besides the line; the delegation's ``told`` gains it."""
-        return (self.said.delegation_id,)
-
-
 class Notice(Item):
     """A fixed line, said word for word."""
 
@@ -91,7 +89,14 @@ class Notice(Item):
 
 
 # A mixed line takes the first of these kinds it carries.
-LINE_KIND_ORDER = (LineKind.RESULT, LineKind.COMMENTARY, LineKind.STATUS, LineKind.NOTICE)
+LINE_KIND_ORDER = (LineKind.RESULT, LineKind.COMMENTARY, LineKind.NOTICE)
+
+
+class Stamp(NamedTuple):
+    """What a wording of a batch is worded on: its notes, and the talker memory's version."""
+
+    notes: WordingNotes
+    version: int
 
 
 @dataclass(frozen=True)
@@ -103,7 +108,7 @@ class Turnover:
 
 
 class Presenter:
-    """The inbox of one call: everything said on its own, worded and said together at idle (module docstring)."""
+    """The inbox of one call: everything said on its own, worded as it arrives and said at idle (module docstring)."""
 
     def __init__(
         self,
@@ -123,13 +128,13 @@ class Presenter:
         self.worknote, self.display, self.lines, self.settings = worknote, display, lines, settings
         self.observe = observe
         self.inbox: deque[Item | Turnover] = deque()
-        self.utterances.requeue = self.requeue
+        self.utterances.requeue, self.utterances.heard = self.requeue, self.heard
         self._arrived = asyncio.Event()
         self._handling = False
-        self._said: list[str] = []  # the delegations the delivery under way marked said
         self._tasks: list[asyncio.Task] = []
         self._closed = False
         self._made = 0
+        self._offered_at = float("-inf")  # when the quiet task last offered a progress line
 
     @classmethod
     def from_settings(
@@ -163,8 +168,12 @@ class Presenter:
             self._queue(Notice(ReadyResult(delegation_id or "", self._own_id("notice"), text)))
 
     def commentary(self, text: str, delegation_id: str | None = None) -> None:
-        """The application's commentary (a fact to say), or the greeting; ``delegation_id``: a client delegation."""
+        """The application's commentary (a fact to say); ``delegation_id``: a client delegation."""
         self._queue(Commentary(ReadyResult(delegation_id or "", self._own_id("commentary"), text)))
+
+    def greeting(self, instructions: str) -> None:
+        """The greeting, worded from ``instructions``, or the ``greeting`` line when they cannot be worded."""
+        self._queue(Commentary(Instruction("", self._own_id("commentary"), instructions, self.lines.greeting)))
 
     def ended(self, delegation_id: str) -> None:
         """The delegation ended with nothing more to say: in its turn, what the caller was told is forgotten."""
@@ -177,9 +186,13 @@ class Presenter:
     def requeue(self, line: Line) -> None:
         """Nobody heard ``line``: what it delivered goes back to the front of the inbox, to be said next."""
         items = [item for item in line.items if isinstance(item, Item)]
-        self._back(items, items)
+        self._back(items)
         if items:
             self.observe("answer.requeued", line=line.id, items=len(items))
+
+    def heard(self, line: Line) -> None:
+        """The caller heard ``line``, even in part: what it delivered is not said again."""
+        self._done([item for item in line.items if isinstance(item, Item)])
 
     def _queue(self, entry: Item | Turnover) -> None:
         if self._closed:
@@ -187,15 +200,18 @@ class Presenter:
         self.inbox.append(entry)
         self._arrived.set()
 
-    def _back(self, items: list[Item], said: list[Item]) -> None:
-        """``items`` go back to the front of the inbox; the results of ``said`` wait to be said again."""
+    def _back(self, items: list[Item]) -> None:
+        """``items`` go back to the front of the inbox; their results still wait in the work note."""
         for item in reversed(items):
             self.inbox.appendleft(item)
-        for item in said:
-            if item.answers and item.said.delegation_id:
-                self.worknote.answered(item.said.delegation_id)
         if items:
             self._arrived.set()
+
+    def _done(self, items: list[Item]) -> None:
+        """``items`` are not said again: the work note counts each result among them as said."""
+        for item in items:
+            if item.answers and item.said.delegation_id:
+                self.worknote.said(item.said.delegation_id)
 
     def _own_id(self, kind: str) -> str:
         self._made += 1
@@ -218,17 +234,16 @@ class Presenter:
         self.inbox.clear()
 
     async def _run(self) -> None:
-        """Deliver everything queued, together, each time the floor allows."""
+        """Take everything queued as it arrives, word it at once, and deliver it together at idle."""
         while True:
             await self._arrived.wait()
             self._arrived.clear()
             if not self.inbox:
                 continue
-            await self.floor.wait_may_prepare()
             batch = self._take()
             if not batch:
                 continue
-            self._handling, self._said = True, []
+            self._handling = True
             try:
                 await self._present(batch)
             except asyncio.CancelledError:
@@ -258,25 +273,69 @@ class Presenter:
         return batch
 
     async def _present(self, batch: list[Item]) -> None:
-        """Word the batch, wait for idle (wording again if anything moved), then deliver it."""
+        """Word the batch, again with everything each time its stamp moves, and deliver it at idle.
+
+        The batch grows in place, so a delivery that raises fails with every item it held.
+        """
         while True:
-            version = self.memory.version
-            text = await self._word(batch)
-            await self.floor.wait_idle()
-            if self.memory.version == version and not self.inbox:
+            stamp = self._stamp(batch)
+            text = await self._worded(batch, stamp)
+            if text is not None and await self._held(batch, stamp):
                 break
-            batch = self._take(batch)  # the memory or the inbox moved while it was worded: word everything again
+            while self.floor.turns_busy:  # the stamp or the inbox moved: word everything again once the turn is decided
+                await self.floor.wait_change()
+            batch[:] = self._take(batch)
         await self._deliver(batch, text)
 
-    async def _word(self, batch: list[Item]) -> str:
+    def _stamp(self, batch: list[Item]) -> Stamp:
+        """What a wording of the batch is worded on now."""
+        return Stamp(self._notes(batch), self.memory.version)
+
+    async def _worded(self, batch: list[Item], stamp: Stamp) -> str | None:
+        """The batch's line worded on ``stamp``; ``None`` when an item comes or the stamp moves before it is worded.
+
+        A move cuts the wording under way short, so the batch is worded again at once, not after a call out of date.
+        """
+        wording = asyncio.ensure_future(self._word(batch, stamp.notes))
+        try:
+            return wording.result() if await self._held(batch, stamp, until=wording) else None
+        finally:
+            wording.cancel()
+
+    async def _held(self, batch: list[Item], stamp: Stamp, until: asyncio.Future | None = None) -> bool:
+        """Wait while no item comes and the batch's ``stamp`` holds: for ``until`` if given, else for idle.
+
+        Return whether the stamp holds then. Each change of the floor and each item queued wakes it, so a stamp that
+        moves is seen as it moves, not at idle.
+        """
+
+        def holds() -> bool:
+            return not self.inbox and self._stamp(batch) == stamp
+
+        def waiting() -> bool:
+            return not until.done() if until is not None else not self.floor.idle
+
+        while holds() and waiting():
+            self._arrived.clear()  # the inbox is empty: an item queued from now on wakes the wait
+            waits = [asyncio.ensure_future(self.floor.wait_change()), asyncio.ensure_future(self._arrived.wait())]
+            try:
+                await asyncio.wait([*waits, until] if until is not None else waits, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for wait in waits:
+                    wait.cancel()
+        return holds()
+
+    def _notes(self, batch: list[Item]) -> WordingNotes:
+        """What the wording of the batch knows: what the caller was told about its delegations, and newer requests."""
+        worded = [item.said for item in batch if item.worded]
+        delegations = list(dict.fromkeys(said.delegation_id for said in worded if said.delegation_id))
+        told = {each: heard for each in delegations if (heard := self.utterances.told_text(each))}
+        return WordingNotes(told, self.worknote.newer_requests(delegations))
+
+    async def _word(self, batch: list[Item], notes: WordingNotes) -> str:
         """One line for the batch: the worded items in one wording call, at the first one's place; others as written."""
         worded = [item.said for item in batch if item.worded]
-        words = ""
-        if worded:
-            delegations = list(dict.fromkeys(said.delegation_id for said in worded if said.delegation_id))
-            told = {each: heard for each in delegations if (heard := self.utterances.told_text(each))}
-            notes = WordingNotes(told, self.worknote.newer_requests(delegations))
-            words = await self.wording.words(worded, notes)
+        words = await self.wording.words(worded, notes) if worded else ""
         parts: list[str] = []
         placed = False
         for item in batch:
@@ -298,10 +357,8 @@ class Presenter:
             delegation_id = item.said.delegation_id
             if item.worded and delegation_id:
                 self.utterances.forget(delegation_id)  # what the caller was told was worded into this line
-            if item.answers and delegation_id:
-                self.worknote.said(delegation_id)
-                self._said.append(delegation_id)
         if not text:
+            self._done(batch)
             return
         tells = [each for item in batch for each in item.record(self.memory, line) if each]
         self.display.spoken(ids, text)
@@ -313,11 +370,11 @@ class Presenter:
         logger.warning(f"Delivering {len(batch)} item(s) failed: {type(exc).__name__}: {exc}")
         self.observe("answer.failed", items=len(batch), error_type=type(exc).__name__)
         again = [replace(item, tries=item.tries + 1) for item in batch if item.tries == 0]
-        said = [item for item in again if item.said.delegation_id in self._said]
-        self._back(again, said)
+        self._back(again)
+        self._done([item for item in batch if item.tries])
 
     async def _quiet(self) -> None:
-        """Offer a progress line when work has run through a quiet spell."""
+        """Offer a progress line when work has run through a quiet spell (:meth:`_progress`)."""
         after = self.settings.progress_after_seconds
         tick = max(0.05, min(1.0, after / 4))
         while True:
@@ -325,9 +382,56 @@ class Presenter:
             if self.busy or not self.floor.idle:
                 continue
             entry = self.worknote.quiet_candidate(self.settings.progress_max_per_delegation)
-            if entry is None or self.floor.clock() - max(self.floor.idle_since, entry.created_at) < after:
+            if entry is None:
                 continue
-            line = self.worknote.offer_progress(entry.id) or self.lines.still_working
-            self.observe("progress.offered", delegation_id=entry.id)
-            if line.strip():
-                self._queue(Status(ReadyResult(entry.id, self._own_id("status"), line)))
+            if self.floor.clock() - max(self.floor.idle_since, entry.created_at, self._offered_at) < after:
+                continue
+            try:
+                await self._progress(entry)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"A progress line failed: {type(exc).__name__}: {exc}")
+                self.observe("progress.failed", delegation_id=entry.id, error_type=type(exc).__name__)
+
+    async def _progress(self, entry: OpenWork) -> None:
+        """Word a progress line about ``entry`` from the work note; say it only if nothing moved while it was worded."""
+        delegation_id = entry.id
+        self._offered_at, version = self.floor.clock(), self.memory.version
+        update = self.worknote.offer(delegation_id)
+        self.observe("progress.offered", delegation_id=delegation_id)
+        told = self.utterances.told_text(delegation_id)
+        wording = asyncio.ensure_future(self.wording.progress(update, told, entry.progress))
+        try:
+            finished = await self._undisturbed(wording)
+        finally:
+            wording.cancel()
+        if not (finished and self.memory.version == version and self.worknote.quiet(delegation_id)):
+            self.observe("progress.dropped", delegation_id=delegation_id)  # its news stays for the next quiet spell
+            return
+        self.worknote.worded(delegation_id)
+        text = wording.result()
+        if not text:
+            self.observe("progress.silent", delegation_id=delegation_id)
+            return
+        line = self.utterances.line(text, LineKind.STATUS, delegation_ids=(delegation_id,), again=False)
+        self.display.spoken((delegation_id,), text)
+        self.observe("progress.said", line=line.id, delegation_id=delegation_id)
+        await self.utterances.hand_off(line, tells=(delegation_id,))
+
+    async def _undisturbed(self, task: asyncio.Future) -> bool:
+        """Wait for ``task`` while the floor stays idle and no item is queued; return whether it finished so.
+
+        Any change of the floor and any item queued while it waits disturbs it, even one undone before it wakes: a
+        result can be said and heard in that time.
+        """
+        if self.busy or not self.floor.idle:
+            return False
+        self._arrived.clear()  # set() already woke the delivery task for whatever was queued before now
+        waits = [asyncio.ensure_future(self.floor.wait_change()), asyncio.ensure_future(self._arrived.wait())]
+        try:
+            done, _ = await asyncio.wait([task, *waits], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for wait in waits:
+                wait.cancel()
+        return done == {task}

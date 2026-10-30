@@ -9,8 +9,8 @@
 * An instruction is pinned in the talker's memory and noted for the backend; it cuts the line in progress for good
   and is decided in turn with any waiting caller turn.
 
-Commentary and thinking drop every pending acknowledgement; an instruction does not. The protocol layer validates and
-acknowledges the commands.
+Commentary and thinking drop every pending acknowledgement; an instruction does not. The gateway validates and
+acknowledges the appends.
 """
 
 from __future__ import annotations

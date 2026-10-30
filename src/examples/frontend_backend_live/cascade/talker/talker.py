@@ -4,17 +4,17 @@
 """The talker: one routing decision per caller turn.
 
 Joins the client's instructions with the prompt set's frame and routing rules, asks the frontend model for a
-``{action, speech}`` decision, and applies the floor (:meth:`Talker.floored`): a turn gets a reply, a delegation, or,
-where the prompt set declares it, a silent ``wait``. A decision that fails while work is open says the holding line
-instead of starting a new delegation, which would join the work in progress. The layout of the routing call's
-instructions is built once, part by part (:meth:`Talker.routing_parts`), so a view of the request (``/history``) shows
-what is sent.
+``{action, speech}`` decision, and makes it one the cascade can carry out (:meth:`Talker.floored`): a turn gets a
+reply, a delegation, or a silent ``wait``. A decision that fails while work is open says the holding line instead of
+starting a new delegation, which would join the work in progress. The layout of the routing call's instructions is
+built once, part by part (:meth:`Talker.routing_parts`), so a view of the request (``/history``) shows what is sent.
+The call's runtime data, the work line and the decision cue, goes after the conversation (:meth:`Talker.runtime_data`),
+where the model reads it last.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from examples.frontend_backend_live.cascade.memory import is_reference_item
 from examples.frontend_backend_live.models.base import CallSpec, Frontend
 from examples.frontend_backend_live.models.decision import UNUSABLE, TalkerDecision
 from examples.frontend_backend_live.prompts import PromptSet
@@ -30,7 +30,7 @@ class PromptPart:
 
 
 class Talker:
-    """Routes each caller turn to a spoken reply, a delegation, or a silent wait where the set declares it."""
+    """Routes each caller turn to a spoken reply, a delegation, or a silent wait."""
 
     def __init__(self, frontend: Frontend, prompts: PromptSet, *, holding: str = ""):
         """Bind the frontend model and the prompt set; the call's spec comes from the set.
@@ -44,71 +44,56 @@ class Talker:
         self.frontend, self.prompts, self.holding = frontend, prompts, holding
         self.spec = CallSpec("talker", prompts.actions, prompts.call_hints.talker)
 
-    def routing_parts(self, instructions: Sequence[PromptPart], work_line: str = "") -> list[PromptPart]:
+    def routing_parts(self, instructions: Sequence[PromptPart]) -> list[PromptPart]:
         """The routing call's instructions, part by part in the order they are sent, each with its source.
 
         Joining each part's ``sep`` and ``text`` gives exactly what :meth:`decide` sends, so a view of the request
         (``/history``) shows what is sent; the provider adds its ``reply_format`` itself.
         """
         prompts, name = self.prompts, self.prompts.name
-        parts = []
-        if prompts.frame_before:
-            parts.append(PromptPart(f"prompt set {name}: the voice's role", prompts.frame_before))
+        parts = [PromptPart(f"prompt set {name}: the voice's role", prompts.frame_before)]
         parts += instructions
-        if prompts.frame_after:
-            parts.append(PromptPart(f"prompt set {name}: how the instructions apply", prompts.frame_after))
+        parts.append(PromptPart(f"prompt set {name}: how the instructions apply", prompts.frame_after))
         parts.append(PromptPart(f"prompt set {name}: routing rules", prompts.routing, "\n"))
-        if work_line:
-            parts.append(PromptPart("open delegations (runtime)", work_line, "\n"))
         return parts
 
-    def labeled(self, history: list[dict]) -> list[dict]:
-        """``history`` with the set's ``caller_label`` in front of each caller turn that follows reference data.
-
-        A caller's "yes" right after a backend result then reads as the caller's, not as part of the result. A set
-        with an empty label leaves the history as it is.
-        """
-        labeled, after_reference = [], False
-        for item in history:
-            caller = item["role"] == "user" and not is_reference_item(item)
-            labeled.append(
-                {**item, "content": self.prompts.caller_label + item["content"]} if caller and after_reference else item
-            )
-            after_reference = is_reference_item(item)
-        return labeled
+    def runtime_data(self, work_line: str = "") -> str:
+        """The routing call's last user entry, after the conversation: the label, the work line (if any), the cue."""
+        prompts = self.prompts
+        return prompts.runtime_label + "\n" + (f"{work_line}\n\n" if work_line else "") + prompts.decision_cue
 
     async def decide(
         self, instructions: str, history: list[dict], work_in_progress: str = "", *, work_open: bool = False
     ) -> TalkerDecision:
-        """Return the routing decision for ``history`` under the client's ``instructions``, after the floor.
+        """Return the routing decision for ``history`` under the client's ``instructions``, after :meth:`floored`.
 
-        ``work_in_progress`` is the cascade's work line (``CallerTurns.work_line``): the delegations still open, or,
-        with a server delegation, that none is open; it is empty in client mode. ``work_open`` says whether any
-        delegation is open, so that a failed decision holds instead of delegating.
+        ``history`` is the voice history as the talker reads it (``TalkerMemory.labeled``). ``work_in_progress`` is the
+        cascade's work line (``CallerTurns.work_line``): the delegations still open, or, with a server delegation, that
+        none is open; it is empty in client mode. It goes after the conversation, in the runtime data. ``work_open``
+        says whether any delegation is open, so that a failed decision holds instead of delegating.
         """
-        parts = self.routing_parts([PromptPart("instructions", instructions)], work_in_progress)
+        parts = self.routing_parts([PromptPart("instructions", instructions)])
         routing = "".join(part.sep + part.text for part in parts)
-        decision = await self.frontend.complete(routing, self.labeled(history), self.spec)
+        # After the caller's newest turn, a line break sets the runtime data apart: the provider joins the two entries.
+        joined = bool(history) and history[-1].get("role") == "user"
+        runtime = {"role": "user", "content": ("\n" if joined else "") + self.runtime_data(work_in_progress)}
+        decision = await self.frontend.complete(routing, [*history, runtime], self.spec)
         return self.floored(decision, work_open=work_open)
 
     def floored(self, decision: TalkerDecision, *, work_open: bool = False) -> TalkerDecision:
         """The decision the cascade carries out: a turn that reached the talker never ends with nothing done.
 
-        ``delegate``, ``speak`` with words, and a declared ``wait`` stand. A decision with nothing to say becomes a
-        ``wait`` where the set declares one, and otherwise counts as a failure (:meth:`after_failure`), as does output
-        the parser could not use.
+        ``delegate``, ``speak`` with words, and ``wait`` stand; a ``speak`` with nothing to say becomes a ``wait``.
+        Output the parser could not use counts as a failure (:meth:`after_failure`).
         """
         action = decision.action
         if decision.diagnostics.get("recovery") in UNUSABLE:
             return self.after_failure(decision.diagnostics, work_open=work_open)
         if action == "delegate" or (action == "speak" and decision.speech.strip()):
             return decision
-        if action == "wait" and action in self.prompts.actions:
+        if action == "wait":
             return TalkerDecision("wait", "", decision.diagnostics)
-        diagnostics = {**decision.diagnostics, "recovery": "empty_speak" if action == "speak" else f"{action}_removed"}
-        if "wait" in self.prompts.actions:
-            return TalkerDecision("wait", "", diagnostics)
-        return self.after_failure(diagnostics, work_open=work_open)
+        return TalkerDecision("wait", "", {**decision.diagnostics, "recovery": "empty_speak"})
 
     def after_failure(self, diagnostics: dict, *, work_open: bool) -> TalkerDecision:
         """What a turn becomes when the talker's decision failed or said nothing.

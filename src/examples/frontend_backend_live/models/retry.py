@@ -47,7 +47,7 @@ async def with_retries(
     Args:
         call: Zero-argument coroutine function; one invocation is one attempt.
         attempts: Total attempts, at least one.
-        role: Label for logs (``talker``, ``commentary``, ``thinker``).
+        role: Label for logs (``talker``, ``writer``, ``normalizer``).
 
     Returns:
         Whatever ``call`` returns.

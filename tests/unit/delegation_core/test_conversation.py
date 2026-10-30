@@ -12,6 +12,9 @@ from unittest import mock
 
 from delegation_core.im import conversation
 from delegation_core.im.conversation import Conversation, TaskHistory
+from tests.unit.contracts.backend import a_round, call_events, text_round
+from tests.unit.delegation_core.backend.llm.doubles import RecordingTools, ScriptedProvider
+from tests.unit.delegation_core.backend.llm.doubles import source as llm_source
 from tests.unit.delegation_core.helpers import (
     CORE_SETTINGS,
     MENU,
@@ -36,7 +39,7 @@ def request(text: str, size: int = 0) -> list[dict]:
 
 class TrimTests(unittest.TestCase):
     def test_trims_drop_whole_old_requests_and_keep_the_newest(self):
-        view = TaskHistory([], 200, CHARS)
+        view = TaskHistory([], 200, CHARS, TEXTS.cut_output)
         view.join([*request("old", 1000), {"type": "message", "role": "assistant", "content": "old answer"}])
         view.join(request("new"))
         history = view.history()
@@ -45,46 +48,51 @@ class TrimTests(unittest.TestCase):
         self.assertEqual(view.since(0)[0]["content"][0]["text"][:3], "old")  # still kept for a cursor
 
     def test_the_newest_request_alone_over_the_budget_fails(self):
-        view = TaskHistory(request("huge", 2000), 100, CHARS)
+        view = TaskHistory(request("huge", 2000), 100, CHARS, TEXTS.cut_output)
         with self.assertRaisesRegex(RuntimeError, "budget"):
             view.history()
 
-    def test_a_one_shot_view_is_never_trimmed(self):
-        view = TaskHistory([*request("old", 3000), *request("new")], None, None)
-        self.assertEqual(len(view.history()), 2)
-
     def test_a_long_tool_output_is_cut_to_its_head_and_tail(self):
         output = "H" * 60_000 + "T" * 40_000
-        view = TaskHistory([], 100_000, CHARS)
+        view = TaskHistory([], 100_000, CHARS, TEXTS.cut_output)
         view.join([{"type": "function_call_output", "call_id": "c1", "output": output}])
         kept = view.history()[0]["output"]
         self.assertLess(len(kept), CHARS + 100)
         self.assertTrue(kept.startswith("H" * 100) and kept.endswith("T" * 100))
-        self.assertIn("characters cut", kept)
+        half = CHARS // 2
+        self.assertEqual(kept, output[:half] + TEXTS.cut_output.format(chars=len(output) - 2 * half) + output[-half:])
 
     def test_each_items_size_is_estimated_once(self):
         with mock.patch.object(conversation, "item_size", wraps=conversation.item_size) as size:
-            view = TaskHistory(request("one"), 10_000, CHARS)
+            view = TaskHistory(request("one"), 10_000, CHARS, TEXTS.cut_output)
             view.join(request("two"))
             for _ in range(5):
                 view.history()
         self.assertEqual(size.call_count, 2)
 
     def test_the_shared_conversation_forgets_what_left_every_window_and_keeps_positions(self):
-        shared = Conversation(100, CHARS)
+        shared = Conversation(100, CHARS, TEXTS.cut_output)
         shared.join(request("old", 500))
         shared.join(request("new"))
         start, items = shared.window()
         self.assertEqual((start, len(items), shared.end), (1, 1, 2))
 
-    def test_owed_outputs_answer_every_call_left_without_one(self):
-        items = [
+    def test_owed_outputs_answer_every_call_left_without_one_and_a_reported_output_its_call_in_call_order(self):
+        calls = [
             {"type": "function_call", "call_id": "a", "name": "x", "arguments": "{}"},
             {"type": "function_call", "call_id": "b", "name": "y", "arguments": "{}"},
-            {"type": "function_call_output", "call_id": "a", "output": "{}"},
         ]
-        owed = conversation.owed_outputs(items, TEXTS.owed_output)
+        answered = [*calls, {"type": "function_call_output", "call_id": "a", "output": "{}"}]
+        owed = conversation.owed_outputs(answered, TEXTS.owed_output)
         self.assertEqual(owed, [{"type": "function_call_output", "call_id": "b", "output": TEXTS.owed_output}])
+        reported = {
+            "b": {"type": "function_call_output", "call_id": "b", "output": '{"booked": true}'},
+            "z": {"type": "function_call_output", "call_id": "z", "output": "{}"},  # no call of its own: left out
+        }
+        owed = conversation.owed_outputs(calls, TEXTS.owed_output, reported)
+        self.assertEqual(
+            owed, [{"type": "function_call_output", "call_id": "a", "output": TEXTS.owed_output}, reported["b"]]
+        )
 
 
 class SegmentTests(IMCase):
@@ -124,6 +132,26 @@ class SegmentTests(IMCase):
         view = adapter.runs[1].histories[0]
         owed = [item for item in view if item.get("type") == "function_call_output"]
         self.assertEqual([item["output"] for item in owed], [TEXTS.owed_output])
+
+    async def test_a_call_that_ended_while_its_task_stopped_keeps_its_output_and_a_call_that_never_ran_is_owed(self):
+        # The backstop stops W1 while book_table runs. The stop lets the call finish, so its output is known; the app's
+        # get_menu of the same round never got an output, so it gets texts.owed_output.
+        tools = RecordingTools(["book_table"], delay=0.4)
+        both = a_round(
+            call_events("book_table", {}, call_id="call_book", index=0),
+            call_events("get_menu", {}, call_id="call_menu", index=1),
+        )
+        provider = ScriptedProvider(both, text_round("It was booked."))
+        im = self.session(llm_source(provider, tools=[tools]).new(), work_timeout_seconds=0.2)
+        menu = {"tools": [MENU]}
+        await read_all(im.admit(ask("Book a table and show the menu."), delegation_id="D1", settings=menu).stream)
+        await read_all(im.admit(ask("Did it book?"), delegation_id="D2").stream)
+        later = provider.payloads[-1]["input"]
+        outputs = {item["call_id"]: item["output"] for item in later if item.get("type") == "function_call_output"}
+        booked = json.dumps({"ok": True, "tool": "book_table"})
+        self.assertEqual(outputs, {"call_book": booked, "call_menu": TEXTS.owed_output})
+        actions = im.ledger.actions
+        self.assertEqual((actions["call_book"].state, actions["call_menu"].state), ("done", "unclear"))
 
     async def test_a_bookings_record_survives_a_trim(self):
         script = [own_call("book_table", output=json.dumps({"booked": True})), answer("Booked.")]

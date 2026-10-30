@@ -9,6 +9,7 @@ has run at that stage, so nothing can repeat.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -30,7 +31,7 @@ FORMAT_ORDER = ("json_schema", "json_object", "none")
 FORMAT_ERROR_HINTS = ("response_format", "json_schema", "json_object", "guided", "structured")
 DEFAULT_SAMPLING = {"temperature": 0.0}
 
-# The talker's own copy of the reasoning helpers of the thinker's translator (in the delegation core).
+# The talker's own copy of the reasoning helpers of the backend provider's translator (in the delegation core).
 THINK_SPAN = re.compile(r"<think>.*?</think>", re.S)
 
 
@@ -144,6 +145,14 @@ class ChatCompletionsFrontend(Frontend):
             if stream is not None:
                 await stream.close()
         text = "".join(parts)
+        duration_ms = round((time.monotonic() - started) * 1000, 3)
+        # Each call's exact messages and reply, and when its first token and its end came, for reading a decision and
+        # its timing back from the logs.
+        logger.debug(f"{spec.role} request: {json.dumps(messages, ensure_ascii=False)}")
+        logger.debug(
+            f"{spec.role} reply ({first_token_ms} ms to the first token, {duration_ms} ms in all): "
+            f"{json.dumps(text, ensure_ascii=False)}"
+        )
         metadata = {
             "response_id": completion_id,
             "response_status": "incomplete" if finish_reason == "length" else "completed",
@@ -151,6 +160,7 @@ class ChatCompletionsFrontend(Frontend):
             "output_types": ["message"] if text else [],
             "output_text_chars": len(text),
             "first_token_ms": first_token_ms,
+            "duration_ms": duration_ms,
             "response_format": level,
             "attempt": current_attempt.get(),
         }

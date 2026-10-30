@@ -19,7 +19,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-MARKER = ".voiceclaw-harness-work"  # locked by the process that owns the folder; holds that process's id, as a note
+# Locked by the process that owns the folder; holds that process's id, as a note.
+MARKER = ".delegation-core-harness-work"
 
 # This process's own work folders: a sweep never takes one, even where a process may take its own lock again (NFS).
 _HELD: set[Path] = set()

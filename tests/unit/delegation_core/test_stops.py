@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""Stops: Cancel, the client-tool deadline and the backstop."""
+"""Stops: Cancel, the client-tool deadline, the backstop, and a task that ends its own Work."""
 
 import asyncio
 
@@ -14,12 +14,15 @@ from tests.unit.delegation_core.helpers import (
     TEXTS,
     IMCase,
     ScriptedAdapter,
-    StartEach,
+    ScriptStep,
     answer,
     app_call,
     app_outputs,
     ask,
+    call_item,
+    checkpoint,
     finished_items,
+    own_call,
     planned,
     read_all,
     wait,
@@ -310,36 +313,68 @@ class StopTests(IMCase):
         events = await read_all(first.stream)
         self.assertEqual(texts(events), [TEXTS.cancelled_line])
 
-    async def test_a_steer_after_a_cancel_starts_new_work(self):
+    async def test_a_stop_request_left_beside_its_cancel_waits_for_the_stop_and_becomes_a_follow_up_work(self):
+        # A Cancel places no request: the steer rule joins "Stop." to the stopping Work, the newest open one, whose task
+        # never takes it; once the stop is confirmed it starts a follow-up Work, which reads the stopped Work's record.
         gate = asyncio.Event()
 
         async def start(given, place):
             await place(Start(("D1",)))
 
-        async def cancel(given, place):
+        async def cancel_only(given, place):
             await place(Cancel("W1"))
-            await place(Start(("D2",)))
-
-        async def steer_old(given, place):
-            await place(Steer("W1", ("D3",)))
 
         adapter = ScriptedAdapter(
-            [wait(gate), answer()], [answer("Two.")], [answer("Three.")], conductor=planned(start, cancel, steer_old)
+            [wait(gate), answer()], [answer("Stopped.")], conductor=planned(start, cancel_only), stop_delay=0.05
         )
         im = self.session(adapter)
-        im.admit(ask("One."), delegation_id="D1")
+        first = im.admit(ask("Book it."), delegation_id="D1")
         await self.turns()
-        await read_all(im.admit(ask("Stop."), delegation_id="D2").stream)
-        await self.turns()
-        third = await read_all(im.admit(ask("Three."), delegation_id="D3").stream)
-        self.assertEqual(texts(third), ["Three."])
-        self.assertEqual(im.ledger.delegations["D3"].work, "W3")
+        second = im.admit(ask("Stop."), delegation_id="D2")
+        stopped, answered = await read_all(first.stream), await read_all(second.stream)
+        self.assertEqual((texts(stopped), texts(answered)), ([TEXTS.cancelled_line], ["Stopped."]))
+        [steering] = im.ledger.steerings.values()
+        self.assertEqual((steering.task, steering.delegations, steering.state), ("W1.1", ["D2"], "follow_up"))
+        works, request = im.ledger.works, im.ledger.delegations["D2"]
+        self.assertEqual((request.work, works["W1"].state, works["W2"].state), ("W2", "cancelled", "answered"))
+        records = adapter.runs[1].histories[0][-1]["content"][1]["text"]  # the follow-up's request: "Stop.", records
+        self.assertIn('{"work": "W1", "state": "cancelled"', records)
 
 
-class StartEachStopTests(IMCase):
-    async def test_start_each_never_stops_anything(self):
-        adapter = ScriptedAdapter([answer()], [answer()], conductor=StartEach())
-        im = self.session(adapter)
-        await read_all(im.admit(ask("One."), delegation_id="D1").stream)
-        await read_all(im.admit(ask("Two."), delegation_id="D2").stream)
-        self.assertEqual([run.stops for run in adapter.runs], [0, 0])
+class EndsOwnWork(ScriptStep):
+    """A round that calls the work tool cancel_work, run through the task's tools, as a task that read a stop does."""
+
+    async def play(self, run):
+        call = call_item("cancel_work", {}, "call_cancel")
+        for event in run.round_events([call]):
+            yield event
+        run.routes.append(run.task.route(call))
+        tools = run.task.tools()
+        run.task.tool_started(call, tools.label)
+        run.task.tool_outcome("call_cancel", await tools.execute("call_cancel", "cancel_work", "{}"), "done")
+
+
+class OwnStopTests(IMCase):
+    """The steer rule never stops work: a caller's stop lands in the running task, which ends its own Work."""
+
+    async def test_a_landed_stop_lets_the_task_end_its_own_work_with_cancel_work(self):
+        gate = asyncio.Event()
+        script = [own_call("search_flights"), wait(gate), checkpoint(), EndsOwnWork(), answer("Stopped, none booked.")]
+        adapter = ScriptedAdapter(script)
+        im = self.session(adapter)  # the shipped settings: every task is offered cancel_work
+        first = im.admit(ask("Book Denver."), delegation_id="D1")
+        await self.turns()
+        second = im.admit(ask("Stop, never mind."), delegation_id="D2")
+        await self.turns()
+        gate.set()
+        events = await read_all(second.stream)
+        await read_all(first.stream)
+        run = adapter.runs[0]
+        self.assertEqual([tool["name"] for tool in run.task.tools().tools()], ["cancel_work"])
+        (steering,) = run.applied
+        self.assertEqual(steering.items[-1]["content"][-1]["text"], TEXTS.closing_line)
+        self.assertEqual(run.routes, ["backend", "backend"])  # search_flights, then the IM's cancel_work
+        self.assertEqual(im.ledger.actions["call_cancel"].state, "done")
+        self.assertEqual(texts(events), ["Stopped, none booked."])  # the stop's own answer: no item for the call
+        self.assertEqual((im.ledger.works["W1"].state, im.ledger.delegations["D2"].work), ("answered", "W1"))
+        self.assertEqual(len(adapter.runs), 1)  # the stop started no work of its own

@@ -3,7 +3,7 @@
 
 """Hosting a Pipecat pipeline for a live session: the caller's transport around the frontend's processors.
 
-The pipeline runs at NVA's shared rates (``examples.shared.pipeline_utils``): caller audio at 16 kHz, reply audio at
+The pipeline runs at the shared rates (``examples.shared.pipeline_utils``): caller audio at 16 kHz, reply audio at
 ``PIPELINE_AUDIO_OUT_SAMPLE_RATE``, which every Magpie deployment accepts. The edges convert: the input gate hands the
 frontend 16 kHz audio, and both outputs send the caller reply audio at the exchange rate (``live.ports.EXCHANGE_RATE``).
 Each transport is a class of :data:`MEDIA_EDGES`.
@@ -21,8 +21,13 @@ from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.transports.base_transport import TransportParams
 from pipecat.workers.runner import WorkerRunner
 
-from examples.frontend_backend_live.adapter.bridge import LiveEventObserver, LiveInputGate, LiveWebSocketAudioOutput
-from examples.frontend_backend_live.adapter.playout import PlayoutTracker
+from examples.frontend_backend_live.adapter.bridge import (
+    LiveEventObserver,
+    LiveInputGate,
+    LiveOutputTranscript,
+    LiveWebSocketAudioOutput,
+)
+from examples.frontend_backend_live.media.playout import PlayoutTracker
 from examples.shared.pipeline_utils import build_pipeline_params
 from live.ports import EXCHANGE_RATE
 from utils import parse_env_bool, parse_env_int
@@ -34,7 +39,7 @@ START_TIMEOUT_SECONDS = 30
 # The switch the repository's tracing setup reads (``src/tracing.py``); the roots import that module, which starts
 # OpenTelemetry, and the adapter only turns pipeline tracing on.
 TRACING_SWITCH = "ENABLE_TRACING"
-# How many 10 ms chunks WebRTC reply audio is written in, as NVA's shared WebRTC transport reads it.
+# How many 10 ms chunks WebRTC reply audio is written in, as the shared WebRTC transport reads it.
 AUDIO_OUT_CHUNKS_SETTING = "AUDIO_OUT_10MS_CHUNKS"
 WEBRTC_AUDIO_OUT_CHUNKS = 5
 
@@ -119,14 +124,14 @@ class PipelineHost:
             audio_in_rate: The sample rate the frontend wants caller audio at.
         """
         self.gate = LiveInputGate(self.session, audio_in_rate)
-        self.playout = PlayoutTracker(self.session)
+        self.playout = PlayoutTracker(LiveOutputTranscript(self.session))
         edges = MEDIA_EDGES[transport]()
         return [*edges.wrap([self.gate, *middle], self.session, connection, audio_in_rate), self.playout]
 
     async def run_pipeline(self, processors: list, *, stt, tts) -> None:
         """Start the pipeline and return once it is running; closing the pipeline closes the session.
 
-        The worker runs at NVA's shared rates and is traced, under the session's id, when tracing is on.
+        The worker runs at the shared rates and is traced, under the session's id, when tracing is on.
 
         Args:
             processors: The complete pipeline, from :meth:`audio_pipeline`.

@@ -37,7 +37,7 @@ class LiveHooks(TypedDict):
 
     factory: str  # builds one live session's parts (``live.ports.AdapterFactory``)
     describe: str  # the example's half of ``GET /v1/live/info``
-    core: str  # the client of the process's one delegation core
+    core: str  # builds the client of the process's one delegation core
 
 
 class ExampleEntry(TypedDict):

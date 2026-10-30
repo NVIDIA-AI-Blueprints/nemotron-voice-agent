@@ -17,7 +17,6 @@ from tests.unit.delegation_core.helpers import (
     answer,
     ask,
     checkpoint,
-    one_shot_session,
     own_call,
     read_all,
     wait,
@@ -83,11 +82,3 @@ class RecordsBlockTests(IMCase):
         works = [record["work"] for record in records_of(adapter.runs[-1].histories[0][-1])]
         self.assertEqual(len(works), MAX_ENDED)
         self.assertEqual(works[-1], f"W{MAX_ENDED + 1}")
-
-    async def test_a_one_shot_session_adds_nothing(self):
-        adapter = ScriptedAdapter([answer()])
-        im = one_shot_session(adapter)
-        im.start()
-        self.addAsyncCleanup(im.close)
-        await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream)
-        self.assertEqual(adapter.runs[0].histories[0], ask("Find teas."))

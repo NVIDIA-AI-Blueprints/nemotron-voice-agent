@@ -7,7 +7,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { DelegationBook, finalAnswers, isDisplay, messageText, progressLines } from "../../public/live/delegations.js";
+import {
+  DelegationBook,
+  PROGRESS_AFTER_MS,
+  finalAnswers,
+  isDisplay,
+  messageText,
+  progressLines,
+  runBatch,
+} from "../../public/live/delegations.js";
 
 /** A view that records what the book draws, per card. */
 function recorder() {
@@ -95,9 +103,9 @@ test("the show call is the display, at once; another mcp_call is a backend step"
   const view = recorder();
   const book = new DelegationBook(view, []);
   announce(book, "d1", "r1");
-  play(book, "d1", [created("r1"), running("r1"), { type: "response.output_item.added", output_index: 0, item: mcp("m1", "show", "in_progress", null, "voiceclaw") }]);
+  play(book, "d1", [created("r1"), running("r1"), { type: "response.output_item.added", output_index: 0, item: mcp("m1", "show", "in_progress", null, "delegation_core") }]);
   assert.ok(view.of("d1").stages.mcp_m1);
-  play(book, "d1", [done(mcp("m1", "show", "completed", "Latte, medium: $5.00", "voiceclaw"))]);
+  play(book, "d1", [done(mcp("m1", "show", "completed", "Latte, medium: $5.00", "delegation_core"))]);
   assert.equal(view.of("d1").stages.mcp_m1, undefined);
   assert.equal(view.of("d1").stages.display.text, "Latte, medium: $5.00");
   assert.equal(book.cards.get("d1").toolRan, false);
@@ -113,7 +121,7 @@ test("a show that did not complete is no display: nothing reaches the screen, an
   const view = recorder();
   const book = new DelegationBook(view, []);
   announce(book, "d1", "r1");
-  play(book, "d1", [created("r1"), running("r1"), done(mcp("m1", "show", "failed", "show: display must be non-empty text", "voiceclaw"))]);
+  play(book, "d1", [created("r1"), running("r1"), done(mcp("m1", "show", "failed", "show: display must be non-empty text", "delegation_core"))]);
   assert.equal(view.of("d1").stages.display, undefined);
   assert.equal(view.of("d1").stages.mcp_m1.cls, "warn");
   assert.match(view.of("d1").stages.mcp_m1.label, /display \(show\) failed/);
@@ -201,4 +209,48 @@ test("the item helpers read phase and the display the same way", () => {
   assert.equal(isDisplay(mcp("m", "get_menu", "completed", "d")), false);
   assert.equal(messageText({ content: "plain" }), "plain");
   assert.equal(messageText({ content: [{ type: "output_text", text: "a" }, { type: "refusal", refusal: "no" }] }), "a");
+});
+
+test("a batch of function calls still running after PROGRESS_AFTER_MS gets one progress line, whatever its tools", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const said = [];
+  let finish;
+  const running = runBatch([call("c1", "any_tool")], () => new Promise((resolve) => { finish = resolve; }), {
+    slow: () => said.push("progress"),
+    signal: new AbortController().signal,
+  });
+  t.mock.timers.tick(PROGRESS_AFTER_MS - 1);
+  assert.deepEqual(said, []);
+  t.mock.timers.tick(1);
+  assert.deepEqual(said, ["progress"]);
+  t.mock.timers.tick(10 * PROGRESS_AFTER_MS);
+  finish("output");
+  assert.deepEqual(await running, ["output"]);
+  assert.deepEqual(said, ["progress"]);  // one line for the batch
+});
+
+test("a quicker batch, a batch with no line to say and a stopped call get no progress line", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const said = [];
+  const slow = () => said.push("progress");
+  const signal = new AbortController().signal;
+  // The batch ends first: its timer is cleared before runBatch returns, so nothing follows the outputs.
+  const quick = runBatch([call("c1"), call("c2")], (fc) => new Promise((resolve) => setTimeout(() => resolve(fc.call_id), PROGRESS_AFTER_MS - 1)), { slow, signal });
+  t.mock.timers.tick(PROGRESS_AFTER_MS - 1);
+  assert.deepEqual(await quick, ["c1", "c2"]);
+  t.mock.timers.tick(2 * PROGRESS_AFTER_MS);
+  // No line to say (the box unchecked, or an empty line): no timer.
+  let finish;
+  const unchecked = runBatch([call("c3")], () => new Promise((resolve) => { finish = resolve; }), { slow: null, signal });
+  t.mock.timers.tick(2 * PROGRESS_AFTER_MS);
+  finish("x");
+  await unchecked;
+  // End or a new Start while the tools run: nothing more is sent for the call.
+  const scope = new AbortController();
+  const stopped = runBatch([call("c4")], () => new Promise((resolve) => { finish = resolve; }), { slow, signal: scope.signal });
+  scope.abort();
+  t.mock.timers.tick(2 * PROGRESS_AFTER_MS);
+  finish("y");
+  await stopped;
+  assert.deepEqual(said, []);
 });

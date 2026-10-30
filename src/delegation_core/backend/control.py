@@ -79,8 +79,12 @@ TOOLS: Mapping[str, _Tool] = {
 class ControlVocabulary:
     """A conductor's instructions and four control tools as the core's texts word them (``port.ControlTools``)."""
 
-    def __init__(self, schemas: Mapping[str, Mapping[str, Any]], prompt: str):
-        """Check ``schemas`` (``texts.control_tools``) and keep ``prompt`` (``texts.conductor_prompt``).
+    def __init__(self, schemas: Mapping[str, Mapping[str, Any]], prompt: str, idle: str, failed: str):
+        """Check ``schemas`` (``texts.control_tools``); keep ``prompt`` (``texts.conductor_prompt``) and two answers.
+
+        ``idle`` is the outcome of a control call that comes before a ``decide()`` takes its calls: the refusal with
+        ``texts.refusal_reasons.idle``. ``failed`` is the answer to a control call that raised (``texts.failed_output``,
+        which holds ``{name}`` and ``{error}``).
 
         Raises:
             ValueError: A tool is missing or unknown, or its schema leaves out a parameter its decision needs or names
@@ -88,7 +92,7 @@ class ControlVocabulary:
         """
         if not isinstance(prompt, str):
             raise ValueError("texts.conductor_prompt must be text")
-        self.prompt = prompt
+        self.prompt, self.idle, self.failed = prompt, idle, failed
         if set(schemas) != set(TOOLS):
             raise ValueError(f"texts.control_tools must hold exactly {', '.join(TOOLS)}; it holds {sorted(schemas)}")
         for name, schema in schemas.items():
@@ -102,6 +106,10 @@ class ControlVocabulary:
                     f"texts.control_tools.{name}: parameters missing {sorted(missing)}, not taken {sorted(unknown)}"
                 )
         self.schemas = {name: deepcopy(dict(schemas[name])) for name in TOOLS}
+
+    def instructions(self, max_running: int) -> str:
+        """The conductor's instructions: ``texts.conductor_prompt`` with the tasks its backend runs at once."""
+        return self.prompt.format(max_running=max_running)
 
     def conductor_tools(self) -> list[dict]:
         """The four control tools, as Responses function tools, in a fixed order."""

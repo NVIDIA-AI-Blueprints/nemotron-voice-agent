@@ -6,16 +6,17 @@
 Each attempt reads ``request()`` and ``history()`` after the safe point settles waiting steering, sends the whole
 history, and holds its items until its terminal, so an attempt that fails delivers nothing. A failed, timed-out or
 empty attempt is tried once more (never in a one-shot session); a completed round with content is never retried.
-Steering restarts a round still streaming, once per Work, because such a round has dispatched nothing (the cut attempt
+Steering restarts a round still streaming, once per run, because such a round has dispatched nothing (the cut attempt
 ends ``incomplete`` with the reason ``steered``); otherwise it lands at the next safe point. A stop cuts a streaming
-round but lets started calls finish. After ``max_tool_rounds`` rounds, one more runs with ``tool_choice: none``.
+round but lets started calls finish. After ``max_tool_rounds`` rounds, one more runs with no tool offered.
+A round that answers ends the task even while steering waits: the IM writes the answer and starts that steering as
+the next request.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import aclosing
@@ -42,13 +43,6 @@ from .settings import LlmSettings
 
 # The label a call no tool source offered is reported with: the backend LLM answered it with an error output.
 OWN_LABEL = "llm"
-
-
-def _form(name: str) -> str:
-    """A tool name's form for comparing names: CamelCase split, lower case, no separators, no trailing "tool"."""
-    key = re.sub(r"[\s_.\-]", "", re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)).lower()
-    return key[: -len("tool")] if key.endswith("tool") and len(key) > len("tool") else key
-
 
 PHASES = frozenset(get_args(Phase))
 
@@ -194,9 +188,8 @@ def _has_content(items: list[dict]) -> bool:
 def _labeled(items: list[dict], commentary: bool) -> list[dict]:
     """The round's items other than calls, each message with its phase.
 
-    ``commentary`` (a round with calls, or one that steering crossed) labels every message so. Otherwise a message keeps
-    a phase its model gave, the rest are the ``final_answer``, and a round whose messages are all commentary answers
-    with its last one.
+    ``commentary`` (a round with calls) labels every message so. Otherwise a message keeps a phase its model gave, the
+    rest are the ``final_answer``, and a round whose messages are all commentary answers with its last one.
     """
     labeled = [dict(item) for item in items]
     messages = [item for item in labeled if item.get("type") == "message"]
@@ -242,7 +235,7 @@ class LlmRun:
         self.round = 0  # the current round, from 1
         self.done = False  # the task answered or failed: events() yields nothing more
         self.stopped = False  # level: set by stop(), never cleared
-        self.redone = False  # the one restart of a streaming round this Work may have had
+        self.redone = False  # the one restart of a streaming round this run may have had
         self.waits = False  # the last round ended with the app's calls: the iteration ends until resume()
         self.held: list[Steering] = []  # steering taken and not settled yet
         self.owners: dict[str, ToolSource] = {}  # the round's offered tools by name: which source runs each
@@ -278,7 +271,7 @@ class LlmRun:
                     if self.stopped:
                         return
                     if attempt.cut_by == "steer" and attempt.terminal is None and attempt.error is None:
-                        self.redone = True  # the restart before acting, once per Work
+                        self.redone = True  # the restart before acting, once per run
                         self.task.trace("backend.steered", round=self.round)
                         if attempt.created is not None:
                             yield attempt.closed("response.incomplete", incomplete_details={"reason": "steered"})
@@ -312,9 +305,10 @@ class LlmRun:
             self._settle_held("not_applied")
 
     def steer(self) -> None:
-        """Steering waits: restart the round if it still streams and this Work has not been restarted.
+        """Steering waits: restart the round if it still streams and this run has not been restarted.
 
         Otherwise the steering lands at the next safe point: after the round's calls, or after the app's outputs.
+        A round that answers first ends the task, and the IM starts the steering as the next request.
         """
         attempt = self._attempt
         if attempt is not None and not attempt.reader.done() and not self.redone and not self.stopped:
@@ -367,12 +361,17 @@ class LlmRun:
         return attempt
 
     def _payload(self, request: dict, history: list[dict]) -> dict:
-        """The round's request: the current settings, the whole history, and every tool the round offers."""
-        tools, self.owners = self._round_tools(request)
+        """The round's request: the current settings, the whole history, and every tool the round offers.
+
+        The capped round, after ``max_tool_rounds``, offers no tool, so its model has none to call or to write out,
+        and ``texts.round_cap_note`` joins its instructions.
+        """
+        capped = self.round > self.settings.max_tool_rounds
+        tools, self.owners = ([], {}) if capped else self._round_tools(request)
         self.offered = [tool["name"] for tool in tools if tool.get("name")]
         payload = {**request, "tools": tools, "input": deepcopy(history)}
-        if self.round > self.settings.max_tool_rounds:  # the capped round: answer with what there is
-            note = self.settings.round_cap_note
+        if capped:  # answer with what there is
+            note = self.task.texts.round_cap_note
             payload["tool_choice"] = "none"
             payload["instructions"] = f"{request['instructions']}\n\n{note}" if request.get("instructions") else note
         return payload
@@ -392,8 +391,11 @@ class LlmRun:
         return tools, owners
 
     async def _round(self, attempt: _Attempt) -> AsyncIterator[dict]:
-        """Pass on a completed round, labeled, then run the backend's calls; the app's calls end the iteration."""
-        calls = [self._named(item) for item in attempt.items if item.get("type") == "function_call"]
+        """Pass on a completed round, labeled, then run the backend's calls; the app's calls end the iteration.
+
+        A round with no call is the answer, also when steering waits: that steering stays with the IM.
+        """
+        calls = [item for item in attempt.items if item.get("type") == "function_call"]
         rest = [item for item in attempt.items if item.get("type") != "function_call"]
         self.task.trace(
             "backend.completed",
@@ -408,15 +410,13 @@ class LlmRun:
         by_route: dict[Route, list[dict]] = {"app": [], "backend": [], "refused": []}
         for call in calls:
             by_route[self.task.route(call)].append(call)
-        if not calls:
-            self._take_boundary()  # steering that waits: this round's words are not the answer
-        items = [*_labeled(rest, bool(calls) or bool(self.held)), *calls]
+        items = [*_labeled(rest, bool(calls)), *calls]
         for index, item in enumerate(items):
             yield {"type": "response.output_item.added", "output_index": index, "item": _opening(item)}
             yield {"type": "response.output_item.done", "output_index": index, "item": item}
         yield {"type": "response.completed", "response": {**attempt.terminal["response"], "output": items}}
         if not calls:
-            self.done = not self.held
+            self.done = True
             return
         if by_route["backend"] and not self.stopped:
             await self._run_calls(by_route["backend"])
@@ -442,14 +442,18 @@ class LlmRun:
         await asyncio.gather(*(self._run_call(call) for call in calls), return_exceptions=True)
 
     async def _run_call(self, call: dict) -> None:
-        """Run one call on the source that offered it; every outcome is reported with an output."""
-        call_id, name = call.get("call_id", ""), call.get("name", "")
+        """Run one call on the source that offered it; every outcome is reported with an output.
+
+        A call to a name the round did not offer runs nothing: its output, ``texts.unknown_tool_output``, lists the
+        names the round offered, which the model reads in its next round.
+        """
+        call_id, name, texts = call.get("call_id", ""), call.get("name", ""), self.task.texts
         source = self.owners.get(name)
         self.task.tool_started(call, source.label if source is not None else OWN_LABEL)
         limit = self.settings.server_tool_timeout_seconds
         if source is None:
-            offered = ", ".join(self.offered) or "none"
-            output, outcome = json.dumps({"error": f"Unknown tool: {name}. The tools offered: {offered}"}), "failed"
+            unknown = texts.unknown_tool_output.format(name=name, offered=", ".join(self.offered) or texts.none)
+            output, outcome = json.dumps({"error": unknown}), "failed"
         else:
             try:
                 async with asyncio.timeout(limit):
@@ -457,23 +461,9 @@ class LlmRun:
             except TimeoutError:  # cut after its effect may have happened: whether it ran is not known
                 output, outcome = json.dumps({"error": f"{name} did not answer within {limit:g} s"}), "unclear"
             except Exception as exc:
-                output, outcome = json.dumps({"error": f"{name} failed: {type(exc).__name__}: {exc}"}), "failed"
+                failed = texts.failed_output.format(name=name, error=f"{type(exc).__name__}: {exc}")
+                output, outcome = json.dumps({"error": failed}), "failed"
         self.task.tool_outcome(call_id, output, outcome)
-
-    def _named(self, call: dict) -> dict:
-        """``call``, under the offered tool's name when it names one in all but its form; otherwise unchanged.
-
-        Only the exact form counts, and only one offered tool may have it: a guessed name could run a write tool the
-        model never named.
-        """
-        name = call.get("name", "")
-        if name in self.offered:
-            return call
-        same = [offered for offered in self.offered if _form(offered) == _form(name)]
-        if len(same) != 1:
-            return call
-        self.task.trace("tools.renamed", round=self.round, call_id=call.get("call_id"), name=name, to=same[0])
-        return {**call, "name": same[0]}
 
     # ------------------------------------------------------------------------------------------------ steering
     def _take_boundary(self) -> None:

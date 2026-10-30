@@ -7,13 +7,15 @@ Admission is one step: a request is refused before anything changes, or its dele
 opens ``queued``. The conductor places arrivals one ``decide()`` call at a time, and the session re-checks and answers
 every decision; what a ``decide()`` leaves unplaced joins the newest open Work, or starts one when none is open, so a
 conductor's failure never starts work beside open work. While an arrival waits for its decision, the commit gate holds
-every open Work's new calls, since any of them may be the one the caller changed. A typed run steers running work as a
-spoken request does, a deliberate deviation from GPT-Live, which queues it.
+every open Work's new calls, since any of them may be the one the caller changed, and with
+``delegation.hold_answers_while_deciding`` their answers too. A typed run steers running work as a spoken request does,
+a deliberate deviation from GPT-Live, which queues it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable
 from copy import deepcopy
@@ -61,6 +63,14 @@ class DelegationError(Exception):
 def is_message(item: dict) -> bool:
     """Whether an input item is a message (a typed one may leave its ``type`` out)."""
     return item.get("type", "message") == "message"
+
+
+def call_arguments(call: dict) -> str | None:
+    """A call's arguments as parsed JSON, written one way (keys sorted) so calls compare as data; ``None``: not JSON."""
+    try:
+        return json.dumps(json.loads(call.get("arguments") or "{}"), sort_keys=True)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -129,8 +139,9 @@ class IMSession:
             backend: The session's backend adapter (``AdapterSource.new()``).
             defaults: What a request leaves out: the deployment's model and instructions.
             settings: The IM's settings (``CoreSettings.delegation``).
-            texts: The core's texts (``CoreSettings.texts``): every line the IM writes or adds.
-            result_format: The class ``delegation.result_format`` names, built with its note; the composition root
+            texts: The core's texts (``CoreSettings.texts``): the lines the IM and the backend write or add to a
+                model's input.
+            result_format: The class ``delegation.result_format`` names, built with its note; the core's builder
                 picks it from ``im/results.RESULT_FORMATS`` (default ``plain``).
             call_reports: The class ``delegation.backend_calls`` names, picked from ``im/results.CALL_REPORTS``
                 (default ``items``).
@@ -144,7 +155,7 @@ class IMSession:
         self.ledger = WorkLedger(uid("conv"))
         self.book = ResponseBook(self.ledger)
         self.notes = ProgressNotes(self.book, settings.progress_note_seconds)
-        self.conversation = Conversation(settings.context_tokens, settings.tool_output_chars)
+        self.conversation = Conversation(settings.context_tokens, settings.tool_output_chars, texts.cut_output)
         self.incoming: dict[str, Incoming] = {}  # every accepted request whose record is kept, by delegation
         self.arrivals: list[str] = []  # the requests no decision has placed yet, oldest first
         self.works: dict[str, WorkRun] = {}  # the open Works
@@ -152,6 +163,9 @@ class IMSession:
         self.ready: deque[TaskRun] = deque()  # tasks waiting for a slot, in the order they became ready
         self.running: set[TaskRun] = set()  # tasks holding a slot
         self.parked: dict[str, Parked] = {}  # each call the app owes an output for, by call_id
+        self.admitted = 0  # the requests admitted so far, steering and typed messages with the app's outputs included
+        # The newest call let run: its name, arguments, call_id, and the requests admitted when it ran.
+        self.newest_call: tuple[str, str | None, str, int] | None = None
         self.conductor: Conductor | None = None
         self.decisions = Decisions(self)
         self.placer: asyncio.Task | None = None
@@ -182,7 +196,10 @@ class IMSession:
 
     @property
     def waits_for_decision(self) -> bool:
-        """Whether a request waits for the conductor's decision: the commit gate holds every open Work's calls."""
+        """Whether a request waits for the conductor's decision: the commit gate holds every open Work's calls.
+
+        With ``delegation.hold_answers_while_deciding``, the answers the open Works' tasks give wait for it too.
+        """
         return not self._decided.is_set()
 
     async def decided(self) -> None:
@@ -238,6 +255,7 @@ class IMSession:
         self.book.open(delegation.id, stream, *self.response_settings(settings))
         self.incoming[delegation.id] = Incoming(brings)
         self.arrivals.append(delegation.id)
+        self.admitted += 1
         self._decided.clear()
         self.observe("backend.queued", delegation_id=delegation.id, waiting=waiting + 1)
         if self._deciding is not None and not self._deciding.done() and not self._placed_any and self._may_restart:
@@ -260,7 +278,7 @@ class IMSession:
                 await self._wake.wait()
             try:
                 await self._decide()
-            except Exception:  # a bug in applying must not stop placement: log it, and go on with what is left
+            except Exception:  # an unexpected error must not stop placement: log it, and go on with what is left
                 logger.exception("Placing the arrivals failed")
 
     async def _decide(self) -> None:
@@ -324,7 +342,7 @@ class IMSession:
 
         async def place(decision: Decision) -> str:
             if call is not self._call:
-                return self._refused("its decide() has ended")
+                return self._refused("ended")
             return await self.place(decision)
 
         return place
@@ -345,42 +363,60 @@ class IMSession:
         taken = [delegation for delegation in self.arrivals if delegation in wanted]
         for delegation in taken:
             self.arrivals.remove(delegation)
-        if not self.arrivals:
-            self._decided.set()  # the commit gate lets the open Works' calls go again
+        if not self.arrivals and not self._decided.is_set():
+            self._decided.set()  # the commit gate lets the open Works' calls (and held answers) go again
+            self.observe("im.decided", delegation_ids=taken)
         return taken
 
-    def _refused(self, reason: str) -> str:
-        return self.texts.outcomes["refused"].format(reason=reason)
+    def _refused(self, reason: str, **values: str) -> str:
+        """The outcome of a refused decision, with the reason ``texts.refusal_reasons`` words for it."""
+        return self.texts.refusal(reason, **values)
 
     def _not_placeable(self, delegations: Iterable[str]) -> str:
-        return self._refused(f"no unplaced request among {', '.join(delegations) or 'none'}")
+        return self._refused("unplaced", delegations=", ".join(delegations) or self.texts.none)
 
     def _placeable(self, delegations: Iterable[str]) -> bool:
         return any(d in self.arrivals and d in self._given for d in delegations)
 
-    # the decisions (``Decisions`` hands each one here) -----------------------------------------
+    def _over_limit(self, tasks: int) -> bool:
+        """Whether ``tasks`` new tasks and the running and queued tasks of open Works are more than ``max_running``.
+
+        Checked only when more than one task may run at once: with one, a rule places (the steer rule, or the backend
+        LLM's own, whose ``start_each`` queues Works on purpose).
+        """
+        limit = self.backend.max_running
+        active = sum(task.record.state in ("queued", "running") for work in self.works.values() for task in work.tasks)
+        return limit > 1 and active + tasks > limit
+
+    # ------------------------------------------------------------------------------------------ the decisions
     def apply_start(self, decision: Start) -> str:
-        """A new Work for these requests, one task per brief."""
-        taken = self._take(decision.delegations, self._given)
-        if not taken:
+        """A new Work for these requests, one task per brief, within the tasks the backend runs at once."""
+        if not self._placeable(decision.delegations):
             return self._not_placeable(decision.delegations)
-        work = self._start_work(taken, decision.tasks)
+        if self._over_limit(len(decision.tasks) or 1):
+            return self._refused("over_limit", max_running=str(self.backend.max_running))
+        work = self._start_work(self._take(decision.delegations, self._given), decision.tasks)
         tasks = ", ".join(task.task_id for task in work.tasks)
         return self.texts.outcomes["started"].format(work=work.id, tasks=tasks)
 
     def apply_steer(self, decision: Steer) -> str:
-        """These requests join an open Work, one task or all; an ended Work or task gives a new Work instead."""
+        """These requests join an open Work, one task or all; an ended Work or task gives a new Work instead.
+
+        That new Work is held to the tasks the backend runs at once, as a Start is.
+        """
         if not self._placeable(decision.delegations):
             return self._not_placeable(decision.delegations)
         work = self.works.get(decision.work_id)
         if work is None and decision.work_id not in self.ledger.works:
-            return self._refused(f"no work {decision.work_id}")
+            return self._refused("no_work", work=decision.work_id)
         task = None
         if work is not None and decision.task_id is not None:
             task = next((each for each in work.tasks if each.task_id == decision.task_id), None)
             if task is None:
-                return self._refused(f"no task {decision.task_id} in {decision.work_id}")
+                return self._refused("no_task", task=decision.task_id, work=decision.work_id)
         if work is None or (task is not None and task.ended):
+            if self._over_limit(1):
+                return self._refused("over_limit", max_running=str(self.backend.max_running))
             new = self._start_work(self._take(decision.delegations, self._given), ())
             ended = decision.task_id or decision.work_id
             return self.texts.outcomes["restarted"].format(work=ended, new=new.id)
@@ -398,12 +434,12 @@ class IMSession:
         ended = self.texts.outcomes["ended"]
         if work is None:
             known = decision.work_id in self.ledger.works
-            return ended.format(work=decision.work_id) if known else self._refused(f"no work {decision.work_id}")
+            return ended.format(work=decision.work_id) if known else self._refused("no_work", work=decision.work_id)
         task = None
         if decision.task_id is not None:
             task = next((each for each in work.tasks if each.task_id == decision.task_id), None)
             if task is None:
-                return self._refused(f"no task {decision.task_id} in {decision.work_id}")
+                return self._refused("no_task", task=decision.task_id, work=decision.work_id)
             if task.ended:
                 return ended.format(work=decision.task_id)
         stopping = [task] if task is not None else work.open_tasks()
@@ -412,7 +448,12 @@ class IMSession:
         return self.texts.outcomes["cancel_requested"].format(work=work.id, tasks=tasks)
 
     def apply_answer(self, decision: Answer) -> str:
-        """End this request with ``text``, from the records; no Work changes."""
+        """End this request with ``text``, from the records; no Work changes.
+
+        An answer is about open work only: with no Work open, it is refused, and the request waits for its place.
+        """
+        if not self.works:
+            return self._refused("no_open_work")
         taken = self._take([decision.delegation_id], self._given)
         if not taken:
             return self._not_placeable([decision.delegation_id])
@@ -447,7 +488,9 @@ class IMSession:
     def history_for(self, work: WorkRun, task: TaskRun) -> TaskHistory:
         """A starting task's view: the conversation's window, its Work's input, its brief, what joined before it."""
         _, window = self.conversation.window()
-        view = TaskHistory([*window, *work.input], self.settings.context_tokens, self.settings.tool_output_chars)
+        view = TaskHistory(
+            [*window, *work.input], self.settings.context_tokens, self.settings.tool_output_chars, self.texts.cut_output
+        )
         if task.brief:
             view.join([brief_message(self.texts.task_line, task.brief)])
         view.join(task.pending)
@@ -502,6 +545,7 @@ class IMSession:
         if pending and not self.closed:
             order = list(self.incoming)
             self._start_work(sorted(pending, key=order.index), ())  # unapplied steering becomes a follow-up Work
+            self.observe("im.follow_up", work_id=work.id, delegation_ids=pending)
         self.observe("backend.ended", work_id=work.id, state=work.record.state, delegation_id=work.carrier)
         self._prune()
 
@@ -556,6 +600,31 @@ class IMSession:
         if action is not None and not action.ended:
             action.output = output
             action.move(outcome)
+
+    def call_routed(self, call: dict) -> None:
+        """``call`` runs (the app's or the backend's): it is the newest call that ran."""
+        self.newest_call = (call.get("name", ""), call_arguments(call), call.get("call_id", ""), self.admitted)
+
+    def repeated_output(self, call: dict, task_id: str) -> str | None:
+        """The output of ``task_id``'s app call with the name and arguments of the newest call that ran, which it made.
+
+        The app's answer to that call, as ``texts.repeated_call_output`` words it, which the IM gives instead of
+        sending the call again; ``None`` for any other call, when the newest call got no text output from the app (it
+        never answered), or when a request was admitted after it ran (a new request, steering too, may ask for the
+        same call again).
+        """
+        if self.newest_call is None:
+            return None
+        name, arguments, call_id, admitted = self.newest_call
+        if admitted != self.admitted:
+            return None
+        if arguments is None or (call.get("name", ""), call_arguments(call)) != (name, arguments):
+            return None
+        action = self.ledger.actions.get(call_id)
+        answered = action is not None and action.task == task_id and action.runner == "app" and action.state == "done"
+        if not answered or not isinstance(action.output, str):
+            return None
+        return self.texts.repeated_call_output.format(output=action.output)
 
     # ------------------------------------------------------------------------------------------ the app's calls
     def park(self, parked: Parked) -> None:
@@ -621,6 +690,8 @@ class IMSession:
         self.book.open(waiting.delegation_id, stream, *self.response_settings(brings))
         for call_id, output in outputs.items():
             self.call_ended(call_id, output.get("output"), "done")
+        if messages:  # the caller's typed messages with the outputs ask anew
+            self.admitted += 1
         waiting.work.continue_with(waiting, outputs, messages, brings)
         self.observe("tools.wait.completed", delegation_id=waiting.delegation_id, call_ids=list(waiting.calls))
         return Admission(waiting.delegation_id, stream)

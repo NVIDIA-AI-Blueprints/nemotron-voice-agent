@@ -179,13 +179,6 @@ class ToolTests(ValidationCase):
         self.assertEqual({tool["type"] for tool in self.core.checked[-1]["tools"]}, TOOL_TYPES)
         self.assertNotIn("error", self.primary.kinds())
 
-    async def test_a_tool_type_outside_the_schema_is_refused_at_once(self):
-        await self.start()
-        await self.update({"tools": [{"type": "teleport"}]})
-        error = (await self.primary.wait_for("error"))["error"]
-        self.assertEqual(error["code"], "invalid_value")
-        self.assertNotIn("session.updated", self.primary.kinds())
-
     async def test_mcp_credentials_reach_the_core_but_never_come_back(self):
         config = SessionConfig(
             model="live-1", delegation={"type": "responses", "responses": {"model": "org/org/model", "tools": [MCP]}}

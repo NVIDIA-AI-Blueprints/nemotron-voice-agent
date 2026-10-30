@@ -40,9 +40,12 @@ class SteeringTests(IMCase):
         run = adapter.runs[0]
         self.assertEqual((run.steers, len(run.applied)), (1, 0))
         self.assertEqual(im.ledger.delegations["D2"].state, "queued")
+        (record,) = im.ledger.steerings.values()  # the steering record, whose id the adapter settles
+        self.assertEqual((record.id, record.task, record.delegations, record.state), ("S1", "W1.1", ["D2"], "waiting"))
         gate.set()
         await self.turns()
-        self.assertEqual(len(run.applied), 1)
+        self.assertEqual([steering.id for steering in run.applied], ["S1"])
+        self.assertEqual(record.state, "applied")
         self.assertEqual(im.ledger.delegations["D2"].state, "answered")
 
     async def test_not_applied_steering_waits_for_the_next_point_then_becomes_a_follow_up_work(self):
@@ -59,7 +62,8 @@ class SteeringTests(IMCase):
         self.assertEqual(len([b for b in adapter.runs[0].boundaries if b.steering is not None]), 3)
         self.assertEqual(older[-1]["response"]["output"][-1]["content"][0]["text"], "Old.")
         self.assertEqual(newer[-1]["response"]["output"][-1]["content"][0]["text"], "New.")
-        self.assertEqual(im.ledger.delegations["D2"].work, "W2")
+        self.assertEqual(im.ledger.steerings["S1"].state, "follow_up")
+        self.assertEqual((im.ledger.delegations["D2"].work, im.ledger.works["W2"].requests), ("W2", ["D2"]))
         self.assertNotIn("Make it Tuesday.", str(adapter.runs[0].histories[-1]))  # never applied, never in history
         self.assertIn("Make it Tuesday.", str(adapter.runs[1].histories[0]))
 

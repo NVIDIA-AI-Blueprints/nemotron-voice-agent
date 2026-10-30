@@ -7,7 +7,7 @@
 
 * ``steer`` (:class:`SteerOpenWork`, the default): arrivals join the newest open Work, whether queued, running or
   waiting for the app's outputs; with none open they start one together.
-* ``start_each`` (:class:`StartEach`, the queue profile): each arrival starts its own Work, which waits its turn.
+* ``start_each`` (:class:`StartEach`): each arrival starts its own Work, which waits its turn, as in a queue.
 
 Both hold no state and place at once, so a ``decide()`` cancelled before it placed anything leaves nothing behind.
 Neither names a task, since the backend LLM runs one task per Work; a caller's stop joins the Work like any request.
@@ -43,7 +43,7 @@ class SteerOpenWork:
 
 
 class StartEach:
-    """``start_each``: each arrival starts its own Work (the queue profile)."""
+    """``start_each``: each arrival starts its own Work, which waits its turn (a queue)."""
 
     name: ClassVar[str] = "start_each"
 

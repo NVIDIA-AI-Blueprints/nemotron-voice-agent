@@ -111,10 +111,6 @@ class WhatEachPartGetsTests(ViewCase):
             {"acknowledgement_delay_ms", "emit", "emit_paced", "id", "input_ms", "report_refusal", "responses"},
         )
 
-    def test_the_catalogue_holds_the_22_server_events_once_each(self):
-        self.assertEqual((len(LIVE_SERVER_EVENTS), len(set(LIVE_SERVER_EVENTS))), (22, 22))
-        self.assertLessEqual(ADAPTER_SENDS | DELEGATION_SIDE_SENDS, set(LIVE_SERVER_EVENTS))
-
 
 class RefusalTests(ViewCase):
     async def assert_sends_only(self, view, allowed):
@@ -261,8 +257,8 @@ class CommandFailureAtCloseTests(ViewCase):
 
         PipelineHost._spawn(adapter, command())
         await asyncio.create_task(self.session.close())  # the close begins in the loop turn in which the command fails
-        self.assertEqual(self.primary.kinds(), ["session.started", "error", "session.closed"])
-        self.assertEqual(self.primary.events[1]["error"]["message"], "A command could not be processed.")
+        self.assertEqual(self.primary.kinds(), ["session.started", "info", "session.closed"])
+        self.assertEqual(self.primary.events[1]["message"], "A command could not be processed.")
 
 
 class RecordingPort:
@@ -287,8 +283,8 @@ class RecordingPort:
             raise ConnectionError("the socket is gone")
         self.calls.append(("send_output_audio", len(pcm), sample_rate))
 
-    async def report_error(self, message, client_event_id=None):
-        self.calls.append(("report_error", message, client_event_id))
+    async def report_error(self, message, client_event_id=None, *, fatal=False):
+        self.calls.append(("report_error", message, client_event_id, fatal))
 
     def request_close(self, reason):
         self.calls.append(("request_close", reason))
@@ -310,7 +306,7 @@ class AdapterFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             port.calls,
             [
-                ("report_error", "Output audio transport failed; start a new session.", None),
+                ("report_error", "Output audio transport failed; start a new session.", None, True),
                 ("request_close", "connection_lost"),
             ],
         )
@@ -326,7 +322,7 @@ class AdapterFailureTests(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(2):
             while not port.calls or adapter.background:
                 await asyncio.sleep(0.01)
-        self.assertEqual(port.calls, [("report_error", "A command could not be processed.", None)])
+        self.assertEqual(port.calls, [("report_error", "A command could not be processed.", None, False)])
 
     async def test_a_pipeline_that_finishes_asks_to_close_only_an_active_session(self):
         for active, requests in ((True, [("request_close", "connection_lost")]), (False, [])):

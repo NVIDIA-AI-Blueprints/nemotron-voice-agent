@@ -7,19 +7,19 @@
 
 * The strict client copies the rules by which tau2's Live client ends or stalls a benchmark run (tau2-bench 2174a60,
   ``src/tau2/voice/audio_native/openai/live_provider.py``, cited as ``T2`` below, and its ``events.py``), with no
-  tau2 import. It reads the event channels of every recorded golden: each golden passes it, or each violation is
-  listed, in ``KNOWN_VIOLATIONS``, or in ``PROVOKED_REFUSALS`` when the golden provokes the refusal with a command
-  tau2 never sends. A whole call answered with tau2's own timing passes it too.
+  tau2 import. It reads the event channels of every recorded golden: each golden passes it, or each violation is one
+  the golden causes on purpose, a refusal of a command tau2 never sends (``PROVOKED_REFUSALS``) or an ending it
+  scripts (``SCRIPTED_ENDINGS``). A whole call answered with tau2's own timing passes it too.
 * The console contract reads ``GET /v1/live/sessions/{id}/history``, ``GET /v1/live/info``, the WebRTC ``201`` answer
   and the usage report as the browser console does (``client/public/live/app.js``), from the real gateway and its
-  HTTP routes with the cascade engine. What the history panel reads through one whole call is pinned in
+  HTTP routes with the cascade adapter. What the history panel reads through one whole call is pinned in
   ``recordings/console-history.json``.
-* The close-order pin: on every close path, the session's own tasks end first; then the engine stops the pipeline and
-  closes the worker and both model clients, in a fixed order; then ``session.closed`` comes once and last, before the
-  socket or the data channel closes.
+* The close-order pin: on every close path, the session's own tasks end first; then the parts close in a fixed order
+  (the pipeline stops, the talker's model client closes, then the conversation's IM session, which closes the
+  backend's model client once a backend round ran); then ``session.closed`` comes once and last, before the socket or
+  the data channel closes.
 
-``console-history`` is recorded like a golden: ``LIVE_GOLDEN_RECORD=1`` writes it, a normal run only compares, and its
-tags follow the harness's rules (``harness.py``, "Tag").
+``console-history`` is recorded like a golden: ``LIVE_GOLDEN_RECORD=1`` writes it, and a normal run only compares.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ from tests.unit.goldens.harness import (
     GOLDEN_CORE,
     GOLDEN_DIR,
     GOLDEN_LIVE_CONFIG,
-    KNOWN_ROWS,
+    GOLDEN_PROMPTS,
     RECORD_VARIABLE,
     RESPONSES_SESSION,
     TRANSCRIPT_KINDS,
@@ -74,7 +74,6 @@ from tests.unit.goldens.harness import (
     canonical,
     channel_diff,
     decision,
-    line_matches,
     result_item,
     tool_call_round,
 )
@@ -83,8 +82,8 @@ TEAS = '{"teas": ["Earl Grey", "Matcha"]}'
 
 
 # --------------------------------------------------------------------------------------------- the strict client
-# What ends or stalls a tau2 run, rule by rule (T2:395-468, _normalize_event; T2:175-185, _accept_event; T2:371-393,
-# the continuation of a function-call batch).
+# What ends or stalls a tau2 run, rule by rule (T2's _normalize_event and _accept_event, and its continuation of a
+# function-call batch).
 RULES = {
     "error": "a top-level error event: tau2 raises RuntimeError (T2:432-433)",
     "unexpected_close": "session.closed before the client asked to close: tau2 raises ConnectionError (T2:428-431)",
@@ -111,9 +110,9 @@ NESTED_FAILURES = frozenset({"response.failed", "response.incomplete", "error"})
 
 # The fields tau2's own models parse from the events it reads, copied as models (not imported) so that the checker
 # parses them the same way: pydantic's lax mode, which takes "0", 0.0 and True as integers. The transcript models are
-# LiveTranscriptDelta and LiveInputTranscriptDelta; a call's fields fill FunctionCallArgumentsDoneEvent
-# (events.py:62-66) the first time tau2 passes the call to its agent. The wire's integer times are pinned by
-# test_live_pipeline.py, not here.
+# LiveTranscriptDelta and LiveInputTranscriptDelta; a call's fields fill FunctionCallArgumentsDoneEvent (events.py)
+# the first time tau2 passes the call to its agent. The wire's integer times are pinned by test_live_pipeline.py, not
+# here.
 class TranscriptFields(BaseModel):
     delta: str
     start_ms: int
@@ -145,22 +144,19 @@ EVENT_CHANNELS = ("session", "delegations", *TRANSCRIPT_KINDS)  # a golden's cha
 # (live/session/session.py), so a recorded session.closed with it is one the client asked for.
 CLIENT_CLOSE_REASON = "close_requested"
 
-# The violations the recorded goldens are known to carry, by golden. Each entry names its rule, its channel
-# ("delegations" for any delegation), the violating event as a tag's ``contains`` matches a line (harness.py, "Tag"),
-# a row of ``KNOWN_ROWS`` (harness.py) and a note. An entry that no violation matches fails the test.
-KNOWN_VIOLATIONS: dict[str, list[dict]] = {}
+# The violations a recorded golden causes on purpose, by golden. Each entry names its rule, its channel ("delegations"
+# for any delegation), what the violating event ``contains`` (each key with a matching value; see ``matches``) and a
+# note. An entry that no violation matches fails the test.
 
 # Refusals that a golden provokes on purpose, with a command tau2's client never sends: tau2 would stop on them, but
 # no tau2 run can meet them. tau2 sends response.create only to continue a response that has completed and whose every
-# call it has answered, and it sends no typed messages. Each entry names the client command by
-# its event id and says what it is; ``row`` is None when the refusal is the intended behavior.
+# call it has answered, and it sends no typed messages. Each entry names the client command by its event id.
 PROVOKED_REFUSALS: dict[str, list[dict]] = {
     "G11": [
         {
             "rule": "error",
             "channel": "session",
             "contains": {"error": {"code": "function_call_outputs_required", "client_event_id": "too_early"}},
-            "row": None,
             "note": "A response.create sent with a typed message while a call's output is still owed: it would "
             "continue nothing.",
         },
@@ -172,7 +168,6 @@ PROVOKED_REFUSALS: dict[str, list[dict]] = {
             "contains": {
                 "error": {"code": "function_call_outputs_required", "client_event_id": "continue_without_output"}
             },
-            "row": None,
             "note": "A response.create without the owed output, after the core's deadline: the call's route is still "
             "open, so it would continue nothing.",
         },
@@ -189,7 +184,6 @@ SCRIPTED_ENDINGS: dict[str, list[dict]] = {
             "rule": "nested_failure",
             "channel": "delegations",
             "contains": {"event": {"type": kind}},
-            "row": None,
             "note": note,
         }
     ]
@@ -379,26 +373,35 @@ def read_recorded(golden):
     return client.violations
 
 
+def matches(value, wanted):
+    """Whether ``value`` has every key of ``wanted`` with a value that matches; nested objects match the same way."""
+    if isinstance(wanted, dict):
+        return isinstance(value, dict) and all(
+            key in value and matches(value[key], part) for key, part in wanted.items()
+        )
+    return value == wanted
+
+
 def known(entry, violation):
     channel = entry["channel"]
     return (
         entry["rule"] == violation.rule
         and (channel == violation.channel or (channel == "delegations" and violation.channel.startswith(channel + "/")))
-        and line_matches(violation.event, entry["contains"])
+        and matches(violation.event, entry["contains"])
     )
 
 
 def unexplained(name, violations):
     """Each violation that no entry explains, and each entry that no violation matches."""
-    entries = KNOWN_VIOLATIONS.get(name, []) + PROVOKED_REFUSALS.get(name, []) + SCRIPTED_ENDINGS.get(name, [])
+    entries = PROVOKED_REFUSALS.get(name, []) + SCRIPTED_ENDINGS.get(name, [])
     problems = [
-        f"{violation} (rule: {RULES[violation.rule]}); fix it, or list it in KNOWN_VIOLATIONS with the row that "
-        "will remove it (or, for a refusal the golden provokes with a command tau2 never sends, in PROVOKED_REFUSALS)"
+        f"{violation} (rule: {RULES[violation.rule]}); fix it, or, when the golden causes it on purpose, list it in "
+        "PROVOKED_REFUSALS or SCRIPTED_ENDINGS"
         for violation in violations
         if not any(known(entry, violation) for entry in entries)
     ]
     problems += [
-        f"stale entry {entry}: no violation matches it any more; remove it in the step that removed the violation"
+        f"stale entry {entry}: no violation matches it any more; remove it"
         for entry in entries
         if not any(known(entry, violation) for violation in violations)
     ]
@@ -427,31 +430,12 @@ def call_done(call_id="call_1"):
 
 
 class StrictClientRuleTests(unittest.TestCase):
-    """The checker itself, on short streams written by hand: each rule fires where tau2 would stop or stall."""
+    """The checker itself, on short streams written by hand: each rule fires where tau2 would stop or stall.
 
-    def test_a_delegation_with_a_client_tool_round_breaks_no_rule(self):
-        events = [
-            {"type": "session.started", "session": {"id": "live_1"}},
-            {"type": "session.input_transcript.delta", "delta": "Teas?", "start_ms": 0, "end_ms": 600},
-            {"type": "session.delegation.created", "delegation": {"id": "item_1"}},
-            relayed("item_1", created("resp_1")),
-            relayed("item_1", call_done()),
-            relayed("item_1", completed("resp_1")),
-            relayed("item_1", created("resp_2")),
-            relayed("item_1", completed("resp_2")),
-            {"type": "session.output_transcript.delta", "delta": "Matcha.", "start_ms": 900, "end_ms": 1300},
-            {"type": "session.closed", "reason": "close_requested"},
-        ]
-        self.assertEqual(StrictClient.read(events, asked_to_close_at=len(events) - 1), [])
-
-    def test_any_top_level_error_ends_the_run(self):
-        error = {"type": "error", "error": {"code": "missing_tool_results", "message": "Return every result."}}
-        self.assertEqual(rules(StrictClient.read([error])), ["error"])
-
-    def test_a_session_closed_the_client_did_not_ask_for_ends_the_run(self):
-        closed = {"type": "session.closed", "reason": "expired"}
-        self.assertEqual(rules(StrictClient.read([closed])), ["unexpected_close"])
-        self.assertEqual(StrictClient.read([closed], asked_to_close_at=0), [])
+    Real calls check the rest: no rule fires on a call with a client-tool round that the client closes
+    (:class:`StrictClientCallTests`), a close the client did not ask for breaks one (:class:`CloseOrderTests`), and
+    the refusals and endings the goldens cause on purpose break theirs (:class:`StrictClientGoldenTests`).
+    """
 
     def test_a_relayed_failure_ends_the_run(self):
         for kind in ("response.failed", "response.incomplete", "error"):
@@ -536,7 +520,7 @@ class StrictClientRuleTests(unittest.TestCase):
     def test_values_are_parsed_as_tau2s_models_parse_them(self):
         # tau2's models parse in pydantic's lax mode: an integer may come as text, a whole float or a
         # boolean, and an input delta may have no event id. A call's name and arguments are read only when tau2 first
-        # passes the call to its agent, and a null name is allowed (T2:447-457; events.py:62-66).
+        # passes the call to its agent, and a null name is allowed (T2's _normalize_event; events.py).
         lax = [
             {"type": "session.input_transcript.delta", "delta": "Hi.", "start_ms": "0", "end_ms": 300.0},
             {"type": "session.output_transcript.delta", "delta": "Hi.", "start_ms": True, "end_ms": 300},
@@ -588,7 +572,8 @@ class StrictClientGoldenTests(unittest.TestCase):
 
     def test_every_recorded_golden_passes_or_each_violation_is_known(self):
         paths = sorted(GOLDEN_DIR.glob("*.json"))
-        self.assertLessEqual({"G1", "G2"}, {path.stem for path in paths}, f"the pilot goldens are not in {GOLDEN_DIR}")
+        listed = {*PROVOKED_REFUSALS, *SCRIPTED_ENDINGS}
+        self.assertLessEqual(listed, {path.stem for path in paths}, f"an entry names a golden not in {GOLDEN_DIR}")
         for path in paths:
             with self.subTest(golden=path.stem):
                 golden = json.loads(path.read_text(encoding="utf-8"))
@@ -600,30 +585,9 @@ class StrictClientGoldenTests(unittest.TestCase):
                 if problems:
                     self.fail(f"tau2's Live client would stop on {path.name}:\n" + "\n".join(problems))
 
-    def test_each_listed_violation_names_a_recorded_golden_and_why_it_is_there(self):
-        tables = (
-            (KNOWN_VIOLATIONS, KNOWN_ROWS),
-            (PROVOKED_REFUSALS, {*KNOWN_ROWS, None}),
-            (SCRIPTED_ENDINGS, {None}),
-        )
-        for table, rows in tables:
-            for name, entries in table.items():
-                self.assertTrue((GOLDEN_DIR / f"{name}.json").exists(), f"an entry names a missing golden {name}")
-                for entry in entries:
-                    with self.subTest(golden=name, entry=entry):
-                        self.assertEqual(set(entry), {"rule", "channel", "contains", "row", "note"})
-                        self.assertIn(entry["rule"], RULES)
-                        self.assertIn(entry["row"], rows)
-                        self.assertTrue(entry["note"].strip())
-        for name, entries in PROVOKED_REFUSALS.items():
-            for entry in entries:
-                # A provoked refusal answers one client command, named by its event id.
-                self.assertEqual(entry["rule"], "error")
-                self.assertIsInstance(entry["contains"]["error"]["client_event_id"], str, name)
-
 
 class StrictClientCallTests(GoldenCase):
-    """A whole call through the real gateway and engine, answered with tau2's own timing."""
+    """A whole call through the real gateway, adapter and core, answered with tau2's own timing."""
 
     async def test_a_client_that_answers_and_continues_as_early_as_tau2_does_is_never_refused(self):
         await self.serve(
@@ -650,9 +614,8 @@ class StrictClientCallTests(GoldenCase):
 
 # ---------------------------------------------------------------------------------------- the console's reads
 # The browser console polls GET /v1/live/sessions/{id}/history every second for its history panel (``refreshHistory`` in
-# app.js), which shows what the talker and the backend hold (``historyView`` in history.js). A talker message that
-# starts with this prefix shows as application context (history.js); the server writes context appends with it.
-CONSOLE_CONTEXT_PREFIX = "Application context (reference data): "
+# app.js), which shows what the talker and the backend hold (``historyView`` in history.js). The panel styles each
+# talker message and each line the next delegation carries by its kind.
 
 
 class HistoryPanel:
@@ -693,9 +656,9 @@ class HistoryPanel:
             return
         for number, message in enumerate(messages):
             where = f"frontend.messages[{number}]"
-            if self.expect(where, message, dict) and self.expect(f"{where}.role", message.get("role"), str):
+            if self.expect(where, message, dict) and self.strings(where, message, ("role", "kind")):
                 content = self.content(where, message.get("content"))
-                self.read("frontend.messages", {"role": message["role"], "content": content})
+                self.read("frontend.messages", {"role": message["role"], "kind": message["kind"], "content": content})
 
     def backend(self, backend):
         # No backend shows "No server backend in this session." (``historyView``).
@@ -713,13 +676,14 @@ class HistoryPanel:
         if self.expect("backend.items", items, list):
             for number, item in enumerate(items):
                 self.item(f"backend.items[{number}]", item)
-        # The labeled lines the next delegation carries (``pendingEntry`` in history.js): "Caller: ...", "Agent: ...".
+        # The lines the next delegation carries (``pendingEntry`` in history.js): each its kind and its labeled text.
         pending = backend.get("pending")
         if not self.expect("backend.pending", pending, list):
             return
         for number, line in enumerate(pending):
-            if self.expect(f"backend.pending[{number}]", line, str):
-                self.read("backend.pending", line)
+            where = f"backend.pending[{number}]"
+            if self.expect(where, line, dict) and self.strings(where, line, ("kind", "text")):
+                self.read("backend.pending", {"kind": line["kind"], "text": line["text"]})
 
     def prompt(self, name, parts):
         # ``promptEntries``; a part's source also says whose it is (``promptOrigin``).
@@ -780,7 +744,7 @@ def recorded_diffs(name, expected, recorded):
 AT_THE_FINAL_EVENT = {
     "pipeline stopped": True,
     "worker closes": 1,
-    "frontend client closes": 1,  # one close owner per side
+    "frontend client closes": 1,  # once, by the cascade
     "backend client closes": 0,
     "still registered": True,
     "socket closed": False,
@@ -820,11 +784,11 @@ class LeavingWebSocket(RecordingWebSocket):
 
 
 class CloseWatch:
-    """Counts what the engine closes and notes each step of the close in order; shared by every session of the test.
+    """Counts the closes and notes each step of the parts' close in order; shared by every session of the test.
 
-    The spies call the original methods unchanged. ``steps`` holds the engine's close as ``ENGINE_CLOSE_ORDER`` names
+    The spies call the original methods unchanged. ``steps`` holds the parts' close as ``ENGINE_CLOSE_ORDER`` names
     it; the test adds the final event and the socket's close. ``running_at_engine_close`` names the session's tasks
-    that were still running when the engine's close started.
+    that were still running when the parts' close started.
     """
 
     def __init__(self, test):
@@ -857,7 +821,7 @@ class CloseWatch:
         test.enterContext(patch.object(PipelineHost, "stop_pipeline", watched_stop_pipeline))
 
     def count(self, client, name):
-        """Count the closes of a model client, which its owner calls by the instance's ``close``."""
+        """Count the closes of a model client, made through the instance's ``close``."""
         close = client.close
 
         async def counted():
@@ -868,10 +832,10 @@ class CloseWatch:
         client.close = counted
 
     def engine_state(self, engine):
-        """What the engine's close has done so far.
+        """What the parts' close has done so far.
 
         With ``CheckedCall.close_state`` and the spies above, the only reads of internals in this file: re-point them
-        when a change moves what they read (the pipeline's task, the engine's close, the worker).
+        when a change moves what they read (the pipeline's task, the parts' close, the IM session's close).
         """
         runner = engine.runner_task
         return {
@@ -969,7 +933,7 @@ class CheckedCall(GoldenCase):
 
         ``backend_ran`` says the call's backend ran a round, whose model client the IM session's close closes.
         ``steps`` is the order of the close's steps, when it is not the path's own; ``still_running`` names the
-        session's tasks still running when the engine's close starts: none, or the task that asked for the close, which
+        session's tasks still running when the parts' close starts: none, or the task that asked for the close, which
         the close keeps running.
         """
         try:
@@ -1014,22 +978,13 @@ class CheckedCall(GoldenCase):
         path = GOLDEN_DIR / f"{name}.json"
         golden = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         if os.environ.get(RECORD_VARIABLE) == "1":
-            previous, golden = (
-                golden,
-                {
-                    "name": name,
-                    "scenario": self.scenario(),
-                    "tags": golden["tags"] if golden else [],
-                    "channels": recorded,
-                },
-            )
+            previous, golden = golden, {"name": name, "scenario": self.scenario(), "channels": recorded}
             path.write_text(json.dumps(golden, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             diffs = recorded_diffs(name, previous["channels"], recorded) if previous else []
             if diffs:
                 self.fail(
                     f"Recorded {path.name} again: {len(diffs)} channel(s) changed, and the file now holds this run. "
-                    f"Check the diff, tag the changed lines, then run without {RECORD_VARIABLE}.\n\n"
-                    + "\n\n".join(diffs)
+                    f"Check the diff, then run without {RECORD_VARIABLE}.\n\n" + "\n\n".join(diffs)
                 )
         elif golden is None:
             self.fail(f"{path} does not exist; record it with {RECORD_VARIABLE}=1")
@@ -1037,11 +992,9 @@ class CheckedCall(GoldenCase):
             diffs = recorded_diffs(name, golden["channels"], recorded)
             if diffs:
                 self.fail(
-                    f"{name} changed in {len(diffs)} channel(s). If the change is intended, name it (a row and a "
-                    f"note, see harness.py), record again with {RECORD_VARIABLE}=1 and tag the changed lines.\n\n"
-                    + "\n\n".join(diffs)
+                    f"{name} changed in {len(diffs)} channel(s). If the change is intended, record again with "
+                    f"{RECORD_VARIABLE}=1.\n\n" + "\n\n".join(diffs)
                 )
-        self.check_tags(name, golden)
 
 
 class ConsoleHistoryTests(CheckedCall):
@@ -1085,10 +1038,16 @@ class ConsoleHistoryTests(CheckedCall):
         # What the panel branches on, checked by meaning as well as recorded.
         self.assertEqual(values(moments["at_start"], "frontend.messages"), [])  # the prompt is its own part
         talker = values(moments["after_a_reply"], "frontend.messages")
-        self.assertIn({"role": "user", "content": CONSOLE_CONTEXT_PREFIX + "The caller is a regular."}, talker)
+        context = GOLDEN_PROMPTS.context_label + "The caller is a regular."
+        self.assertIn({"role": "user", "kind": "app_context", "content": context}, talker)
+        words = GOLDEN_PROMPTS.transcript
         self.assertEqual(
             values(moments["after_a_reply"], "backend.pending"),
-            ["App context: The caller is a regular.", "Caller: Hi.", "Agent: Hello there."],
+            [
+                {"kind": "context", "text": f"{words.context}: The caller is a regular."},
+                {"kind": "caller", "text": f"{words.caller}: Hi."},
+                {"kind": "agent", "text": f"{words.agent}: Hello there."},
+            ],
         )
         self.assertEqual(
             [values(lines, "backend.busy") for lines in moments.values()], [[False], [False], [True], [False]]
@@ -1134,10 +1093,15 @@ class ConsoleWebRTCTests(unittest.IsolatedAsyncioTestCase):
         return parts
 
     def mount(self, app):
-        """The live routes on ``app``, with the gateway's one core on the backend's script, as the root mounts them."""
+        """The live routes on ``app``, with the gateway's one core on the backend's script, as the root mounts them.
+
+        The gateway closes at cleanup, as at the app's shutdown, so a test that fails mid-call leaves no session open.
+        """
         core = chat_core(self.backend, **GOLDEN_CORE)
         self.addAsyncCleanup(core.aclose)
-        return mount_live(app, factory=self.factory, core=core_hook(core))
+        gateway = mount_live(app, factory=self.factory, core=core_hook(core))
+        self.addAsyncCleanup(gateway.close_all)
+        return gateway
 
     async def wait_for(self, kind, *, after=0, where=None):
         async with asyncio.timeout(WAIT_SECONDS):
@@ -1208,7 +1172,7 @@ class ConsoleWebRTCTests(unittest.IsolatedAsyncioTestCase):
         closed = await self.wait_for("session.closed", after=asked)
         async with asyncio.timeout(WAIT_SECONDS):
             await channel_closed.wait()
-        # session.closed came once and last, after the engine closed everything in order (the talker's model
+        # session.closed came once and last, after the parts closed everything in order (the talker's model
         # client once, see ENGINE_CLOSE_ORDER), and before the data channel closed.
         self.assertEqual(self.close_watch.steps, [*ENGINE_CLOSE_ORDER, "session.closed", "channel closed"])
         self.assertEqual(self.close_watch.running_at_engine_close, [])
@@ -1300,7 +1264,7 @@ class ConsoleInfoTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CloseOrderTests(CheckedCall):
-    """session.closed comes once and last, after the engine closed everything in order, and before the socket closes."""
+    """session.closed comes once and last, after the parts closed everything in order, and before the socket closes."""
 
     async def test_a_client_close_after_a_reply(self):
         await self.serve_checked(frontend=[decision("speak", "Hello there.")])
@@ -1317,8 +1281,8 @@ class CloseOrderTests(CheckedCall):
         await self.wait_quiet()
         asked = len(self.ws.from_server)
         await self.close("bye")
-        # Nothing more is said about the open delegation: its round has completed, and the worker is cancelled
-        # while it waits for the output.
+        # Nothing more is said about the open delegation: its round has completed, and the IM session's close stops
+        # its Work while it waits for the output.
         later = [event["type"] for event in self.ws.from_server[asked:] if event["type"] != AUDIO_EVENT]
         self.assertEqual(later, ["session.closed"])
         await self.assert_close_order("close_requested", "bye", asked_to_close_at=asked, backend_ran=True)

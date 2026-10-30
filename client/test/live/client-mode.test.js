@@ -9,9 +9,6 @@ import { test } from "node:test";
 
 import {
   ClientQueue,
-  FAILED_LINE,
-  PARTLY_DONE_LINE,
-  STARTED_LINE,
   TOOL_ROUNDS,
   Transcript,
   rebuiltRequest,
@@ -26,11 +23,17 @@ const message = (text, phase) => ({
 const call = (callId, name = "get_menu", args = "{}") => ({ id: `fc_${callId}`, type: "function_call", status: "completed", call_id: callId, name, arguments: args });
 const answer = (output) => ({ response: { id: "resp_x", output }, sent_request: { model: "m", tools: ["get_menu"] } });
 
+/** The example's lines, as GET /v1/live/info gives them (`lines`). */
+const LINES = {
+  apology: "The apology line.", unclear: "The unclear line.", still_working: "The still-working line.", intro: "Greet.",
+  app_started: "The work-started note.",
+};
+
 /**
  * The loop's ports, recorded. `rounds`: what each round answers, in order: an output list, an Error to throw, or a
  * function of (input, signal) returning either.
  */
-function harness(rounds, { sendResult = true, delegationId = "item_1" } = {}) {
+function harness(rounds, { sendResult = true, delegationId = "item_1", lines = LINES } = {}) {
   const record = { inputs: [], tools: [], sent: [], stages: {}, statuses: [], logs: [] };
   const scope = new AbortController();
   let index = 0;
@@ -39,6 +42,7 @@ function harness(rounds, { sendResult = true, delegationId = "item_1" } = {}) {
     transcript: "user: what teas do you have?",
     history: [],
     model: "backend-model",
+    lines,
     cart: () => ({ lines: [], total: 0 }),
     round: async (input, signal) => {
       record.inputs.push(structuredClone(input));
@@ -72,7 +76,8 @@ test("a delegation: its own history, the tools it asks for, then its final_answe
   ]);
   const outcome = await runClientDelegation(port);
   assert.deepEqual(outcome, { status: "answered", answer: "We have chai and green tea." });
-  assert.deepEqual(record.sent[0], { type: "session.thinking.append", event_id: "progress_1", delegation_id: "item_1", content: STARTED_LINE });
+  // The silent note that work started is the example's `app_started` line.
+  assert.deepEqual(record.sent[0], { type: "session.thinking.append", event_id: "progress_1", delegation_id: "item_1", content: LINES.app_started });
   assert.deepEqual(commentary(record), [
     { type: "session.commentary.append", event_id: "result_1", delegation_id: "item_1", content: "We have chai and green tea." },
   ]);
@@ -97,10 +102,9 @@ test("the answer round: round 6's tool outputs are sent once more, and no tool i
   assert.equal(record.inputs.at(-1).at(-1).call_id, `c${TOOL_ROUNDS}`);  // round 6's output reached round 7
   assert.ok(!record.tools.includes("place_order"));
   assert.match(record.stages.notrun.label, /not run/);
-  // A tool ran and no answer came: "partly finished", never "could not complete".
-  assert.deepEqual(outcome, { status: "no answer", answer: PARTLY_DONE_LINE });
-  assert.equal(commentary(record)[0].content, PARTLY_DONE_LINE);
-  assert.doesNotMatch(PARTLY_DONE_LINE, /could not complete/i);
+  // A tool ran and no answer came: the unclear line, since the outcome is not known, never the apology.
+  assert.deepEqual(outcome, { status: "no answer", answer: LINES.unclear });
+  assert.equal(commentary(record)[0].content, LINES.unclear);
 
   const answered = harness([...rounds, [message("Your order is placed.", "final_answer")]]);
   assert.deepEqual(await runClientDelegation(answered.port), { status: "answered", answer: "Your order is placed." });
@@ -108,16 +112,38 @@ test("the answer round: round 6's tool outputs are sent once more, and no tool i
 
 test("a failed round speaks a failure line with the delegation's id instead of leaving silence", async () => {
   const before = harness([new Error("POST /v1/live/delegate answered HTTP 502: The backend could not complete the round")]);
-  assert.deepEqual(await runClientDelegation(before.port), { status: "failed", answer: FAILED_LINE });
-  assert.deepEqual(commentary(before.record).map((event) => [event.delegation_id, event.content]), [["item_1", FAILED_LINE]]);
+  assert.deepEqual(await runClientDelegation(before.port), { status: "failed", answer: LINES.apology });
+  assert.deepEqual(commentary(before.record).map((event) => [event.delegation_id, event.content]), [["item_1", LINES.apology]]);
   assert.match(before.record.stages.bkerr.text, /HTTP 502/);
   assert.deepEqual(before.record.statuses.at(-1), ["failed", "failed"]);
 
   const after = harness([[call("c1", "place_order")], new Error("POST /v1/live/delegate answered HTTP 429: Too many console rounds")]);
-  assert.deepEqual(await runClientDelegation(after.port), { status: "failed", answer: PARTLY_DONE_LINE });
+  assert.deepEqual(await runClientDelegation(after.port), { status: "failed", answer: LINES.unclear });
 
   const empty = harness([[]]);
-  assert.deepEqual(await runClientDelegation(empty.port), { status: "no answer", answer: FAILED_LINE });
+  assert.deepEqual(await runClientDelegation(empty.port), { status: "no answer", answer: LINES.apology });
+});
+
+test("an empty line is not sent, and with no lines from the server the card says so", async () => {
+  const silent = harness([new Error("HTTP 502")], { lines: { ...LINES, apology: "", app_started: "" } });
+  assert.deepEqual(await runClientDelegation(silent.port), { status: "failed", answer: "" });
+  assert.deepEqual(silent.record.sent, []);  // no work note, and no failure line
+  assert.deepEqual(silent.record.statuses.at(-1), ["failed", "failed"]);
+  assert.equal(silent.record.stages.nolines, undefined);
+
+  // The work note is its own line: with `still_working` empty, the note is still sent.
+  const quiet = harness([[message("Done.", "final_answer")]], { lines: { ...LINES, still_working: "" } });
+  await runClientDelegation(quiet.port);
+  assert.deepEqual(quiet.record.sent.map((event) => event.content), [LINES.app_started, "Done."]);
+
+  const older = harness([[message("Done.", "final_answer")]], { lines: null });
+  assert.deepEqual(await runClientDelegation(older.port), { status: "answered", answer: "Done." });
+  assert.deepEqual(older.record.sent.map((event) => [event.type, event.content]), [["session.commentary.append", "Done."]]);
+  assert.match(older.record.stages.nolines.label, /no lines/);
+
+  const failed = harness([new Error("HTTP 502")], { lines: null });
+  assert.deepEqual(await runClientDelegation(failed.port), { status: "failed", answer: "" });
+  assert.deepEqual(failed.record.sent, []);
 });
 
 test("the session's stop signal: nothing starts, a round in flight ends the loop, tool outputs are not sent", async () => {
@@ -196,18 +222,19 @@ test("the transcript joins a speaker's deltas within 1.5 s and keeps the newest 
   clock = 3000;
   transcript.record("assistant", "One moment.");
   clock = 3100;
-  transcript.record("user", "k");  // "user: k", seven characters: left out of the context
-  assert.equal(transcript.context(), "user: What teas do you have?\nassistant: One moment.");
+  transcript.record("user", "k");  // a one-letter reply is the caller's words too
+  clock = 5000;
+  transcript.record("assistant", "  ");  // nothing transcribed: left out of the context
+  assert.equal(transcript.context(), "user: What teas do you have?\nassistant: One moment.\nuser: k");
   for (let i = 0; i < 45; i += 1) { clock += 2000; transcript.record(i % 2 ? "user" : "assistant", `line number ${i}`); }
   assert.equal(transcript.lines.length, 40);
   assert.equal(transcript.context(2), "user: line number 43\nassistant: line number 44");
 });
 
-test("the rebuilt request holds the transcript and the cart", () => {
+test("the rebuilt request holds the transcript and the application's state, as data only", () => {
   const text = rebuiltRequest("user: two lattes", { lines: [], total: 0 });
-  assert.match(text, /^Recent voice transcript \(may contain errors or corrections\):\nuser: two lattes\n\n/);
-  assert.match(text, /Current cart state: \{"lines":\[\],"total":0\}/);
-  assert.match(rebuiltRequest("", {}), /\(nothing transcribed yet\)/);
+  assert.equal(text, 'Recent voice transcript:\nuser: two lattes\n\nApplication state:\n{"lines":[],"total":0}');
+  assert.match(rebuiltRequest("", {}), /^Recent voice transcript:\n\(nothing transcribed yet\)\n\n/);
 });
 
 test("a round posts the delegation's history with the page's settings and reads the route's answer", async () => {

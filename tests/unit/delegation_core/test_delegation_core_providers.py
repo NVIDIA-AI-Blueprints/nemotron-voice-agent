@@ -9,7 +9,8 @@ import json
 import unittest
 from dataclasses import replace
 
-from openai import APITimeoutError
+import httpx
+from openai import APIError, APITimeoutError, BadRequestError
 
 from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
 from delegation_core.backend.providers.translation import (
@@ -302,3 +303,15 @@ class ChatBackendTests(unittest.IsolatedAsyncioTestCase):
         failing = ChatCompletionsBackend(ENDPOINT, replace(LIMITS, provider_retries=0), FakeChat(_timeout()))
         with self.assertRaises(APITimeoutError):
             [e async for e in failing.stream({"input": []})]
+
+    async def test_an_error_event_that_opens_the_stream_is_retried_but_a_rejected_request_is_not(self):
+        request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+        overloaded = APIError("Service temporarily overloaded", request, body=None)
+        backend = ChatCompletionsBackend(ENDPOINT, LIMITS, FakeChat(overloaded, [chunk("Hello", finish="stop")]))
+        events = [e async for e in backend.stream({"input": []})]
+        self.assertIn("response.output_text.delta", [e["type"] for e in events])
+
+        rejected = BadRequestError("bad request", response=httpx.Response(400, request=request), body=None)
+        refused = ChatCompletionsBackend(ENDPOINT, LIMITS, FakeChat(rejected, [chunk("Hello", finish="stop")]))
+        with self.assertRaises(BadRequestError):
+            [e async for e in refused.stream({"input": []})]

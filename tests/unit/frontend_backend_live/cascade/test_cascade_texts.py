@@ -10,14 +10,8 @@ from dataclasses import replace
 
 from examples.frontend_backend_live.cascade.lines import FixedLines
 from examples.frontend_backend_live.cascade.worknote import WorkNote
-from examples.frontend_backend_live.prompts import get_prompt_set
-from tests.unit.frontend_backend_live.cascade.doubles import (
-    ANSWER_READY_LABEL,
-    NO_WORK_IN_PROGRESS,
-    TYPED_REQUEST_LABEL,
-    WORK_IN_PROGRESS,
-    prompt_set,
-)
+from examples.frontend_backend_live.prompts import WorkTexts
+from tests.unit.frontend_backend_live.cascade.doubles import prompt_set
 
 
 def note(prompts):
@@ -25,23 +19,18 @@ def note(prompts):
 
 
 def rendered(prompts) -> tuple[str, str]:
-    """The note with nothing open, then with a running entry, a typed run and a result said next."""
+    """The note empty, then with a running entry (one call failed, one runs), a typed run and a result said next."""
     work = note(prompts)
     empty = work.line()
     work.confirm(work.reserve("Teas?"), "D1")
     work.running("D1")
+    work.call_ended("D1", "resp_1", "mcp_1", "get_stock", "failed")
+    work.call_started("D1", "resp_1", "mcp_2", "get_menu")
+    work.progress("D1", "Checking the menu.")
     work.typed("T1")
     work.confirm(work.reserve("Cakes?"), "D2")
     work.answered("D2")
     return empty, work.line()
-
-
-ITEMS = (
-    '1. running for 0 s: "Teas?"',
-    '2. waiting to start: "a typed request"',
-    '3. answer ready, said next: "Cakes?"',
-)
-TODAY = (NO_WORK_IN_PROGRESS, WORK_IN_PROGRESS.format(items="\n".join(ITEMS)))
 
 
 class PromptSetTextTests(unittest.TestCase):
@@ -52,18 +41,18 @@ class PromptSetTextTests(unittest.TestCase):
             no_work_in_progress="NOTHING",
             answer_ready_label="READY",
             typed_request_label="TYPED",
+            work_texts=WorkTexts(
+                item="{number}|{state}|{request}|{update}",
+                running="RUN {seconds}",
+                ended=" ENDED {steps}",
+                ended_call="{name}={status}",
+                steps=" USING {steps}",
+                waiting="WAIT",
+                update="UPDATE {progress}",
+            ),
         )
-        self.assertEqual(
-            rendered(marked),
-            ("NOTHING", 'NOTE<1. running for 0 s: "Teas?"\n2. waiting to start: "TYPED"\n3. READY: "Cakes?">'),
-        )
-
-    def test_the_v1_and_v2_prompt_sets_carry_the_work_note_texts_unchanged(self):
-        # PromptSet holds the work note's texts byte for byte (the doubles keep the pin).
-        for version in ("v1", "v2"):
-            with self.subTest(version):
-                self.assertEqual(rendered(get_prompt_set(version)), TODAY)
-        self.assertEqual((ANSWER_READY_LABEL, TYPED_REQUEST_LABEL), ("answer ready, said next", "a typed request"))
+        first = "1|RUN 0 ENDED get stock=failed USING get menu|Teas?|UPDATE Checking the menu."
+        self.assertEqual(rendered(marked), ("NOTHING", f"NOTE<{first}\n2|WAIT|TYPED|\n3|READY|Cakes?|>"))
 
 
 class LineTests(unittest.TestCase):

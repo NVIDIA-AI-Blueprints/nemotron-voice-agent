@@ -7,7 +7,9 @@ When the IM asks for the conductor, the conductor's and the workers' processes s
 workers' process opens and retires one idle session, so the first request pays neither ``initialize`` nor a cold first
 ``session/new`` (an agent's first session in a process may take seconds longer while it loads its caches). Each session
 holds one of its process's ``turns_per_process`` places until its prompts end, also while it waits for the app; when a
-role's processes are full, the next session opens another.
+role's processes are full, the next session opens another. A session kept for a later task (``backend.harness.session``)
+holds no place while it waits, and takes one again when a task takes it. With ``max_running`` 1 the conductor is the
+steer rule, so only the workers' processes start.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from delegation_core.backend.conductors import SteerOpenWork
 from delegation_core.backend.port import ControlTools, TaskContext, ToolSource
 
 from .bridge import Door
@@ -29,6 +32,7 @@ from .runtime import RuntimeOpener, RuntimeProcess
 from .worker import WorkerRun
 
 if TYPE_CHECKING:
+    from .sessions import KeptSession
     from .source import HarnessSource
 
 
@@ -47,18 +51,26 @@ class HarnessAdapter:
         self.conductor_role = Role("conductor", "c")
         self.workers = Role("workers", "w")
         self.closed = False
+        self._started = False  # the IM asked for the conductor: the runtimes started
         self._conductor: HarnessConductor | None = None
         self._shared: dict[str, list[asyncio.Task]] = {}  # each role's processes, opening or open
         self._runs: set[WorkerRun] = set()
+        self.kept: KeptSession | None = None  # the session the session policy keeps for a later task
 
     # ------------------------------------------------------------------------------------------------ the port
-    def conductor(self) -> HarnessConductor:
-        """The session's conductor (the IM asks once); the conductor's and the workers' runtimes start now."""
-        if self._conductor is None:
-            self._conductor = HarnessConductor(self)
-            self._conductor.warm()
+    def conductor(self) -> HarnessConductor | SteerOpenWork:
+        """The session's conductor (the IM asks once); the conductor's and the workers' runtimes start now.
+
+        With one task at a time (``max_running`` 1) it is the steer rule, as the backend LLM's, and no conductor process
+        starts.
+        """
+        if not self._started:
+            self._started = True
+            if self.max_running > 1:
+                self._conductor = HarnessConductor(self)
+                self._conductor.warm()
             self._warm(self.workers, first_session=True)
-        return self._conductor
+        return self._conductor or SteerOpenWork()
 
     def start(self, task: TaskContext) -> WorkerRun:
         """Run one task: a ``WorkerRun``; nothing is opened before its ``events()``."""
@@ -74,6 +86,9 @@ class HarnessAdapter:
                 await self._conductor.close()
         await asyncio.gather(*(run.release() for run in self._runs), return_exceptions=True)
         self._runs.clear()
+        kept, self.kept = self.kept, None
+        if kept is not None:
+            kept.retire(self.bridge)
         opened, self._shared = [task for pool in self._shared.values() for task in pool], {}
         for task in opened:
             if not task.done():
@@ -109,6 +124,13 @@ class HarnessAdapter:
             if not process.client.alive:
                 raise RuntimeError(f"The {role.name} runtime process ended as it started")
             # Look again: a session that waited for the same process may have taken its last place.
+
+    def take_place(self, runtime: RuntimeProcess) -> bool:
+        """Take a place in ``runtime`` for the session kept there, while it has a turn free and its client is alive."""
+        if self._full(runtime) or not runtime.client.alive:
+            return False
+        runtime.places += 1
+        return True
 
     def _full(self, process: RuntimeProcess) -> bool:
         """Whether every turn of ``process`` is taken (never, when the agent's turns have no limit)."""

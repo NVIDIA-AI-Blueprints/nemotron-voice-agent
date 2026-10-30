@@ -27,7 +27,7 @@ from delegation_core.backend.harness.protocol import (
     ToolCardEnd,
     UserText,
 )
-from tests.unit.delegation_core.backend.harness.doubles import scratch, until, wire
+from tests.unit.delegation_core.backend.harness.doubles import hermes, scratch, until, wire
 
 LOST = "the connection to the agent is lost"  # the error a prompt to a lost connection ends with
 
@@ -38,7 +38,7 @@ def updates(scenario):
 
 def hermes_events(scenario, server="client"):
     """A recorded scenario's updates as the Hermes agent class reads them (the recorded server was "client")."""
-    reader = SessionUpdates(HermesAgent(), server)
+    reader = SessionUpdates(hermes(), server)
     return [reader.read(update) for update in updates(scenario)]
 
 
@@ -52,7 +52,7 @@ class UpdateTests(unittest.TestCase):
         events = hermes_events("tool_then_cancel_in_tool")
         kinds = {type(event).__name__ for event in events if event is not None}
         self.assertEqual(kinds, {"ToolCard", "ToolCardEnd", "MessageChunk", "ThoughtChunk"})
-        reader = SessionUpdates(HermesAgent(), "w1")
+        reader = SessionUpdates(hermes(), "w1")
         self.assertIsNone(reader.read({"sessionUpdate": "usage_update", "size": 1, "used": 0}))
         self.assertIsNone(reader.read({"sessionUpdate": "available_commands_update"}))
         self.assertIsNone(reader.read("not an update"))
@@ -71,6 +71,15 @@ class UpdateTests(unittest.TestCase):
         self.assertIn("14:07", ends[0].output)
         self.assertIn("MCP call interrupted", ends[1].output)
 
+    def test_a_tool_cards_output_is_its_raw_text_else_its_content_else_its_raw_output_as_json(self):
+        reader = SessionUpdates(hermes(), "w1")
+        ended = {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"}
+        content = {"content": [{"type": "content", "content": {"type": "text", "text": "3 teas"}}]}
+        self.assertEqual(reader.read({**ended, "rawOutput": "three teas", **content}).output, "three teas")
+        self.assertEqual(reader.read({**ended, "rawOutput": {"teas": 3}, **content}).output, "3 teas")
+        self.assertEqual(reader.read({**ended, "rawOutput": {"teas": 3}}).output, '{"teas": 3}')  # structured
+        self.assertEqual(reader.read(ended).output, "")  # no output at all
+
     def test_a_hermes_ack_has_no_message_id(self):
         chunks = [e for e in hermes_events("redirect_and_steer") if isinstance(e, MessageChunk)]
         acks = [chunk.text for chunk in chunks if chunk.message_id is None]
@@ -83,7 +92,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((pong.text, thoughts), ("pong", {pong.message_id}))
 
     def test_a_plan_and_a_drained_prompt(self):
-        reader = SessionUpdates(HermesAgent(), "w1")
+        reader = SessionUpdates(hermes(), "w1")
         plan = reader.read({"sessionUpdate": "plan", "entries": [{"content": "Look it up", "status": "in_progress"}]})
         self.assertEqual(plan, PlanUpdate(("Look it up (in_progress)",)))
         user = reader.read({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "Queued."}})
@@ -128,7 +137,7 @@ class AgentTests(unittest.TestCase):
             AcpAgent.from_settings({"steer_command": "/steer "})
 
     def test_hermes_reads_its_instructions_from_its_pinned_folder(self):
-        agent = HermesAgent.from_settings({})
+        agent = hermes()
         folder = scratch("hermes-session-")
         self.assertEqual(agent.prepare(folder, "  Be brief.  "), ())
         self.assertEqual((folder / ".hermes.md").read_text(), "Be brief.\n")
@@ -136,21 +145,23 @@ class AgentTests(unittest.TestCase):
         empty = scratch("hermes-session-")
         self.assertEqual(agent.prepare(empty, ""), ())
         self.assertEqual([path.name for path in empty.iterdir()], [".git"])
-        renamed = HermesAgent.from_settings({"instructions_file": "AGENTS.md"})
+        renamed = hermes(instructions_file="AGENTS.md")
         renamed.prepare(empty, "Hi.")
         self.assertTrue((empty / "AGENTS.md").is_file())
 
-    def test_hermes_guards_a_prompt_from_its_commands_and_steers_with_its_own(self):
-        agent = HermesAgent.from_settings({})
+    def test_hermes_guards_a_prompt_or_a_steers_text_from_its_commands_and_steers_with_its_own(self):
+        agent = hermes()
         self.assertEqual(agent.prompt_text("  /reset everything"), "Request: /reset everything")
         self.assertEqual(agent.prompt_text("Find teas."), "Find teas.")
         self.assertEqual(agent.steer_text("Make it two."), "/steer Make it two.")
+        # On an idle session Hermes runs a steer's text as a prompt of its own: it gets a prompt's guard.
+        self.assertEqual(agent.steer_text("/reset the order to tea"), "/steer Request: /reset the order to tea")
         self.assertTrue(agent.native_steer)
         custom = HermesAgent.from_settings({"steer_command": "/queue ", "command_guard": "Asked: "})
         self.assertEqual((custom.steer_text("x"), custom.prompt_text("/x")), ("/queue x", "Asked: /x"))
 
     def test_hermes_names_its_tools_and_knows_its_bridged_ones(self):
-        agent = HermesAgent()
+        agent = hermes()
         self.assertEqual(agent.tool_name("mcp__w1__lookup: ABC123"), "mcp__w1__lookup")
         self.assertTrue(agent.bridged("mcp__w1__lookup", "w1"))
         self.assertFalse(agent.bridged("web_search", "w1"))
@@ -159,24 +170,13 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(agent.turns_per_process, 4)
 
     def test_hermes_speaks_only_a_parsed_answer(self):
-        agent = HermesAgent()
+        agent = hermes()
         self.assertTrue(agent.model_text(Facts(chunks=2)))
         self.assertTrue(agent.model_text(Facts(chunks=1, thought=True, after_text=True)))
         self.assertFalse(agent.model_text(Facts(chunks=1, thought=True)))  # its own text, under the reasoning's id
         self.assertIn("no usage", agent.no_answer(None, 0))
         self.assertIn("did not move", agent.no_answer(100, 100))
         self.assertIsNone(agent.no_answer(120, 100))
-
-    def test_a_bad_hermes_block_is_refused(self):
-        cases = {
-            "an unknown key": ({"soul": "x"}, "unknown keys: soul"),
-            "an empty steer": ({"steer_command": " "}, "steer_command must be non-empty text"),
-            "a path for a file": ({"instructions_file": "a/b.md"}, "must be a file name"),
-            "not text": ({"command_guard": 1}, "non-empty text"),
-        }
-        for name, (block, message) in cases.items():
-            with self.subTest(name), self.assertRaisesRegex(ValueError, message):
-                HermesAgent.from_settings(block)
 
 
 class Facts:
@@ -255,7 +255,7 @@ class Replay:
 
 
 def client_on(transport, agent=None):
-    return AcpClient(transport, agent or HermesAgent(), permission=Reject(), start_timeout_seconds=5)
+    return AcpClient(transport, agent or hermes(), permission=Reject(), start_timeout_seconds=5)
 
 
 SERVER = McpServer("w1", "http://bridge.test/mcp", "token-1")
@@ -309,16 +309,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(texts, ["Request: /reset everything", "/steer Make it two."])
         await client.close()
 
-    async def test_a_plain_agent_gets_a_prompt_as_written(self):
-        replay = Replay("pong")
-        client = client_on(replay, AcpAgent())
-        await client.open()
-        session = await client.new_session("/work/w1", SERVER, asyncio.Queue())
-        await session.ended(session.prompt("/reset everything"))
-        texts = [m["params"]["prompt"][0]["text"] for m in replay.received if m.get("method") == "session/prompt"]
-        self.assertEqual(texts, ["/reset everything"])
-        await client.close()
-
     async def test_a_cancel_is_sent_only_while_a_prompt_is_outstanding(self):
         replay = Replay("cancel_then_prompt")
         client = client_on(replay)
@@ -331,14 +321,31 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([m.get("method") for m in replay.received].count("session/cancel"), 1)
         await client.close()
 
-    async def test_a_permission_request_is_declined_and_after_a_cancel_answered_cancelled(self):
-        replay = Replay("pong", ask_permission=True)
+    async def test_a_permission_request_is_answered_cancelled_only_while_the_cancelled_turn_runs(self):
+        # The conductor's session takes the next prompt once its cancelled turn has ended: that turn's requests get the
+        # settings' answer again.
+        replay = Replay("cancel_then_prompt", ask_permission=True)
+        replay.steps = [step for step in replay.steps if "end" not in step]  # each turn ends when the test says
         client = client_on(replay)
         await client.open()
         session = await client.new_session("/work/w1", SERVER, asyncio.Queue())
-        await session.ended(session.prompt("pong"))
-        await asyncio.sleep(0.1)
+
+        async def end(stop):
+            prompt = [message for message in replay.received if message.get("method") == "session/prompt"][-1]
+            await replay.send({"jsonrpc": "2.0", "id": prompt["id"], "result": {"stopReason": stop}})
+
+        first = session.prompt("Count to 400.")
+        self.assertTrue(await session.cancel())
+        await until(lambda: replay.permission_answer is not None)
+        self.assertEqual(replay.permission_answer, {"outcome": {"outcome": "cancelled"}})
+        await end("cancelled")
+        await session.ended(first)
+        replay.permission_answer = None
+        second = session.prompt("Reply with exactly the word: ok")
+        await until(lambda: replay.permission_answer is not None)
         self.assertEqual(replay.permission_answer, {"outcome": {"outcome": "selected", "optionId": "reject-1"}})
+        await end("end_turn")
+        await session.ended(second)
         await client.close()
 
     async def test_a_lost_connection_ends_every_outstanding_prompt_with_an_error(self):

@@ -8,9 +8,11 @@
 import asyncio
 import json
 import unittest
+from unittest.mock import patch
 
 from delegation_core.backend.agent.memory import ConductorMemory, DecisionRound
 from delegation_core.backend.agent.render import round_input
+from delegation_core.backend.agent.settings import WHEN_IDLE
 from delegation_core.backend.port import Answer, Cancel, ConductorInput, Request, Start, Steer
 from delegation_core.backend.providers import ChatCompletionsBackend
 from tests.unit.contracts.backend import ConductorContract, FakeDecisionTarget, a_round, message_events, text_round
@@ -31,7 +33,7 @@ from tests.unit.delegation_core.backend.agent.doubles import (
     start_each,
     steer,
 )
-from tests.unit.delegation_core.backend.llm.doubles import FakeChat, chunk, tool_fragment
+from tests.unit.delegation_core.backend.llm.doubles import FakeChat, Sleep, chunk, tool_fragment
 
 TOOLS = ["start_work", "steer_work", "cancel_work", "answer_status"]
 
@@ -41,6 +43,13 @@ class LlmConductorContractTests(ConductorContract, unittest.IsolatedAsyncioTestC
 
     def make_conductor(self):
         return conductor_on(Model(respond=start_each))
+
+
+class IdleRuleContractTests(ConductorContract, unittest.IsolatedAsyncioTestCase):
+    """The conductor contract with the shipped idle rule: while no Work is open, the requests start one together."""
+
+    def make_conductor(self):
+        return conductor_on(Model(respond=start_each), when_idle=WHEN_IDLE["start"])
 
 
 def given(*requests, works=(), conversation=None, new_from=0) -> ConductorInput:
@@ -56,14 +65,14 @@ async def decide(conductor, given_input) -> list:
 
 
 class RoundTests(unittest.IsolatedAsyncioTestCase):
-    async def test_one_model_call_with_the_prompt_the_four_tools_required_and_parallel(self):
+    async def test_one_model_call_with_the_prompt_the_four_tools_required_and_one_call(self):
         model = Model(decisions(start("D1", "D2")))
         placed = await decide(conductor_on(model), given(a_request("D1", "Teas?"), a_request("D2", "Hours?")))
         self.assertEqual(placed, [Start(("D1", "D2"))])
         [payload] = model.payloads
-        self.assertEqual(payload["instructions"], TEXTS.conductor_prompt)
+        self.assertEqual(payload["instructions"], TEXTS.conductor_prompt.format(max_running=3))  # the agent's limit
         self.assertEqual([tool["name"] for tool in payload["tools"]], TOOLS)
-        self.assertEqual((payload["tool_choice"], payload["parallel_tool_calls"]), ("required", True))
+        self.assertEqual((payload["tool_choice"], payload["parallel_tool_calls"]), ("required", False))
         self.assertEqual(payload["max_output_tokens"], 2 * 256)  # the cap grows with the requests it places
         self.assertEqual((payload["reasoning"], payload["model"]), ({"effort": "none"}, ENDPOINT.model))
 
@@ -135,78 +144,63 @@ class RoundTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await decide(conductor_on(model), given()), [])
         self.assertEqual(model.payloads, [])
 
+    async def test_each_round_logs_its_request_and_its_reply_in_full(self):
+        model = Model(decisions(start("D1")))
+        with patch("delegation_core.backend.agent.conductor.logger") as log:
+            await decide(conductor_on(model), given(a_request("D1", "Teas?")))
+        lines = [call.args[0] for call in log.debug.call_args_list]
+        [request] = [line.split(": ", 1)[1] for line in lines if line.startswith("conductor request: ")]
+        [reply] = [line.split(": ", 1)[1] for line in lines if line.startswith("conductor reply: ")]
+        self.assertEqual(json.loads(request), model.payloads[0])
+        [call] = json.loads(reply)
+        self.assertEqual((call["name"], json.loads(call["arguments"])), ("start_work", {"delegations": ["D1"]}))
+
     async def test_reasoning_left_out_keeps_the_models_own(self):
         model = Model(decisions(start("D1")))
         await decide(conductor_on(model, reasoning_effort=None), given(a_request("D1", "Teas?")))
         self.assertNotIn("reasoning", model.payloads[0])
 
 
-class RulePlacementTests(unittest.IsolatedAsyncioTestCase):
-    """What the model leaves, the backend LLM's steer rule places: a join while a Work is open, else a start."""
+class LeftRequestTests(unittest.IsolatedAsyncioTestCase):
+    """What the model's calls do not place, the conductor leaves: the IM's steer rule places it once the round ended."""
 
-    async def check(self, round_, *, works=(), requests=("D2",), **settings) -> list:
+    async def check(self, round_, *, works=(), **settings) -> list:
         conductor = conductor_on(Model(round_), **settings)
-        return await decide(conductor, given(*(a_request(d, "Also this.") for d in requests), works=works))
+        return await decide(conductor, given(a_request("D2", "Also this."), works=works))
 
-    async def test_a_failure_while_a_work_is_open_joins_it(self):
-        placed = await self.check([RuntimeError("model down")], works=(a_work("W1"),))
-        self.assertEqual(placed, [Steer("W1", ("D2",))])
-
-    async def test_a_failure_with_no_work_open_starts_the_requests_together(self):
-        self.assertEqual(await self.check([RuntimeError("model down")], requests=("D1", "D2")), [Start(("D1", "D2"))])
-        ended = a_work("W0", state="answered")
-        self.assertEqual(await self.check([RuntimeError("model down")], works=(ended,)), [Start(("D2",))])
-
-    async def test_a_timeout_places_by_the_rule(self):
+    async def test_a_failed_or_timed_out_round_places_nothing_and_returns(self):
+        self.assertEqual(await self.check([RuntimeError("model down")], works=(a_work("W1"),)), [])
         never = asyncio.Event()
-        placed = await self.check([never], works=(a_work("W1"),), timeout_seconds=0.05)
-        self.assertEqual(placed, [Steer("W1", ("D2",))])
+        self.assertEqual(await self.check([never], works=(a_work("W1"),), timeout_seconds=0.05), [])
 
-    async def test_a_round_whose_input_cannot_be_rendered_places_by_the_rule(self):
-        # A request part whose text is null fails the round before its model call. The rule still places it (a join
-        # while a Work is open), so decide() never raises and the IM never starts it beside the open Work.
+    async def test_a_round_whose_input_cannot_be_rendered_places_nothing_and_calls_no_model(self):
+        # A request part whose text is null fails the round before its model call; decide() still returns.
         odd = Request("D2", ({"type": "message", "role": "user", "content": [{"type": "input_text", "text": None}]},))
         model = Model()
         conductor = conductor_on(model)
-        self.assertEqual(await decide(conductor, given(odd, works=(a_work("W1"),))), [Steer("W1", ("D2",))])
-        self.assertEqual(await decide(conductor, given(odd)), [Start(("D2",))])
+        self.assertEqual(await decide(conductor, given(odd, works=(a_work("W1"),))), [])
         self.assertEqual((model.payloads, conductor.memory.items()), ([], []))
 
-    async def test_a_round_with_no_call_places_by_the_rule(self):
-        self.assertEqual(
-            await self.check(text_round("I would start it."), works=(a_work("W1"),)), [Steer("W1", ("D2",))]
-        )
-
-    async def test_a_round_cut_by_its_output_cap_places_by_the_rule(self):
+    async def test_a_round_with_no_call_or_cut_by_its_output_cap_places_nothing(self):
+        self.assertEqual(await self.check(text_round("I would start it."), works=(a_work("W1"),)), [])
         cut = a_round(message_events("start_work start_work start_work"))
         cut[-1] = {
             "type": "response.incomplete",
             "response": {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
         }
-        self.assertEqual(await self.check(cut), [Start(("D2",))])
+        self.assertEqual(await self.check(cut), [])
 
-    async def test_a_request_the_model_skipped_joins_the_open_work(self):
-        placed = await self.check(decisions(start("D1")), works=(a_work("W1"),), requests=("D1", "D2"))
-        self.assertEqual(placed, [Start(("D1",)), Steer("W1", ("D2",))])
-
-    async def test_malformed_calls_are_skipped_and_the_rule_places_their_requests(self):
+    async def test_malformed_calls_place_nothing(self):
         round_ = decisions(
             ("steer_work", {"delegations": ["D2"]}), ("book_table", {}), ("start_work", {"delegations": "D2"})
         )
-        self.assertEqual(await self.check(round_, works=(a_work("W1"),)), [Steer("W1", ("D2",))])
+        self.assertEqual(await self.check(round_, works=(a_work("W1"),)), [])
 
-    async def test_a_decision_naming_an_unshown_work_or_task_leaves_its_request_to_the_rule(self):
-        # The IM refuses both decisions (an unknown Work, an unknown task), so the request still waits for its place.
+    async def test_a_decision_naming_an_unshown_work_or_task_goes_to_the_im_which_refuses_it(self):
         unknown = await self.check(decisions(steer("W9", "D2")), works=(a_work("W1"),))
-        self.assertEqual(unknown, [Steer("W9", ("D2",)), Steer("W1", ("D2",))])
+        self.assertEqual(unknown, [Steer("W9", ("D2",))])
         no_task = await self.check(decisions(steer("W1", "D2", task_id="W1.7")), works=(a_work("W1"),))
-        self.assertEqual(no_task, [Steer("W1", ("D2",), "W1.7"), Steer("W1", ("D2",))])
-
-    async def test_an_answered_or_steered_request_is_not_placed_again(self):
-        placed = await self.check(decisions(answer_status("D2", "Nearly done.")), works=(a_work("W1"),))
-        self.assertEqual(placed, [Answer("D2", "Nearly done.")])
-        placed = await self.check(decisions(steer("W1", "D2", task_id="W1.1")), works=(a_work("W1"),))
-        self.assertEqual(placed, [Steer("W1", ("D2",), "W1.1")])
+        self.assertEqual(no_task, [Steer("W1", ("D2",), "W1.7")])
 
 
 class MemoryTests(unittest.IsolatedAsyncioTestCase):
@@ -247,20 +241,6 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed, model.payloads[0]["input"][0])
         self.assertEqual(round_data({"input": [new]})["new_requests"][0]["delegation_id"], "D2")
 
-    async def test_a_decide_cancelled_before_it_placed_leaves_the_memory_as_it_was(self):
-        thinking = asyncio.Event()
-        model = Model([thinking], decisions(start("D1", "D2")))
-        conductor = conductor_on(model)
-        first = asyncio.create_task(conductor.decide(given(a_request("D1", "Teas?")), FakeDecisionTarget().place))
-        await asyncio.sleep(0.01)
-        self.assertEqual(len(model.payloads), 1)  # it was waiting for its model
-        first.cancel()
-        await asyncio.gather(first, return_exceptions=True)
-        self.assertEqual(conductor.memory.items(), [])
-        placed = await decide(conductor, given(a_request("D1", "Teas?"), a_request("D2", "Hours?")))
-        self.assertEqual(placed, [Start(("D1", "D2"))])
-        self.assertEqual(len(model.payloads[1]["input"]), 1)  # nothing of the cancelled round
-
     async def test_memory_keeps_whole_rounds_within_its_budget_and_always_the_newest(self):
         memory = ConductorMemory(budget=200)
         rounds = []
@@ -281,15 +261,51 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class IdleRuleTests(unittest.IsolatedAsyncioTestCase):
+    """``conductor.when_idle``: ``start`` places the requests that come while no Work is open, with no model call."""
+
+    async def test_with_no_open_work_the_new_requests_start_one_work_together_and_no_model_is_called(self):
+        model = Model()
+        ended = a_work("W1", state="answered")  # the records list it; it takes no request
+        conductor = conductor_on(model, when_idle=WHEN_IDLE["start"])
+        placed = await decide(conductor, given(a_request("D1", "Teas?"), a_request("D2", "Hours?"), works=(ended,)))
+        self.assertEqual(placed, [Start(("D1", "D2"))])
+        self.assertEqual(model.payloads, [])
+
+    async def test_an_open_work_or_decide_leaves_the_requests_to_the_model(self):
+        for name, (rule, works) in {
+            "an open Work": ("start", (a_work("W1", state="waiting_client"),)),
+            "decide": ("decide", ()),
+        }.items():
+            with self.subTest(name):
+                model = Model(decisions(start("D2")))
+                conductor = conductor_on(model, when_idle=WHEN_IDLE[rule])
+                placed = await decide(conductor, given(a_request("D2", "Hours?"), works=works))
+                self.assertEqual((placed, len(model.payloads)), ([Start(("D2",))], 1))
+
+    async def test_a_round_the_rule_placed_keeps_its_input_so_the_model_reads_its_conversation_next(self):
+        model = Model(decisions(steer("W1", "D2")))
+        conductor = conductor_on(model, when_idle=WHEN_IDLE["start"])
+        await decide(conductor, given(a_request("D1", "Teas?")))
+        await decide(conductor, given(a_request("D2", "Green."), works=(a_work("W1"),)))
+        [payload] = model.payloads
+        ruled, new = payload["input"]
+        self.assertEqual(round_data({"input": [ruled]})["new_requests"][0]["delegation_id"], "D1")
+        self.assertEqual(round_data({"input": [new]})["new_requests"][0]["delegation_id"], "D2")
+
+
 class ChatProviderTests(unittest.IsolatedAsyncioTestCase):
     """The conductor on the real chat provider (template and translator), its client scripted."""
 
-    async def test_parallel_calls_are_all_placed_and_the_memory_is_a_valid_chat_history(self):
+    async def test_only_the_rounds_first_call_is_placed_and_the_memory_is_a_valid_chat_history(self):
+        # The model writes a second call, which its output cap cuts: the round ends when that call starts, so the cut
+        # never costs the first call, and the request the first call left is the IM's to place.
         chat = FakeChat(
             [
                 chunk(tool_calls=[tool_fragment(0, "p1", "start_work", '{"delegations": ["D1"]}')]),
-                chunk(tool_calls=[tool_fragment(1, "p2", "answer_status", '{"delegation_id": "D2", "text": "Soon."}')]),
-                chunk(finish="tool_calls"),
+                chunk(tool_calls=[tool_fragment(1, "p2", "answer_status", '{"delegation_id": "D2", "te')]),
+                Sleep(5),  # never read: the round ended with its first call
+                chunk(finish="length"),
             ],
             [
                 chunk(tool_calls=[tool_fragment(0, "p3", "steer_work", '{"work_id": "W1", "delegations": ["D3"]}')]),
@@ -300,21 +316,17 @@ class ChatProviderTests(unittest.IsolatedAsyncioTestCase):
         conductor = conductor_on(None)
         conductor.make_provider = lambda: provider
         placed = await decide(conductor, given(a_request("D1", "Teas?"), a_request("D2", "How long?")))
-        self.assertEqual(placed, [Start(("D1",)), Answer("D2", "Soon.")])
+        self.assertEqual(placed, [Start(("D1",))])  # D2 is left: it joins W1 by the IM's rule
         await decide(conductor, given(a_request("D3", "Green."), works=(a_work("W1"),)))
         first, second = chat.requests
         self.assertEqual((first["tool_choice"], first["max_tokens"]), ("required", 512))
-        self.assertNotIn("parallel_tool_calls", first)  # on by default; never sent to a chat endpoint
+        self.assertNotIn("parallel_tool_calls", first)  # never sent to a chat endpoint: the translator keeps one call
         self.assertEqual(
-            [message["role"] for message in second["messages"]], ["system", "user", "assistant", "tool", "tool", "user"]
+            [message["role"] for message in second["messages"]], ["system", "user", "assistant", "tool", "user"]
         )
-        self.assertEqual(second["messages"][0]["content"], VOCABULARY.prompt)
-        self.assertEqual(
-            [call["function"]["name"] for call in second["messages"][2]["tool_calls"]], ["start_work", "answer_status"]
-        )
-        self.assertEqual(
-            [message["content"] for message in second["messages"][3:5]], ["Started W1 with 1 task(s).", "Answered D2."]
-        )
+        self.assertEqual(second["messages"][0]["content"], VOCABULARY.instructions(3))
+        self.assertEqual([call["function"]["name"] for call in second["messages"][2]["tool_calls"]], ["start_work"])
+        self.assertEqual(second["messages"][3]["content"], "Started W1 with 1 task(s).")
 
     async def test_close_closes_the_provider_once_a_round_made_it(self):
         model = Model(decisions(start("D1")))

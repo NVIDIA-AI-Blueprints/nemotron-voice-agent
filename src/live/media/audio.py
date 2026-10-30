@@ -3,10 +3,10 @@
 
 """Wire audio conversion for the primary WebSocket.
 
-24 kHz mono PCM16 is the exchange format with the pipeline. The wire carries PCM at 16 or 24 kHz, or G.711
+24 kHz mono PCM16 is the exchange format with the frontend adapter. The wire carries PCM at 16 or 24 kHz, or G.711
 mu-law or A-law at 8 kHz. Each wire format has its own sample codec (:data:`SAMPLE_CODECS`), picked once when the
-session's codec is built; G.711 follows the standard ITU-T G.711 segment algorithm. Conversion keeps
-fractional-frame state across chunks: resetting a resampler for every network packet would lose samples.
+session's codec is built; G.711 follows the standard ITU-T G.711 segment algorithm. Conversion keeps fractional-frame
+state across chunks: resetting a resampler for every network packet would lose samples.
 """
 
 from __future__ import annotations

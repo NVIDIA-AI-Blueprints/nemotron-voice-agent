@@ -14,12 +14,12 @@ from tests.unit.delegation_core.helpers import (
     IMCase,
     ScriptedAdapter,
     ScriptedConductor,
-    StartEach,
     answer,
     app_call,
     app_outputs,
     ask,
     checkpoint,
+    is_handover_line,
     read_all,
     wait,
 )
@@ -33,7 +33,7 @@ class HandoverCase(IMCase):
             if event["type"] == "response.completed":
                 output = event["response"]["output"]
                 texts = [part["text"] for item in output for part in item.get("content", [])]
-                if texts == [TEXTS.handover_line]:
+                if len(texts) == 1 and is_handover_line(texts[0]):
                     ended.append(response_id)
         return ended
 
@@ -72,6 +72,7 @@ class HandoverTests(HandoverCase):
         self.assertEqual(in_progress["response"]["previous_response_id"], older[0]["response"]["id"])
         self.assertEqual(older[-1]["type"], "response.completed")
         self.assertEqual(older[-2]["item"]["phase"], "commentary")
+        self.assertEqual(older[-2]["item"]["content"][0]["text"], TEXTS.handover_line.format(delegation="D2"))
         self.assertEqual(im.ledger.delegations["D1"].state, "handed_over")
         self.assertEqual(im.ledger.delegations["D1"].handed_to, "D2")
         self.assertEqual(im.ledger.works["W1"].carrier, "D2")
@@ -132,24 +133,13 @@ class HandoverTests(HandoverCase):
         self.assertEqual(named[1]["previous_response_id"], named[0]["id"])
         self.assertEqual(named[2]["previous_response_id"], named[1]["id"])
         self.assertEqual([im.ledger.delegations[f"D{n}"].state for n in (1, 2, 3)], ["handed_over"] * 2 + ["answered"])
+        self.assertEqual([im.ledger.delegations[f"D{n}"].handed_to for n in (1, 2)], ["D2", "D3"])
         self.assertEveryHandoverNamesItsTaker()
-
-    async def test_a_chain_d1_d2_d3_names_each_taker(self):
-        gates = [asyncio.Event(), asyncio.Event()]
-        script = [wait(gates[0]), checkpoint(), wait(gates[1]), checkpoint(), answer()]
-        im = self.session(ScriptedAdapter(script))
-        im.admit(ask("Teas."), delegation_id="D1")
-        await self.turns()
-        im.admit(ask("Green."), delegation_id="D2")
-        await self.turns()
-        gates[0].set()
-        await self.turns()
-        im.admit(ask("Two of them."), delegation_id="D3")
-        await self.turns()
-        gates[1].set()
-        await self.turns()
-        self.assertEqual(len(self.handovers()), 2)
-        self.assertEveryHandoverNamesItsTaker()
+        # One Work carries the requests, oldest first; the newest carries it, and its task read them all.
+        work = im.ledger.works["W1"]
+        self.assertEqual((work.requests, work.carrier, work.state), (["D1", "D2", "D3"], "D3", "answered"))
+        self.assertIn("Part 1.", str(im.ended_works[-1].requested))
+        self.assertIn("Part 3.", str(im.ended_works[-1].requested))
 
     async def test_steering_from_one_task_while_another_waits_hands_over_when_the_carrier_reopens(self):
         gate = asyncio.Event()
@@ -218,12 +208,6 @@ class CancelForANewerRequestTests(IMCase):
         work = self.im.ledger.works["W1"]
         self.assertEqual((work.state, self.im.ledger.tasks["W1.1"].stop.state), ("cancelled", "stopped"))
 
-    async def test_an_unconfirmed_stop_says_so(self):
-        older = await self.cancel("unconfirmed")
-        self.assertEqual(older[-2]["item"]["content"][0]["text"], TEXTS.unconfirmed_line)
-        self.assertEqual(older[-1]["type"], "response.completed")
-        self.assertEqual(self.im.ledger.tasks["W1.1"].stop.state, "unconfirmed")
-
     async def test_a_stop_that_does_not_return_in_time_is_unconfirmed(self):
         gate = asyncio.Event()
 
@@ -239,11 +223,3 @@ class CancelForANewerRequestTests(IMCase):
         older = await read_all(first.stream)
         self.assertEqual(older[-2]["item"]["content"][0]["text"], TEXTS.unconfirmed_line)
         self.assertEqual(im.ledger.tasks["W1.1"].stop.state, "unconfirmed")
-
-
-class StartEachHandoverTests(HandoverCase):
-    async def test_start_each_hands_nothing_over(self):
-        im = self.session(ScriptedAdapter([answer()], [answer()], conductor=StartEach()))
-        await read_all(im.admit(ask("One."), delegation_id="D1").stream)
-        await read_all(im.admit(ask("Two."), delegation_id="D2").stream)
-        self.assertEqual(self.handovers(), [])

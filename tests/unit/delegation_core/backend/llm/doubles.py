@@ -197,7 +197,7 @@ class RecordingTools:
 class WorkTools:
     """The IM's work tools as a test sees them: ``show`` and ``cancel_work``, which marks the task cancelled."""
 
-    label: ClassVar[str] = "voiceclaw"
+    label: ClassVar[str] = "delegation_core"
 
     def __init__(self):
         self.shown, self.cancelled = [], False

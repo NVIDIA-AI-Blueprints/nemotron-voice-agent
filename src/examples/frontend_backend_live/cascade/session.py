@@ -4,7 +4,7 @@
 """One call's cascade: its Pipecat-free parts, assembled, and the entry points its host calls.
 
 The host hands it a turn buffer (Pipecat's context), a ``say`` coroutine and the call's delegation part, so the same
-parts run in tests, in the live adapter and in the UI bot. A delegation part that reports events (the server
+parts run in tests, in the cascade adapter and in the UI bot. A delegation part that reports events (the server
 delegation) hands back each delegation's official events by plain calls that only record or queue, so delegated work
 never waits for the voice. One that does not (Live client mode) only announces each delegation to the client app,
 which answers with commentary.
@@ -70,8 +70,8 @@ class CascadeSession:
         """Assemble the parts of one call.
 
         Args:
-            agent: The talker and the commentary writer.
-            config: The validated example configuration.
+            agent: The talker, the writer and the normalizer.
+            config: The validated ``frontend.cascade`` block of ``config.yaml``.
             conversation: The host's turn buffer: the seed the talker's memory starts from, then each committed caller
                 turn. The cascade only reads it.
             delegation: The call's delegation part.
@@ -92,12 +92,16 @@ class CascadeSession:
         self.buffer = conversation
         settings = self.settings
         self.memory = TalkerMemory.seeded(
-            conversation.messages(), context_tokens=settings.context_tokens, compact_at=settings.compact_at
+            agent.prompts,
+            conversation.messages(),
+            context_tokens=settings.context_tokens,
+            compact_at=settings.compact_at,
         )
-        self.conversation = self.memory  # what the adapter reads for /history and the context meter
+        self.conversation = self.memory  # what the cascade adapter reads for /history and the context meter
         self.floor = Floor(clock)
-        self.heard_log = HeardLog()
-        self.utterances = Utterances(
+        self.heard_log = HeardLog(agent.prompts)
+        self.utterances = Utterances.from_settings(
+            settings,
             say,
             self.heard_log,
             self.memory,
@@ -105,11 +109,9 @@ class CascadeSession:
             observe=observe,
             reports_playout=reports_playout,
             reports_sentences=reports_sentences,
-            start_timeout_seconds=settings.start_timeout_seconds,
-            retry_silent_lines=settings.retry_silent_lines,
         )
         self.worknote = WorkNote(agent.prompts, tracks=delegation.reports_events, clock=clock, observe=observe)
-        self.acknowledgements = Acknowledgements(self.utterances, self.lines, observe=observe)
+        self.acknowledgements = Acknowledgements(self.utterances, observe=observe)
         self.presenter = Presenter.from_settings(
             settings,
             agent=agent,
@@ -132,7 +134,6 @@ class CascadeSession:
         )
         self.turns = CallerTurns(
             agent,
-            config,
             self.memory,
             conversation,
             heard_log=self.heard_log,
@@ -212,6 +213,6 @@ class CascadeSession:
         self.memory.typed(text)
 
     def greet(self, text: str) -> None:
-        """Greet the caller before they speak: ``text`` is pinned as an instruction and worded and said, at idle."""
+        """Greet the caller before they speak: ``text`` is pinned, worded, then said at idle, else the greeting line."""
         self.memory.instruction(text)
-        self.presenter.commentary(text)
+        self.presenter.greeting(text)

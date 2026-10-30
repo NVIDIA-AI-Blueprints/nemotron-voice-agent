@@ -3,9 +3,8 @@
 
 """Server event construction: every event carries a fresh ``event_id``; rejections become ``error`` events.
 
-An optional field the server has no value for is omitted, not sent as ``null``. :func:`error_event`
-is the one builder of ``error`` events: its ``type`` follows its code, so a server fault is never labelled as the
-client's mistake.
+An optional field the server has no value for is omitted, not sent as ``null``. :func:`error_event` is the one builder
+of ``error`` events: its ``type`` follows its code, so a server fault is never labelled as the client's mistake.
 """
 
 from __future__ import annotations

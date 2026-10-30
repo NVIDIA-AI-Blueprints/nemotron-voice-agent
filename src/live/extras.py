@@ -3,7 +3,7 @@
 
 """Routes beside the live session protocol: ``GET /v1/live/info`` and ``POST /v1/live/delegate``.
 
-``/info`` describes the server for clients such as the live console: the protocol's voices, the session limit, and
+``/info`` describes the server for clients such as the Live Console: the protocol's voices, the session limit, and
 what the composition root's optional ``describe`` hook adds. ``/delegate`` runs one stateless backend round for a
 client-mode app on the gateway's delegation core client, with the client's whole history as input; it has its own
 limits, since it runs backend work for anyone who reaches it (:func:`add_extras`).
@@ -37,7 +37,7 @@ def console_request(payload: dict) -> dict:
         raise HTTPException(400, "input must be a non-empty list of items")
     try:
         tools = BackendConfig(model="client", tools=tools).tools
-    except ValidationError as exc:  # the answer the console's parity cases record
+    except ValidationError as exc:
         raise HTTPException(400, "tools must be function or web_search tools") from exc
     request = {"input": items, "tools": tools, "tool_choice": "auto", "stream": True, "store": False}
     for key in ("model", "instructions"):
@@ -115,7 +115,7 @@ def add_extras(app: FastAPI, gateway: LiveGateway, describe: Describe | None = N
 
     @app.get("/v1/live/info")
     async def info(request: Request) -> dict:
-        """Describe the server for clients: the protocol's voices, plus the example's models, prompts and guards."""
+        """Describe the server for clients: the voices and the session limit, plus the example's models and prompts."""
         gateway.authorize(request)
         described = await describe() if describe is not None else {}
         return {"voices": sorted(LIVE_VOICES), "max_sessions": gateway.settings.max_sessions, **described}

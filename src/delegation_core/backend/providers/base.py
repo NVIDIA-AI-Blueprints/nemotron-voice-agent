@@ -18,12 +18,12 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from openai import AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 
 from delegation_core.backend.port import TERMINALS
 
 from ...config import ModelEndpoint
-from .retry import TRANSIENT, with_retries
+from .retry import TRANSIENT, StreamErrorEvent, with_retries
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,11 @@ class Backend:
         except StopAsyncIteration:
             await events.aclose()
             raise BrokenStreamError("The backend's stream ended before its first event") from None
+        except APIError as exc:
+            await events.aclose()
+            if type(exc) is APIError:  # an error event in the stream, not a status: the server's state, not the request
+                raise StreamErrorEvent(str(exc)) from exc
+            raise
         except BaseException:
             await events.aclose()
             raise

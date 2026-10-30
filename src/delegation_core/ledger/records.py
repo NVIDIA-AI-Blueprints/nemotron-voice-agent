@@ -4,7 +4,7 @@
 """The work ledger's records: what the interaction manager knows about one session's work.
 
 Each record has one state field and a table of the moves it allows (``MOVES``); ``move`` refuses any other move with a
-``TransitionError``, so a wrong move fails a test instead of drifting. Only the interaction manager moves the records,
+``TransitionError``, so a wrong move fails at once instead of drifting. Only the interaction manager moves the records,
 and a ``WorkLedger`` keeps one session's records in memory only.
 """
 
@@ -250,7 +250,9 @@ class Action(Record):
 
     ``unclear`` when its task ended with no report of it, so whether it ran is not known; ``not_run`` when the IM
     refused it and its output says why: while newer input waits (the commit gate), after a stop was
-    requested or the task's own ``cancel_work``, or for a function the app and a work tool both name.
+    requested or the task's own ``cancel_work``, for a function the app and a work tool both name, or for an app call
+    that repeats the newest call that ran, which its task made and the app answered, with no request since (its output
+    is that answer).
     """
 
     MOVES = moves(started=("done", "failed", "unclear", "not_run"), done=(), failed=(), unclear=(), not_run=())

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from examples.frontend_backend_live.cascade.memory import TalkerMemory, split_messages
 from examples.frontend_backend_live.cascade.ports import ReadyResult, ResultWording, WordingNotes
-from examples.frontend_backend_live.cascade.writer.wording import WriterWording
+from examples.frontend_backend_live.cascade.writer.wording import WriterWording, as_written
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.cascade.agent import LiveAgent
@@ -20,11 +20,15 @@ WordingFactory = Callable[["LiveAgent", TalkerMemory, Callable[..., None]], Resu
 
 
 class AsWritten:
-    """``as_written``: every ready result's speak part, unchanged, in order."""
+    """``as_written``: every ready result's speak part cleaned for speech, in order; instructions say their fallback."""
 
     async def words(self, results: Sequence[ReadyResult], notes: WordingNotes) -> str:
-        """The speak parts joined into one line."""
-        return " ".join(result.speak.strip() for result in results if result.speak.strip())
+        """The speak parts as plain spoken sentences (no list markers, headings or emphasis), joined into one line."""
+        return as_written(results)
+
+    async def progress(self, update: str, told: str | None, latest: str | None) -> str:
+        """No progress line: nothing words one."""
+        return ""
 
 
 def writer_wording(agent: LiveAgent, memory: TalkerMemory, observe: Callable[..., None]) -> WriterWording:

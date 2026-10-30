@@ -5,7 +5,7 @@
 # (LIVE_CONFIG_PATH points it at another), so an edit takes effect at the next restart.
 #
 # The delegation core that does the delegated work has its own file, core.yaml (CORE_CONFIG_PATH points the server at
-# another): the backend model and adapter, the core's limits, and every line it writes. A key that belongs there stops
+# another): the backend model and adapter, the core's limits, and its texts. A key that belongs there stops
 # loading with a message that names its place.
 
 frontend:
@@ -21,40 +21,39 @@ frontend:
     #             openai-responses (the OpenAI Responses API)
     #   slot      the examples_registry.yaml services slot whose selected services.yaml entry is the model (endpoint,
     #             model id, sampling and reasoning settings are set there, not here)
-    #   prompt    the prompts.yaml entry used as the talker's instructions when a live session supplies none
+    #   prompt    the prompts.yaml entry used, as written, as the talker's instructions when a live session supplies
+    #             none or blank ones (voice names no domain; the repository UI bot picks its own, the cafe's talker)
     provider: chat-completions
     slot: llm
-    prompt: talker
+    prompt: voice
 
-    # The prompt set added on top of the example's prompts: v1 is the original routing text; v2 frames the supplied
-    # instructions for the talker (its role first, the instructions word for word, every step they describe as the
-    # backend's work), makes them outrank the examples, and delegates detail-bearing turns, answers and confirmations,
-    # as GPT-Live does. Left out: the prompt sets' default.
-    prompt_version: v2
+    # The prompt set added on top of the example's prompts: every text the talker, the writer and the normalizer read
+    # (prompts/default.py, the one set). It frames the supplied instructions for the talker (its role first, the
+    # instructions word for word, every step they describe as the backend's work) and for the writer. Left out: the
+    # prompt sets' default.
+    prompt_version: default
 
     reliability:
       provider_retries: 2                  # transient provider failures (timeout, 429, 5xx), with backoff
       talker_attempt_timeout_seconds: 10   # one routing or phrasing attempt
       client_timeout_seconds: 45           # the frontend model's client, per request
 
-    guards:
-      repeat_guard: false        # a spoken reply that nearly repeats an earlier one becomes a delegation
-      turn_router: false         # drop acknowledgment-only turns ("okay", "mm-hmm") before the talker
-      turn_router_shadow: false  # only trace what the router would drop
-      continuers: [uh-huh, uh huh, mm-hmm, mm hmm, mhm, hmm, mm, mmm, ah, oh, i see, got it]
-
     # What the voice does around its delegations.
     delegation:
-      app_wait_seconds: 62             # the app-wait line, when the app has not answered a call by then; null: none
+      app_wait_seconds: 50             # the app-wait line, when the app has not answered a call by then; null: none.
+                                       # It comes before the core's deadline for the app's outputs (core.yaml
+                                       # delegation.client_tool_timeout_seconds), while the work still waits.
       result_wording: writer           # writer: ready results are worded by a model call; as_written: said as written
-      progress_after_seconds: 8        # a short progress line after this long of silent work; null: none
-      progress_max_per_delegation: 1
+      progress_after_seconds: 8        # the writer may word a short progress line after this long of silent work;
+                                       # null: none
+      progress_max_per_delegation: 3   # offers for one delegation; a later one needs a backend step that ended or
+                                       # a new progress note
 
     # Rewrite the caller's turn into written form before the talker sees it: spelled IDs joined, numbers as digits,
-    # a spelling that corrects a word applied. Uses the talker's model and the same conversation.
+    # a spelling that corrects a word applied. Uses the talker's model and the same conversation. When enabled, it reads
+    # the newest caller turn whenever the caller's turns are decided, and its prompt decides what needs rewriting.
     normalizer:
       enabled: false
-      every_turn: false        # false: only turns with digits, number words, spelled letters or spoken symbols
       timeout_seconds: 4       # a slower normalization keeps the turn as heard
 
     memory:
@@ -63,9 +62,25 @@ frontend:
 
     speech:
       tts_mode: per_sentence   # per_sentence | stitched
+      # How the caller's turn ends, and when the speech-to-text finalizes what it heard (media/turns.py):
+      #   smart_turn  Smart Turn judges each pause of vad_stop_seconds; the speech-to-text finalizes once it judges
+      #               the turn over, so a spelled ID keeps its letters
+      #   silence     a pause of turn_silence_seconds ends the turn; no Smart Turn
+      #   shared      the repository's shared pipeline: Smart Turn at a 0.2 s pause, and a final at every pause
+      turn_end: smart_turn
+      vad_start_seconds: 0.12  # smart_turn, silence: speech this long marks the caller as speaking
+      vad_stop_seconds: 0.2    # smart_turn: the pause that Smart Turn judges
+      turn_silence_seconds: 1.2 # a pause this long ends the turn whatever Smart Turn judged
       start_timeout_seconds: 3 # a line whose audio has not started by then is retried or written off
-      resume_after_noise: true # a line cut by a noise that was not speech resumes
+      resume_after_noise: true # a line cut by a noise, or by words the talker waits on, resumes
       retry_silent_lines: true # a line that produced no audio is said once more
+      # What the talker's memory keeps of a line cut while it played: as_recorded keeps the sentences that played;
+      # estimated also keeps the whole words its audio likely carried past them, never past the sentence in progress
+      # (the whole line with stitched speech): as many as the audio sent carried at the call's speaking rate, measured
+      # from the sentences that played, or at estimate_chars_per_second until one has. The heard log and the backend
+      # do not take the estimate.
+      heard_words: as_recorded # as_recorded | estimated
+      estimate_chars_per_second: 15
 
     tts_preroll_ms: 300        # reply audio held before playback starts, absorbing uneven TTS chunks (0: off)
 

@@ -17,7 +17,7 @@ from live.protocol import SessionConfig
 
 
 class FakeAdapter:
-    """A frontend adapter and a delegation core in one, which record what the protocol layer asks of them.
+    """A frontend adapter and a delegation core in one, which record what the gateway asks of them.
 
     As the core, it is the scripted ``ResponsesClient`` the session builds its server delegation on: it
     opens one conversation, refuses the models in ``models_rejected`` (also when it checks settings), and answers each

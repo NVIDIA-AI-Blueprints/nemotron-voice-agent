@@ -10,7 +10,8 @@ real model of an operator-configured Hermes home, and nothing here reads its key
 
 Skipped unless ``HARNESS_HERMES_BIN`` names a ``hermes`` executable; the real-model run also needs
 ``HARNESS_HERMES_HOME`` (the configured home) and writes its evidence to ``HARNESS_EVIDENCE`` when set. Set
-``HARNESS_TRANSPORT=websocket`` to serve Hermes over WebSocket (``served_agent.py``) instead of ``stdio``.
+``HARNESS_TRANSPORT=websocket`` to serve Hermes over WebSocket (``served_agent.py``) instead of ``stdio``, and
+``HARNESS_SESSION=call`` to run every test with one session per call (``backend.harness.session``).
 """
 
 import asyncio
@@ -26,15 +27,17 @@ from types import MappingProxyType
 
 from delegation_core.app import build_core
 from delegation_core.backend.harness import HarnessSource
+from delegation_core.backend.port import Start
 from delegation_core.config import CoreSettings, ModelEndpoint
 from delegation_core.im.input import BackendTask
 from tests.unit.contracts.backend import (
     MENU_FUNCTION,
     BackendAdapterContract,
     ConductorContract,
+    a_request,
     check_events,
 )
-from tests.unit.delegation_core.backend.harness.doubles import scratch, vocabulary
+from tests.unit.delegation_core.backend.harness.doubles import AGENT_BLOCKS, PROMPTS, scratch, vocabulary
 from tests.unit.delegation_core.backend.harness.scripted_model import (
     MODEL,
     Call,
@@ -54,6 +57,7 @@ HERMES = os.environ.get("HARNESS_HERMES_BIN", "")
 REAL_HOME = os.environ.get("HARNESS_HERMES_HOME", "")
 EVIDENCE = os.environ.get("HARNESS_EVIDENCE", "")
 SERVED = os.environ.get("HARNESS_TRANSPORT", "stdio") == "websocket"
+SESSION = os.environ.get("HARNESS_SESSION", "task")
 HAVE_HERMES = bool(HERMES) and os.access(HERMES, os.X_OK)
 SKIP_HERMES = (
     "the real Hermes is not available: set HARNESS_HERMES_BIN to a `hermes` executable at af26aca with its ACP and "
@@ -154,8 +158,11 @@ class Operator:
     def block(self, **over) -> dict:
         """The harness block of a test: Hermes's agent class, the way in, a work root, the bridge, the limits."""
         return {
+            "prompts": PROMPTS,
+            "agents": AGENT_BLOCKS,
             "agent": "hermes",
             "steer": "native_command",
+            "session": SESSION,
             **self.reach(),
             "work_root": str(scratch("harness-real-")),
             "bridge": {"bind": "127.0.0.1:0", "advertise": None},
@@ -224,6 +231,10 @@ def conductor_model(body: dict):
         return Call([("__answer_status", {"delegation_id": ids[0], "text": "Still looking it up."})])
     if "the hours, please" in new and works:  # a model that names a Work it was not shown: the IM refuses it
         return Call([("__steer_work", {"work_id": "W9", "delegations": ids})])
+    if "For two people" in new:  # one call that places only the first request: the IM places the rest
+        return Call([("__start_work", {"delegations": ids[:1]})])
+    if "Never mind" in new:  # one call that cancels: it names no request, so the IM places the stop request
+        return Call([("__cancel_work", {"work_id": works[0]})])
     if "opening hours" in new:
         return Call([("__start_work", {"delegations": ids, "tasks": ["find teas", "find the opening hours"]})])
     if works:
@@ -250,6 +261,10 @@ class Workers:
         text = user_text(body)
         if "Make it two" in text:
             return Say("Two teas: green and black.")
+        if "For two people" in text:
+            return Say("A table for two on Friday.")
+        if "Never mind" in text:
+            return Say("The counting is stopped.")
         if "Task: find the opening hours" in text:
             return Say("Open from eight to six.")
         if "Task: find teas" in text:
@@ -258,6 +273,9 @@ class Workers:
             return Fail(403)
         if "Check my balance" in text:  # a reasoning model that never writes its answer
             return Say("", reasoning=REASONING)
+        if "Check the teas twice" in text:  # a model that repeats its lookup once, then answers
+            results = [message for message in body.get("messages") or [] if message.get("role") == "tool"]
+            return Call([("__get_menu", {})]) if len(results) < 2 else Say("We have green tea and black tea.")
         if "What teas" in text:
             return (
                 Say("We have green tea and black tea.")
@@ -378,7 +396,32 @@ class RealHermesConductorContract(ConductorContract, unittest.IsolatedAsyncioTes
             names, [f"mcp__c1__{name}" for name in ("answer_status", "cancel_work", "start_work", "steer_work")]
         )
         system = first["messages"][0]["content"]
-        self.assertIn(vocabulary().prompt, system)  # its instructions: the conductor prompt, from its own folder
+        self.assertIn(vocabulary().instructions(3), system)  # its instructions: the conductor prompt, from its folder
+
+    async def test_a_turn_cancelled_in_its_model_call_ends_and_the_next_decide_takes_the_same_session(self):
+        # The IM's busy rule cancels a decide() that placed nothing; Hermes ends the turn cancelled, and the next
+        # decide() prompts the same session, whose history holds the cancelled prompt.
+        holds = iter([Hold()])
+        self.model.policy = lambda body: next(holds, None) or conductor_model(body)
+        conductor = self.make_conductor()
+        first = asyncio.ensure_future(conductor.decide(self.given(a_request("d_1", "Find teas.")), _Target().place))
+        async with asyncio.timeout(120):
+            while not self.model.waiting:  # the turn waits for its model call
+                await asyncio.sleep(0.05)
+        session = conductor.session
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        self.assertIs(conductor.session, session)
+        target = _Target()
+        given = self.given(a_request("d_1", "Find teas."), a_request("d_2", "Make it green tea."))
+        await asyncio.wait_for(conductor.decide(given, target.place), 120)
+        self.assertIs(conductor.session, session)
+        self.assertEqual(target.decisions, [Start(("d_1", "d_2"))])
+        cancelled, taken = [body for body in self.model.requests if offers(body, "__start_work")][:2]
+        self.assertEqual(taken["tools"], cancelled["tools"])  # the same session's door (c1)
+        prompts = [message["content"] for message in taken["messages"] if message.get("role") == "user"]
+        self.assertEqual(len(prompts), 2)  # the cancelled prompt, then the next one
+        self.assertIn("[d_2] Make it green tea.", prompts[-1])
 
     def _requests(self):
         from tests.unit.contracts.backend import a_request
@@ -494,7 +537,7 @@ class RealHermesCoreFlows(unittest.IsolatedAsyncioTestCase):
             ):
                 await asyncio.sleep(0.05)
 
-    async def test_a_newer_request_joins_the_running_work_and_carries_its_answer(self):
+    async def test_a_newer_request_that_comes_while_the_turn_answers_starts_a_follow_up_work(self):
         hold = self.workers.holding(Say("Old answer."))
         d1 = self.session.admit(message("Look up the teas."), delegation_id="d1")
         await self.until_running()
@@ -505,12 +548,13 @@ class RealHermesCoreFlows(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.05)
         hold.event.set()
         older, newer = await read(d1.stream), await read(d2.stream)
-        self.assertEqual(spoken(older), [])  # the older request handed its work over
-        # The answer that crossed the newer request is only commentary; the handover line ends the older response.
-        self.assertEqual(spoken(older, "commentary")[-1], self.core.settings.texts.handover_line)
+        # The turn answered before it took the newer request: its answer is the older request's, and the newer
+        # request starts the next Work, whose history holds that answer.
+        self.assertEqual(spoken(older), ["Old answer."])
         self.assertEqual(spoken(newer), ["Two teas: green and black."])
         taker = next(e for e in newer if e["type"] == "response.in_progress")
-        self.assertEqual(taker["response"]["previous_response_id"], older[0]["response"]["id"])
+        self.assertIsNone(taker["response"].get("previous_response_id"))
+        self.assertEqual(self.session.ledger.delegations["d2"].work, "W2")
 
     async def test_no_call_is_dispatched_while_a_newer_request_waits_to_join(self):
         # The commit gate on the real runtime: the model calls the app's get_menu while the newer request waits to land
@@ -584,8 +628,60 @@ class RealHermesCoreFlows(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(self.session.ledger.works), ["W1"])
         hold.event.set()
         older, newer = await read(d1.stream), await read(d2.stream)
-        self.assertEqual(spoken(older), [])  # handed over to the newer request
+        self.assertEqual(spoken(older), ["Old answer."])  # the turn answered first: the newer request goes next
         self.assertEqual(spoken(newer), ["Done."])
+
+    async def test_a_request_the_conductors_turn_leaves_joins_the_work_that_turn_started(self):
+        # Both requests reach one turn of the conductor, whose one call starts work for the first: the IM places the
+        # second against the Works as the turn left them, so it joins that Work. The turn ends once that Work's model
+        # call runs, so the second request reaches the task as a steer, and the task's answer comes first.
+        hold = self.workers.holding(Say("Booked for Friday."))
+        placed, workers = Hold(then=Say("Placed.")), self.model.policy
+        self.model.policy = lambda body: placed if offers(body, "__start_work") and after_tool(body) else workers(body)
+        d1 = self.session.admit(message("Book a table for Friday."), delegation_id="d1")
+        d2 = self.session.admit(message("For two people."), delegation_id="d2")
+        async with asyncio.timeout(120):
+            while hold not in self.model.waiting:  # the started Work's model call runs while the turn waits
+                await asyncio.sleep(0.05)
+        placed.event.set()
+        async with asyncio.timeout(120):
+            while not self.session.ledger.delegations["d2"].work:  # "" until a decision places it
+                await asyncio.sleep(0.05)
+        self.assertEqual([self.session.ledger.delegations[d].work for d in ("d1", "d2")], ["W1", "W1"])
+        hold.event.set()
+        older, newer = await read(d1.stream), await read(d2.stream)
+        self.assertEqual(spoken(older), ["Booked for Friday."])  # the turn answered first: the newer request goes next
+        self.assertEqual(spoken(newer), ["A table for two on Friday."])
+        self.assertEqual(sorted(self.session.ledger.works), ["W1", "W2"])
+
+    async def test_a_stop_request_the_conductors_turn_leaves_beside_its_cancel_runs_after_the_stop(self):
+        # The turn's one call cancels the running Work and names no request, so the IM's steer rule places the stop
+        # request: it joins the stopping Work while that Work is open, and runs in a Work of its own after the stop.
+        self.workers.holding(Say("Still counting."))
+        d1 = self.session.admit(message("Count the stars."), delegation_id="d1")
+        await self.until_running()
+        d2 = self.session.admit(message("Never mind, stop counting."), delegation_id="d2")
+        older, newer = await read(d1.stream), await read(d2.stream)
+        self.assertEqual(spoken(older), [self.core.settings.texts.cancelled_line])  # stopped, and confirmed
+        self.assertEqual(spoken(newer), ["The counting is stopped."])
+        stopped, after = self.session.ended_works
+        self.assertEqual((stopped.id, stopped.record.state), ("W1", "cancelled"))
+        self.assertEqual((after.id, after.record.state, after.carrier), ("W2", "answered", "d2"))
+        self.assertLessEqual(stopped.ended_at, after.started_at)
+
+    async def test_a_repeated_app_call_reaches_the_app_once_and_hermes_reads_the_recorded_answer(self):
+        first = await read(self.session.admit(message("Check the teas twice."), delegation_id="d1").stream)
+        [call] = done_items(first, "function_call")
+        teas = '{"teas": ["green", "black"]}'
+        output = [{"type": "function_call_output", "call_id": call["call_id"], "output": teas}]
+        rest = await read(self.session.admit_client_request(output, delegation_id="d1").stream)
+        self.assertEqual(done_items(rest, "function_call"), [])  # the repeat never went to the app
+        self.assertEqual(spoken(rest), ["We have green tea and black tea."])
+        # Hermes read the app's answer, then the same answer from the record with the core's note after it.
+        note = self.core.settings.texts.repeated_call_output.format(output="").strip()
+        worker = [body for body in self.model.requests if offers(body, "__get_menu")][-1]
+        results = [message["content"] for message in worker["messages"] if message.get("role") == "tool"]
+        self.assertEqual([note in result for result in results], [False, True])
 
     async def test_close_stops_running_work_ends_its_response_and_removes_every_work_folder(self):
         self.workers.holding(Say("Late."))
@@ -598,6 +694,130 @@ class RealHermesCoreFlows(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["type"], "response.incomplete")
         self.assertEqual(events[-1]["response"]["status"], "cancelled")
         self.assertEqual([folder for folder in root.iterdir() if folder.name.startswith("work-")], [])
+
+
+@unittest.skipUnless(HAVE_HERMES, SKIP_HERMES)
+class RealHermesOneTaskAtATime(unittest.IsolatedAsyncioTestCase):
+    """With ``max_running: 1`` the harness's conductor is the steer rule: no conductor process, no conductor turn."""
+
+    async def asyncSetUp(self):
+        self.workers = Workers()
+        self.model = await ScriptedModel(policy=self.workers).start()
+        self.operator = await Operator(self.model).start()
+        self.core = build(self.model, block=self.operator.block(max_running=1))
+        self.session = self.core.session()
+        self.session.start()
+
+    async def asyncTearDown(self):
+        for hold in self.workers.holds:
+            hold.event.set()
+        await self.session.close()
+        await self.core.aclose()
+        await self.operator.stop()
+        await self.model.stop()
+
+    async def test_a_newer_request_joins_the_running_work_and_no_conductor_runs(self):
+        hold = self.workers.holding(Say("Old answer."))
+        d1 = self.session.admit(message("Look up the teas."), delegation_id="d1")
+        async with asyncio.timeout(120):
+            while not any(work.tasks[0].run is not None for work in self.session.works.values()):
+                await asyncio.sleep(0.05)
+        async with asyncio.timeout(120):
+            while hold not in self.model.waiting:  # the task's model call runs: the newer request reaches it as a steer
+                await asyncio.sleep(0.05)
+        root = Path(self.core.source.settings.work_root)
+        self.assertEqual(len([folder for folder in root.iterdir() if folder.name.startswith("work-")]), 1)
+        d2 = self.session.admit(message("Make it two."), delegation_id="d2")
+        async with asyncio.timeout(120):
+            while not self.session.ledger.delegations["d2"].work:  # "" until the steer rule places it
+                await asyncio.sleep(0.05)
+        self.assertEqual(self.session.ledger.delegations["d2"].work, "W1")
+        hold.event.set()
+        older, newer = await read(d1.stream), await read(d2.stream)
+        self.assertEqual(spoken(older), ["Old answer."])  # the turn answered first: the newer request goes next
+        self.assertEqual(spoken(newer), ["Two teas: green and black."])
+        self.assertFalse(any(offers(body, "__start_work") for body in self.model.requests))  # no conductor's turn
+
+
+@unittest.skipUnless(HAVE_HERMES, SKIP_HERMES)
+class RealHermesOneSessionPerCall(unittest.IsolatedAsyncioTestCase):
+    """``session: call`` on the real runtime: the session of a Work that answered takes the next Work's task."""
+
+    async def asyncSetUp(self):
+        self.workers = Workers()
+        self.model = await ScriptedModel(policy=self.workers).start()
+        self.operator = await Operator(self.model).start()
+        self.traces: list[str] = []
+        block = self.operator.block(session="call")
+        self.core = build(self.model, block=block, observe=lambda kind, **fields: self.traces.append(kind))
+        self.session = self.core.session()
+        self.session.start()
+
+    async def asyncTearDown(self):
+        for hold in self.workers.holds:
+            hold.event.set()
+        await self.session.close()
+        await self.core.aclose()
+        await self.operator.stop()
+        await self.model.stop()
+
+    def sessions(self) -> tuple[int, int]:
+        """How many sessions the tasks opened, and how many tasks took a kept one."""
+        return self.traces.count("harness.session_opened"), self.traces.count("harness.session_reused")
+
+    async def held(self, hold: Hold) -> None:
+        async with asyncio.timeout(120):
+            while hold not in self.model.waiting:
+                await asyncio.sleep(0.05)
+
+    async def teas(self, delegation_id: str) -> list[dict]:
+        """A request whose task calls the app's get_menu, then answers once the app's output is in."""
+        first = await read(self.session.admit(message("What teas do you have?"), delegation_id=delegation_id).stream)
+        [call] = done_items(first, "function_call")
+        output = [
+            {"type": "function_call_output", "call_id": call["call_id"], "output": '{"teas": ["green", "black"]}'}
+        ]
+        return await read(self.session.admit_client_request(output, delegation_id=delegation_id).stream)
+
+    async def test_two_works_share_one_session_and_the_second_reads_the_first_as_its_own_turns(self):
+        self.assertEqual(spoken(await self.teas("d1")), ["We have green tea and black tea."])
+        second = await read(self.session.admit(message("Make it two."), delegation_id="d2").stream)
+        self.assertEqual(spoken(second), ["Two teas: green and black."])
+        self.assertEqual(self.sessions(), (1, 1))  # one session/new for both Works
+        messages = [body for body in self.model.requests if not offers(body, "__start_work")][-1]["messages"]
+        users = [message["content"] for message in messages if message["role"] == "user"]
+        self.assertEqual(len(users), 2)  # the first Work's transcript, then only the new request with its records
+        self.assertTrue(users[-1].startswith("Make it two."))
+        calls = [call["function"]["name"] for each in messages for call in each.get("tool_calls") or []]
+        self.assertEqual([name.rsplit("__", 1)[-1] for name in calls], ["get_menu"])  # the first Work's own call
+        [result] = [message["content"] for message in messages if message["role"] == "tool"]
+        self.assertIn("green", result)  # the app's output, as Hermes wraps a tool's result
+
+    async def test_a_stopped_work_leaves_the_next_work_a_fresh_session(self):
+        hold = self.workers.holding(Say("Still counting."))
+        d1 = self.session.admit(message("Count the stars."), delegation_id="d1")
+        await self.held(hold)
+        d2 = self.session.admit(message("Stop that."), delegation_id="d2")
+        older, newer = await read(d1.stream), await read(d2.stream)
+        self.assertEqual(spoken(older), [self.core.settings.texts.cancelled_line])
+        self.assertEqual(spoken(newer), ["Stopping that."])
+        third = await read(self.session.admit(message("Make it two."), delegation_id="d3").stream)
+        self.assertEqual(spoken(third), ["Two teas: green and black."])
+        self.assertEqual(self.sessions(), (2, 0))  # the stopped Work's session was retired, never kept
+
+    async def test_a_steered_works_session_is_still_kept(self):
+        first = await read(self.session.admit(message("What teas do you have?"), delegation_id="d1").stream)
+        [call] = done_items(first, "function_call")
+        d2 = self.session.admit(message("Make it two."), delegation_id="d2")
+        async with asyncio.timeout(120):
+            while not self.session.ledger.delegations["d2"].work:  # "" until a decision places it
+                await asyncio.sleep(0.05)
+        output = [{"type": "function_call_output", "call_id": call["call_id"], "output": '{"teas": ["green"]}'}]
+        await read(self.session.admit_client_request(output, delegation_id="d1").stream)
+        self.assertEqual(spoken(await read(d2.stream)), ["Two teas: green and black."])  # the steer was applied
+        third = await read(self.session.admit(message("And the hours?"), delegation_id="d3").stream)
+        self.assertEqual(third[-1]["type"], "response.completed")
+        self.assertEqual(self.sessions(), (1, 1))
 
 
 # --------------------------------------------------------------------------------------------- the real model

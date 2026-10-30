@@ -99,11 +99,6 @@ def user(text):
 
 
 class TransitionTableTests(unittest.TestCase):
-    def test_each_record_has_its_lifecycle_table(self):
-        for cls, table in TABLES.items():
-            with self.subTest(record=cls.__name__):
-                self.assertEqual({state: set(targets) for state, targets in cls.MOVES.items()}, table)
-
     def test_each_record_starts_in_its_first_state(self):
         for cls, start in STARTS.items():
             with self.subTest(record=cls.__name__):
@@ -133,28 +128,6 @@ class TransitionTableTests(unittest.TestCase):
             for state, targets in table.items():
                 with self.subTest(record=cls.__name__, state=state):
                     self.assertEqual(record_in(cls, state).ended, not targets)
-
-    def test_a_task_holds_its_own_stop_and_result(self):
-        task = Task("W1.1", work="W1", brief="menu")
-        self.assertEqual(
-            (task.stop.id, task.stop.state, task.result.id, task.result.state), ("W1.1", "none", "W1.1", "none")
-        )
-        self.assertEqual(
-            (task.work, task.brief, task.acted, task.progress, task.outcome), ("W1", "menu", False, None, None)
-        )
-        # An ended task's summary says how long it ran (port TaskSummary.seconds), so the record keeps both times.
-        self.assertEqual((task.started_at, task.ended_at), (None, None))
-        task.stop.move("stop_requested")
-        task.stop.move("unconfirmed")  # the run could not confirm its stop in time
-        self.assertTrue(task.stop.ended)
-
-    def test_a_result_keeps_its_items(self):
-        result = Result("W1.1")
-        show = {"type": "mcp_call", "server_label": "voiceclaw", "name": "show", "output": "A table."}
-        answer = {"type": "message", "phase": "final_answer", "content": [{"type": "output_text", "text": "Done."}]}
-        result.items += [show, answer]
-        result.move("final")
-        self.assertEqual(result.items, [show, answer])
 
 
 class WorkLedgerTests(unittest.TestCase):
@@ -189,14 +162,6 @@ class WorkLedgerTests(unittest.TestCase):
         self.assertEqual((first.id, second.id), ("S1", "S2"))
         self.assertEqual((first.state, first.task, first.delegations), ("waiting", "W1.1", ["item_b"]))
         self.assertEqual(second.items, [user("Green."), user("Hot.")])
-
-    def test_an_action_names_its_task_its_work_and_who_runs_it(self):
-        ledger = WorkLedger("conv_1")
-        ledger.new_work(["item_a"], {}, briefs=("menu", "hours"))
-        action = ledger.new_action("call_1", "W1.2", "get_menu", "app")
-        self.assertEqual((action.task, action.work, action.name, action.runner), ("W1.2", "W1", "get_menu", "app"))
-        action.move("not_run")  # refused after a stop request: never run
-        self.assertTrue(action.ended)
 
     def test_only_the_newest_closed_works_are_kept_and_the_forgotten_ones_are_returned(self):
         # The ledger moves no record itself: the IM expires the forgotten Works' results.

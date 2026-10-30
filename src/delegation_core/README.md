@@ -25,8 +25,9 @@ event, and refusal passes through JSON on the way, as it would over HTTP. The fo
 | `DELETE /v1/conversations/{id}` | Ends the conversation's IM session, which stops its work and ends every open response. |
 
 The core reads two `metadata` keys: `live_delegation_id` names the delegation, and `live_typed_run: "true"` marks a
-typed run. A request that names its delegation and brings no function outputs is a delegation, and any other request is
-the client's own. A request with no `conversation` is stateless: a one-shot IM session serves it and keeps nothing.
+typed run. A request that names its delegation, brings no function outputs, and is not a typed run is a delegation, and
+any other request is the client's own. A request with no `conversation` is stateless: a one-shot IM session serves it
+and keeps nothing.
 
 In the [Frontend/Backend Live example](../examples/frontend_backend_live/README.md), the composition root builds one
 core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the
@@ -48,7 +49,8 @@ an edit takes effect at the next restart. A profile names the file it builds on 
 differs, and an unknown key stops the load. The file has the following blocks:
 
 - `delegation`: the IM's settings, with their defaults in `DelegationSettings` ([`config.py`](config.py)).
-- `texts`: every line that the core writes, sends, or adds to a model's input.
+- `texts`: the lines that the IM and the backend write or add to a model's input. A harness words its own prompts in
+  `backend.harness.prompts`.
 - `backend`: the adapter (`adapter`) and the one that serves stateless requests (`one_shot_adapter`), both `llm` by
   default, the default model's slot and prompt (`slot` and `prompt`), the server tool sources (`tools`), and each
   adapter's own block.
@@ -83,7 +85,7 @@ adapter's package only when a core is built with it. The following table lists t
 | Adapter | Package | What it runs | Profile |
 | --- | --- | --- | --- |
 | `llm` (default) | [`backend/llm/`](backend/llm/) | The backend LLM, directly connected, with a rule conductor. It also serves stateless requests. | `core.yaml` |
-| `llm-agent` | [`backend/agent/`](backend/agent/) | A model conductor that makes one model call per decision, with backend LLM runs as its workers. | `core.agent.yaml` |
+| `llm-agent` | [`backend/agent/`](backend/agent/) | A model conductor that makes one model call per decision, with backend LLM runs as its workers. While no Work is open, a request starts one with no model call (`conductor.when_idle: start`). With `max_running: 1`, the `steer` rule places each request instead. | `core.agent.yaml` |
 | `harness` | [`backend/harness/`](backend/harness/) | An external agent that its operator deploys, such as Hermes, over the Agent Client Protocol (ACP). | `core.harness.yaml` |
 
 To deploy Hermes or connect another ACP agent, refer to

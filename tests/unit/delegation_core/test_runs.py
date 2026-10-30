@@ -11,6 +11,7 @@ import unittest
 from delegation_core.backend.port import Answer, Cancel, Start, Steer
 from tests.unit.contracts.backend import ConductorContract
 from tests.unit.delegation_core.helpers import (
+    MENU,
     TEXTS,
     IMCase,
     ScriptedAdapter,
@@ -18,6 +19,8 @@ from tests.unit.delegation_core.helpers import (
     StartEach,
     SteerNewest,
     answer,
+    app_call,
+    app_outputs,
     ask,
     fail,
     planned,
@@ -28,19 +31,25 @@ from tests.unit.delegation_core.helpers import (
 
 class SchedulerTests(IMCase):
     async def test_two_works_run_at_once_up_to_max_running(self):
-        gates = [asyncio.Event(), asyncio.Event(), asyncio.Event()]
-        adapter = ScriptedAdapter(*([wait(gate), answer()] for gate in gates), conductor=StartEach(), max_running=2)
+        # A task waiting for the app's outputs holds no slot, so two more Works run; once its outputs are in, it waits
+        # for a slot until one of them ends.
+        gates = [asyncio.Event(), asyncio.Event()]
+        scripts = [[app_call(), answer("One.")], *([wait(gate), answer()] for gate in gates)]
+        adapter = ScriptedAdapter(*scripts, conductor=StartEach(), max_running=2)
         im = self.session(adapter)
-        streams = [im.admit(ask(f"Request {n}."), delegation_id=f"D{n}").stream for n in (1, 2, 3)]
+        first = await read_all(im.admit(ask("Request 1."), delegation_id="D1", settings={"tools": [MENU]}).stream)
+        streams = [im.admit(ask(f"Request {n}."), delegation_id=f"D{n}").stream for n in (2, 3)]
         await self.turns()
-        self.assertEqual([work.record.state for work in im.works.values()], ["running", "running", "queued"])
+        self.assertEqual([work.record.state for work in im.works.values()], ["waiting_client", "running", "running"])
+        resumed = im.admit_client_request(app_outputs(first), delegation_id="D1", settings={"tools": [MENU]}).stream
+        await self.turns()
+        self.assertEqual(im.ledger.tasks["W1.1"].state, "waiting_client")  # its outputs are in: it waits for a slot
         gates[0].set()
         await read_all(streams[0])
         await self.turns()
-        self.assertEqual(im.ledger.works["W3"].state, "running")
-        for gate in gates[1:]:
-            gate.set()
-        for stream in streams[1:]:
+        self.assertEqual(im.ledger.tasks["W1.1"].state, "answered")
+        gates[1].set()
+        for stream in (resumed, streams[1]):
             await read_all(stream)
         self.assertEqual([im.ledger.works[w].state for w in ("W1", "W2", "W3")], ["answered"] * 3)
 
@@ -54,24 +63,6 @@ class SchedulerTests(IMCase):
         self.assertEqual(failed[-1]["type"], "response.failed")
         self.assertEqual(answered[-1]["type"], "response.completed")
         self.assertEqual((im.ledger.works["W1"].state, im.ledger.works["W2"].state), ("failed", "answered"))
-
-    async def test_a_work_with_two_tasks_answers_twice_and_ends_with_its_last_task(self):
-        hold = asyncio.Event()
-
-        async def split(given, place):
-            await place(Start(("D1",), ("teas", "hours")))
-
-        adapter = ScriptedAdapter([answer("Teas.")], [answer("Hours.", hold=hold)], conductor=planned(split))
-        adapter.max_running = 2
-        im = self.session(adapter)
-        stream = im.admit(ask("Teas and hours."), delegation_id="D1").stream
-        await self.turns()
-        self.assertFalse(im.ledger.works["W1"].ended)
-        hold.set()
-        events = await read_all(stream)
-        answers = [e["item"]["content"][0]["text"] for e in events if e["type"] == "response.output_item.done"]
-        self.assertEqual(answers, ["Teas.", "Hours."])
-        self.assertEqual([task.task_id for task in im.ended_works[-1].tasks], ["W1.1", "W1.2"])
 
     async def test_each_task_reads_its_own_brief(self):
         async def split(given, place):
@@ -137,14 +128,12 @@ class PlacementTests(IMCase):
         self.assertEqual(calls, [["D1"], ["D2"]])
         self.assertEqual(im.ledger.delegations["D2"].work, "W2")
 
-    async def test_the_outcome_line_reaches_the_conductor(self):
-        async def plan(given, place):
-            await place(Start(("D1",)))
-
-        conductor = ScriptedConductor(plan)
-        im = self.session(ScriptedAdapter([answer()], conductor=conductor))
-        await read_all(im.admit(ask("One."), delegation_id="D1").stream)
-        self.assertEqual(conductor.outcomes, [TEXTS.outcomes["started"].format(work="W1", tasks="W1.1")])
+    async def test_a_split_over_max_running_is_refused_and_the_steer_rule_starts_one_task(self):
+        conductor = planned(lambda given, place: place(Start(("D1",), ("teas", "hours", "days"))))
+        im = self.session(ScriptedAdapter([answer()], conductor=conductor, max_running=2))
+        await read_all(im.admit(ask("Teas, hours and days."), delegation_id="D1").stream)
+        self.assertEqual(conductor.outcomes, [TEXTS.refusal("over_limit", max_running="2")])
+        self.assertEqual([task.task_id for task in im.ended_works[-1].tasks], ["W1.1"])
 
     async def test_a_conductor_reads_the_open_and_ended_works_and_the_conversation_since_it_last_read(self):
         gate = asyncio.Event()
@@ -276,7 +265,7 @@ class RecheckTests(IMCase):
 
     async def test_a_delegation_is_placed_once_and_its_first_placement_stays(self):
         outcomes = await self.check([Start(("D2",)), Steer("W1", ("D2",)), Answer("D2", "Hi.")])
-        refused = TEXTS.outcomes["refused"].format(reason="no unplaced request among D2")
+        refused = TEXTS.refusal("unplaced", delegations="D2")
         self.assertEqual(outcomes[1:], [refused, refused])
         self.assertEqual(self.im.ledger.delegations["D2"].work, "W2")
 
@@ -295,10 +284,32 @@ class RecheckTests(IMCase):
         self.assertEqual(outcomes[0], TEXTS.outcomes["ended"].format(work="W1"))
         self.assertEqual(self.im.ledger.works["W1"].state, "answered")
 
+    async def test_a_start_over_max_running_is_refused_and_the_steer_rule_joins_its_request_to_the_open_work(self):
+        outcomes = await self.check([Start(("D2",), ("hours", "days"))])  # one task runs: two more make three of two
+        self.assertEqual(outcomes, [TEXTS.refusal("over_limit", max_running="2")])
+        self.assertEqual((self.im.ledger.delegations["D2"].work, sorted(self.im.ledger.works)), ("W1", ["W1"]))
 
-class StartEachContractTests(ConductorContract, unittest.IsolatedAsyncioTestCase):
-    def make_conductor(self):
-        return StartEach()
+    async def test_a_start_within_max_running_runs_beside_the_open_work(self):
+        outcomes = await self.check([Start(("D2",))])
+        self.assertEqual(outcomes, [TEXTS.outcomes["started"].format(work="W2", tasks="W2.1")])
+
+    async def test_a_steer_into_an_ended_work_over_max_running_is_refused_and_its_request_joins_the_open_work(self):
+        # W1 ended, and W2's two tasks run, as many as run at once: the new Work the steer would start makes three.
+        gate = asyncio.Event()
+        placements = {"D0": Start(("D0",)), "D1": Start(("D1",), ("teas", "hours")), "D2": Steer("W1", ("D2",))}
+        conductor = ScriptedConductor(lambda given, place: place(placements[given.arrivals[0].delegation_id]))
+        scripts = [[answer("Done early.")], [wait(gate), answer()], [wait(gate), answer()]]
+        im = self.session(ScriptedAdapter(*scripts, conductor=conductor, max_running=2))
+        await read_all(im.admit(ask("Menu."), delegation_id="D0").stream)
+        first = im.admit(ask("Teas and hours."), delegation_id="D1")
+        await self.turns()
+        second = im.admit(ask("And the days."), delegation_id="D2")
+        await self.turns()
+        self.assertEqual(conductor.outcomes[-1], TEXTS.refusal("over_limit", max_running="2"))
+        self.assertEqual((im.ledger.delegations["D2"].work, sorted(im.ledger.works)), ("W2", ["W1", "W2"]))
+        gate.set()
+        for stream in (first.stream, second.stream):
+            await read_all(stream)
 
 
 class SteerNewestContractTests(ConductorContract, unittest.IsolatedAsyncioTestCase):

@@ -267,7 +267,7 @@ class Client(StrictModel):
     data_channel: Permissions = Field(default_factory=Permissions)
 
 
-# The startup limits on the session's own instructions and history, as the reference's session.start sets them.
+# The startup limits on the session's own instructions and history, as GPT-Live's session.start sets them.
 MAX_INSTRUCTION_TOKENS = 16384
 MAX_INPUT_MESSAGES = 128
 MAX_INPUT_TOKENS = 8192

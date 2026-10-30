@@ -5,11 +5,11 @@
 
 """Protocol conformance: a client written from the official schema starts and runs."""
 
-import asyncio
 import unittest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from loguru import logger
 from pydantic import ValidationError
 
 from live.events import error_event
@@ -18,9 +18,6 @@ from live.gateway.websocket import wire_codec
 from live.protocol import LIVE_VOICES, ProtocolError, SessionConfig, validation_error
 from live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
-
-# Nine of the documented voices, which the session config accepts.
-NEW_VOICES = ("brise", "flitz", "harema", "juni", "nira", "noeul", "nuri", "shida", "sillage")
 
 
 def start_error(session: dict) -> ProtocolError:
@@ -67,7 +64,8 @@ class DelegationClassTests(unittest.TestCase):
 class VoiceTests(unittest.TestCase):
     def test_every_documented_voice_and_a_custom_id_are_accepted(self):
         self.assertEqual(len(LIVE_VOICES), 31)
-        for voice in (*NEW_VOICES, "marin", {"id": "voice_custom"}):
+        documented = ("brise", "flitz", "harema", "juni", "marin", "nira", "noeul", "nuri", "shida", "sillage")
+        for voice in (*documented, {"id": "voice_custom"}):
             with self.subTest(voice=voice):
                 SessionConfig(model="live-1", audio={"output": {"voice": voice}})
         error = start_error({"model": "m", "audio": {"output": {"voice": "no-such-voice"}}})
@@ -87,11 +85,44 @@ class ErrorRoutingTests(SessionCase):
 
     async def test_an_error_no_command_caused_goes_to_every_connection(self):
         await self.start(responses_config())
-        await self.session.adapter_view.report_error("The speech service failed.")
+        await self.session.adapter_view.report_error("The speech service failed.", fatal=True)
         for subscriber in tuple(self.session.fanout.subscribers.values()):
             await subscriber.queue.join()
         self.assertEqual(self.primary.kinds()[-1], "error")
         self.assertEqual(self.sideband.kinds()[-1], "error")
+
+    async def test_a_recoverable_failure_no_command_caused_is_logged_and_sent_as_info_never_as_an_error(self):
+        await self.start(responses_config())
+        records = []
+        sink = logger.add(lambda message: records.append(message.record), level="WARNING")
+        self.addCleanup(logger.remove, sink)
+        await self.session.adapter_view.report_error("The speech service failed.")
+        for subscriber in tuple(self.session.fanout.subscribers.values()):
+            await subscriber.queue.join()
+        for collector in (self.primary, self.sideband):
+            notice = collector.events[-1]
+            self.assertEqual(set(notice), {"type", "event_id", "code", "message"})  # the official info event
+            self.assertEqual(
+                (notice["type"], notice["code"], notice["message"]),
+                ("info", "pipeline_error", "The speech service failed."),
+            )
+            self.assertNotIn("error", collector.kinds())
+        logged = [(record["level"].name, record["message"]) for record in records]
+        self.assertIn(("WARNING", f"session={self.session.id} pipeline_error=The speech service failed."), logged)
+
+    async def test_a_failure_of_a_client_command_stays_an_error_for_that_command(self):
+        await self.start(responses_config())
+
+        async def take_thinking(text, client_event_id=None, delegation_id=None):
+            await self.session.adapter_view.report_error("The context could not be taken.", client_event_id)
+
+        self.engine.append_thinking = take_thinking
+        command = {"type": "session.thinking.append", "event_id": "t1", "delegation_id": None, "content": "x"}
+        await self.handle(command, self.sideband_key)
+        error = next(event for event in self.sideband.events if event["type"] == "error")
+        self.assertEqual((error["error"]["code"], error["client_event_id"]), ("pipeline_error", "t1"))
+        self.assertNotIn("info", self.sideband.kinds())
+        self.assertNotIn("error", self.primary.kinds())  # only the connection that sent the command
 
     async def test_a_detached_connections_command_is_dropped(self):
         await self.start(responses_config())
@@ -149,11 +180,6 @@ class StartedTests(SessionCase):
         info = await self.primary.wait_for("info")
         self.assertEqual(info["code"], "data_channel_permissions")
         self.assertEqual(self.primary.kinds()[:2], ["session.started", "info"])
-
-    async def test_an_unrestricted_session_gets_no_info_event(self):
-        await self.start(responses_config())
-        await asyncio.sleep(0.01)
-        self.assertNotIn("info", self.primary.kinds())
 
 
 class BackendSettingTests(unittest.TestCase):

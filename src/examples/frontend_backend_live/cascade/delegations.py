@@ -5,7 +5,8 @@
 
 The delegation part hands every event to :meth:`DelegationReader.on_delegation_event` by a plain call that only records
 or queues; the reader never reads a text to decide anything. Items are read from ``response.output_item.done``, since
-the forwarded lifecycle snapshots carry no output.
+the forwarded lifecycle snapshots carry no output; a backend call is also read at ``response.output_item.added``, where
+it starts running, and its ``done`` gives the official status it ended with.
 
 A ``previous_response_id`` on ``response.in_progress`` that names another delegation's response makes this delegation
 the taker of that one's work; the IM names the taker on every join, so the reader never guesses. Each response has a
@@ -50,7 +51,7 @@ def is_progress(item: dict) -> bool:
 
 
 class Results(Protocol):
-    """What the reader hands on, in order: implemented by the presenter's inbox, recorded in tests."""
+    """What the reader hands on, in order; the presenter's inbox implements it."""
 
     def ready(self, result: ReadyResult) -> None:
         """A ready result."""
@@ -147,6 +148,9 @@ class DelegationReader:
             return
         elif kind == "response.in_progress":
             self._runs(watched, response.get("previous_response_id"))
+        elif kind == "response.output_item.added":
+            self._release_line(watched)  # its response went on: the line it kept was progress
+            self._started(watched, event.get("item") or {})
         elif kind == "response.output_item.done":
             self._release_line(watched)  # its response went on: the line it kept was progress
             self._item(watched, event.get("item") or {})
@@ -225,6 +229,11 @@ class DelegationReader:
             else:
                 self._release_line(watched)
 
+    def _started(self, watched: Watched, item: dict) -> None:
+        """An item starts: a backend call, other than the display, runs now."""
+        if item.get("type") == "mcp_call" and item.get("server_label") != self.display_label:
+            self.worknote.call_started(watched.id, watched.response.id, item.get("id", ""), item.get("name", ""))
+
     def _item(self, watched: Watched, item: dict) -> None:
         seen, delegation_id, item_type = watched.response, watched.id, item.get("type")
         if item_type == "message" and item.get("status") == "completed" and is_progress(item):
@@ -239,13 +248,16 @@ class DelegationReader:
         elif item_type == "function_call":
             seen.calls += 1
             watched.tool_ran = True
-            self.worknote.called(delegation_id, seen.id, item.get("name", ""))
+            # The app runs it: it reads as running until the app's outputs come.
+            self.worknote.call_started(delegation_id, seen.id, item.get("id", ""), item.get("name", ""))
         elif item_type == "mcp_call" and item.get("server_label") == self.display_label:
             if item.get("status") == "completed":  # a display that failed is none, and no tool step either
                 self.display.shown(delegation_id, item)
         elif item_type == "mcp_call":
             watched.tool_ran = True
-            self.worknote.called(delegation_id, seen.id, item.get("name", ""))
+            self.worknote.call_ended(
+                delegation_id, seen.id, item.get("id", ""), item.get("name", ""), item.get("status", "")
+            )
             self.observe("delegation.backend_step", delegation_id=delegation_id, name=item.get("name", ""))
 
     def _progress(self, watched: Watched, text: str) -> None:
@@ -281,7 +293,7 @@ class DelegationReader:
             self.observe("delegation.waits_for_app", delegation_id=delegation_id)
         elif kind == "response.completed":
             if seen.finals:
-                self.worknote.ended(delegation_id)  # it leaves once its results are said
+                self.worknote.ended(delegation_id)  # it leaves once nothing of it waits to be heard
             if watched.taker is None and self._may_be_named(watched):
                 watched.awaits_taker = True  # the taker's naming may still come, on a stream of its own
             else:

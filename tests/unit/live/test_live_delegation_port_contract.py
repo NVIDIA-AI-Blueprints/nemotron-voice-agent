@@ -5,7 +5,7 @@
 
 """The gateway's two delegation parts against ``live.ports.DelegationPort``.
 
-Neither part has a known failure: the server delegation refuses a delegation made before ``listen()``.
+Both parts keep the contract; the server delegation refuses a delegation made before ``listen()``.
 """
 
 import unittest

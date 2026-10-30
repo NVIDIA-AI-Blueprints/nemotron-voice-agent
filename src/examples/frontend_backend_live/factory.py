@@ -40,10 +40,11 @@ from examples.frontend_backend_live.adapter.contract import ServiceStarting
 from examples.frontend_backend_live.config_manager.loader import EXAMPLE_DIR, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ExampleConfig, ModelEndpoint
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts.catalog import role_instructions
+from examples.frontend_backend_live.prompts.catalog import CATALOG_PATH, catalog_line, catalog_prompt, role_instructions
 from examples.frontend_backend_live.tables import pick
 from live.ports import SessionParts
 from live.protocol import ProtocolError, SessionConfig
+from utils import default_prompt_key, load_yaml_file
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.adapter.contract import (
@@ -55,6 +56,14 @@ if TYPE_CHECKING:
 # The delegation core's own file, beside config.yaml; CORE_CONFIG_PATH names another.
 CORE_CONFIG = EXAMPLE_DIR / "core.yaml"
 
+# The catalog's lines (prompts.yaml ``lines``) that the console sends: in client mode the silent note that work started
+# (``app_started``) and a failed delegation's line (``apology``, ``unclear``), the progress line of a slow tool batch
+# (``still_working``), and its append presets (``intro``, ``still_working``).
+CONSOLE_LINES = ("apology", "unclear", "still_working", "intro", "app_started")
+# The catalog's block of the console's other append presets (prompts.yaml ``console_presets``): by append type, a list
+# of [label, text]. It has no content, so the prompt list leaves it out.
+CONSOLE_PRESETS = "console_presets"
+
 # The root's reads and the core's build happen once, also when several sessions start together: a first call waits
 # for the build another thread has begun. Reentrant, because the core's build reads the root's state.
 _BUILDING = threading.RLock()
@@ -63,7 +72,7 @@ _BUILDING = threading.RLock()
 def once[T](build: Callable[[], T]) -> Callable[[], T]:
     """``build``, run once: later calls return its result, and concurrent first calls wait for the one build.
 
-    A build that raises is not kept, so the next call runs it again (a fixed file is read on the next use).
+    A build that raises is not kept, so the next call runs it again (a corrected file is read on the next use).
     ``cache_clear`` starts over.
     """
     cached = cache(build)
@@ -161,9 +170,15 @@ def endpoint_lookup(catalog: ExampleCatalog, slot: str, overrides: dict | None =
     return endpoints
 
 
-def backend_defaults(core: CoreSettings, endpoints: EndpointLookup) -> BackendTask:
-    """What a request leaves out: the default model of ``backend.slot`` and the instructions of ``backend.prompt``."""
-    return BackendTask(model=endpoints(None).model, instructions=role_instructions(core.backend.prompt), tools=[])
+def backend_defaults(
+    core: CoreSettings, endpoints: EndpointLookup, instructions: Callable[[str], str] = role_instructions
+) -> BackendTask:
+    """What a request leaves out: the default model of ``backend.slot`` and the instructions of ``backend.prompt``.
+
+    ``instructions`` reads the catalog entry that ``backend.prompt`` names: by default the entry and then the channel
+    context, as the UI bot's backend starts.
+    """
+    return BackendTask(model=endpoints(None).model, instructions=instructions(core.backend.prompt), tools=[])
 
 
 def core_client(core: DelegationCore) -> LocalResponsesClient:
@@ -178,10 +193,15 @@ def core_client(core: DelegationCore) -> LocalResponsesClient:
 
 @once
 def delegation_core() -> DelegationCore:
-    """The one delegation core of this process, built on first use from the core's own file; it blocks."""
+    """The one delegation core of this process, built on first use from the core's own file; it blocks.
+
+    It serves every Live client, whatever its tools, so a request with no instructions gets the entry that
+    ``backend.prompt`` names as written, with no channel context.
+    """
     state = root()
     endpoints = endpoint_lookup(state.catalog, state.core.backend.slot)
-    return build_core(state.core, endpoints=endpoints, defaults=backend_defaults(state.core, endpoints))
+    defaults = backend_defaults(state.core, endpoints, catalog_prompt)
+    return build_core(state.core, endpoints=endpoints, defaults=defaults)
 
 
 @once
@@ -226,8 +246,11 @@ async def describe() -> dict:
 
 
 def _describe() -> dict:
-    """The adapter's half, the core's half, the backend's models and instructions, and the console's sample tools."""
-    state, built = root(), delegation_core()
+    """The adapter's half, the core's half, the backend's models, and the console's sample.
+
+    The sample is the default talker, the UI bot's backend and its tools, and the lines and presets the console sends.
+    """
+    state, built, sample = root(), delegation_core(), console_sample()
     backend = state.core.backend
     default = endpoint_lookup(state.catalog, backend.slot)(None)
     frontend = state.adapter.describe(state.settings, state.catalog)
@@ -242,17 +265,62 @@ def _describe() -> dict:
             "base_url": default.base_url,
             "prompt": backend.prompt,
         },
-        "instructions": {**frontend.get("instructions", {}), "backend": role_instructions(backend.prompt)},
-        "sample_tools": sample_tools(),
+        "instructions": {"frontend": sample.talker, "backend": sample.instructions},
+        "sample_tools": sample.tools,
+        "lines": sample.lines,
+        "presets": sample.presets,
     }
 
 
-@once
-def sample_tools() -> list[dict]:
-    """The console's sample tools: those of the tool sources the UI bot's profile names, built by name.
+@dataclass(frozen=True)
+class ConsoleSample:
+    """What the console starts with: the default talker, the backend of ``ui_bot.core_config``, lines and presets."""
 
-    The console runs in the browser the demo that the UI bot runs on the server (the Bluebird Cafe), so it offers the
-    same tools; the Live core itself runs no server tools.
+    instructions: str  # the backend instructions of the UI bot's profile, as its backend starts
+    tools: list[dict]  # the tools of the tool sources that the profile names, built by name
+    lines: dict[str, str]  # the catalog's lines that the console sends, by name (CONSOLE_LINES)
+    presets: dict[str, list[list[str]]]  # the catalog's other append presets, by append type (CONSOLE_PRESETS)
+    talker: str  # the example catalog's default talker prompt, then the channel context
+
+
+@once
+def console_sample() -> ConsoleSample:
+    """The console's sample: the catalog's default talker, the UI bot's backend, and the catalog's lines and presets.
+
+    The console runs in the browser, with its own copy of the tools, the demo that the UI bot's profile
+    (``ui_bot.core_config``) names, so it starts with the example catalog's default talker prompt (the one that
+    ``utils.resolve_prompt`` falls back to), then the channel context, the same backend instructions and the
+    same tools. The Live frontend and core run no demo: they give a session or a request with no instructions their own
+    defaults.
+
+    Raises:
+        KeyError: The catalog has no line of a name in ``CONSOLE_LINES``.
+        ValueError: The catalog's ``console_presets`` block is malformed.
     """
-    sources = tool_sources(ui_bot_core(root().config).backend.tools)()
-    return [tool for source in sources for tool in source.tools()]
+    backend = ui_bot_core(root().config).backend
+    sources = tool_sources(backend.tools)()
+    tools = [tool for source in sources for tool in source.tools()]
+    lines = {name: catalog_line(name) for name in CONSOLE_LINES}
+    talker = role_instructions(default_prompt_key(load_yaml_file(CATALOG_PATH)))
+    return ConsoleSample(role_instructions(backend.prompt), tools, lines, console_presets(), talker)
+
+
+def console_presets() -> dict[str, list[list[str]]]:
+    """The catalog's ``console_presets`` block: by append type, the [label, text] presets the console offers.
+
+    A catalog without the block offers none.
+
+    Raises:
+        ValueError: The block is not a mapping of append type to a list of [label, text] pairs of text.
+    """
+    block = load_yaml_file(CATALOG_PATH).get(CONSOLE_PRESETS) or {}
+    if not isinstance(block, dict) or not all(
+        isinstance(entries, list) and all(map(_is_preset, entries)) for entries in block.values()
+    ):
+        raise ValueError(f"prompts.yaml {CONSOLE_PRESETS} must map each append type to a list of [label, text] pairs")
+    return block
+
+
+def _is_preset(entry: object) -> bool:
+    """Whether ``entry`` is one append preset: a [label, text] pair of text."""
+    return isinstance(entry, list) and len(entry) == 2 and all(isinstance(text, str) for text in entry)

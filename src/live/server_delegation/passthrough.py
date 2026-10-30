@@ -267,10 +267,9 @@ class ClientRoutes:
       the core, which judges it. At most ``MAX_OPEN_ROUTES`` are open; the oldest is dropped first.
     * The pending client input: the results (:data:`RESULTS`) and typed messages received and not yet passed on. A
       result is taken for any call a route names, whatever its output, repeats and mismatched types included: the core
-      judges them. They leave when the core accepts the request that carries them, and a result also
-      when its route closes. While a queued request carries them they are in flight, and no other ``response.create``
-      sends them again; a refusal keeps them. At most ``MAX_PENDING_RESULTS`` results and ``MAX_QUEUED_ITEMS`` typed
-      messages wait.
+      judges them. They leave when the core accepts the request that carries them, and a result also when its route
+      closes. While a queued request carries them they are in flight, and no other ``response.create`` sends them again;
+      a refusal keeps them. At most ``MAX_PENDING_RESULTS`` results and ``MAX_QUEUED_ITEMS`` typed messages wait.
 
     It keeps no rule about a request beyond the official ones of ``response.create`` (:meth:`requests`).
     """
@@ -365,7 +364,7 @@ class ClientRoutes:
         Every waiting response whose calls all have results is continued, one request each, the oldest first, with its
         results in call order; the newest also takes the typed messages, after its results. A response with only some
         of its results waits, with no error. With no response waiting, it is a typed run of the typed messages, which
-        may be none. What an earlier request carries now is not sent again.
+        may be none. What a queued request already carries is not sent again.
 
         Raises:
             ProtocolError: It would continue nothing while results are owed: ``function_call_outputs_required`` when
@@ -457,8 +456,8 @@ class ServerDelegation:
 
         ``view`` is the session's delegation view; ``None`` (the UI bot) means that no Live client listens, so nothing
         is relayed and no settings are sent. A conversation the core cannot create, or does not create within
-        ``CONVERSATION_SECONDS``, raises, which fails the session's start. Safe to call twice; a server
-        delegation that was closed opens nothing.
+        ``CONVERSATION_SECONDS``, raises, which fails the session's start. Safe to call twice; a server delegation that
+        was closed opens nothing.
         """
         if self._opened or self._closed:
             return
@@ -530,9 +529,9 @@ class ServerDelegation:
     async def delegate(self, input: list[dict]) -> str:
         """Delegate a request and return its delegation id once the core accepted it; a refusal raises.
 
-        The request takes its place in the session's order now, where ``offset_ms`` is read; the sender
-        sends it in turn. A caller that gives up before it is sent cancels it; one that gives up later still has its
-        events read, so no accepted work is left unread. No event reaches the frontend before this returns.
+        The request takes its place in the session's order now, where ``offset_ms`` is read; the sender sends it in
+        turn. A caller that gives up before it is sent cancels it; one that gives up later still has its events read, so
+        no accepted work is left unread. No event reaches the frontend before this returns.
 
         Raises:
             RuntimeError: The part is not open, is closing, or has no listener yet (``listen()`` comes first).
@@ -554,7 +553,7 @@ class ServerDelegation:
         return self.view.input_ms if self.view is not None else 0
 
     def _check_open(self) -> None:
-        """Every request names the session's conversation, which exists from open until close; none from step 2."""
+        """Each request names the session's conversation, which exists from open until close; none from close step 2."""
         if self._closing:
             raise RuntimeError("Session is closing")
         if self.conversation is None:
@@ -716,8 +715,8 @@ class ServerDelegation:
 
         It runs in the background, so settings never hold up the session's commands or audio. A setting the core
         refuses comes back as a nonfatal ``responses_validation_failed`` with its ``param`` and the settings event's
-        ``client_event_id``; the setting is kept. A core that cannot answer is logged, and nothing is
-        reported: the settings may be right.
+        ``client_event_id``; the setting is kept. A core that cannot answer is logged, and nothing is reported: the
+        settings may be right.
         """
         if self.conversation is None or self.view is None:
             return

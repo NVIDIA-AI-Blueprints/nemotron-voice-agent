@@ -6,11 +6,11 @@
 """Named texts and the instruction composer."""
 
 import unittest
+from dataclasses import replace
 
-from delegation_core.im.input import compose, task_request
+from delegation_core.im.input import compose
 from delegation_core.im.results import SpeakDisplay
 from tests.unit.delegation_core.helpers import (
-    CORE_SETTINGS,
     DEFAULTS,
     TEXTS,
     IMCase,
@@ -24,46 +24,37 @@ from tests.unit.delegation_core.helpers import (
 class ComposeTests(unittest.TestCase):
     def test_the_order_is_the_instructions_then_the_voice_note_then_the_format_note(self):
         self.assertEqual(compose("Be brief.", "VOICE", "FORMAT"), "Be brief.\nVOICE\nFORMAT")
-
-    def test_an_empty_note_adds_nothing_and_today_s_v1_composes_byte_for_byte(self):
-        self.assertEqual(compose("Be brief.", "", ""), "Be brief.")
-        self.assertEqual(compose("Be brief.\n", TEXTS.voice_notes["v1"]), "Be brief.\n")
-        self.assertIsNone(compose(None, ""))
-
-    def test_v2_composes_as_todays_join_did(self):
-        note = TEXTS.voice_notes["v2"]
+        note = TEXTS.voice_notes["default"]  # each note on a line of its own
         self.assertEqual(compose("Be brief.", note), "Be brief.\n" + note.strip())
 
-    def test_task_request_keeps_the_settings_and_composes_the_instructions(self):
-        request = task_request(DEFAULTS, "VOICE")
-        self.assertEqual(request["instructions"], "Do the task.\nVOICE")
-        self.assertEqual((request["model"], request["tools"], request["tool_choice"]), ("test/model", [], "auto"))
+    def test_an_empty_note_adds_nothing_and_keeps_the_instructions_byte_for_byte(self):
+        self.assertEqual(compose("Be brief.", "", ""), "Be brief.")
+        self.assertEqual(compose("Be brief.\n", ""), "Be brief.\n")
+        self.assertIsNone(compose(None, ""))
 
 
 class VoiceNoteTests(unittest.TestCase):
-    def test_v2_is_the_default(self):
-        self.assertEqual(CORE_SETTINGS.delegation.voice_note, "v2")
-
-    def test_v2_keeps_the_voice_channel_and_gains_the_owners_rules(self):
-        note = TEXTS.voice_notes["v2"]
+    def test_the_note_describes_the_voice_channel_and_how_speech_recognition_writes_ids(self):
+        note = " ".join(TEXTS.voice_notes["default"].split())
         for line in (
             "## Voice channel",
             "Write plain spoken sentences",
             "join them before using them in a tool",
-            "look it up before asking them to spell it",
-            "spoken numbers as digits",
-            "trust what the caller says over your own read-back",
-            "try it once more in lowercase",
-            "Try the ids you have before you transfer the caller",
-            "offer a transfer after a few failed",
-            "Do not ask for any check your instructions do not require",
-            "Finish every part of the request, and check the rules before each change",
-            "Ask for all missing details in one question",
-            "never ask for a detail the records already show",
-            "offer two or three options at a time",
+            "Speech recognition guesses capital letters, spacing and symbols",
+            "with spoken numbers as digits",
+            "and trust the caller's words over the assistant's read-backs.",
+            "Write an id in the form its tool describes.",
+            "you may retry once with only its letter case or separators changed; never try other letters or digits.",
+            "Then read back what you heard, letter by letter, and ask the caller to spell the part you are unsure of.",
+            "Once a lookup in this call has found what an id names, do not ask the caller for that id again.",
+            "Offer two or three options at a time",
         ):
             with self.subTest(line=line):
-                self.assertIn(line, " ".join(note.split()))
+                self.assertIn(line, note)
+        self.assertNotIn("likely written forms", note)  # no guessed variants of an id
+        for rule in ("transfer", "check the rules", "Finish every part", "the records already show"):
+            with self.subTest(rule=rule):
+                self.assertNotIn(rule, note)  # a task's or a domain's rules belong in the backend's own prompt
 
 
 class SessionInstructionTests(IMCase):
@@ -72,12 +63,12 @@ class SessionInstructionTests(IMCase):
         adapter = ScriptedAdapter([answer()])
         im = self.session(adapter, result_format=speak_display)
         await read_all(im.admit(ask("Find teas."), delegation_id="D1", settings={"instructions": "Be brief."}).stream)
-        expected = compose("Be brief.", TEXTS.voice_notes["v2"], TEXTS.result_formats["speak_display"])
+        expected = compose("Be brief.", TEXTS.voice_notes["default"], TEXTS.result_formats["speak_display"])
         self.assertEqual(adapter.runs[0].requests[0]["instructions"], expected)
 
-    async def test_a_request_without_instructions_gets_the_default_and_v1_adds_nothing(self):
+    async def test_a_request_without_instructions_gets_the_default_and_an_empty_note_adds_nothing(self):
         adapter = ScriptedAdapter([answer()])
-        im = self.session(adapter, voice_note="v1")
+        im = self.session(adapter, texts=replace(TEXTS, voice_notes={"default": ""}))
         await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream)
         self.assertEqual(adapter.runs[0].requests[0]["instructions"], DEFAULTS.instructions)
 
@@ -88,6 +79,6 @@ class SessionInstructionTests(IMCase):
         im = self.session(adapter)
         events = await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream)
         snapshots = [event["response"] for event in events if "response" in event]
-        expected = compose(DEFAULTS.instructions, TEXTS.voice_notes["v2"])
+        expected = compose(DEFAULTS.instructions, TEXTS.voice_notes["default"])
         self.assertEqual({snapshot["instructions"] for snapshot in snapshots}, {expected})
         self.assertEqual(adapter.runs[0].requests[0]["instructions"], expected)

@@ -9,7 +9,6 @@ import re
 import unittest
 
 from live.client_delegation import ClientDelegation
-from live.server_delegation import ServerDelegation
 
 
 class View:
@@ -56,19 +55,6 @@ class ClientDelegationTests(unittest.IsolatedAsyncioTestCase):
         await part.open(Checking())
         await part.delegate([])
         self.assertEqual(known, [True])
-
-    async def test_only_an_announced_string_id_is_known(self):
-        delegation_id = await self.part.delegate([])
-        for other in ("item_1", "", None, 5, {"id": delegation_id}):
-            with self.subTest(other=other):
-                self.assertFalse(self.part.knows(other))
-
-    async def test_it_says_where_the_work_goes_and_has_no_conversation_with_a_core(self):
-        self.assertEqual((self.part.target, self.part.conversation), ("client", None))
-        self.assertEqual(ServerDelegation.target, "responses")
-        self.part.listen(object())  # nothing follows an announcement, so a listener is never handed an event
-        await self.part.delegate([])
-        self.assertEqual([kind for kind, _ in self.view.events], ["session.delegation.created"])
 
     async def test_from_close_step_2_nothing_is_announced_and_after_close_delegate_raises(self):
         earlier = await self.part.delegate([])

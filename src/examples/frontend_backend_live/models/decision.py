@@ -3,8 +3,8 @@
 
 """The frontend model's output contract: one `{action, speech}` decision.
 
-The parser accepts every action of `TalkerAction`; what a call allows is its caller's to enforce (the talker's floor
-follows the prompt set's actions). Anything unusable delegates the original request: no tool has run at the talker
+The parser accepts every action of `TalkerAction`; what a call allows is its caller's to enforce (the talker's floor,
+the writer's wording). Anything unusable delegates the original request: no tool has run at the talker
 stage, so delegating can never repeat an action.
 """
 
@@ -18,8 +18,8 @@ from examples.shared.json_parsing import extract_json_object
 if TYPE_CHECKING:
     from .base import CallSpec
 
-# Routing speaks, delegates or, where the prompt set declares it, waits; commentary phrasing may also listen.
-TalkerAction = Literal["speak", "delegate", "wait", "listen"]
+# Routing speaks, delegates or waits; the writer speaks.
+TalkerAction = Literal["speak", "delegate", "wait"]
 ACTIONS = get_args(TalkerAction)
 # Why the parser could not use a decision, so a caller can tell such a delegation from the model's own choice.
 UNUSABLE = frozenset({"empty_output", "invalid_json", "invalid_decision", "incomplete_output"})

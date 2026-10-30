@@ -6,17 +6,19 @@
 """One wording for every ready result: ``WriterWording`` on the ``ResultWording`` port."""
 
 import asyncio
-import inspect
 import unittest
 
-from examples.frontend_backend_live.cascade.ports import ReadyResult, ResultWording, WordingNotes
-from examples.frontend_backend_live.cascade.writer.wording import WriterWording, as_written
+from examples.frontend_backend_live.cascade.ports import ReadyResult, WordingNotes
+from examples.frontend_backend_live.cascade.writer.plain_speech import plain_speech
+from examples.frontend_backend_live.cascade.writer.wording import Instruction, WriterWording, as_written
 from examples.frontend_backend_live.cascade.writer.writer import CommentaryWriter
+from examples.frontend_backend_live.models.chat_completions import ChatCompletionsFrontend
 from examples.frontend_backend_live.models.decision import TalkerDecision
 from examples.frontend_backend_live.prompts import get_prompt_set
-from tests.unit.cascade_helpers import ScriptedFrontend
+from tests.unit.cascade_helpers import CASCADE_ENDPOINT, FAST, ScriptedFrontend, _decision_chunks
+from tests.unit.core_helpers import FakeChat
 
-V2 = get_prompt_set("v2")
+DEFAULT = get_prompt_set("default")
 INSTRUCTIONS = "You are Remy."
 HISTORY = [{"role": "user", "content": "A latte and a croissant, please."}, {"role": "assistant", "content": "Sure."}]
 LATTE = ReadyResult("item_d1", "msg_1", "Added one large Latte ($5.50).")
@@ -32,7 +34,7 @@ class Recorder:
         self.events.append((kind, fields))
 
 
-def wording(script, *, timeout_seconds=1.0, prompts=V2):
+def wording(script, *, timeout_seconds=1.0, prompts=DEFAULT):
     frontend = ScriptedFrontend(script)
     observe = Recorder()
     words = WriterWording(
@@ -45,21 +47,18 @@ def wording(script, *, timeout_seconds=1.0, prompts=V2):
 
 
 class OneCallTests(unittest.IsolatedAsyncioTestCase):
-    def test_it_has_the_ports_one_member_with_its_signature(self):
-        port = inspect.signature(ResultWording.words)
-        self.assertEqual(inspect.signature(WriterWording.words).parameters.keys(), port.parameters.keys())
-
-    async def test_one_result_sends_the_request_the_presenter_sent(self):
+    async def test_one_result_sends_one_writer_request_with_the_frame_the_history_and_the_told_note(self):
         words, frontend, _ = wording([TalkerDecision("speak", "Your latte is in.")])
         notes = WordingNotes(told={"item_d1": "Let me add that."}, newer_requests=())
         self.assertEqual(await words.words([LATTE], notes), "Your latte is in.")
         (call,) = frontend.calls
-        self.assertEqual(call["instructions"], INSTRUCTIONS + "\n" + V2.commentary + V2.answer)
+        expected = DEFAULT.writer_framed(INSTRUCTIONS) + "\n" + DEFAULT.commentary + DEFAULT.answer
+        self.assertEqual(call["instructions"], expected)
         self.assertEqual(call["history"][:-1], HISTORY)
         self.assertEqual(
             call["history"][-1]["content"],
-            "Commentary update (reference data):\nAdded one large Latte ($5.50)."
-            '\n(you already told the caller: "Let me add that." -- do not repeat that, report only the result)',
+            "Update for the caller:\nAdded one large Latte ($5.50).\n"
+            '(the caller already heard: "Let me add that."; do not say that again)',
         )
         self.assertEqual((call["actions"], call["role"]), (("speak",), "writer"))
 
@@ -73,12 +72,13 @@ class OneCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(line, "Both are in; your total is nine twenty-five.")
         self.assertEqual(len(frontend.calls), 1)
         update = frontend.calls[0]["history"][-1]["content"]
-        self.assertTrue(
-            update.startswith("Commentary update (reference data):\n" + LATTE.speak + "\n\n" + CROISSANT.speak)
+        self.assertTrue(update.startswith("Update for the caller:\n" + LATTE.speak + "\n\n" + CROISSANT.speak))
+        self.assertIn(
+            '(the caller already heard: "Let me add that. And the croissant."; do not say that again)', update
         )
-        self.assertIn('(you already told the caller: "Let me add that. And the croissant."', update)
         self.assertNotIn("Unrelated.", update)
-        self.assertIn('still in progress: "Make it a large."', update)
+        self.assertTrue(update.endswith(DEFAULT.writer_notes.newer))  # the newer request's note, without its words
+        self.assertNotIn("Make it a large.", update)
 
     async def test_results_of_one_delegation_carry_its_told_note_once(self):
         words, frontend, _ = wording([TalkerDecision("speak", "Done.")])
@@ -117,23 +117,61 @@ class AsWrittenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await words.words([LATTE, CROISSANT], NO_NOTES), as_written([LATTE, CROISSANT]))
         self.assertEqual(observe.events[0], ("commentary.answer_forced", {"talker_action": "speak", "results": 2}))
 
-    async def test_a_writer_that_delegates_speaks_the_verified_text(self):
-        words, _, _ = wording([TalkerDecision("delegate", "")])
+    async def test_a_line_the_voice_already_said_is_no_wording_and_the_results_are_said_as_written(self):
+        words, _, observe = wording([TalkerDecision("speak", "Sure.")])  # the voice's own line in HISTORY
         self.assertEqual(await words.words([LATTE], NO_NOTES), LATTE.speak)
-
-    def test_as_written_skips_empty_results(self):
-        self.assertEqual(as_written([ReadyResult("d", "m", "  "), LATTE]), "Added one large Latte ($5.50).")
+        self.assertEqual(observe.events[0], ("commentary.answer_forced", {"talker_action": "speak", "results": 1}))
 
 
-class SetTests(unittest.IsolatedAsyncioTestCase):
-    async def test_v3_words_several_results_under_its_own_frame_and_label(self):
-        v3 = get_prompt_set("v3")
-        words, frontend, _ = wording([TalkerDecision("speak", "Both are in.")], prompts=v3)
-        await words.words([LATTE, CROISSANT], NO_NOTES)
-        call = frontend.calls[0]
-        self.assertTrue(call["instructions"].startswith(v3.writer_frame_before + INSTRUCTIONS))
-        self.assertIn("When it holds several results", call["instructions"])
-        self.assertTrue(call["history"][-1]["content"].startswith(v3.update_label))
+class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    """The writer's unusable output: the results said as written, cleaned for speech, and never instructions said."""
+
+    async def test_unusable_output_says_the_results_as_written_cleaned_for_speech(self):
+        words, _, observe = wording([TalkerDecision("delegate", "", {"recovery": "invalid_json"})])
+        order = ReadyResult("d1", "m1", "# Order\n- **Latte**\n- Scone")
+        self.assertEqual(await words.words([order], NO_NOTES), "Order. Latte. Scone.")
+        self.assertEqual(observe.events, [("commentary.answer_forced", {"talker_action": "delegate", "results": 1})])
+
+    async def test_unusable_output_for_instructions_says_their_fallback_never_the_instructions(self):
+        greeting = Instruction("", "c1", "Greet the caller as Remy", "Hi, I'm Remy. What can I get you?")
+        words, _, observe = wording([TalkerDecision("delegate", "", {"recovery": "invalid_json"})])
+        self.assertEqual(await words.words([greeting], NO_NOTES), "Hi, I'm Remy. What can I get you?")
+        self.assertEqual(observe.events, [("commentary.answer_forced", {"talker_action": "delegate", "results": 1})])
+
+    async def test_instructions_with_nested_list_markers_and_an_invalid_json_reply_say_the_fallback(self):
+        # The reply echoes the instructions with no JSON, so the parser reads it as unusable and the action says so.
+        instructions = "## 1. Greet the caller\n- - Greet the caller as Remy"
+        greeting = Instruction("", "c1", instructions, "Hi, I'm Remy. What can I get you?")
+        client = FakeChat(_decision_chunks(instructions))
+        observe = Recorder()
+        words = WriterWording(
+            CommentaryWriter(ChatCompletionsFrontend(CASCADE_ENDPOINT, FAST, client), DEFAULT),
+            lambda: (INSTRUCTIONS, list(HISTORY)),
+            timeout_seconds=1.0,
+            observe=observe,
+        )
+        self.assertEqual(await words.words([greeting], NO_NOTES), "Hi, I'm Remy. What can I get you?")
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(observe.events, [("commentary.answer_forced", {"talker_action": "delegate", "results": 1})])
+
+    async def test_a_reply_that_repeats_the_instructions_cleaned_for_speech_says_the_fallback(self):
+        instructions = "## 1. Greet the caller\n- - Greet the caller as Remy\n1. - Ask what they would like"
+        greeting = Instruction("", "c1", instructions, "Hi, I'm Remy. What can I get you?")
+        words, _, observe = wording([TalkerDecision("speak", plain_speech(instructions))])
+        self.assertEqual(await words.words([greeting], NO_NOTES), "Hi, I'm Remy. What can I get you?")
+        self.assertEqual(observe.events, [("commentary.answer_forced", {"talker_action": "speak", "results": 1})])
+
+    async def test_a_reply_that_repeats_instructions_whose_markers_emphasis_hid_says_the_fallback(self):
+        # One cleaning leaves such a marker ("1.", "-") and a second drops it: each cleaned once, the two differ.
+        hidden = ("**1.** Greet the caller as Remy\n**2.** Ask what they want", "`- Greet the caller as Remy`")
+        for instructions in hidden:
+            with self.subTest(instructions=instructions):
+                greeting = Instruction("", "c1", instructions, "Hi, I'm Remy. What can I get you?")
+                words, _, observe = wording([TalkerDecision("speak", plain_speech(instructions))])
+                self.assertEqual(await words.words([greeting], NO_NOTES), "Hi, I'm Remy. What can I get you?")
+                self.assertEqual(
+                    observe.events, [("commentary.answer_forced", {"talker_action": "speak", "results": 1})]
+                )
 
 
 if __name__ == "__main__":

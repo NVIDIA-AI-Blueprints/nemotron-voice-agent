@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Protocol
@@ -125,6 +126,7 @@ class LiveProtocolSession:
         core: CoreHook = no_core,
         codec: AudioCodec | None = None,
         max_session_seconds: int = 1800,
+        max_appends_per_minute: int = 64,
         on_closed: Callable[[LiveProtocolSession], Awaitable[None]] | None = None,
     ):
         """Create a session in the ``created`` state.
@@ -137,6 +139,8 @@ class LiveProtocolSession:
                 delegation on that client; a client-mode session builds a client delegation and never asks for it.
             codec: A primary WebSocket's wire audio codec, from the WebSocket edge; ``None`` on WebRTC.
             max_session_seconds: Lifetime after which the session expires.
+            max_appends_per_minute: The context appends the session accepts in any minute, the three kinds together;
+                one more is refused with ``rate_limit_exceeded``.
             on_closed: Awaited once after the session closed, for registry cleanup.
 
         Raises:
@@ -148,6 +152,10 @@ class LiveProtocolSession:
         # One delegation part, by the resolved delegation.type, which never changes during a session.
         self.delegation: DelegationPart = DELEGATION_PARTS[config.mode](core)
         self.max_session_seconds, self.on_closed = max_session_seconds, on_closed
+        self.max_appends_per_minute = max_appends_per_minute
+        # When the session accepted each recent context append (time.monotonic), oldest first: what the appends module
+        # counts against max_appends_per_minute.
+        self.recent_appends: deque[float] = deque()
         self.codec = codec
         self.status = "created"
         self.created_at = time.time()
@@ -245,7 +253,12 @@ class LiveProtocolSession:
             await self.fanout.send_to(connection, error_event(exc, client_event_id))
 
     async def report_error(self, message: str, client_event_id: str | None = None) -> None:
-        """Report a recoverable pipeline failure to the client: an ``error`` event with code ``pipeline_error``."""
+        """Report a pipeline failure to the client: an ``error`` event with code ``pipeline_error``.
+
+        It reports a fatal failure, which the session's close follows, or the failure of the client command
+        ``client_event_id``. A recoverable failure that no client command caused is an ``info`` notice instead
+        (:meth:`AdapterView.report_error`).
+        """
         logger.warning(f"session={self.id} pipeline_error={message}")
         await self.reply_error(ProtocolError(message, "pipeline_error"), client_event_id)
 
@@ -349,7 +362,7 @@ def _refuse_unless_allowed(kind: str, allowed: frozenset[str], part: str) -> Non
 class AdapterView:
     """The frontend adapter's narrow view of its session (:class:`live.ports.SessionPort`).
 
-    The adapter sends its transcripts, its reply audio and its errors, advances the input clock and asks for a close.
+    The adapter sends its transcripts, its reply audio and its failures, advances the input clock and asks for a close.
     It may send no other event type, and the rest of the session stays out of its reach.
     """
 
@@ -380,9 +393,18 @@ class AdapterView:
         """Send reply audio (mono PCM16) to the primary connection only; the event carries no ``event_id``."""
         await self._session.send_output_audio(pcm, sample_rate)
 
-    async def report_error(self, message: str, client_event_id: str | None = None) -> None:
-        """Report a recoverable failure as an ``error`` event with code ``pipeline_error``."""
-        await self._session.report_error(message, client_event_id)
+    async def report_error(self, message: str, client_event_id: str | None = None, *, fatal: bool = False) -> None:
+        """Report a failure, with code ``pipeline_error``.
+
+        The failure of the client command ``client_event_id`` is an ``error`` event for that command, and so is a
+        ``fatal`` failure. Any other failure is recoverable and no client command caused it: it is logged as a warning
+        and sent to every connection as an ``info`` notice, never as an ``error``.
+        """
+        if fatal or client_event_id is not None:
+            await self._session.report_error(message, client_event_id)
+            return
+        logger.warning(f"session={self.id} pipeline_error={message}")
+        await self._session.emit("info", code="pipeline_error", message=message)
 
     def request_close(self, reason: AdapterCloseReason) -> None:
         """Ask the session to close. The close is scheduled; this returns at once."""

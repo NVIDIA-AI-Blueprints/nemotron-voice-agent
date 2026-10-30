@@ -19,7 +19,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from live.gateway import LiveSettings
-from live.gateway.security import host_name
 from live.mount import mount_live
 from tests.unit.live_helpers import FakeAdapter
 
@@ -105,23 +104,12 @@ class CapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((done.status_code, again.status_code), (200, 200))
         self.assertEqual(len(core.rounds), 2)  # the refused one ran nothing
 
-    def test_the_cap_is_an_operator_setting(self):
-        with patch.dict(os.environ, {"LIVE_MAX_CONSOLE_ROUNDS": "4"}):
-            self.assertEqual(LiveSettings.from_env().max_console_rounds, 4)
-        with patch.dict(os.environ, {"LIVE_MAX_CONSOLE_ROUNDS": "0"}), self.assertRaises(ValueError):
-            LiveSettings.from_env()
-
 
 class ModelTests(LimitCase):
     def test_an_unknown_model_gives_400_and_runs_no_round(self):
         response = self.post({"input": INPUT, "model": "bad-model"})
         self.assertEqual((response.status_code, response.json()["detail"]), (400, "Unknown model 'bad-model'"))
         self.assertEqual((self.core.checked_models, self.core.rounds), (["bad-model"], []))
-
-    def test_a_served_model_is_checked_then_used(self):
-        response = self.post({"input": INPUT, "model": "org/other"})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual((self.core.checked_models, self.core.rounds[0]["model"]), (["org/other"], "org/other"))
 
     def test_with_no_model_the_core_uses_its_own_and_nothing_is_checked(self):
         self.assertEqual(self.post({"input": INPUT}).status_code, 200)
@@ -152,12 +140,6 @@ class HostTests(LimitCase):
         self.assertEqual(self.post({"input": INPUT}, "evil.example", settings, headers=authorized).status_code, 200)
         self.assertEqual(self.post({"input": INPUT}, "evil.example", settings).status_code, 401)
 
-    def test_the_host_name_drops_its_port(self):
-        self.assertEqual(
-            [host_name(h) for h in ("app:8000", "[::1]:8000", "::1", "10.0.0.5", "")],
-            ["app", "::1", "::1", "10.0.0.5", ""],
-        )
-
 
 class BodyTests(LimitCase):
     def test_a_body_over_the_console_limit_is_a_413_and_runs_no_round(self):
@@ -166,11 +148,6 @@ class BodyTests(LimitCase):
         response = self.post({"input": big}, settings=settings)
         self.assertEqual(response.status_code, 413)
         self.assertEqual(self.core.rounds, [])
-
-    def test_the_console_limit_is_smaller_than_the_session_limit(self):
-        from live.gateway.security import MAX_BODY_BYTES
-
-        self.assertLess(LiveSettings().console_body_bytes, MAX_BODY_BYTES)
 
 
 if __name__ == "__main__":

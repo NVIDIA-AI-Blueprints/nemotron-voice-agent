@@ -7,7 +7,7 @@
 import httpx
 from openai import InternalServerError
 
-from tests.unit.goldens.harness import GoldenCase, answer_round, chunk, decision, result_item, tool_call_round
+from tests.unit.goldens.harness import GoldenCase, chunk, decision
 
 # How often a round that always fails with a transient error is tried: the provider opens it once and retries it
 # backend.llm.provider_retries (2) times, and the run tries the round once more, with the same retries.
@@ -21,7 +21,7 @@ def server_error():
 
 
 class DelegationGoldens(GoldenCase):
-    """Delegations that do not go straight through: a round cut short, a failed one, and a second request."""
+    """Delegations that do not go straight through: a round cut short, and a failed one."""
 
     async def test_g3_a_round_cut_by_the_output_limit(self):
         """G3: a round cut by the output limit, with partial text.
@@ -60,37 +60,3 @@ class DelegationGoldens(GoldenCase):
         await self.wait_quiet()
         await self.close()
         self.assert_golden("G4")
-
-    async def test_g5_a_second_request_after_the_first_acted(self):
-        """G5: a second request after the first acted.
-
-        The first delegation calls the client's get_menu tool. While it waits for the output, the caller narrows the
-        request; the talker sees the open work in its prompt and delegates again with a lead-in. The steer conductor
-        joins the second request to the open Work: its words wait as steering, and the IM names the newer
-        request as the work's taker. The client returns the output; the Work goes on with the output and the
-        steering in one more round, which answers the narrowed request. The writer words that answer, with both
-        lead-ins as already told.
-        """
-        await self.serve(
-            frontend=[
-                decision("delegate", "Let me check."),  # the talker, first line
-                decision("delegate", "Okay, I'll narrow that down."),  # the talker, second line
-                decision("speak", "Our green teas are Matcha and Sencha."),  # the answer
-            ],
-            backend=[
-                tool_call_round("call_1", '{"category":"tea"}'),
-                answer_round("Our green teas are Matcha and Sencha."),
-            ],
-        )
-        await self.say("What teas do you have?")
-        first = await self.wait_for_call("get_menu")
-        # The first lead-in is spoken and written into the talker's context; the work waits for the client.
-        await self.wait_quiet()
-        await self.say("Actually, only green tea.")
-        # The second lead-in is spoken; the second request waits as steering of the open work.
-        await self.wait_quiet()
-        self.send(result_item(first["call_id"], '{"teas": ["Earl Grey", "Matcha", "Sencha"]}'))
-        self.send({"type": "response.create", "event_id": "continue_1"})
-        await self.wait_quiet()
-        await self.close()
-        self.assert_golden("G5")

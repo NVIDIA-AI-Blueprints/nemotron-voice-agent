@@ -5,7 +5,6 @@
 
 """The backend port against the core: its helpers, the control vocabulary, the core's settings and the tables."""
 
-import asyncio
 import json
 import tempfile
 import unittest
@@ -30,7 +29,6 @@ from delegation_core.backend.port import (
 from delegation_core.config import BackendChoice, CoreSettings, ModelEndpoint
 from delegation_core.im.input import BackendTask
 from delegation_core.tables import pick
-from tests.unit.contracts.backend import FakeDecisionTarget
 from tests.unit.contracts.responses import ResponsesClientContract
 from tests.unit.delegation_core.emulator import EmulatorSource
 
@@ -94,24 +92,11 @@ class PortHelperTests(unittest.TestCase):
         self.assertEqual(message_phase({"type": "message"}), "final_answer")
         self.assertEqual(message_phase({"type": "message", "phase": "commentary"}), "commentary")
 
-    def test_each_decision_applies_itself_to_the_matching_method(self):
-        target = FakeDecisionTarget()
-        decisions = [
-            Start(("d1",), ("a", "b")),
-            Steer("W1", ("d2",), "W1.2"),
-            Cancel("W1", "W1.1"),
-            Answer("d3", "Hi."),
-        ]
-
-        async def apply_all():
-            return [await decision.apply(target) for decision in decisions]
-
-        outcomes = asyncio.run(apply_all())
-        self.assertEqual(target.decisions, decisions)
-        self.assertEqual(outcomes[0], "Started W1 with 2 task(s).")
-
 
 # ------------------------------------------------------------------------------------------- the control vocabulary
+FAILED = "{name} broke: {error}"  # the answer to a control call that raised (texts.failed_output)
+
+
 def control_schemas():
     def schema(required, optional=()):
         properties = {name: {"type": "string"} for name in (*required, *optional)}
@@ -127,8 +112,11 @@ def control_schemas():
 
 class ControlVocabularyTests(unittest.TestCase):
     def test_each_control_call_makes_its_decision(self):
-        vocabulary = ControlVocabulary(control_schemas(), "Place the requests.")
-        self.assertEqual(vocabulary.prompt, "Place the requests.")
+        vocabulary = ControlVocabulary(control_schemas(), "Place the requests.", "Not applied: idle.", FAILED)
+        self.assertEqual(
+            (vocabulary.prompt, vocabulary.idle, vocabulary.failed),
+            ("Place the requests.", "Not applied: idle.", FAILED),
+        )
         self.assertEqual([tool["name"] for tool in vocabulary.conductor_tools()], list(control_schemas()))
         cases = [
             ("start_work", {"delegations": ["d1"]}, Start(("d1",))),
@@ -143,7 +131,7 @@ class ControlVocabularyTests(unittest.TestCase):
                 self.assertEqual(vocabulary.decision(name, json.dumps(arguments)), decision)
 
     def test_a_malformed_call_is_refused(self):
-        vocabulary = ControlVocabulary(control_schemas(), "Place the requests.")
+        vocabulary = ControlVocabulary(control_schemas(), "Place the requests.", "Not applied: idle.", FAILED)
         for name, arguments in (
             ("start_work", "{}"),
             ("start_work", '{"delegations": []}'),
@@ -159,31 +147,51 @@ class ControlVocabularyTests(unittest.TestCase):
         schemas = control_schemas()
         del schemas["steer_work"]["parameters"]["properties"]["work_id"]
         with self.assertRaisesRegex(ValueError, "steer_work"):
-            ControlVocabulary(schemas, "Place the requests.")
+            ControlVocabulary(schemas, "Place the requests.", "Not applied: idle.", FAILED)
         with self.assertRaisesRegex(ValueError, "exactly"):
             ControlVocabulary(
-                {name: schema for name, schema in control_schemas().items() if name != "cancel_work"}, "Place them."
+                {name: schema for name, schema in control_schemas().items() if name != "cancel_work"},
+                "Place them.",
+                "Not applied: idle.",
+                FAILED,
             )
 
 
 # ------------------------------------------------------------------------------------------------ the core's settings
 def texts():
     return {
-        "voice_notes": {"v1": "", "v2": "\n## Voice channel\n"},
+        "voice_notes": {"default": "\n## Voice channel\n"},
         "result_formats": {"plain": "", "speak_display": "Two parts."},
-        "handover_line": "Handled together.",
+        "handover_line": "Handled together ({delegation}).",
         "cancelled_line": "Stopped.",
         "unconfirmed_line": "Not confirmed.",
         "owed_output": "Outcome unknown.",
         "not_run_output": "Not run.",
         "stopped_output": "Stopped.",
         "clash_output": "Two of a name.",
+        "unknown_tool_output": "No {name}; try {offered}.",
+        "failed_output": "{name}: {error}",
+        "misrouted_output": "{name} is the app's.",
+        "repeated_call_output": "{output} (again)",
+        "cut_output": "[{chars} cut]",
+        "none": "none",
         "records_block": "Work so far:\n{records}",
         "closing_line": "Say where it stands.",
         "task_line": "Task: {task}",
-        "conductor_prompt": "Place the requests.",
+        "round_cap_note": "Answer now.",
+        "conductor_prompt": "Place the requests; {max_running} run at once.",
         "outcomes": {
-            key: key for key in ("started", "steered", "restarted", "cancel_requested", "ended", "answered", "refused")
+            **{key: key for key in ("started", "steered", "restarted", "cancel_requested", "ended", "answered")},
+            "refused": "refused: {reason}",
+        },
+        "refusal_reasons": {
+            "ended": "ended",
+            "unplaced": "not among {delegations}",
+            "no_work": "no {work}",
+            "no_task": "no {task} in {work}",
+            "no_open_work": "no open work",
+            "over_limit": "over {max_running}",
+            "idle": "idle",
         },
         "control_tools": control_schemas(),
         "work_tools": {
@@ -207,14 +215,28 @@ class CoreSettingsTests(unittest.TestCase):
         self.assertEqual((settings.backend.adapter, settings.backend.one_shot_adapter), ("llm", "llm"))
         self.assertEqual(dict(settings.backend.blocks["llm"]), {"conductor": "steer"})
         self.assertEqual(list(settings.backend.tools), ["cafe"])
-        self.assertEqual(settings.delegation.context_tokens, 24_000)
-        self.assertIsNotNone(settings.delegation.client_tool_timeout_seconds)
+        delegation = settings.delegation
+        self.assertEqual(
+            (
+                delegation.client_tool_timeout_seconds,
+                delegation.work_timeout_seconds,
+                delegation.backend_calls,
+                delegation.display_label,
+                delegation.records_max_works,
+                delegation.context_tokens,
+                delegation.tool_output_chars,
+            ),
+            (60.0, 600.0, "items", "delegation_core", 5, 24_000, 8000),
+        )
+        # The records may list no ended Work.
+        self.assertEqual(self.settings(delegation={"records_max_works": 0}).delegation.records_max_works, 0)
 
     def test_unknown_keys_fractions_and_missing_names_are_refused(self):
         cases = {
             "unknown key": {"delegation": {"max_pending": 3}},
             "a fraction": {"delegation": {"max_pending_delegations": 2.5}},
             "a boolean count": {"delegation": {"context_tokens": True}},
+            "no room for a tool output": {"delegation": {"tool_output_chars": 0}},
             "a negative wait": {"delegation": {"stop_timeout_seconds": -1}},
             "an unknown voice note": {"delegation": {"voice_note": "v9"}},
             "an unknown format": {"delegation": {"result_format": "html"}},
@@ -234,27 +256,44 @@ class CoreSettingsTests(unittest.TestCase):
         self.assertIsNone(settings.delegation.close_grace_seconds)
         self.assertIsNone(settings.delegation.work_timeout_seconds)
 
-    def test_the_im_keys_the_lanes_read(self):
-        delegation = self.settings().delegation
-        self.assertEqual(
-            (
-                delegation.work_timeout_seconds,
-                delegation.backend_calls,
-                delegation.display_label,
-                delegation.records_max_works,
-                delegation.tool_output_chars,
-            ),
-            (600.0, "items", "voiceclaw", 5, 8000),
-        )
-        self.assertEqual(self.settings(delegation={"records_max_works": 0}).delegation.records_max_works, 0)
-        with self.assertRaises(ValueError):
-            self.settings(delegation={"tool_output_chars": 0})
-
     def test_the_texts_keep_their_template_fields(self):
-        broken = texts()
-        broken["task_line"] = "Task:"
-        with self.assertRaisesRegex(ValueError, "task_line"):
-            CoreSettings.parse({"texts": broken, "backend": {"slot": "s", "prompt": "p"}})
+        cases = {
+            "a handover with no taker": ("handover_line", "Handled together.", "must hold {delegation}"),
+            "a brief with no task": ("task_line", "Task:", "must hold {task}"),
+            "an unknown tool with no names offered": ("unknown_tool_output", "No {name}.", "must hold {offered}"),
+            "a failure naming a field it is not given": ("failed_output", "{name}: {error} {why}", "not given"),
+            "a misrouted call with no name": ("misrouted_output", "The app's.", "must hold {name}"),
+            "a repeated call with no output": ("repeated_call_output", "Again.", "must hold {output}"),
+            "a conductor prompt with no limit": ("conductor_prompt", "Place them.", "must hold {max_running}"),
+            "a cut with no count": ("cut_output", "[cut]", "must hold {chars}"),
+            "a refusal with no reason": (
+                "outcomes",
+                {**texts()["outcomes"], "refused": "Not applied."},
+                "outcomes.refused must hold {reason}",
+            ),
+            "a refusal reason left out": ("refusal_reasons", {"ended": "ended"}, "refusal_reasons must hold exactly"),
+            "a reason with no work": (
+                "refusal_reasons",
+                {**texts()["refusal_reasons"], "no_work": "no such work"},
+                "no_work must hold {work}",
+            ),
+            "a limit with no number": (
+                "refusal_reasons",
+                {**texts()["refusal_reasons"], "over_limit": "too many"},
+                "over_limit must hold {max_running}",
+            ),
+            "no round-cap note": ("round_cap_note", " ", "round_cap_note must be non-empty"),
+        }
+        for name, (key, value, message) in cases.items():
+            broken = {**texts(), key: value}
+            with self.subTest(name), self.assertRaisesRegex(ValueError, message):
+                CoreSettings.parse({"texts": broken, "backend": {"slot": "s", "prompt": "p"}})
+
+    def test_a_refusal_is_the_refused_outcome_with_its_reason(self):
+        given = {**texts(), "outcomes": {**texts()["outcomes"], "refused": "Not applied: {reason}"}}
+        settings = CoreSettings.parse({"texts": given, "backend": {"slot": "s", "prompt": "p"}})
+        self.assertEqual(settings.texts.refusal("no_task", task="W1.7", work="W1"), "Not applied: no W1.7 in W1")
+        self.assertEqual(settings.texts.refusal("ended"), "Not applied: ended")
 
 
 class ProfileTests(unittest.TestCase):
@@ -275,7 +314,7 @@ class ProfileTests(unittest.TestCase):
                 {
                     "extends": "core.yaml",
                     "delegation": {"result_format": "speak_display", "client_tool_timeout_seconds": None},
-                    "texts": {"conductor_prompt": "Place them by the records."},
+                    "texts": {"conductor_prompt": "Place them by the records, {max_running} at once."},
                     "backend": {"adapter": "llm-agent", "llm-agent": {"max_running": 3}},
                 },
             )
@@ -285,8 +324,8 @@ class ProfileTests(unittest.TestCase):
             settings = CoreSettings.load(harness)
         self.assertEqual(settings.backend.adapter, "harness")
         self.assertEqual(sorted(settings.backend.blocks), ["llm", "llm-agent"])
-        self.assertEqual(settings.texts.conductor_prompt, "Place them by the records.")
-        self.assertEqual(settings.texts.handover_line, "Handled together.")
+        self.assertEqual(settings.texts.conductor_prompt, "Place them by the records, {max_running} at once.")
+        self.assertEqual(settings.texts.handover_line, "Handled together ({delegation}).")
         self.assertEqual(settings.delegation.result_format, "speak_display")
         self.assertIsNone(settings.delegation.client_tool_timeout_seconds)
 
@@ -307,10 +346,6 @@ class TableTests(unittest.TestCase):
         self.assertEqual(pick({"llm": 1}, "llm", "backend adapter"), 1)
         with self.assertRaisesRegex(ValueError, r"Unknown backend adapter 'hermes'; known: harness, llm"):
             pick({"llm": 1, "harness": 2}, "hermes", "backend adapter")
-
-    def test_the_adapter_table_names_the_three_adapters_and_loads_each_on_use(self):
-        self.assertEqual(sorted(ADAPTERS), ["harness", "llm", "llm-agent"])
-        self.assertTrue(all(callable(load) for load in ADAPTERS.values()))
 
     def test_every_adapter_of_the_table_loads_its_source(self):
         # Each adapter is built, so each entry loads the source class its package exports.

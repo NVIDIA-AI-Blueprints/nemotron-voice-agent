@@ -47,9 +47,8 @@ def mount_live(
     """Add the live routes to ``app``; when the app shuts down, close their sessions, then the one core's client.
 
     This is additive: it registers routes under ``/v1/live`` and wraps the app's lifespan; it changes nothing else.
-    A server with several
-    uvicorn workers serves no live route, since a session lives in one process; either way, a last route answers 404 for
-    any other path under ``/v1/live``.
+    A server with several uvicorn workers serves no live route, since a session lives in one process; either way, a
+    last route answers 404 for any other path under ``/v1/live``.
 
     Args:
         app: The server's app.

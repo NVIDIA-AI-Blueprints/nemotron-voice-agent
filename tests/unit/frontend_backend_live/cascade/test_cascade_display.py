@@ -25,7 +25,7 @@ class DisplayTests(Call):
         await self.turn("Order a latte.")
         self.emit("item_1", created("r1"), queued("r1"), in_progress("r1"))
         self.emit("item_1", message("Placing the order.", phase="commentary", item_id="c1"))
-        self.emit("item_1", mcp_call("voiceclaw", "show", output='{"order": "BB-42"}'))
+        self.emit("item_1", mcp_call("delegation_core", "show", output='{"order": "BB-42"}'))
         self.emit("item_1", message("Order BB-42 is placed.", item_id="m1"), completed("r1"))
         await self.said(2)
         self.assertEqual(

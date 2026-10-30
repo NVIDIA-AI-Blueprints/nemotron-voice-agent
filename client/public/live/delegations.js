@@ -5,7 +5,11 @@
 // adapter reads them (src/examples/frontend_backend_live/cascade/delegations.py). A `message` with phase `commentary`
 // is progress; `final_answer`, or no phase, is an answer. A completed `mcp_call` named `show` is the display. A
 // `previous_response_id` on `response.in_progress` names the older response whose work this delegation takes over.
-// Streamed text (`response.output_text.delta`) is never taken as the answer.
+// Streamed text (`response.output_text.delta`) is never taken as the answer. The function calls a response ends with
+// run as one batch (runBatch).
+
+/** A batch of function calls still running after this many ms gets one progress line, when the page sends one. */
+export const PROGRESS_AFTER_MS = 1000;
 
 /** The IM's display tool (src/delegation_core/im/tools.py): its `mcp_call` carries what the screen shows. */
 export const DISPLAY_TOOL = "show";
@@ -39,6 +43,20 @@ export function progressLines(items) {
     .filter((item) => item.type === "message" && (item.status ?? "completed") === "completed" && isProgress(item))
     .map(messageText)
     .filter((text) => text.trim());
+}
+
+/**
+ * Run `calls` together with `run(call)` and return their results in order. With `slow`, a batch still running after
+ * PROGRESS_AFTER_MS calls `slow()` once, unless `signal` stopped the call; the timer is cleared as the batch ends,
+ * before this returns, so nothing it sends can come between the batch's outputs and their continuation.
+ */
+export async function runBatch(calls, run, { slow = null, signal }) {
+  const timer = slow && setTimeout(() => { if (!signal.aborted) slow(); }, PROGRESS_AFTER_MS);
+  try {
+    return await Promise.all(calls.map(run));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const safeParse = (text) => { try { return JSON.parse(text); } catch { return text; } };

@@ -4,7 +4,7 @@
 """The ports between the live gateway and the parts that serve a session: types and their rules.
 
 A composition root mounts the routes with ``live.mount.mount_live``. Its :data:`AdapterFactory` builds each session's
-parts (:class:`SessionParts`), and its ``core`` hook builds, on first use, the one delegation-core client the gateway
+parts (:class:`SessionParts`), and its ``core`` hook builds, on first use, the one delegation core client the gateway
 holds (``live.server_delegation.responses_client.ResponsesClient``); a client-mode session never asks for it. The
 frontend adapter (:class:`FrontendAdapter`) hears and speaks to the caller and reports back through
 :class:`SessionPort`. The session builds its delegation part (:class:`DelegationPart`) from ``DELEGATION_PARTS`` by its
@@ -47,8 +47,14 @@ class SessionPort(Protocol):
     async def send_output_audio(self, pcm: bytes, sample_rate: int) -> None:
         """Send reply audio (mono PCM16 at :data:`EXCHANGE_RATE`) to the primary connection only; no ``event_id``."""
 
-    async def report_error(self, message: str, client_event_id: str | None = None) -> None:
-        """Report a recoverable failure as an ``error`` event with code ``pipeline_error``."""
+    async def report_error(self, message: str, client_event_id: str | None = None, *, fatal: bool = False) -> None:
+        """Report a failure, with code ``pipeline_error``.
+
+        The failure of the client command ``client_event_id`` is an ``error`` event for that command, and so is a
+        ``fatal`` failure, after which the adapter asks to close. Any other failure is recoverable and no client
+        command caused it: it is logged as a warning and sent as an ``info`` notice, never as an ``error``, which a
+        client may take as the end of the session.
+        """
 
     def request_close(self, reason: AdapterCloseReason) -> None:
         """Ask the session to close. The close is scheduled; this returns at once."""
@@ -110,7 +116,7 @@ class DelegationEvents(Protocol):
       ``response.in_progress`` when work runs for it;
     * carries items, read from ``response.output_item.done``: messages with ``phase`` (``commentary`` is progress, each
       ``final_answer`` is one ready result, several allowed), ``mcp_call`` items for tools the backend ran (``show``
-      with server label ``voiceclaw`` carries display, never spoken), and ``function_call`` items for the app;
+      with server label ``delegation_core`` carries display, never spoken), and ``function_call`` items for the app;
     * ends with exactly one terminal: ``response.completed``, ``response.failed`` (an ``error`` object) or
       ``response.incomplete`` (status ``cancelled`` and no reason at close; a reason such as ``max_output_tokens``
       otherwise). A ``completed`` whose output has function calls waits for the app; one with no item answers a late
@@ -211,7 +217,7 @@ class DelegationView(Protocol):
     It gives the part only what the part reads of the session's settings, each read when asked (never copied): the
     ``delegation.responses`` block each request carries, and the acknowledgement delay the part reports on its port.
     The client delegation uses only ``input_ms``, ``acknowledgement_delay_ms`` and ``emit``, for
-    ``session.delegation.created``. Both of its sides are the gateway's.
+    ``session.delegation.created``. Both sides of this port are in the gateway.
     """
 
     id: str  # the session's id, for each request's metadata
@@ -282,6 +288,7 @@ class SessionParts:
 # Builds the parts of a new session from its configuration, its transport (``webrtc`` or ``websocket``) and the
 # WebRTC peer (``None`` on a WebSocket). A factory raises ``ProtocolError`` to refuse a session.
 AdapterFactory = Callable[[SessionConfig, str, MediaConnection | None], Awaitable[SessionParts]]
-# Builds the gateway's one delegation-core client (``ResponsesClient``), or an awaitable of it. The gateway runs it
-# once, on first use, so a client-mode session never builds a core, and closes the client (``aclose``) at shutdown.
+# Builds the gateway's one delegation core client (``ResponsesClient``), or an awaitable of it. The gateway runs it
+# on first use (again after a failed build), so a client-mode session never builds a core, and closes the client
+# (``aclose``) at shutdown.
 CoreHook = Callable[[], Any]

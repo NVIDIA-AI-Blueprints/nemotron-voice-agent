@@ -17,7 +17,7 @@ from unittest.mock import patch
 from delegation_core.config import CoreSettings
 from examples.frontend_backend_live import factory
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
-from examples.frontend_backend_live.prompts.catalog import role_instructions
+from examples.frontend_backend_live.prompts.catalog import catalog_prompt
 from live.protocol import SessionConfig
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,
@@ -87,7 +87,7 @@ class RootTests(RootCase):
                 with self.assertRaisesRegex(ValueError, "the core's settings"):
                     factory.root()
                 with self.assertRaisesRegex(ValueError, "the core's settings"):
-                    factory.root()  # not cached: a fixed file is read on the next use
+                    factory.root()  # not cached: a corrected file is read on the next use
 
 
 class OneCoreTests(RootCase):
@@ -109,7 +109,9 @@ class OneCoreTests(RootCase):
         (settings, endpoints, defaults) = built[0]
         self.assertEqual(settings, CoreSettings.load(CONFIG_PATH.with_name("core.yaml")))
         self.assertEqual((defaults.model, defaults.tools), ("org/back", []))
-        self.assertEqual(defaults.instructions, role_instructions("thinker"))
+        # Any client: the generic entry as written, with none of the cafe demo's channel context.
+        self.assertEqual(defaults.instructions, catalog_prompt(settings.backend.prompt))
+        self.assertEqual(settings.backend.prompt, "backend")
         self.assertEqual(endpoints(None).base_url, "http://back/v1")
         self.assertEqual(endpoints("org/other").base_url, "http://o/v1")
 

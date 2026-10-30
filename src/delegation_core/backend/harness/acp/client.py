@@ -5,8 +5,8 @@
 
 Built on ``agent-client-protocol`` 0.9.0; ``initialize`` must answer protocol version 1. The client advertises no file
 system and no terminal. A permission request gets the configured
-:class:`~delegation_core.backend.harness.protocol.PermissionAnswer`, or ``cancelled`` once its session was cancelled,
-as ACP requires. Behavior ACP leaves to the agent goes through its agent class.
+:class:`~delegation_core.backend.harness.protocol.PermissionAnswer`, or ``cancelled`` while its session's cancelled
+turn runs, as ACP requires. Behavior ACP leaves to the agent goes through its agent class.
 
 **Order.** The SDK runs each notification in its own task, so ``session_update`` callbacks may run after the response
 that followed them. The client reads updates with the connection's stream observer instead, in wire order, so every
@@ -54,7 +54,7 @@ from .agent import AcpAgent
 from .transports import Transport
 from .updates import SessionUpdates
 
-CLIENT_INFO = Implementation(name="voiceclaw-harness", version="1")
+CLIENT_INFO = Implementation(name="delegation-core-harness", version="1")
 SESSION_UPDATE = CLIENT_METHODS["session_update"]
 # Why the connection ended, as the prompts it ends say: lost on the agent's side, or closed by this side.
 LOST = "the connection to the agent is lost"
@@ -81,7 +81,7 @@ class _Client:
         self.owner = owner
 
     async def request_permission(self, options: list, session_id: str, tool_call: Any, **kwargs: Any) -> Any:
-        """Answer by the settings' permission answer; ``cancelled`` once the session was cancelled or retired."""
+        """Answer by the settings' permission answer; ``cancelled`` while its cancelled turn runs, or once retired."""
         session = self.owner.sessions.get(session_id)
         if session is None or session.cancelled:
             return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
@@ -101,7 +101,7 @@ class AcpSession:
     def __init__(self, client: AcpClient, session_id: str, mailbox: Mailbox, updates: SessionUpdates):
         """A session of ``client`` whose events, read by ``updates``, go to ``mailbox``."""
         self.client, self.id, self.mailbox, self.updates = client, session_id, mailbox, updates
-        self.cancelled = False  # a cancel was sent: permission requests are answered "cancelled" from now on
+        self.cancelled = False  # a cancel was sent: permission requests are answered "cancelled" until its turn ends
         self.retired = False
         self._numbers = itertools.count(1)
         self._outstanding: set[int] = set()
@@ -176,6 +176,7 @@ class AcpSession:
         self.mailbox.put_nowait(ended)
         self._ended.pop(ended.prompt).set()
         if not self._outstanding:
+            self.cancelled = False  # the cancelled turn has ended: the next prompt is a turn of its own
             self._idle.set()
 
     async def cancel(self) -> bool:
