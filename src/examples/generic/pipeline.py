@@ -3,7 +3,8 @@
 
 """Generic cascaded pipeline: NVIDIA STT -> Nemotron LLM -> NVIDIA TTS with function calling.
 
-Uses pipecat's built-in NVIDIA classes:
+Uses pipecat's built-in NVIDIA classes, including the standard continuous STT
+service with its default ``stop_history=320`` and no injected force-EOU audio:
   - NvidiaSTTService  (Nemotron Streaming ASR)
   - NvidiaLLMService  (NIM-compatible LLM)
   - NvidiaTTSService  (Magpie TTS)
@@ -33,7 +34,8 @@ from pipecat.processors.frameworks.rtvi.observer import RTVIObserverParams
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
-from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
+from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings, NvidiaTTSSynthesisMode
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport
 from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy
 from pipecat.workers.runner import WorkerRunner
 
@@ -42,8 +44,21 @@ from examples.generic.silent_reply import AddressedReplyMixin, SilentReplyFilter
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
+from examples.shared.evaluation_trace import (
+    EvaluationNvidiaLLMService,
+    EvaluationNvidiaSTTService,
+    EvaluationNvidiaTTSService,
+    create_evaluation_trace,
+)
+from examples.shared.llm_request_trace import LLMRequestTraceMixin
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
+from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
+from examples.shared.nvidia_tts_explicit_eof import (
+    EXPLICIT_EOF_COMPLETION_POLICY,
+    ExplicitEOFNvidiaTTSService,
+    explicit_eof_tts_options,
+)
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -71,6 +86,7 @@ from utils import (
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
+    nvidia_llm_api_key,
     parse_env_int,
     parse_json_dict,
     resolve_prompt,
@@ -87,6 +103,10 @@ class AddressedNvidiaLLMService(AddressedReplyMixin, NvidiaLLMService):
 
 class AddressedNvidiaStreamingLLMService(AddressedReplyMixin, NvidiaStreamingLLMService):
     """NvidiaStreamingLLMService that asks spoken turns for the multi-speaker JSON reply."""
+
+
+class AddressedEvaluationNvidiaLLMService(LLMRequestTraceMixin, AddressedNvidiaLLMService):
+    """Retain addressed reply behavior with optional native request capture."""
 
 
 GENERIC_INTRO_PROMPT = "Greet the user warmly, introduce yourself, and ask how you can help."
@@ -108,6 +128,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    evaluation_trace = create_evaluation_trace(body)
+    evaluation_kwargs = {"evaluation_trace": evaluation_trace} if evaluation_trace else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
         __file__,
@@ -121,6 +143,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
+    base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
+    llm_api_key = nvidia_llm_api_key(body.get("llm_id", ""), base_url=base_url)
 
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
@@ -153,14 +177,14 @@ async def bot(runner_args: RunnerArguments) -> None:
             f"Speaker diarization enabled: max_speakers={max_speakers or '(default)'}, "
             f"multi_speaker_support={multi_speaker_support}"
         )
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
+    stt_service = EvaluationNvidiaSTTService if evaluation_trace else NvidiaSTTService
+    stt = stt_service(**asr_kwargs, stop_history=resolve_stt_stop_history_ms(), **evaluation_kwargs)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
     )
 
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
-    base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
     extra_params = parse_json_dict(
         body.get("extra_params", "") or default_llm.get("extra_params", ""),
@@ -202,10 +226,13 @@ async def bot(runner_args: RunnerArguments) -> None:
         llm_service = AddressedNvidiaStreamingLLMService if streaming else AddressedNvidiaLLMService
     else:
         llm_service = NvidiaStreamingLLMService if streaming else NvidiaLLMService
+    if evaluation_trace and not streaming:
+        llm_service = AddressedEvaluationNvidiaLLMService if multi_speaker_support else EvaluationNvidiaLLMService
     llm = llm_service(
-        api_key=nvidia_api_key(),
+        api_key=llm_api_key,
         base_url=base_url,
         settings=llm_settings,
+        **(evaluation_kwargs if not streaming else {}),
     )
 
     tools_schema = None
@@ -258,7 +285,18 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
-    tts = NvidiaTTSService(**tts_kwargs)
+    tts_context_completion_policy = "native_idle"
+    if isinstance(transport, FastAPIWebsocketTransport) and tts_synthesis_mode == NvidiaTTSSynthesisMode.STITCHED:
+        # Match finite WebSocket processing: a live RPC completes through its
+        # response EOF and drained audio queue, rather than an audio idle gap.
+        tts_kwargs.update(explicit_eof_tts_options(tts_synthesis_mode))
+        tts_context_completion_policy = EXPLICIT_EOF_COMPLETION_POLICY
+    tts_service = EvaluationNvidiaTTSService if evaluation_trace else NvidiaTTSService
+    if not evaluation_trace and tts_context_completion_policy == EXPLICIT_EOF_COMPLETION_POLICY:
+        tts_service = ExplicitEOFNvidiaTTSService
+    tts = tts_service(**tts_kwargs, **evaluation_kwargs)
+    if evaluation_trace:
+        evaluation_trace.record("tts_context_completion_policy", policy=tts_context_completion_policy)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
@@ -266,7 +304,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"language={tts_language_code or '(pipecat default)'}, "
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
-        f"text_filters=[NemotronSpeechTextFilter]"
+        f"text_filters=[NemotronSpeechTextFilter], "
+        f"context_completion_policy={tts_context_completion_policy}"
     )
 
     messages = build_context_messages(base_system_content, system_prompt)
@@ -284,6 +323,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         assistant_aggregator = LLMAssistantAggregator(context)
     else:
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
+    if evaluation_trace:
+        evaluation_trace.bind_processor(stt, role="asr")
+        evaluation_trace.bind_processor(user_aggregator, role="user")
+        evaluation_trace.bind_processor(llm, role="llm")
     if speaker_processor and not multi_speaker_support:
         logger.info("Barge-in: final transcript from latched speaker only")
     logger.info(
@@ -396,7 +439,11 @@ async def bot(runner_args: RunnerArguments) -> None:
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=with_realtime_observers(latency_observer, transport=transport),
+        observers=with_realtime_observers(
+            latency_observer,
+            *([evaluation_trace] if evaluation_trace else []),
+            transport=transport,
+        ),
         rtvi_observer_params=(
             RTVIObserverParams(ignored_sources=[stt, speaker_processor]) if speaker_processor else None
         ),
@@ -457,4 +504,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(task)
-    await runner.run()
+    try:
+        await runner.run()
+    finally:
+        if evaluation_trace:
+            await asyncio.to_thread(evaluation_trace.close)
