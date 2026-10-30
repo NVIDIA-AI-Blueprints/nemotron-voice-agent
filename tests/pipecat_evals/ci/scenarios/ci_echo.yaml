@@ -17,4 +17,5 @@ turns:
         within_ms: 3000
       - event: response
         text_contains: "CI eval bot turn 1: hello from ci"
+        text_matches: "^CI eval bot turn 1: hello from ci$"
         within_ms: 3000

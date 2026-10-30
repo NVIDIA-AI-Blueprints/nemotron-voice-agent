@@ -26,6 +26,8 @@ from benchmark_core import (  # noqa: E402
     ProtocolClient,
     ProtocolConnectionClosed,
 )
+from pipecat.frames.protobufs import frames_pb2  # noqa: E402
+from pipecat.processors.frameworks.rtvi import models as RTVI  # noqa: E402
 from realtime_client import RealtimeClient, RealtimeFrameAdapter  # noqa: E402
 from realtime_transport import RealtimeProtocolError, RealtimeTransport  # noqa: E402
 from rtvi_client import RTVIClient, categorize_processor  # noqa: E402
@@ -235,17 +237,26 @@ class RealtimeSocketTests(unittest.IsolatedAsyncioTestCase):
             {
                 "metadata": {
                     "nvidia_metrics": (
-                        '{"asr_ttfb":[0.4,0.6],"llm_ttft":[0.2],"tts_ttfb":[0.1],'
-                        '"server_e2e":[0.9],"vad_smart_turn":[0.5],'
+                        '{"asr_ttfb":[0.4,0.6],"llm_ttfb":[0.2],"tts_ttfb":[0.1],'
+                        '"server_e2e":[0.9],"turn_taking_latency":[0.5],'
                         '"llm_processing_time":[0.6],"llm_tokens_per_sec":[20.0]}'
                     )
                 }
             }
         )
 
-        self.assertEqual(metrics["llm_ttft"], [0.2])
+        self.assertEqual(metrics["llm_ttfb"], [0.2])
         self.assertEqual(client.server_metric_samples["asr_ttfb"], [0.4, 0.6])
         self.assertEqual(client.server_metric_samples["llm_tokens_per_sec"], [20.0])
+
+    def test_realtime_client_reads_legacy_llm_ttft_as_canonical_ttfb(self) -> None:
+        client = self.realtime_client()
+        client.collecting_metrics = True
+
+        metrics = client.process_response_metrics({"metadata": {"nvidia_metrics": '{"llm_ttft":[0.2]}'}})
+
+        self.assertEqual(metrics, {"llm_ttfb": [0.2]})
+        self.assertEqual(client.server_metric_samples["llm_ttfb"], [0.2])
 
     def test_realtime_client_drains_welcome_by_default(self) -> None:
         protocol = self.realtime_client()
@@ -314,14 +325,14 @@ class RealtimeSocketTests(unittest.IsolatedAsyncioTestCase):
         encoded = json.dumps(
             {
                 "asr_ttfb": [float("nan"), float("inf"), 0.4],
-                "llm_ttft": {"average": float("-inf"), "count": 2},
+                "llm_ttfb": {"average": float("-inf"), "count": 2},
             }
         )
 
         metrics = client.process_response_metrics({"metadata": {"nvidia_metrics": encoded}})
 
         self.assertEqual(metrics, {"asr_ttfb": [0.4]})
-        self.assertEqual(client.server_metric_samples["llm_ttft"], [])
+        self.assertEqual(client.server_metric_samples["llm_ttfb"], [])
 
     async def test_rtvi_client_parses_symmetric_server_metrics(self) -> None:
         client = RTVIClient(
@@ -341,22 +352,31 @@ class RealtimeSocketTests(unittest.IsolatedAsyncioTestCase):
                         {"processor": "NvidiaSTTService#1", "value": 0.4},
                         {"processor": "LLMService#1", "value": 0.2},
                         {"processor": "TTSService#1", "value": 0.1},
-                    ]
+                    ],
+                    "ttfa": [
+                        {
+                            "processor": "TTSService#1",
+                            "ttfa": 0.15,
+                            "ttfb": 0.1,
+                            "leading_silence": 0.05,
+                        }
+                    ],
                 },
             }
         )
 
         self.assertIsInstance(client, ProtocolClient)
         self.assertEqual(client.server_metric_samples["asr_ttfb"], [0.4])
-        self.assertEqual(client.server_metric_samples["llm_ttft"], [0.2])
+        self.assertEqual(client.server_metric_samples["llm_ttfb"], [0.2])
         self.assertEqual(client.server_metric_samples["tts_ttfb"], [0.1])
+        self.assertEqual(client.server_metric_samples["tts_ttfa"], [0.15])
         self.assertEqual(len(client.rtvi_messages), 1)
 
     async def test_protocol_clients_populate_the_same_metric_schema(self) -> None:
         realtime = self.realtime_client()
         realtime.set_collecting_metrics(True)
         realtime.process_response_metrics(
-            {"metadata": {"nvidia_metrics": '{"asr_ttfb":[0.4],"llm_ttft":[0.2],"tts_ttfb":[0.1]}'}}
+            {"metadata": {"nvidia_metrics": ('{"asr_ttfb":[0.4],"llm_ttfb":[0.2],"tts_ttfb":[0.1],"tts_ttfa":[0.15]}')}}
         )
         rtvi = RTVIClient(
             stream_id="client",
@@ -374,7 +394,8 @@ class RealtimeSocketTests(unittest.IsolatedAsyncioTestCase):
                         {"processor": "NvidiaSTTService#1", "value": 0.4},
                         {"processor": "LLMService#1", "value": 0.2},
                         {"processor": "TTSService#1", "value": 0.1},
-                    ]
+                    ],
+                    "ttfa": [{"processor": "TTSService#1", "ttfa": 0.15, "ttfb": 0.1}],
                 },
             }
         )
@@ -556,6 +577,25 @@ class RealtimeSocketTests(unittest.IsolatedAsyncioTestCase):
         websocket.close.assert_awaited_once()
         self.assertIsNone(client.transport.websocket)
         self.assertIsInstance(client.transport, RTVITransport)
+
+    async def test_rtvi_client_ready_uses_installed_protocol_version(self) -> None:
+        transport = RTVITransport(
+            stream_id="client",
+            host="example.test",
+            port=443,
+            connect_timeout=1,
+        )
+        websocket = MagicMock()
+        websocket.send = AsyncMock()
+        websocket.close = AsyncMock()
+
+        with patch("rtvi_transport.websockets.connect", AsyncMock(return_value=websocket)):
+            await transport.__aenter__()
+            await transport.close()
+
+        frame = frames_pb2.Frame.FromString(websocket.send.await_args.args[0])
+        payload = json.loads(frame.message.data)
+        self.assertEqual(payload["data"]["version"], RTVI.PROTOCOL_VERSION)
 
 
 if __name__ == "__main__":

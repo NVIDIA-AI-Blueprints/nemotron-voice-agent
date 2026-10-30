@@ -6,7 +6,7 @@ concurrency: 1
 base_port: 7920
 runs_dir: ../../../eval-runs
 record: false
-spawn: "{python} {bot} -t eval --port {port}"
+spawn: "{python} {bot} --port {port}"
 
 suite:
   - bot: ci_bot.py

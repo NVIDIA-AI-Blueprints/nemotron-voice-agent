@@ -5,7 +5,7 @@
 
 Launch with Pipecat's runner, for example:
 
-    python src/eval_bot.py -t eval --port 7860
+    python src/eval_bot.py --port 7860
 """
 
 from __future__ import annotations

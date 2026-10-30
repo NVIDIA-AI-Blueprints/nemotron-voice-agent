@@ -283,6 +283,28 @@ class SpeakerDiarizationProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(frame.text, " Speaker 1: hello")
         self.assertEqual(processor.turn_fragments[0].speaker_id, 0)
 
+    async def test_native_per_speaker_frames_are_numbered_once_without_resplitting(self):
+        processor = await self._processor(multi_speaker_support=True)
+        result = _result(_word("hello", 7), _word("there", 9), _word("again", 7))
+        frames = [
+            TranscriptionFrame(text="hello", user_id="7", timestamp="", result=result, finalized=False),
+            TranscriptionFrame(text="there", user_id="9", timestamp="", result=result, finalized=False),
+            TranscriptionFrame(text="again", user_id="7", timestamp="", result=result, finalized=True),
+        ]
+
+        for frame in frames:
+            await processor.process_frame(frame, FrameDirection.DOWNSTREAM)
+
+        pushed = [call.args[0] for call in processor.push_frame.await_args_list]
+        self.assertEqual(
+            [frame.text for frame in pushed],
+            [" Speaker 1: hello", " Speaker 2: there", " Speaker 1: again"],
+        )
+        self.assertEqual(
+            [(fragment.speaker_id, fragment.text) for fragment in processor.turn_fragments],
+            [(0, "hello"), (1, "there"), (0, "again")],
+        )
+
     async def test_start_frame_resets_primary_speaker_for_new_connection(self):
         processor = await self._processor(multi_speaker_support=False)
         await processor.process_frame(_frame("one", _result(_word("one", 2))), FrameDirection.DOWNSTREAM)

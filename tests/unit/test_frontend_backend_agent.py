@@ -31,8 +31,8 @@ from examples.frontend_backend_agent.src.tool_handlers import (
     _normalize_arguments,
     build_handlers,
 )
-from examples.frontend_backend_agent.src.tts_filter import FrontendBackendAgentPronunciationTextFilter
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 
 
 def _today() -> date:
@@ -455,15 +455,15 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(epoch["duration_minutes"], 90)
 
     async def test_tts_filter_strips_asterisks_and_keeps_base_cleanup(self) -> None:
-        filtered = await NemotronSpeechTextFilter().filter("PNR **ABC123** <break> {AA123}")
+        filtered = await nemotron_speech_text_transform("PNR **ABC123** <break> {AA123}", "*")
 
         self.assertEqual(filtered, "PNR ABC123 break> AA123")
 
     async def test_tts_filter_expands_airline_codes_after_base_cleanup(self) -> None:
-        base_filtered = await NemotronSpeechTextFilter().filter(
-            "- Your PNR's status for **ABC123** on flight AA2072 from JFK to SFO."
+        base_filtered = await nemotron_speech_text_transform(
+            "- Your PNR's status for **ABC123** on flight AA2072 from JFK to SFO.", "*"
         )
-        filtered = await FrontendBackendAgentPronunciationTextFilter().filter(base_filtered)
+        filtered = await apply_frontend_backend_agent_pronunciation_for_tts(base_filtered, "*")
 
         self.assertEqual(
             filtered,

@@ -4,6 +4,7 @@
 # ruff: noqa: D100, D101, D102, D107
 
 import sys
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -46,6 +47,7 @@ from examples.shared.prewarm import (
     _parse_asr_config,
     intersect_session_languages,
     prewarm_asr,
+    prewarm_tts,
     validate_llm_session_language,
 )
 
@@ -82,6 +84,44 @@ class _FakeNvidiaSTTService:
 
 
 class SessionLanguageCatalogTests(unittest.TestCase):
+    def test_tts_prewarm_awaits_async_synthesis_config_in_worker(self) -> None:
+        class _FakeTTSService:
+            awaited = False
+
+            def _initialize_client(self) -> None:
+                pass
+
+            async def _create_synthesis_config(self):
+                self.awaited = True
+                return types.SimpleNamespace(model_config=[_FakeModelConfig("en-US")])
+
+        service = _FakeTTSService()
+        with (
+            patch("examples.shared.prewarm._create_tts_service", return_value=service),
+            patch("examples.shared.prewarm.config_store.get", return_value=None),
+            patch("examples.shared.prewarm.config_store.set"),
+        ):
+            config = prewarm_tts("tts.example:443", "Voice")
+
+        self.assertTrue(service.awaited)
+        self.assertEqual(config["languages"], ["en-US"])
+
+    def test_tts_prewarm_timeout_does_not_wait_for_worker_shutdown(self) -> None:
+        class _SlowTTSService:
+            def _initialize_client(self) -> None:
+                time.sleep(0.2)
+
+        started = time.monotonic()
+        with (
+            patch("examples.shared.prewarm._create_tts_service", return_value=_SlowTTSService()),
+            patch("examples.shared.prewarm._TTS_PREWARM_RPC_TIMEOUT_SECS", 0.01),
+            patch("examples.shared.prewarm.config_store.get", return_value=None),
+        ):
+            config = prewarm_tts("tts.example:443", "Voice")
+
+        self.assertLess(time.monotonic() - started, 0.1)
+        self.assertIn("timed out", config["error"])
+
     def test_empty_asr_catalog_falls_back_to_spanish_only(self) -> None:
         tts_config = {"languages": ["en-US", "es-US", "vi-VN", "zh-CN"], "voices": []}
 

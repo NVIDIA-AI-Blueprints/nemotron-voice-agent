@@ -184,7 +184,7 @@ def test_queued_prefill_keeps_history_stable_when_the_user_turn_is_committed() -
         # queued prefill frame, appending the user turn to the shared history.
         context.add_message({"role": "user", "content": "Hi there"})
         live = queued[0]
-        await service._sync_session(service._session_request_for(live.context), live.text)
+        await service._sync_session(await service._session_request_for(live.context), live.text)
         service._reset_response_state()
         stream = await service.get_chat_completions(context)
         async for _ in stream:
