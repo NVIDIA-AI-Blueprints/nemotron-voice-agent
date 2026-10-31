@@ -18,7 +18,11 @@ from unittest import mock
 from _fda_variants import variant  # noqa: E402
 from _fda_voice_fakes import PROFILES
 
-from examples.frontend_delegation_agent.core.config import DelegationConfigError, load_delegation_config
+from examples.frontend_delegation_agent.core.config import (
+    DelegationConfigError,
+    load_delegation_config,
+    with_proactive_max_override,
+)
 from examples.frontend_delegation_agent.core.sidecar import gateway_config as gc
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -106,6 +110,35 @@ class ShippedProfileTests(unittest.TestCase):
     def test_delay_is_env_configurable_in_the_browser_profile(self) -> None:
         with mock.patch.dict(os.environ, {"FDA_BACKEND_DELAY_S": "2.5"}):
             self.assertEqual(load_delegation_config(PROFILES / "browser_demo.yaml").backend.delay_seconds, 2.5)
+
+    def test_proactive_status_defaults_to_15_s_and_one_line_per_run(self) -> None:
+        clean = {k: v for k, v in os.environ.items() if k not in ("FDA_PROACTIVE_AFTER_S", "FDA_PROACTIVE_MAX_PER_RUN")}
+        for name in ("realtime_eval.yaml", "pipecat_realtime_eval.yaml"):
+            with self.subTest(profile=name), mock.patch.dict(os.environ, clean, clear=True):
+                proactive = load_delegation_config(PROFILES / name).output.proactive_status
+                self.assertEqual((proactive.enabled, proactive.after_s, proactive.max_per_run), (True, 15.0, 1))
+
+    def test_proactive_status_of_a_big_bench_audio_run(self) -> None:
+        # docker/docker-compose.fda-bba.yaml: a status line after 1.0 s of silence, at most 3 per backend run.
+        # max_per_run is applied after loading (Realtime sessions only), so the config hash stays as it was.
+        clean = {k: v for k, v in os.environ.items() if k not in ("FDA_PROACTIVE_AFTER_S", "FDA_PROACTIVE_MAX_PER_RUN")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            base = load_delegation_config(PROFILES / "pipecat_realtime_eval.yaml")
+        with mock.patch.dict(os.environ, {**clean, "FDA_PROACTIVE_AFTER_S": "1.0"}, clear=True):
+            loaded = load_delegation_config(PROFILES / "pipecat_realtime_eval.yaml")
+        config = with_proactive_max_override(loaded, {"FDA_PROACTIVE_MAX_PER_RUN": "3"})
+        proactive = config.output.proactive_status
+        self.assertEqual((proactive.enabled, proactive.after_s, proactive.max_per_run), (True, 1.0, 3))
+        self.assertEqual(config.config_hash, loaded.config_hash)
+        for unset in ({}, {"FDA_PROACTIVE_MAX_PER_RUN": ""}, {"FDA_PROACTIVE_MAX_PER_RUN": "  "}):
+            with self.subTest(environ=unset):
+                self.assertIs(with_proactive_max_override(base, unset), base)
+        for value in ("0", "11", "-1", "many", "1.5"):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(DelegationConfigError, "FDA_PROACTIVE_MAX_PER_RUN must be a whole number"),
+            ):
+                with_proactive_max_override(base, {"FDA_PROACTIVE_MAX_PER_RUN": value})
 
     def test_secrets_are_redacted_and_hash_is_stable(self) -> None:
         with mock.patch.dict(os.environ, {"NVIDIA_API_KEY": "sk-secret"}):

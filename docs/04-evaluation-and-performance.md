@@ -51,6 +51,8 @@ The following table shows accuracy (%) on Big Bench Audio for the LLM standalone
 
 Follow steps from [`benchmarking_tools/AA-BigBenchAudio-Eval/`](../benchmarking_tools/AA-BigBenchAudio-Eval/README.md) which describe the full pipeline (download → preprocess → inference → Riva transcription → LLM-judge scoring).
 
+Big Bench Audio can also run over the OpenAI Realtime API, for agents that serve only that API. Refer to [Realtime API Transport](../benchmarking_tools/AA-BigBenchAudio-Eval/README.md#realtime-api-transport) in the BigBench Audio Eval README and to the [Frontend Delegation Agent Runbook](../benchmarking_tools/AA-BigBenchAudio-Eval/RUNBOOK-FDA.md).
+
 ---
 
 ## Full-Duplex Behavior

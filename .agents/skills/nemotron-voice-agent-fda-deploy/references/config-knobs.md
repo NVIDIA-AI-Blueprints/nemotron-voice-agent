@@ -22,6 +22,15 @@ The LLM overlay sets the following on the voice service and removes `depends_on`
 | `FDA_GATEWAY_LOG` | `logs/fda_gateway_events.pipecat.jsonl` | The gateway event log, at the Hermes path |
 | `FDA_WORKER_LOG_DIR` | `logs/fda_workers_pipecat` | The backend traces, at the Hermes path |
 
+The optional Super VL overlay, `docker/docker-compose.fda-llm-super-vl.yaml`, switches the LLM backend's model. Use it only when the user asks for `nvidia/nvidia/nemotron-3.5-super-vl`. It goes after the LLM overlay and before the BBA overlay, for example `E="-f docker-compose.yml -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-llm-super-vl.yaml"`. It is for the LLM backend only (Hermes reads its model from `docker/fda/gateway.env`). It sets the following on the voice service:
+
+| Variable | Value | Meaning |
+| --- | --- | --- |
+| `BACKEND_LLM_MODEL` | `nvidia/nvidia/nemotron-3.5-super-vl` | The backend model in place of `nvidia/nvidia/nemotron-3-ultra` |
+| `FDA_BACKEND_REASONING_BUDGET` | `"0"` | Omits `reasoning_budget` from every backend request: the model rejects it with HTTP 400 `Unsupported parameter(s): reasoning_budget` |
+
+Reasoning stays on: `enable_thinking: true` and `llm.reasoning_effort` `medium` are still sent. To switch back to `nemotron-3-ultra`, rerun `up -d --build` with `$E` without the Super VL overlay.
+
 With `link: in_process`, the voice side loads the gateway file in `backend.gateway_config`, `${FDA_GATEWAY_CONFIG:-gateway.emulator.yaml}` in `delegation_agent.yaml`. Compose sets `FDA_GATEWAY_CONFIG=gateway.yaml` on the voice service, and the eval overlay sets `gateway.eval.yaml`; Hermes ignores it there. Both backends therefore read the same gateway settings, prompt features, and domains. `profiles/realtime_eval.yaml` also reads `FDA_BACKEND_LINK`.
 
 Gateway configuration sections (`config/gateway.yaml`):
@@ -58,7 +67,7 @@ A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (v
 
 ## Compose Variables
 
-`docker-compose.yml` sets every FDA variable of the voice service as a literal, so `.env` cannot change them, except `FDA_PROMPT_PROFILE`. Only the overlays change them. The eval overlay, `docker/docker-compose.fda-eval.yaml`, changes `FDA_PROFILE`, `PIPELINE_TLS`, the default of `FDA_PROMPT_PROFILE` on both services, and `FDA_GATEWAY_CONFIG` on both services. The LLM overlay sets the values in Backends above. The following table lists the voice service values:
+`docker-compose.yml` sets every FDA variable of the voice service as a literal, so `.env` cannot change them, except `FDA_PROMPT_PROFILE`. Only the overlays change them. The eval overlay, `docker/docker-compose.fda-eval.yaml`, changes `FDA_PROFILE`, `PIPELINE_TLS`, the default of `FDA_PROMPT_PROFILE` on both services, and `FDA_GATEWAY_CONFIG` on both services. The LLM overlay sets the values in Backends above. The BBA overlay, `docker/docker-compose.fda-bba.yaml`, sets only `FDA_VAD_STOP_SECS`, `FDA_PROACTIVE_AFTER_S`, and `FDA_PROACTIVE_MAX_PER_RUN`. The Super VL overlay, `docker/docker-compose.fda-llm-super-vl.yaml`, sets only `BACKEND_LLM_MODEL` and `FDA_BACKEND_REASONING_BUDGET`. The following table lists the voice service values:
 
 | Variable | Value | Meaning |
 | --- | --- | --- |
@@ -67,9 +76,12 @@ A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (v
 | `FDA_PROFILE` | `default` (`eval` with the overlay) | The deployment profile |
 | `FDA_MAX_SESSIONS` | `4` | `server.max_sessions`: one cap for browser sessions and a separate cap for Realtime sessions |
 | `FDA_BACKEND_DELAY_S` | `5` | The demo delay before each backend run (browser sessions only) |
-| `FDA_PROACTIVE_AFTER_S` | `15` | M1: one proactive status line after this many seconds of silence while the backend works |
+| `FDA_PROACTIVE_AFTER_S` | `15` (`"1.0"` with `docker/docker-compose.fda-bba.yaml`) | M1: a proactive status line after this many seconds of silence (from the end of the agent's speech) while the backend works. Interpolated into `output.proactive_status.after_s` of the loaded config, so it is in the `config hash` |
+| `FDA_PROACTIVE_MAX_PER_RUN` | `"1"` (`"3"` with `docker/docker-compose.fda-bba.yaml`) | Replaces `output.proactive_status.max_per_run` after loading, for Realtime sessions only (`with_proactive_max_override`); browser sessions ignore it. Whole number 1 to 10, else the Realtime runtime refuses to start with a `DelegationConfigError` naming the variable; empty keeps the file's 1. Not in the `config hash`. The BBA overlay sets it so status lines keep the BBA client (2 s stop rule) listening |
 | `FDA_EVENT_LOG` | `logs/fda_voice_events.pipecat.jsonl` | The voice event log |
 | `FDA_PROMPT_PROFILE` | `${FDA_PROMPT_PROFILE:-generic}` (`${FDA_PROMPT_PROFILE:-customer_service}` with the eval overlay) | The prompt profile, `config/prompts/<profile>/`. The only value `.env` can change |
+| `FDA_VAD_STOP_SECS` | `"0.8"` (`"0.5"` with `docker/docker-compose.fda-bba.yaml`) | Replaces `vad.stop_secs` of the eval Pipecat settings for Realtime sessions only; browser sessions and the `default` settings ignore it. Must be > 0 and ≤ 5 (else `PipecatSettingsError`); empty keeps the file's 0.8. Not in the `config hash`. The BBA overlay sets it for Big Bench Audio runs |
+| `FDA_BACKEND_REASONING_BUDGET` | `"1024"` (`"0"` with `docker/docker-compose.fda-llm-super-vl.yaml`) | `backend.request_overrides.extra_body.reasoning_budget` of `gateway.yaml` (`${FDA_BACKEND_REASONING_BUDGET:-1024}`): the `reasoning_budget` of every backend LLM request. `0` omits the parameter (a child gateway file cannot remove an inherited key, so 0 is the sentinel). Any other value must be a whole number ≥ 0, else `GatewayConfigError` naming the key. Only the voice service sets it, so it reaches the LLM backend; Hermes (`gateway.env`) does not set it and keeps 1024 |
 | `FRONTEND_LLM_MODEL`, `FRONTEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3.5-lightning`, `https://inference-api.nvidia.com/v1` | The frontend model of Realtime sessions and the default of browser sessions |
 | `FDA_BACKEND_URL` | `ws://default--fda-hermes.openshell.localhost:8080/v1/backend` (`ws://fda-hermes:8790/v1/backend` with the plain overlay) | The gateway, through the OpenShell gateway's network alias by default. Unused with `llm` |
 | `FDA_GATEWAY_CONFIG` | `gateway.yaml` (`gateway.eval.yaml` with the eval overlay) | The gateway file of the in-process backend (`llm`). Unused with Hermes |
@@ -127,7 +139,7 @@ The Pipecat settings files are `config/adapters/pipecat.yaml` (`default`) and `c
 | Key | `default` | `eval` |
 | --- | --- | --- |
 | `vad.confidence`, `vad.start_secs`, `vad.min_volume` | `null` | `null` |
-| `vad.stop_secs` | `null` | 0.8 |
+| `vad.stop_secs` | `null` | 0.8 (0.5 with the BBA overlay, Realtime sessions only; refer to `FDA_VAD_STOP_SECS`) |
 | `vad.audio_idle_timeout` (`VADProcessor`; 0 disables the wall-clock forced speech stop) | `null` | 0.0 |
 | `turn.user_speech_timeout` (`SpeechTimeoutUserTurnStopStrategy`) | `null` | 0.0 |
 | `turn.user_turn_stop_timeout` (`UserTurnProcessor`) | `null` | `null` |
@@ -149,14 +161,14 @@ The following table lists the shared knobs:
 | Frontend model | env `FRONTEND_LLM_MODEL`, `FRONTEND_LLM_BASE_URL`; `frontend.llm.*` | `nvidia/nvidia/nemotron-3.5-lightning`, thinking off |
 | Frontend tool choice, hedging, and timeout | `frontend.tool_choice`, `frontend.hedge_after_ms`, `frontend.timeout_ms` | `named`, 1500, 4000 |
 | Filler spoken when delegating | `delegation.speak_when_delegating` | `true` |
-| Silent frontend for single-turn evaluations such as VoiceBench (filler of delegated turns and M1 status line logged, never spoken; direct answers spoken; a silent turn that holds a request is delegated as a `task` with an empty filler, logged as `delegation_guard` with `guard=silent_delegated`, except empty turns, backchannels, pauses, liveness turns, and turns while WORKING) | `delegation.silent_frontend`, env `FDA_SILENT_FRONTEND` | `false`; only `docker/docker-compose.fda-silent-frontend.yaml` sets `true`. Never set it empty. With it on, the `config hash` differs |
+| Silent frontend for single-turn evaluations such as VoiceBench (filler of delegated turns and M1 status line logged, never spoken; direct answers spoken; a silent turn that holds a request is delegated as a `task` with an empty filler, logged as `delegation_guard` with `guard=silent_delegated`, except empty turns, backchannels, pauses, liveness turns, and turns while WORKING) | `delegation.silent_frontend`, env `FDA_SILENT_FRONTEND` | `false`; only `docker/docker-compose.fda-silent-frontend.yaml` sets `true`. Never set it empty. With it on, the `config hash` differs. Big Bench Audio records the full reply (filler and answer) and does not use it |
 | Guards | `delegation.guards.backend_question_needs_delegate`, `backchannel_words` | On, 17 words |
 | Steering | `backend.steer_mode` | `auto` (redirect during a model call, else steer) |
 | Status speech | `backend.status_verbalizer.{mode,timeout_ms}` | `llm` (template fallback), 3000 |
 | Output hold and stale policy | `output.hold_max_ms`, `output.on_stale` | 4000; keep answers and apologies, drop stale status lines and fillers |
 | Tool or instruction change after the agent exists | `session.update_after_start` | `error` |
 | Tool execution | `tools.executor` | `wire` (client executes, `eval`); `local` (server executes, browser profiles) |
-| Backend model (both backends) | `gateway.yaml` `backend.model`, `base_url`, `request_overrides`; env `BACKEND_LLM_MODEL`, `BACKEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3-ultra`, `enable_thinking: true`, budget 1024 |
+| Backend model (both backends) | `gateway.yaml` `backend.model`, `base_url`, `request_overrides`; env `BACKEND_LLM_MODEL`, `BACKEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3-ultra`, `enable_thinking: true`, budget 1024 (`FDA_BACKEND_REASONING_BUDGET`; `nvidia/nvidia/nemotron-3.5-super-vl` and no budget with the Super VL overlay, LLM backend only) |
 | Backend budgets (both backends) | `backend.max_iterations`, `run_budget_seconds`, `run_hard_deadline_s` | 30, 300 (soft), 330 (hard, gateway watchdog; kills a Hermes worker process) |
 | LLM backend client | `llm.reasoning_effort`, `request_timeout_s`, `max_retries` | `medium`, 180, 3 |
 | Worker processes | `workers.start_timeout_s`, `stop_timeout_s`, `kill_grace_s`, `warm`, `recovery.*` | 15, 12, 3, 0; respawn at most two per session |
@@ -168,7 +180,7 @@ The following table lists the switches of the evaluation fixes. The Python code 
 
 | Fix | Where | Default |
 | --- | --- | --- |
-| M1 proactive status | `output.proactive_status.{enabled,after_s,max_per_run}` (`after_s` from `FDA_PROACTIVE_AFTER_S`); lines in `prompts/<profile>/frontend.yaml` `status_proactive_lines` | On, 15 s, 1 per run |
+| M1 proactive status | `output.proactive_status.{enabled,after_s,max_per_run}` (`after_s` from `FDA_PROACTIVE_AFTER_S`; `max_per_run` of Realtime sessions from `FDA_PROACTIVE_MAX_PER_RUN`); lines in `prompts/<profile>/frontend.yaml` `status_proactive_lines` | On, 15 s, 1 per run (BBA overlay: 1.0 s, 3 per run) |
 | M3 spelled runs | `voice/*.yaml` `normalization.transcript.spelled_runs.{enabled,min_tokens,case}` | On, 3, `keep` |
 | M3 spelling hold | `delegation.spelling_hold.{enabled,hold_ms,complete_patterns}` | On, 1500 ms, `[]`; `auto` in `realtime_eval.yaml`; off in both Pipecat profiles |
 | M3 local "invalid ID" wording | `voice/*.yaml` `normalization.tool_arguments.invalid_message_key`, `escalate_invalid_message_key` | `tool_argument_invalid_readback`, `tool_argument_invalid_spell_all` (`voice/realtime_eval.yaml`) |

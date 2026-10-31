@@ -18,6 +18,10 @@
 #   docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
 #     -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-silent-frontend.yaml \
 #     --profile frontend-delegation-agent/single-gpu up -d --build
+#   # eval mode for Big Bench Audio: add the BBA overlay last (never with the silent-frontend overlay)
+#   FDA_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+#     -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-bba.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
 #
 # To switch from Hermes, first run `down` with the Compose files that started Hermes: this overlay moves the
 # Hermes services to an inactive profile, so an `up` or `down` with it neither stops nor starts them.

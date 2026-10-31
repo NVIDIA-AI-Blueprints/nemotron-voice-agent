@@ -302,9 +302,17 @@ services:
       FDA_MAX_SESSIONS: "4"
       FDA_BACKEND_DELAY_S: "5"
       FDA_PROACTIVE_AFTER_S: "15"
+      # Proactive status lines per backend run (output.proactive_status.max_per_run); the BBA overlay sets 3.
+      FDA_PROACTIVE_MAX_PER_RUN: "1"
       FDA_EVENT_LOG: logs/fda_voice_events.pipecat.jsonl
       FDA_PROMPT_PROFILE: ${FDA_PROMPT_PROFILE:-generic}
       FDA_SILENT_FRONTEND: "false"
+      # End-of-turn silence of OpenAI Realtime sessions, in seconds (vad.stop_secs of the eval settings).
+      # docker/docker-compose.fda-bba.yaml sets 0.5 for Big Bench Audio runs.
+      FDA_VAD_STOP_SECS: "0.8"
+      # reasoning_budget of every backend LLM request (config/gateway.yaml); 0 omits it.
+      # docker/docker-compose.fda-llm-super-vl.yaml sets 0 for a model that rejects the parameter.
+      FDA_BACKEND_REASONING_BUDGET: "1024"
       FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
       FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
       # The Hermes runtime's address (OpenShell: the gateway's routed host name; port 8080 is the

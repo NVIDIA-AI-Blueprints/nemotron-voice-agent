@@ -478,7 +478,7 @@ def build_gateway_config(merged: Mapping[str, Any], files: tuple[Path, ...] = ()
         tool_result_timeout_s=pick(b, "backend", "tool_result_timeout_s", float),
         steer_timeout_s=pick(b, "backend", "steer_timeout_s", float),
         status_timeout_s=pick(b, "backend", "status_timeout_s", float),
-        request_overrides=copy.deepcopy(dict(b.get("request_overrides") or {})),
+        request_overrides=_request_overrides(b.get("request_overrides")),
         prompts_path=prompts_path,
         backend_trace=pick(b, "backend", "backend_trace", bool),
     )
@@ -507,6 +507,27 @@ def build_gateway_config(merged: Mapping[str, Any], files: tuple[Path, ...] = ()
     )
     _cross_check(config)
     return config
+
+
+def _request_overrides(raw: Any) -> dict[str, Any]:
+    """``backend.request_overrides``; ``extra_body.reasoning_budget: 0`` omits the parameter.
+
+    Some models reject ``reasoning_budget`` (for example ``nvidia/nvidia/nemotron-3.5-super-vl``), and
+    a child file cannot remove an inherited key (``None`` keeps the base value), so ``0`` means "do not
+    send it". The value must be a whole number of tokens, 0 or more.
+    """
+    overrides = copy.deepcopy(dict(raw or {}))
+    extra = overrides.get("extra_body")
+    if isinstance(extra, Mapping) and "reasoning_budget" in extra:
+        budget = extra["reasoning_budget"]
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
+            raise GatewayConfigError(
+                "backend.request_overrides.extra_body.reasoning_budget must be a whole number of tokens "
+                f"(0 omits it), got {budget!r}"
+            )
+        if budget == 0:
+            overrides["extra_body"] = {key: value for key, value in extra.items() if key != "reasoning_budget"}
+    return overrides
 
 
 def _domains(raw: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:

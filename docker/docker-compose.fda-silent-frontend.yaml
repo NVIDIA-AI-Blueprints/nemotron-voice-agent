@@ -12,6 +12,8 @@
 # Each FDA filler and proactive status line is its own response, so both are logged and never spoken.
 # Direct answers are still spoken, and a turn the frontend leaves silent that holds a request is
 # delegated. Use it for single-turn evaluations only, never for multi-turn ones.
+# Big Bench Audio records the full reply (the filler and the backend's answer), so it never uses this
+# overlay; it uses docker/docker-compose.fda-bba.yaml instead.
 # Pick the prompt profile with FDA_PROMPT_PROFILE (for example general_qa).
 
 services:

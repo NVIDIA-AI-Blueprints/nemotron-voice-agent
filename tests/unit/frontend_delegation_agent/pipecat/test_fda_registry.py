@@ -26,6 +26,13 @@ from examples.frontend_delegation_agent.adapters.pipecat.profiles import (
     keepalive_mismatch,
     profile_name,
 )
+from examples.frontend_delegation_agent.adapters.pipecat.settings import (
+    VAD_STOP_SECS_ENV,
+    PipecatSettingsError,
+    load_pipecat_settings,
+    with_vad_stop_override,
+)
+from examples.frontend_delegation_agent.core.config import PROACTIVE_MAX_PER_RUN_ENV, DelegationConfigError
 from examples.frontend_delegation_agent.core.text.demo_tools import TOOLS
 from realtime.gateway import _SESSION_OWNED_PIPELINES
 
@@ -102,13 +109,51 @@ class RealtimeRuntimeTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_realtime_sessions_always_run_eval(self) -> None:
-        env = {"UVICORN_WS_PING_INTERVAL": "0", "FDA_PROFILE": "default"}
+        env = {
+            "UVICORN_WS_PING_INTERVAL": "0",
+            "FDA_PROFILE": "default",
+            VAD_STOP_SECS_ENV: "",
+            PROACTIVE_MAX_PER_RUN_ENV: "",
+        }
         with mock.patch.dict(os.environ, env):
+            os.environ.pop("FDA_PROACTIVE_AFTER_S", None)  # restored on exit; unset means the 15 s default
             runtime = runtime_module.realtime_runtime()
         self.assertEqual(runtime.profile, REALTIME_PROFILE)
+        proactive = runtime.config.output.proactive_status
+        self.assertEqual((proactive.after_s, proactive.max_per_run), (15.0, 1))
         self.assertIn(PROFILES[REALTIME_PROFILE].delegation_path, runtime.config.source_files)
         self.assertEqual(runtime.settings.summary()["vad"], {"stop_secs": 0.8, "audio_idle_timeout": 0.0})
         self.assertEqual(runtime.slots.max_sessions, runtime.config.voice.server.max_sessions)
+
+    def test_vad_stop_override_applies_to_realtime_sessions(self) -> None:
+        env = {"UVICORN_WS_PING_INTERVAL": "0", "FDA_PROFILE": "eval", VAD_STOP_SECS_ENV: "0.5"}
+        with mock.patch.dict(os.environ, env):
+            runtime = runtime_module.realtime_runtime()
+        # Only stop_secs changes; the other eval settings stay as the file sets them.
+        self.assertEqual(runtime.settings.summary()["vad"], {"stop_secs": 0.5, "audio_idle_timeout": 0.0})
+        self.assertEqual(runtime.settings.summary()["turn"], {"user_speech_timeout": 0.0})
+
+    def test_big_bench_audio_proactive_status_applies_to_realtime_sessions(self) -> None:
+        env = {
+            "UVICORN_WS_PING_INTERVAL": "0",
+            "FDA_PROFILE": "eval",
+            "FDA_PROACTIVE_AFTER_S": "1.0",
+            PROACTIVE_MAX_PER_RUN_ENV: "3",
+        }
+        with mock.patch.dict(os.environ, env):
+            runtime = runtime_module.realtime_runtime()
+        proactive = runtime.config.output.proactive_status
+        self.assertEqual((proactive.enabled, proactive.after_s, proactive.max_per_run), (True, 1.0, 3))
+
+    def test_invalid_proactive_override_refuses_realtime(self) -> None:
+        env = {"UVICORN_WS_PING_INTERVAL": "0", PROACTIVE_MAX_PER_RUN_ENV: "lots"}
+        with mock.patch.dict(os.environ, env), self.assertRaises(DelegationConfigError):
+            runtime_module.realtime_runtime()
+
+    def test_invalid_vad_stop_override_refuses_realtime(self) -> None:
+        env = {"UVICORN_WS_PING_INTERVAL": "0", VAD_STOP_SECS_ENV: "fast"}
+        with mock.patch.dict(os.environ, env), self.assertRaises(PipecatSettingsError):
+            runtime_module.realtime_runtime()
 
     def test_server_pings_refuse_realtime(self) -> None:
         with mock.patch.dict(os.environ, {"UVICORN_WS_PING_INTERVAL": "20"}), self.assertRaises(ProfileError):
@@ -146,6 +191,42 @@ class BotRoutingTests(unittest.IsolatedAsyncioTestCase):
             await bot_module.serve_realtime(SimpleNamespace(body={"protocol": "realtime"}, websocket=websocket))
         self.assertIn('"server_error"', sent[0])
         websocket.close.assert_awaited_once_with(code=1011, reason="profile error")
+
+
+class VadStopOverrideTests(unittest.TestCase):
+    """``FDA_VAD_STOP_SECS``: the Realtime sessions' end-of-turn silence (the Big Bench Audio overlay sets 0.5)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.eval_settings = load_pipecat_settings(PROFILES[REALTIME_PROFILE].pipecat_settings)
+
+    def test_unset_or_empty_keeps_the_eval_file_value(self) -> None:
+        for environ in ({}, {VAD_STOP_SECS_ENV: ""}, {VAD_STOP_SECS_ENV: "  "}):
+            with self.subTest(environ=environ):
+                settings = with_vad_stop_override(self.eval_settings, environ)
+                self.assertIs(settings, self.eval_settings)
+                self.assertEqual(settings.vad.stop_secs, 0.8)
+
+    def test_a_valid_value_replaces_stop_secs_only(self) -> None:
+        for raw, expected in (("0.5", 0.5), (" 0.5 ", 0.5), ("5", 5.0), ("0.05", 0.05)):
+            with self.subTest(raw=raw):
+                settings = with_vad_stop_override(self.eval_settings, {VAD_STOP_SECS_ENV: raw})
+                self.assertEqual(settings.vad.stop_secs, expected)
+                self.assertEqual(settings.vad.audio_idle_timeout, self.eval_settings.vad.audio_idle_timeout)
+                self.assertEqual(settings.turn, self.eval_settings.turn)
+                self.assertEqual(settings.source, self.eval_settings.source)
+        self.assertEqual(self.eval_settings.vad.stop_secs, 0.8)  # the loaded settings are not mutated
+
+    def test_an_invalid_value_names_the_variable(self) -> None:
+        for raw in ("fast", "0", "-0.5", "5.01", "nan", "inf"):
+            with self.subTest(raw=raw), self.assertRaisesRegex(PipecatSettingsError, VAD_STOP_SECS_ENV):
+                with_vad_stop_override(self.eval_settings, {VAD_STOP_SECS_ENV: raw})
+
+    def test_the_settings_loader_ignores_it(self) -> None:
+        # Browser UI sessions load their settings with load_pipecat_settings only.
+        with mock.patch.dict(os.environ, {VAD_STOP_SECS_ENV: "0.5"}):
+            self.assertIsNone(load_pipecat_settings(PROFILES[DEFAULT_PROFILE].pipecat_settings).vad.stop_secs)
+            self.assertEqual(load_pipecat_settings(PROFILES[REALTIME_PROFILE].pipecat_settings).vad.stop_secs, 0.8)
 
 
 if __name__ == "__main__":

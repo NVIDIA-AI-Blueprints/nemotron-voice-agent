@@ -15,7 +15,7 @@ E="-f docker-compose.yml -f docker/docker-compose.fda-eval.yaml"
 
 The backend must be the user's choice (ask, suggest `hermes`; refer to `SKILL.md`). Record the backend with every run, and do not mix backends inside one comparison unless the comparison is Hermes against `llm`.
 
-The eval overlay defaults the prompt profile to `customer_service` on both services. Do not set `FDA_PROMPT_PROFILE` for a benchmark run; check that the shell and `.env` do not set it (`printenv FDA_PROMPT_PROFILE` in the voice container prints `customer_service`). Only a VoiceBench run sets it (refer to the rule in `SKILL.md`).
+The eval overlay defaults the prompt profile to `customer_service` on both services. Do not set `FDA_PROMPT_PROFILE` for a benchmark run; check that the shell and `.env` do not set it (`printenv FDA_PROMPT_PROFILE` in the voice container prints `customer_service`). Only a VoiceBench run (the chosen profile) and a Big Bench Audio run (`general_qa`) set it (refer to the rules in `SKILL.md`).
 
 The Hermes runtime is OpenShell by default. Use the plain runtime only when the user asks for it, for example for an A/B slice. Record which runtime a run used, and do not mix runtimes inside one comparison.
 
@@ -56,6 +56,8 @@ Every Realtime session, in both profiles, runs `profiles/pipecat_realtime_eval.y
 | `vad.stop_secs` | 0.2 | 0.8 | Silero counts 800 ms of silence in audio chunks |
 | `vad.audio_idle_timeout` | 1.0 (wall clock) | 0 (off) | `VADProcessor` forces speech-stopped after 1 s without input audio, which ends the turn mid-utterance when the client's input stalls |
 | `turn.user_speech_timeout` | 0.6 (wall clock) | 0 | `SpeechTimeoutUserTurnStopStrategy` waits this long after the VAD stop |
+
+BBA exception: `FDA_VAD_STOP_SECS` replaces `vad.stop_secs` for Realtime sessions only (browser sessions and the `default` settings ignore it). `docker-compose.yml` sets `"0.8"` as a literal, so `.env` has no effect; only the BBA overlay, `docker/docker-compose.fda-bba.yaml`, sets `"0.5"`. Every other eval run keeps 0.8. The Pipecat settings are not part of the `config hash`. `session.created` still reports `silence_duration_ms: 800` (reporting only; it does not drive the VAD).
 
 `user_turn_stop_timeout` keeps its default (5 s, wall clock). It fires only while the user is not speaking, as a safety net. Do not raise `stop_secs` to make up for input stalls: a longer wait only adds latency, which a simulated user answers with pings and talk-over.
 
@@ -104,6 +106,8 @@ tail -n 1 logs/fda_voice_events.pipecat.jsonl
 
 The `Pipecat adapter settings` line must show a `settings_file` that ends in `adapters/pipecat.eval.yaml`, `"vad"` with `stop_secs` 0.8 and `audio_idle_timeout` 0.0, and `"turn"` with `user_speech_timeout` 0.0. The app log must show no `forcing speech stop` warning.
 
+BBA exception: a Big Bench Audio run (BBA overlay, `FDA_VAD_STOP_SECS=0.5`) must show `stop_secs` 0.5 instead. The other values of this check (`settings_file`, `audio_idle_timeout` 0.0, `user_speech_timeout` 0.0) stay the same. A BBA deployment that shows 0.8 fails the check: the BBA overlay is missing. Every other eval run must show 0.8. A BBA run must also log `proactive status enabled=True after_s=1 max_per_run=3` right after the `Pipecat adapter settings` line (every other run: `after_s=15 max_per_run=1`).
+
 ## 5. Point the Evaluation Client at FDA
 
 - URL: `ws://<host>:7860/v1/realtime`, model `nvidia/nemotron-realtime-frontend-delegation`.
@@ -132,7 +136,29 @@ docker compose $E --profile $P exec fda-hermes printenv FDA_PROMPT_PROFILE      
 - After one session, `logs/fda_voice_events.pipecat.jsonl` has `silent_frontend: true` in the `fda_session_start` settings and a `filler_silenced` record (reason `silent_frontend`) per delegated turn. `proactive_status_silenced` is logged once per backend run instead of the M1 status line. Direct answers are spoken.
 - Harness: profile `nemotron-fdh-local`, run configuration `configs/runs/voicebench-fdh-realtime-smoke.yaml` in `voice-agent-evaluation`. Do not change the evaluator.
 - The `config hash` of a silent run differs from a normal eval run, and so does a run with another prompt profile (the prompt paths are hashed). With the switch off and no profile set, the hash is unchanged.
-- To switch back, rerun `up -d --build` without the silent-frontend overlay and without `FDA_PROMPT_PROFILE`. Never use the overlay or another profile for other benchmark runs.
+- To switch back, rerun `up -d --build` without the silent-frontend overlay and without `FDA_PROMPT_PROFILE`. Never use the silent-frontend overlay for any other benchmark run, including Big Bench Audio. Only VoiceBench and Big Bench Audio set another prompt profile.
+
+### Big Bench Audio
+
+Big Bench Audio (BBA, `benchmarking_tools/AA-BigBenchAudio-Eval/`) streams each question with `speech-inference.py --transport realtime` and records everything FDA speaks within the client's unchanged stop rules (the filler, any proactive status lines, then the backend's answer) in `output.wav` as the final response. A BBA run names its configuration, so do not ask the backend or VoiceBench questions: `eval`, the LLM backend (Hermes is not supported: its per-session worker start can exceed the client's 30 s handshake limit), `FDA_PROMPT_PROFILE=general_qa`, the BBA overlay last, and never the silent-frontend overlay:
+
+```bash
+E="-f docker-compose.yml -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-bba.yaml"
+FDA_PROMPT_PROFILE=general_qa docker compose $E --profile $P up -d --build
+docker compose $E --profile $P exec frontend-delegation-agent-single-gpu \
+  printenv FDA_PROFILE PIPELINE_TLS FDA_PROMPT_PROFILE FDA_VAD_STOP_SECS FDA_PROACTIVE_AFTER_S FDA_PROACTIVE_MAX_PER_RUN FDA_BACKEND
+  # eval, false, general_qa, 0.5, 1.0, 3, llm
+```
+
+The BBA overlay also sets `FDA_PROACTIVE_AFTER_S=1.0` and `FDA_PROACTIVE_MAX_PER_RUN=3` (`output.proactive_status`; every other deployment keeps 15 and 1). While the backend works, the frontend speaks a fixed `status_proactive_lines` line (no LLM call) after 1.0 s of silence, at most 3 per backend run. The BBA client stops listening 2 s after the last audio, so each line restarts that wait and keeps the client listening for an answer of up to about 10 s. Recordings can hold status lines, such as "Still checking, one moment.", before the answer; the judge assesses the answer.
+
+- Run the NLTK, `/health`, and settings checks of section 3 with this `$E`.
+- From `benchmarking_tools/AA-BigBenchAudio-Eval/`, run one warm-up sample first (`--start 0 --end 0`): the first session also runs FDA's warm-up, which counts against the client's 30 s handshake limit. Then check the `Pipecat adapter settings` line for `stop_secs` 0.5 and the next line for `proactive status enabled=True after_s=1 max_per_run=3` (the BBA exception in section 4).
+- Full run: `uv run python speech-inference.py --input_dir ./datasets/bigbench_audio --inference --transport realtime --server-url http://127.0.0.1:7860`. Pass `--batch_size 4` (4 Realtime slots; a slot is freed when its client disconnects, and the client waits 1 s before its next sample). Rerun failed or `server_busy` samples with `--retry_samples`; the client does not retry.
+- Record the backend, the prompt profile, `FDA_VAD_STOP_SECS`, `FDA_PROACTIVE_AFTER_S`, `FDA_PROACTIVE_MAX_PER_RUN`, the `Pipecat adapter settings` line, the `proactive status` line, and the `config hash` (the Pipecat settings and `FDA_PROACTIVE_MAX_PER_RUN` are not in the hash; `FDA_PROACTIVE_AFTER_S` is).
+- Backend model variant: only when the user asks for `nvidia/nvidia/nemotron-3.5-super-vl`, add `-f docker/docker-compose.fda-llm-super-vl.yaml` right after the LLM overlay in `$E`. Then `printenv BACKEND_LLM_MODEL FDA_BACKEND_REASONING_BUDGET` prints `nvidia/nvidia/nemotron-3.5-super-vl` and `0`; record both as differences on the BBA condition card (`RUNBOOK-FDA.md`), because the scores are not comparable with the default `nemotron-3-ultra` run.
+- To switch back to Tau, rerun `up -d --build` without the BBA overlay and without `FDA_PROMPT_PROFILE`.
+- The operator runbook is `benchmarking_tools/AA-BigBenchAudio-Eval/RUNBOOK-FDA.md`.
 
 ## 6. Fingerprint and Hashes
 

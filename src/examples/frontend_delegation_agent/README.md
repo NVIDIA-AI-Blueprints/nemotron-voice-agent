@@ -10,7 +10,7 @@ The example is registered in [`examples_registry.yaml`](../../../examples_regist
 - Browser UI sessions over WebRTC or the UI's WebSocket transport, with the Real-Time Voice Inference (RTVI) protocol.
 - OpenAI Realtime (GA) sessions on the shared `/v1/realtime` route with the model `nvidia/nemotron-realtime-frontend-delegation`.
 
-It has one Docker Compose recipe, `frontend-delegation-agent/single-gpu`, an eval overlay, [`docker/docker-compose.fda-eval.yaml`](../../../docker/docker-compose.fda-eval.yaml), an LLM backend overlay, [`docker/docker-compose.fda-llm.yaml`](../../../docker/docker-compose.fda-llm.yaml), and a silent-frontend overlay for single-turn evaluations, such as VoiceBench, only, [`docker/docker-compose.fda-silent-frontend.yaml`](../../../docker/docker-compose.fda-silent-frontend.yaml), which goes after the eval overlay. `FDA_PROMPT_PROFILE` selects the [prompt profile](#prompt-profiles). For the step-by-step guide, refer to [Deploy the Frontend Delegation Agent](../../../docs/how-to/deploy-frontend-delegation-agent.md). AI agents load the [`nemotron-voice-agent-fda-deploy`](../../../.agents/skills/nemotron-voice-agent-fda-deploy/SKILL.md) skill to build, deploy, or evaluate the example.
+It has one Docker Compose recipe, `frontend-delegation-agent/single-gpu`, an eval overlay, [`docker/docker-compose.fda-eval.yaml`](../../../docker/docker-compose.fda-eval.yaml), an LLM backend overlay, [`docker/docker-compose.fda-llm.yaml`](../../../docker/docker-compose.fda-llm.yaml), and a silent-frontend overlay for single-turn evaluations, such as VoiceBench, only, [`docker/docker-compose.fda-silent-frontend.yaml`](../../../docker/docker-compose.fda-silent-frontend.yaml), which goes after the eval overlay. A Big Bench Audio overlay, [`docker/docker-compose.fda-bba.yaml`](../../../docker/docker-compose.fda-bba.yaml), goes after the LLM backend overlay, ends a Realtime user turn after 0.5 s of silence, and speaks up to 3 status lines for each backend run after 1.0 s of silence. Big Bench Audio records the full reply, so it never uses the silent-frontend overlay. `FDA_PROMPT_PROFILE` selects the [prompt profile](#prompt-profiles). For the step-by-step guide, refer to [Deploy the Frontend Delegation Agent](../../../docs/how-to/deploy-frontend-delegation-agent.md). AI agents load the [`nemotron-voice-agent-fda-deploy`](../../../.agents/skills/nemotron-voice-agent-fda-deploy/SKILL.md) skill to build, deploy, or evaluate the example.
 
 ## Architecture
 
@@ -44,9 +44,11 @@ The gateway configuration's `backend.kind`, set by the `FDA_BACKEND` environment
 
 The LLM backend uses the same backend prompts and handles the session control that voice needs, such as steer, redirect, interrupt, and tool-name repair. It uses the same model and endpoint, `BACKEND_LLM_MODEL` and `BACKEND_LLM_BASE_URL`, and `NVIDIA_API_KEY`. It has no sandbox: it runs in the voice container, which holds the real key. With the LLM backend overlay, the four Hermes and OpenShell services do not start, and the voice service loads the gateway configuration from `FDA_GATEWAY_CONFIG`: `gateway.yaml`, or `gateway.eval.yaml` with the eval overlay. Both backends therefore use the same gateway settings, prompt features, and domains. Never combine the LLM backend overlay with the plain runtime overlay.
 
+The optional Super VL overlay, [`docker/docker-compose.fda-llm-super-vl.yaml`](../../../docker/docker-compose.fda-llm-super-vl.yaml), switches the LLM backend's model to `nvidia/nvidia/nemotron-3.5-super-vl`. Pass it after the LLM backend overlay and before the Big Bench Audio overlay. The model rejects the `reasoning_budget` parameter, so the overlay also sets `FDA_BACKEND_REASONING_BUDGET=0`, which omits the parameter from every backend request. Reasoning stays on with `enable_thinking: true` and `llm.reasoning_effort` `medium`. The overlay applies to the LLM backend only. To switch back, redeploy without it. For details, refer to [Deploy the Frontend Delegation Agent](../../../docs/how-to/deploy-frontend-delegation-agent.md#change-the-backend-model-of-the-llm-backend).
+
 The gateway configuration has the following backend sections:
 
-- `backend:` holds the settings that every backend shares: `kind`, `model`, `base_url`, `api_key_env`, the run budgets and timeouts, `request_overrides`, `backend_trace`, and `prompts.path`.
+- `backend:` holds the settings that every backend shares: `kind`, `model`, `base_url`, `api_key_env`, the run budgets and timeouts, `request_overrides`, `backend_trace`, and `prompts.path`. The `request_overrides.extra_body.reasoning_budget` value comes from `FDA_BACKEND_REASONING_BUDGET`, which defaults to `1024`. The value must be a whole number of 0 or more, and `0` omits the parameter from the request.
 - `hermes:` holds the Hermes-only settings: `provider`, `context_length`, `load_soul_identity`, and `disable_streaming`.
 - `llm:` holds the LLM-only settings: `reasoning_effort`, `request_timeout_s`, and `max_retries`.
 
@@ -153,7 +155,7 @@ The following table lists the example's files and folders:
 
 ## Configuration Profiles
 
-Unless noted otherwise, every profile has 800 ms end-of-turn silence (the client's value is ignored), transcript normalization on, and no WebSocket keepalive ping. The following table lists the delegation profiles in `config/profiles/`:
+Unless noted otherwise, every profile has 800 ms end-of-turn silence (the client's value is ignored), transcript normalization on, and no WebSocket keepalive ping. Big Bench Audio runs are the exception: with the Big Bench Audio overlay, `FDA_VAD_STOP_SECS` sets 0.5 s for Realtime sessions. Every other eval run keeps 0.8 s. The following table lists the delegation profiles in `config/profiles/`:
 
 | Profile | Use |
 | --- | --- |
@@ -171,6 +173,10 @@ The Pipecat turn settings live in their own files, outside the shared delegation
 | `config/adapters/pipecat.yaml` | The `default` profile: every VAD and turn key is `null`, so Pipecat's defaults apply. |
 | `config/adapters/pipecat.eval.yaml` | The `eval` profile: Silero `stop_secs: 0.8`, `audio_idle_timeout: 0`, and `user_speech_timeout: 0`, so a turn ends after 0.8 s of silence counted in input audio. |
 
+The `FDA_VAD_STOP_SECS` environment variable replaces `vad.stop_secs` of the eval settings for OpenAI Realtime sessions only. Browser UI sessions and the `default` settings ignore it. The value must be greater than 0 and at most 5 seconds, and an empty or unset value keeps the file's 0.8. `docker-compose.yml` sets `0.8` as a literal value, so `.env` has no effect. Only the Big Bench Audio overlay, `docker/docker-compose.fda-bba.yaml`, sets `0.5`. Every other eval run keeps 0.8 s. The effective value appears in the `Pipecat adapter settings` line of the app log and in `session_start`. Like the other Pipecat settings, it is not part of the `config_hash`. `session.created` still reports `silence_duration_ms: 800`. That value is reported only and does not drive the VAD.
+
+The `FDA_PROACTIVE_MAX_PER_RUN` environment variable works the same way for `output.proactive_status.max_per_run`: it applies to OpenAI Realtime sessions only, after the configuration loads, so it is not part of the `config_hash`. The value must be a whole number from 1 to 10, or the Realtime runtime refuses to start with an error that names the variable. `docker-compose.yml` sets `1`, and only the Big Bench Audio overlay sets `3`. `FDA_PROACTIVE_AFTER_S` is part of the loaded configuration and of the `config_hash`. Compose sets `15`, and the Big Bench Audio overlay sets `1.0`. The app log shows the effective values after the `Pipecat adapter settings` line, for example `proactive status enabled=True after_s=1 max_per_run=3`.
+
 The skill's `config-knobs.md` reference lists every knob.
 
 ## Failure-Fix Switches
@@ -179,7 +185,7 @@ Each switch below is on in the YAML defaults (`delegation_agent.yaml`, `gateway.
 
 | Switch | Where | Fix |
 | --- | --- | --- |
-| `output.proactive_status` | `delegation_agent.yaml` | M1: one `status_proactive_lines` line after `after_s` of silence while WORKING (`FDA_PROACTIVE_AFTER_S`, default 15; calibrate it per host) |
+| `output.proactive_status` | `delegation_agent.yaml` | M1: a fixed `status_proactive_lines` line, with no LLM call, after `after_s` of silence (counted from the end of the agent's speech) while WORKING, at most `max_per_run` for each backend run (`FDA_PROACTIVE_AFTER_S`, default 15; calibrate it per host. `FDA_PROACTIVE_MAX_PER_RUN`, default 1, Realtime sessions only). The Big Bench Audio overlay sets 1.0 s and 3, so the status lines keep its client, which stops listening 2 s after the last audio, listening for a slower answer |
 | `normalization.transcript.spelled_runs`, `normalization.tool_arguments.escalate_invalid_message_key` | `voice/realtime_eval.yaml` (`voice/browser.yaml` has spelled runs only) | M3.1 and M3.3: spelled letters and digits are joined; the local "invalid ID" answer asks for a read-back, then for the whole ID |
 | `delegation.spelling_hold` | `delegation_agent.yaml` | M3.2: wait `hold_ms` before deciding a turn that ends mid-spelling. With `complete_patterns: auto`, `realtime_eval.yaml` never holds a value in the strict shape of an `id`, `*_id`, or `*_ids` example from the tool schemas. Off in both Pipecat profiles |
 | `delegation.replay_unheard_answer` and `prompt_features.replay_intent` | `delegation_agent.yaml` | M2 (experimental, off by default): replay an unheard answer on `request=status` in IDLE |
@@ -220,7 +226,7 @@ These switches are on in `realtime_eval.yaml`, `voice/realtime_eval.yaml`, `gate
 
 ## Silent-Frontend Switch
 
-Single-turn evaluations, such as VoiceBench, score only the first response of each case, and this agent speaks each filler and proactive status line as its own response. The following switch is off by default in both profiles and in the Python code:
+Single-turn evaluations, such as VoiceBench, score only the first response of each case, and this agent speaks each filler and proactive status line as its own response. Big Bench Audio records the full reply, the filler and the backend's answer, as the final response, so it does not use this switch. The following switch is off by default in both profiles and in the Python code:
 
 | Switch | Where | Effect |
 | --- | --- | --- |
@@ -248,6 +254,11 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
 # with the general_qa prompt profile
 FDA_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
   -f docker/docker-compose.fda-silent-frontend.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
+# Big Bench Audio: the eval overlay, the LLM backend overlay, then the BBA overlay (0.5 s VAD stop),
+# with the general_qa prompt profile and never the silent-frontend overlay
+FDA_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+  -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-bba.yaml \
   --profile frontend-delegation-agent/single-gpu up -d --build
 # plain runtime (baseline): add the plain overlay before the eval overlay, if any
 docker compose -f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml \

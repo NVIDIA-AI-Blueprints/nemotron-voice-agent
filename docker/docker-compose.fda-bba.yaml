@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Big Bench Audio runs of the Frontend Delegation Agent:
+#   - OpenAI Realtime sessions end a user turn after 0.5 s of silence in the audio, in place of the eval
+#     settings' 0.8 s (FDA_VAD_STOP_SECS replaces vad.stop_secs of config/adapters/pipecat.eval.yaml).
+#   - While the backend works, the frontend speaks a short status line after 1.0 s of silence, at most 3
+#     per backend run (output.proactive_status; docker-compose.yml sets 15 s and 1). The client stops
+#     listening 2 s after the last audio, so the status lines keep it listening for a slower answer.
+# FDA_VAD_STOP_SECS and FDA_PROACTIVE_MAX_PER_RUN apply to OpenAI Realtime sessions only; FDA_PROACTIVE_AFTER_S
+# is also read by the browser profile, but eval mode (the eval overlay) refuses browser UI sessions.
+# Apply last, after the eval overlay and the LLM backend overlay:
+#
+#   FDA_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml \
+#     -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml \
+#     -f docker/docker-compose.fda-bba.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#
+# Big Bench Audio records the frontend's reply and the backend's answer together, so never combine
+# this overlay with docker/docker-compose.fda-silent-frontend.yaml. Other evaluation runs, such as
+# Tau, keep 0.8 s: leave this overlay out for them. Refer to
+# benchmarking_tools/AA-BigBenchAudio-Eval/RUNBOOK-FDA.md.
+
+services:
+  frontend-delegation-agent-single-gpu:
+    environment:
+      FDA_VAD_STOP_SECS: "0.5"
+      FDA_PROACTIVE_AFTER_S: "1.0"
+      FDA_PROACTIVE_MAX_PER_RUN: "3"

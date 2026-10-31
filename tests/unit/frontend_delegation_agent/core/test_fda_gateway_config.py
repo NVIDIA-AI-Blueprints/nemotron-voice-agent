@@ -135,5 +135,59 @@ class GatewayConfigTest(unittest.TestCase):
         self.assertEqual(templates.render("backend_delegation_message", block="", text="hi"), "hi")
 
 
+class ReasoningBudgetTest(unittest.TestCase):
+    """``FDA_BACKEND_REASONING_BUDGET``: 1024 by default, 0 omits ``reasoning_budget`` from every request."""
+
+    def load(self, value: str | None, name: str = "gateway.yaml") -> dict:
+        env = {k: v for k, v in os.environ.items() if k != "FDA_BACKEND_REASONING_BUDGET"}
+        if value is not None:
+            env["FDA_BACKEND_REASONING_BUDGET"] = value
+        with mock.patch.dict(os.environ, env, clear=True):
+            return dict(gc.load_gateway_config(gc.CONFIG_DIR / name).backend.request_overrides)
+
+    def test_unset_and_empty_keep_1024(self) -> None:
+        for value in (None, ""):
+            for name in ("gateway.yaml", "gateway.eval.yaml"):
+                with self.subTest(value=value, config=name):
+                    self.assertEqual(
+                        self.load(value, name),
+                        {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 1024}},
+                    )
+
+    def test_a_number_replaces_the_budget(self) -> None:
+        self.assertEqual(self.load("512")["extra_body"]["reasoning_budget"], 512)
+
+    def test_zero_omits_the_parameter_and_keeps_thinking_on(self) -> None:
+        for name in ("gateway.yaml", "gateway.eval.yaml"):
+            with self.subTest(config=name):
+                self.assertEqual(
+                    self.load("0", name), {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}
+                )
+
+    def test_invalid_budgets_are_refused(self) -> None:
+        for value in ("-1", "1.5", "lots", "true"):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(gc.GatewayConfigError, "reasoning_budget must be a whole number"),
+            ):
+                self.load(value)
+
+    def test_the_llm_client_sends_no_budget_when_it_is_omitted(self) -> None:
+        from examples.frontend_delegation_agent.core.backends.llm.client import ChatClient
+
+        client = ChatClient(
+            base_url="https://example.invalid/v1",
+            api_key="k",
+            model="m",
+            timeout_s=1.0,
+            max_retries=0,
+            reasoning_effort="medium",
+            request_overrides=self.load("0"),
+        )
+        body = client.body([{"role": "user", "content": "hi"}], None)
+        self.assertEqual(body["extra_body"], {"chat_template_kwargs": {"enable_thinking": True}})
+        self.assertEqual(body["reasoning_effort"], "medium")
+
+
 if __name__ == "__main__":
     unittest.main()

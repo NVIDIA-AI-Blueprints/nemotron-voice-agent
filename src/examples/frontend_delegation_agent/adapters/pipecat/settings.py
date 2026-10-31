@@ -9,12 +9,17 @@ so the former server's fingerprint is unaffected by anything set here. Every key
 
 Selection: ``--pipecat-settings`` or ``FDA_PIPECAT_SETTINGS`` (a path, or a name
 relative to the example's ``config/`` directory), default ``adapters/pipecat.yaml``.
+
+``FDA_VAD_STOP_SECS`` replaces ``vad.stop_secs`` of the OpenAI Realtime sessions' settings
+(:func:`with_vad_stop_override`); the Big Bench Audio overlay sets it to ``0.5``.
 """
 
 from __future__ import annotations
 
+import math
 import os
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +28,8 @@ import yaml
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 DEFAULT_SETTINGS = "adapters/pipecat.yaml"
 SETTINGS_ENV = "FDA_PIPECAT_SETTINGS"
+VAD_STOP_SECS_ENV = "FDA_VAD_STOP_SECS"
+MAX_VAD_STOP_SECS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,3 +136,21 @@ def load_pipecat_settings(value: str | None = None) -> PipecatHeadSettings:
         )
     except TypeError as exc:
         raise PipecatSettingsError(f"{path}: {exc}") from exc
+
+
+def with_vad_stop_override(
+    settings: PipecatHeadSettings, environ: Mapping[str, str] | None = None
+) -> PipecatHeadSettings:
+    """``settings`` with ``vad.stop_secs`` from ``FDA_VAD_STOP_SECS``; unset or empty keeps the file's value."""
+    raw = (os.environ if environ is None else environ).get(VAD_STOP_SECS_ENV, "").strip()
+    if not raw:
+        return settings
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not 0.0 < value <= MAX_VAD_STOP_SECS:
+        raise PipecatSettingsError(
+            f"{VAD_STOP_SECS_ENV} must be a number of seconds in (0, {MAX_VAD_STOP_SECS:g}], got {raw!r}"
+        )
+    return replace(settings, vad=replace(settings.vad, stop_secs=value))

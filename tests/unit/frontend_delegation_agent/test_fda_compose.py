@@ -11,7 +11,10 @@
   ``FDA_PROMPT_PROFILE`` (the prompt profile), which both services get with the same never-empty default;
 * the voice service mentions Hermes only through ``FDA_BACKEND_URL`` and ``depends_on: fda-hermes``;
 * the eval overlay sets only ``environment`` keys on ``fda-hermes``, each one listed in ``gateway.env``;
-* the OpenShell runtime is the default, and the plain overlay overrides single fields only (Part B, step 10).
+* the OpenShell runtime is the default, and the plain overlay overrides single fields only (Part B, step 10);
+* only the Big Bench Audio overlay changes the Realtime end-of-turn silence (``FDA_VAD_STOP_SECS``) and the
+  proactive status (``FDA_PROACTIVE_AFTER_S``, ``FDA_PROACTIVE_MAX_PER_RUN``);
+* only the super-vl overlay changes the LLM backend's model and its reasoning budget (``FDA_BACKEND_REASONING_BUDGET``).
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ COMPOSE = REPO_ROOT / "docker-compose.yml"
 EVAL_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-eval.yaml"
 PLAIN_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-hermes-plain.yaml"
 LLM_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-llm.yaml"
+BBA_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-bba.yaml"
+SUPER_VL_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-llm-super-vl.yaml"
 CONTROLLER = REPO_ROOT / "docker" / "fda" / "openshell" / "controller.sh"
 GATEWAY_ENV = REPO_ROOT / "docker" / "fda" / "gateway.env"
 VOICE = "frontend-delegation-agent-single-gpu"
@@ -58,6 +63,10 @@ VOICE_SETTINGS = {
     # Read only when the voice service runs the backend itself (the LLM overlay).
     "FDA_GATEWAY_CONFIG": "gateway.yaml",
     "UVICORN_WS_PING_INTERVAL": "0",
+    # The eval settings' vad.stop_secs; only the Big Bench Audio overlay changes it.
+    "FDA_VAD_STOP_SECS": "0.8",
+    "FDA_BACKEND_REASONING_BUDGET": "1024",
+    "FDA_PROACTIVE_MAX_PER_RUN": "1",
 }
 #: The one variable the shell or .env may set: the prompt profile, with the default of each mode.
 PROMPT_PROFILE = "FDA_PROMPT_PROFILE"
@@ -221,6 +230,67 @@ class LLMOverlayTests(unittest.TestCase):
                 self.assertNotIn("${", str(value))
         # The gateway file comes from docker-compose.yml or the eval overlay, never from this file.
         self.assertNotIn("FDA_GATEWAY_CONFIG", environment)
+
+
+class BBAOverlayTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.bba = yaml.load(BBA_OVERLAY.read_text(encoding="utf-8"), Loader=_ComposeLoader)["services"]
+        cls.others = {
+            path.name: yaml.load(path.read_text(encoding="utf-8"), Loader=_ComposeLoader)["services"]
+            for path in (EVAL_OVERLAY, PLAIN_OVERLAY, LLM_OVERLAY, SUPER_VL_OVERLAY)
+        }
+
+    def test_it_sets_only_the_end_of_turn_silence_and_the_proactive_status(self) -> None:
+        self.assertEqual(
+            self.bba,
+            {
+                VOICE: {
+                    "environment": {
+                        "FDA_VAD_STOP_SECS": "0.5",
+                        "FDA_PROACTIVE_AFTER_S": "1.0",
+                        "FDA_PROACTIVE_MAX_PER_RUN": "3",
+                    }
+                }
+            },
+        )
+
+    def test_no_other_overlay_changes_them(self) -> None:
+        # Tau and the other evaluation runs keep 0.8 s, and a status line after 15 s at most once per run.
+        for name, services in self.others.items():
+            for key in ("FDA_VAD_STOP_SECS", "FDA_PROACTIVE_AFTER_S", "FDA_PROACTIVE_MAX_PER_RUN"):
+                with self.subTest(overlay=name, key=key):
+                    environment = (services.get(VOICE) or {}).get("environment") or {}
+                    self.assertNotIn(key, environment)
+
+
+class SuperVLOverlayTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.super_vl = yaml.load(SUPER_VL_OVERLAY.read_text(encoding="utf-8"), Loader=_ComposeLoader)["services"]
+        cls.others = {
+            path.name: yaml.load(path.read_text(encoding="utf-8"), Loader=_ComposeLoader)["services"]
+            for path in (EVAL_OVERLAY, PLAIN_OVERLAY, LLM_OVERLAY, BBA_OVERLAY)
+        }
+
+    def test_it_sets_only_the_backend_model_and_omits_the_reasoning_budget(self) -> None:
+        self.assertEqual(
+            self.super_vl,
+            {
+                VOICE: {
+                    "environment": {
+                        "BACKEND_LLM_MODEL": "nvidia/nvidia/nemotron-3.5-super-vl",
+                        "FDA_BACKEND_REASONING_BUDGET": "0",
+                    }
+                }
+            },
+        )
+
+    def test_no_other_overlay_changes_the_reasoning_budget(self) -> None:
+        for name, services in self.others.items():
+            with self.subTest(overlay=name):
+                environment = (services.get(VOICE) or {}).get("environment") or {}
+                self.assertNotIn("FDA_BACKEND_REASONING_BUDGET", environment)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 """Speech inference and preprocess for Big Bench Audio. See README for prerequisites and usage."""
 
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -14,15 +15,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import wave
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import resampy
 import soundfile as sf
 import websockets
+from dotenv import dotenv_values
 from pipecat.frames.protobufs import frames_pb2
 
-# 16 kHz mono WAV is required by the Nemotron voice agent WebSocket transport. Adjust SAMPLE_RATE if your stack differs.
+# 16 kHz mono PCM in 32 ms chunks on both transports: Pipecat protobuf audio frames on /api/ws, and
+# input_audio_buffer.append events on /v1/realtime (the session.update below selects 16 kHz in and out).
 SAMPLE_RATE, CHUNK_MS = 16000, 32
 # After we finish sending input, allow a short initial delay for the first output frame to arrive.
 POST_SEND_INITIAL_WAIT_SEC = 5.0
@@ -36,6 +40,30 @@ OPEN_TIMEOUT_SEC = 5.0
 # POST /api/session-config body so the server runs cascaded mode; ASR/LLM/TTS come from server config.
 MINIMAL_SESSION_BODY: dict[str, str] = {"pipeline_mode": "cascaded"}
 DEFAULT_HTTP_PORT = 7860
+
+# --transport: "ws" (default) is the Nemotron WebSocket client protocol on /api/ws; "realtime" is the
+# OpenAI Realtime-compatible WebSocket on /v1/realtime. Only the transport differs: the send pacing,
+# the silence tail, the exit rules above, and the output.wav assembly are shared.
+TRANSPORT_WS, TRANSPORT_REALTIME = "ws", "realtime"
+DEFAULT_REALTIME_MODEL = "nvidia/nemotron-realtime-frontend-delegation"
+REALTIME_API_KEY_ENV = "REALTIME_API_KEY"
+# Fallback for REALTIME_API_KEY when the environment does not set it: the repository-root .env.
+DOTENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+# Upper bound on connect + session.created + session.update/session.updated. The handshake finishes
+# before the scoring clock in process_conversation starts, so it does not change the exit rules.
+REALTIME_HANDSHAKE_TIMEOUT_SEC = 30.0
+# Selects the client's audio format only: no instructions, no tools, and server-owned turn detection.
+REALTIME_SESSION_UPDATE: dict[str, Any] = {
+    "type": "session.update",
+    "session": {
+        "type": "realtime",
+        "output_modalities": ["audio"],
+        "audio": {
+            "input": {"format": {"type": "audio/pcm", "rate": SAMPLE_RATE}},
+            "output": {"format": {"type": "audio/pcm", "rate": SAMPLE_RATE}},
+        },
+    },
+}
 
 
 def _ssl_context_insecure() -> ssl.SSLContext:
@@ -100,21 +128,129 @@ def request_session_id(
     return session_id
 
 
+def load_realtime_api_key() -> str | None:
+    """Return ``REALTIME_API_KEY`` from the environment, else from ``DOTENV_PATH``; ``None`` when unset.
+
+    An empty or whitespace-only value counts as unset, as on the server. Only this one key is read from
+    the ``.env`` file, so no other secret enters the client's environment.
+    """
+    value = os.environ.get(REALTIME_API_KEY_ENV, "").strip()
+    if not value and DOTENV_PATH.is_file():
+        value = (dotenv_values(DOTENV_PATH).get(REALTIME_API_KEY_ENV) or "").strip()
+    return value or None
+
+
+def _realtime_error_text(event: dict[str, Any]) -> str:
+    error = event.get("error") if isinstance(event.get("error"), dict) else {}
+    code = error.get("code") or error.get("type") or "error"
+    return f"{code}: {error.get('message') or 'no message'}"
+
+
+async def _await_realtime_event(websocket: Any, expected: str) -> dict[str, Any]:
+    """Return the next ``expected`` server event; raise on an ``error`` event, and ignore other events."""
+    while True:
+        event = json.loads(await websocket.recv())
+        kind = event.get("type") if isinstance(event, dict) else None
+        if kind == expected:
+            return event
+        if kind == "error":
+            raise RuntimeError(f"realtime server error before {expected}: {_realtime_error_text(event)}")
+
+
 class BenchmarkClient:
     """WebSocket client for streaming WAV to the voice agent and writing ``output.wav`` per sample.
 
-    Each sample uses ``POST /api/session-config`` then ``/api/ws?session_id=...`` (see Nemotron ``src/server.py``).
+    Each sample opens a new session. With the ``ws`` transport it uses ``POST /api/session-config`` then
+    ``/api/ws?session_id=...`` (see Nemotron ``src/server.py``). With the ``realtime`` transport it uses
+    ``/v1/realtime?model=...``: ``session.created``, one ``session.update`` (``REALTIME_SESSION_UPDATE``),
+    and ``session.updated``. Only connect, encode, and decode differ between the transports.
     """
 
-    def __init__(self, http_base: str, ws_origin: str, ssl_context: ssl.SSLContext | None):
-        """Store parsed ``--server-url`` components (HTTP base, ws/wss origin, optional TLS for HTTPS)."""
+    def __init__(
+        self,
+        http_base: str,
+        ws_origin: str,
+        ssl_context: ssl.SSLContext | None,
+        *,
+        transport: str = TRANSPORT_WS,
+        model: str = DEFAULT_REALTIME_MODEL,
+        api_key: str | None = None,
+    ):
+        """Store parsed ``--server-url`` components and the transport (with its model and Bearer key)."""
+        if transport not in (TRANSPORT_WS, TRANSPORT_REALTIME):
+            raise ValueError(f"unknown transport {transport!r}")
         self.http_base = http_base.rstrip("/")
         self.ws_origin = ws_origin.rstrip("/")
         self._ssl_context = ssl_context
+        self.transport = transport
+        self.model = model
+        self._api_key = api_key
 
     def _websocket_url(self, session_id: str) -> str:
         q = urllib.parse.urlencode({"session_id": session_id})
         return f"{self.ws_origin}/api/ws?{q}"
+
+    def _realtime_url(self) -> str:
+        q = urllib.parse.urlencode({"model": self.model})
+        return f"{self.ws_origin}/v1/realtime?{q}"
+
+    async def _connect(self) -> Any:
+        """Open one sample's session on the selected transport and return the websocket."""
+        if self.transport == TRANSPORT_REALTIME:
+            timeout = REALTIME_HANDSHAKE_TIMEOUT_SEC
+            try:
+                return await asyncio.wait_for(self._open_realtime_session(), timeout=timeout)
+            except TimeoutError as exc:
+                raise TimeoutError(f"realtime handshake did not complete within {timeout:g}s") from exc
+        session_id = request_session_id(self.http_base, ssl_context=self._ssl_context)
+        ws_url = self._websocket_url(session_id)
+        ssl_kw = {"ssl": self._ssl_context} if self._ssl_context else {}
+        return await websockets.connect(ws_url, open_timeout=OPEN_TIMEOUT_SEC, **ssl_kw)
+
+    async def _open_realtime_session(self) -> Any:
+        """Connect to ``/v1/realtime`` and finish the handshake; the Bearer header is sent only with a key."""
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else None
+        ssl_kw = {"ssl": self._ssl_context} if self._ssl_context else {}
+        websocket = await websockets.connect(
+            self._realtime_url(), open_timeout=OPEN_TIMEOUT_SEC, additional_headers=headers, **ssl_kw
+        )
+        try:
+            await _await_realtime_event(websocket, "session.created")
+            await websocket.send(json.dumps(REALTIME_SESSION_UPDATE))
+            await _await_realtime_event(websocket, "session.updated")
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(websocket.close(), timeout=0.1)
+            raise
+        return websocket
+
+    def _encode_audio(self, pcm: bytes) -> bytes | str:
+        """One outgoing PCM16 chunk as the transport's message."""
+        if self.transport == TRANSPORT_REALTIME:
+            return json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode("ascii")})
+        return frames_pb2.Frame(
+            audio=frames_pb2.AudioRawFrame(audio=pcm, sample_rate=SAMPLE_RATE, num_channels=1)
+        ).SerializeToString()
+
+    def _decode_audio(self, message: bytes | str, label: str) -> np.ndarray | None:
+        """The int16 audio of one received message, or ``None`` for a message without audio."""
+        if self.transport == TRANSPORT_REALTIME:
+            event = json.loads(message)
+            kind = event.get("type") if isinstance(event, dict) else None
+            if kind == "error":
+                print(f"warning: realtime server error for {label}: {_realtime_error_text(event)}")
+            if kind != "response.output_audio.delta":
+                return None
+            audio = base64.b64decode(event.get("delta") or "")
+        else:
+            frame = frames_pb2.Frame.FromString(message)
+            if frame.WhichOneof("frame") != "audio":
+                return None
+            audio = frame.audio.audio
+        if not audio:
+            return None
+        chunk = np.frombuffer(audio, dtype=np.int16)
+        return chunk if len(chunk) else None
 
     async def process_conversation(
         self,
@@ -127,8 +263,9 @@ class BenchmarkClient:
 
         Send and receive run in parallel (non-blocking). Output chunk times use ``start_time`` so input and output
         share a timeline. Exit rules (gap tolerance, initial wait) apply only after the full input file has been
-        sent (including the silence tail), so we capture the main response. Incoming audio is raw int16 PCM from
-        the Nemotron serializer (no WAV header).
+        sent (including the silence tail), so we capture the main response. Incoming audio is raw int16 PCM (no
+        WAV header): protobuf audio frames on ``ws``, base64 ``response.output_audio.delta`` events on
+        ``realtime``. Any received message, with or without audio, restarts the ``RECV_TIMEOUT_SEC`` wait.
         """
         output_chunks: list[np.ndarray] = []
         chunk_times: list[float] = []
@@ -145,25 +282,20 @@ class BenchmarkClient:
         while True:
             try:
                 response = await asyncio.wait_for(websocket.recv(), timeout=RECV_TIMEOUT_SEC)
-                frame = frames_pb2.Frame.FromString(response)
-                if frame.WhichOneof("frame") == "audio":
-                    audio = frame.audio.audio
-                    if not audio:
-                        continue
-                    chunk = np.frombuffer(audio, dtype=np.int16)
-                    if len(chunk) == 0:
-                        continue
+                chunk = self._decode_audio(response, output_dir)
+                if chunk is None:
+                    continue
 
-                    last_frame_at = time.time()
-                    received_any_frame = True
-                    output_chunks.append(chunk)
-                    curr_time = time.time() - start_time  # same time base as session for input/output sync
-                    # Use current time if this is the first chunk or if time gap is significant,
-                    # otherwise use sequential timing from previous chunk
-                    if not chunk_times or abs(curr_time - chunk_times[-1]) >= 0.05:
-                        chunk_times.append(curr_time)
-                    else:
-                        chunk_times.append(chunk_times[-1] + len(chunk) / SAMPLE_RATE)
+                last_frame_at = time.time()
+                received_any_frame = True
+                output_chunks.append(chunk)
+                curr_time = time.time() - start_time  # same time base as session for input/output sync
+                # Use current time if this is the first chunk or if time gap is significant,
+                # otherwise use sequential timing from previous chunk
+                if not chunk_times or abs(curr_time - chunk_times[-1]) >= 0.05:
+                    chunk_times.append(curr_time)
+                else:
+                    chunk_times.append(chunk_times[-1] + len(chunk) / SAMPLE_RATE)
             except TimeoutError:
                 current_time = time.time()
 
@@ -294,13 +426,13 @@ class BenchmarkClient:
                 return
 
             # New session per sample (server consumes session on WebSocket connect).
-            print(f"processing idx= {sample_id} -> {self.http_base} (session + {self.ws_origin}/api/ws)")
+            if self.transport == TRANSPORT_REALTIME:
+                print(f"processing idx= {sample_id} -> {self._realtime_url()}")
+            else:
+                print(f"processing idx= {sample_id} -> {self.http_base} (session + {self.ws_origin}/api/ws)")
             websocket = None
             try:
-                session_id = request_session_id(self.http_base, ssl_context=self._ssl_context)
-                ws_url = self._websocket_url(session_id)
-                ssl_kw = {"ssl": self._ssl_context} if self._ssl_context else {}
-                websocket = await websockets.connect(ws_url, open_timeout=OPEN_TIMEOUT_SEC, **ssl_kw)
+                websocket = await self._connect()
                 await self.process_conversation(websocket, input_wav, sample_dir, output_filename)
                 print(f"successfully processed idx: {sample_id}")
             except Exception as e:
@@ -365,13 +497,7 @@ class BenchmarkClient:
                         if stop_silence_event.is_set():
                             break
                         try:
-                            await websocket.send(
-                                frames_pb2.Frame(
-                                    audio=frames_pb2.AudioRawFrame(
-                                        audio=silence, sample_rate=SAMPLE_RATE, num_channels=1
-                                    )
-                                ).SerializeToString()
-                            )
+                            await websocket.send(self._encode_audio(silence))
                         except (
                             websockets.exceptions.ConnectionClosed,
                             websockets.exceptions.ConnectionClosedOK,
@@ -419,13 +545,7 @@ class BenchmarkClient:
                         # Convert back to int16 and send
                         chunk_int16 = (chunk * 32767).astype(np.int16)
                         try:
-                            await websocket.send(
-                                frames_pb2.Frame(
-                                    audio=frames_pb2.AudioRawFrame(
-                                        audio=chunk_int16.tobytes(), sample_rate=SAMPLE_RATE, num_channels=1
-                                    )
-                                ).SerializeToString()
-                            )
+                            await websocket.send(self._encode_audio(chunk_int16.tobytes()))
                         except (
                             websockets.exceptions.ConnectionClosed,
                             websockets.exceptions.ConnectionClosedOK,
@@ -510,6 +630,24 @@ async def main():
         help="Voice agent base URL: http:// or https:// (default port if omitted: 7860). Required with --inference.",
     )
     parser.add_argument(
+        "--transport",
+        choices=(TRANSPORT_WS, TRANSPORT_REALTIME),
+        default=TRANSPORT_WS,
+        help=(
+            "Server protocol: 'ws' (default) is the Nemotron WebSocket client protocol on /api/ws; "
+            "'realtime' is the OpenAI Realtime-compatible WebSocket on /v1/realtime. "
+            "Timing and exit rules are the same for both."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            f"Realtime model to request (--transport realtime only; default: {DEFAULT_REALTIME_MODEL}). "
+            f"{REALTIME_API_KEY_ENV} is read from the environment or the repository-root .env."
+        ),
+    )
+    parser.add_argument(
         "--insecure-skip-verify",
         action="store_true",
         help="Disable TLS certificate verification for https:// server URLs. Use only for local self-signed certs.",
@@ -532,6 +670,8 @@ async def main():
         help="Stream prepared WAVs to the voice agent (disabled by default)",
     )
     args = parser.parse_args()
+    if args.model is not None and args.transport != TRANSPORT_REALTIME:
+        parser.error("--model applies only to --transport realtime")
     input_root = validate_input_dir(args.input_dir)
 
     if args.preprocess:
@@ -560,7 +700,17 @@ async def main():
         except ValueError:
             parser.error("--retry_samples must contain only comma-separated integers; got malformed ID")
 
-    client = BenchmarkClient(http_base, ws_origin, ssl_context)
+    if args.transport == TRANSPORT_REALTIME:
+        client = BenchmarkClient(
+            http_base,
+            ws_origin,
+            ssl_context,
+            transport=TRANSPORT_REALTIME,
+            model=args.model or DEFAULT_REALTIME_MODEL,
+            api_key=load_realtime_api_key(),
+        )
+    else:
+        client = BenchmarkClient(http_base, ws_origin, ssl_context)
     await client.process_directory(
         input_root,
         batch_size=args.batch_size,

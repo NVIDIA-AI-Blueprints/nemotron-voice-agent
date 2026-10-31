@@ -16,6 +16,12 @@ import requests
 API_URL = os.environ.get("EVAL_API_URL", "").strip()
 API_KEY = (os.environ.get("EVAL_API_KEY", "") or "").strip()
 
+# --judge_api: the request format of the judge endpoint. "bedrock" (default) posts the Anthropic/Bedrock
+# payload to EVAL_API_URL itself; "openai" posts an OpenAI chat completion for --judge_model to
+# <EVAL_API_URL>/chat/completions (for example the Inference Hub, https://inference-api.nvidia.com/v1).
+# Only the wire format differs: the prompt, the sampling parameters, and the label parsing are shared.
+JUDGE_API_BEDROCK, JUDGE_API_OPENAI = "bedrock", "openai"
+
 
 def list_sample_ids(root: Path, start: int | None, end: int | None, samples: list[int] | None = None) -> list[int]:
     """Return sorted numeric subdir names in root, optionally filtered by start/end or samples list."""
@@ -103,8 +109,10 @@ def _invoke_llm_judge(
     temperature: float = 0.0,
     top_p: float = 1.0,
     max_tokens: int = 8,
+    judge_api: str = JUDGE_API_BEDROCK,
+    model: str | None = None,
 ) -> dict:
-    """Call the configured LLM judge API (EVAL_API_URL). Uses Anthropic/Bedrock-style payload.
+    """Call the configured LLM judge API (EVAL_API_URL) with the Anthropic/Bedrock or the OpenAI payload.
 
     top_p: Nucleus sampling — only consider tokens in the top p probability mass (0–1).
     Use 1.0 for deterministic judge output (CORRECT/INCORRECT); lower values add sampling.
@@ -118,19 +126,47 @@ def _invoke_llm_judge(
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "messages": messages,
-        "temperature": temperature,
-        "top_p": top_p,
-        "max_tokens": max_tokens,
-    }
-    resp = requests.post(API_URL, headers=headers, data=json.dumps(payload), timeout=60)
+    if judge_api == JUDGE_API_OPENAI:
+        if not model:
+            raise RuntimeError("--judge_model is required with --judge_api openai")
+        url = API_URL.rstrip("/") + "/chat/completions"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+        }
+    else:
+        url = API_URL
+        payload = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+        }
+    resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
     resp.raise_for_status()
     return resp.json()
 
 
 def _extract_text_from_response(resp_json: dict) -> str:
+    # OpenAI chat completion schema: { choices: [ {message: {content: "..."}}, ... ] }
+    try:
+        choices = resp_json.get("choices")
+        if isinstance(choices, list) and choices:
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "".join(
+                    p.get("text", "") for p in content if isinstance(p, dict) and isinstance(p.get("text"), str)
+                )
+    except Exception:
+        pass
+
     # Common Anthropic-like Bedrock schema: { content: [ {type:"text", text:"..."}, ... ] }
     try:
         content = resp_json.get("content")
@@ -167,7 +203,14 @@ def _validate_eval_inputs(question: str | None, official: str | None, candidate:
         raise ValueError("candidate_answer is missing or empty")
 
 
-def evaluate_sample(_unused_client: object, question: str | None, official: str | None, candidate: str | None) -> str:
+def evaluate_sample(
+    _unused_client: object,
+    question: str | None,
+    official: str | None,
+    candidate: str | None,
+    judge_api: str = JUDGE_API_BEDROCK,
+    judge_model: str | None = None,
+) -> str:
     """Run LLM judge on one sample; return CORRECT, INCORRECT, or MISSING_INFO_LABEL if inputs missing."""
     try:
         _validate_eval_inputs(question, official, candidate)
@@ -184,6 +227,8 @@ def evaluate_sample(_unused_client: object, question: str | None, official: str 
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=8,
+        judge_api=judge_api,
+        model=judge_model,
     )
     _latency_ms = int((time.time() - start_ts) * 1000)
     text = _extract_text_from_response(resp_json)
@@ -203,7 +248,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not write result.txt. Print only indices where new label differs from existing (or missing).",
     )
-    return p.parse_args()
+    p.add_argument(
+        "--judge_api",
+        choices=[JUDGE_API_BEDROCK, JUDGE_API_OPENAI],
+        default=JUDGE_API_BEDROCK,
+        help="Request format of EVAL_API_URL: bedrock (the invoke URL itself, default) or openai "
+        "(an OpenAI-compatible base URL such as https://inference-api.nvidia.com/v1; needs --judge_model).",
+    )
+    p.add_argument(
+        "--judge_model", help="Judge model for --judge_api openai, e.g. aws/anthropic/bedrock-claude-sonnet-5"
+    )
+    args = p.parse_args()
+    if args.judge_api == JUDGE_API_OPENAI and not args.judge_model:
+        p.error("--judge_model is required with --judge_api openai")
+    if args.judge_model and args.judge_api != JUDGE_API_OPENAI:
+        p.error("--judge_model applies only to --judge_api openai")
+    return args
 
 
 def main() -> None:
@@ -246,7 +306,7 @@ def main() -> None:
             meta = load_meta(sample_dir / "meta.json")
             official = meta.get("official_answer")
 
-            label = evaluate_sample(client, question, official, candidate)
+            label = evaluate_sample(client, question, official, candidate, args.judge_api, args.judge_model)
             normalized_label = (label or "").strip()
 
             if args.compare_only:

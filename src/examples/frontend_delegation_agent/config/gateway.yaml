@@ -48,7 +48,9 @@ backend:
   request_overrides:
     extra_body:
       chat_template_kwargs: {enable_thinking: true}
-      reasoning_budget: 1024
+      # FDA_BACKEND_REASONING_BUDGET (docker-compose.yml sets 1024); 0 omits the parameter, for a model
+      # that rejects it (docker/docker-compose.fda-llm-super-vl.yaml).
+      reasoning_budget: ${FDA_BACKEND_REASONING_BUDGET:-1024}
   prompts:
     # The prompt profile (FDA_PROMPT_PROFILE); {kind} is backend.kind, so each backend reads its own file.
     path: "prompts/${FDA_PROMPT_PROFILE:-generic}/backend/{kind}.yaml"

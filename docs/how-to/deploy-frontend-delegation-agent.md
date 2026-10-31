@@ -40,7 +40,7 @@ The `FDA_PROFILE` setting decides what a deployment serves. Refer to [Choose a P
 
 If you are an AI agent that deploys this example for a user, follow these rules:
 
-1. If the user's request does not name the backend, ask: "Which backend: `hermes` (the default, Hermes in its own container and an OpenShell sandbox) or `llm` (the lightweight backend inside the voice container)?" Suggest `hermes` and wait for the answer. Do not choose one silently, even though Compose starts Hermes when no backend overlay is passed. Refer to [Choose a Backend](#choose-a-backend).
+1. If the user's request does not name the backend, ask: "Which backend: `hermes` (the default, Hermes in its own container and an OpenShell sandbox) or `llm` (the lightweight backend inside the voice container)?" Suggest `hermes` and wait for the answer. Do not choose one silently, even though Compose starts Hermes when no backend overlay is passed. A Big Bench Audio run is the exception: it uses the LLM backend without asking, as rule 10 says. Refer to [Choose a Backend](#choose-a-backend).
 2. If the user's request does not say which profile to deploy, ask: "Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?" Wait for the answer. Do not choose one silently, even though Compose uses `default` when no overlay is passed. You can ask both questions together.
 3. For `default`, use the recipe command without the eval overlay. For `eval`, add the `docker/docker-compose.fda-eval.yaml` overlay to every Compose command. Refer to [Choose a Profile](#choose-a-profile).
 4. For Tau or any other benchmark, always deploy `eval`. A `default` deployment pairs Realtime sessions with the wrong gateway configuration.
@@ -53,7 +53,8 @@ If you are an AI agent that deploys this example for a user, follow these rules:
     - "Which prompt profile? Suggested: `general_qa`."
 
     If the first answer is yes, add `docker/docker-compose.fda-silent-frontend.yaml` after the eval overlay. Pass the Compose files in this order: `docker-compose.yml`, the plain overlay if used, the eval overlay, the LLM backend overlay if used, and then the silent-frontend overlay. Set `FDA_PROMPT_PROFILE` to the chosen profile on the Compose command line, for example `FDA_PROMPT_PROFILE=general_qa docker compose ... up -d --build`. VoiceBench runs use the `eval` profile. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation).
-10. Do not ask these two questions for Tau, the browser UI, or any other run. Those runs use the default prompt profile of their mode without asking: `generic` for `default` and `customer_service` for `eval`. Never add the silent-frontend overlay for them, and do not set `FDA_PROMPT_PROFILE`. If an existing `.env` sets `FDA_PROMPT_PROFILE`, show the value and ask the user to confirm it or remove it. Refer to [Prompt Profiles](#prompt-profiles).
+10. If the user says that the run is a Big Bench Audio (BBA) evaluation, do not ask the backend question or the two VoiceBench questions. Deploy `eval` with the LLM backend, set `FDA_PROMPT_PROFILE=general_qa` on the Compose command line, and add `docker/docker-compose.fda-bba.yaml` after the LLM backend overlay. Never add the silent-frontend overlay. The Hermes backend is not supported for BBA. Refer to [Run a Big Bench Audio Evaluation](#run-a-big-bench-audio-evaluation).
+11. Do not ask the two VoiceBench questions for Tau, BBA, the browser UI, or any other run. Tau, the browser UI, and every other run except VoiceBench and BBA use the default prompt profile of their mode without asking: `generic` for `default` and `customer_service` for `eval`. Never add the silent-frontend overlay or the BBA overlay for them, and do not set `FDA_PROMPT_PROFILE`. If an existing `.env` sets `FDA_PROMPT_PROFILE`, show the value and ask the user to confirm it or remove it. Refer to [Prompt Profiles](#prompt-profiles).
 
 Do not overwrite other keys in an existing `.env`. For smoke tests, benchmark checks, and logs, load the deploy skill at `.agents/skills/nemotron-voice-agent-fda-deploy/SKILL.md`.
 
@@ -84,7 +85,7 @@ The overlay also removes the four Hermes and OpenShell services from the recipe 
 
 The following rules apply to the Compose files:
 
-- Pass the overlays in this order: `docker-compose.yml`, then the eval overlay if you use it, then the LLM backend overlay, then the silent-frontend overlay if you use it.
+- Pass the overlays in this order: `docker-compose.yml`, then the eval overlay if you use it, then the LLM backend overlay, then the Super VL overlay if you use it, then the silent-frontend overlay or the BBA overlay if you use one. A deployment never uses both the silent-frontend overlay and the BBA overlay.
 - Never combine the LLM backend overlay with the plain runtime overlay, `docker/docker-compose.fda-hermes-plain.yaml`. The plain overlay runs Hermes.
 - Pass the same files in every Compose command of the deployment, such as `ps`, `logs`, `exec`, and `down`. An `up` command without the LLM backend overlay recreates the deployment with Hermes.
 
@@ -97,6 +98,25 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fda-llm.yaml \
 ```
 
 The `config hash` covers the backend link and the gateway configuration file, so it differs between the two backends.
+
+### Change the Backend Model of the LLM Backend
+
+The optional Super VL overlay, `docker/docker-compose.fda-llm-super-vl.yaml`, switches the LLM backend from `nvidia/nvidia/nemotron-3-ultra` to `nvidia/nvidia/nemotron-3.5-super-vl`. It sets the following values on the voice service:
+
+- `BACKEND_LLM_MODEL=nvidia/nvidia/nemotron-3.5-super-vl`.
+- `FDA_BACKEND_REASONING_BUDGET=0`, which omits `reasoning_budget` from every backend LLM request. The model rejects the parameter with HTTP 400 and the message `Unsupported parameter(s): reasoning_budget`.
+
+Reasoning stays on. The backend still sends `enable_thinking: true` and the `reasoning_effort` of `llm.reasoning_effort` in `gateway.yaml`, which is `medium`. The overlay applies to the LLM backend only. Hermes reads its model from `docker/fda/gateway.env`, so do not combine the overlay with a Hermes deployment.
+
+Pass the overlay after the LLM backend overlay and before the BBA overlay. The following command starts an eval deployment of the LLM backend with the Super VL model:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+  -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-llm-super-vl.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
+```
+
+Pass the same files in every Compose command of the deployment. To switch back to `nvidia/nvidia/nemotron-3-ultra`, rerun the `up -d --build` command without the Super VL overlay. Compose then recreates the voice service with the default model and `FDA_BACKEND_REASONING_BUDGET=1024`.
 
 ## Prerequisites
 
@@ -168,7 +188,7 @@ The agent ships the profiles in the following table.
 | --- | --- | --- | --- |
 | `customer_service` | Customer-service prompts for multi-turn conversations with client tools, such as Tau. The evaluation pins cover its prompt hashes. | Eval mode, through the eval overlay | `customer_service/` |
 | `generic` | The browser demo prompts. The files currently have the same content as `customer_service/` and are planned to become more generic. | The `default` deployment, including its Realtime sessions | `generic/` |
-| `general_qa` | A general question-answering assistant. The frontend delegates every request (`delegate=true`) with the filler "One moment." The backend answers from the LLM with no tools. It puts the answer first, starts a multiple-choice answer with "The answer is X.", follows formatting instructions literally, and refuses harmful requests with "I'm sorry, but I can't help with that." | No mode. Choose it for single-turn question-answering evaluations, such as VoiceBench. | `general_qa/` |
+| `general_qa` | A general question-answering assistant. The frontend delegates every request (`delegate=true`) with the filler "One moment." The backend answers from the LLM with no tools. It puts the answer first, starts a multiple-choice answer with "The answer is X.", follows formatting instructions literally, and refuses harmful requests with "I'm sorry, but I can't help with that." | No mode. Choose it for single-turn question-answering evaluations, such as VoiceBench and Big Bench Audio. | `general_qa/` |
 
 The `FDA_PROMPT_PROFILE` variable names the profile and replaces the default of the mode. It is the one FDA setting that the shell or `.env` can change. Compose passes the same value to the voice service and to `fda-hermes`, so both sides always use the same profile. With the LLM backend, the voice service reads every file of the profile itself. In the OpenShell runtime, the controller passes it into the sandbox. Compose passes `${FDA_PROMPT_PROFILE:-generic}`, and the eval overlay passes `${FDA_PROMPT_PROFILE:-customer_service}`. Realtime sessions follow the deployment: on a `default` deployment, they also use `generic`. Use the eval overlay for `customer_service`.
 
@@ -273,6 +293,10 @@ The following optional keys change the deployment. Leave them unset to keep the 
 | `HERMES_AGENT_DIR` | `../hermes-agent` | Path of the Hermes checkout for the image build. Both Hermes runtimes use it. The LLM backend does not. |
 | `FDA_PROMPT_PROFILE` | `generic`, or `customer_service` with the eval overlay | The prompt profile: `generic`, `customer_service`, `general_qa`, or a profile that you add. It is the only `FDA_*` key that `.env` can change. Never set it to an empty value. Refer to [Prompt Profiles](#prompt-profiles). |
 | `FDA_SILENT_FRONTEND` | `false` | `true` keeps the frontend silent on delegated turns for single-turn evaluations, such as VoiceBench. Compose sets `false` as a literal value, and only the silent-frontend overlay sets `true`. Setting it in `.env` has no effect. Never set it to an empty value. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation). |
+| `FDA_VAD_STOP_SECS` | `0.8` | The end-of-turn silence of OpenAI Realtime sessions, in seconds. It replaces `vad.stop_secs` of the eval Pipecat settings and must be greater than 0 and at most 5. Browser UI sessions ignore it. Compose sets `0.8` as a literal value, and only the BBA overlay, `docker/docker-compose.fda-bba.yaml`, sets `0.5`. Setting it in `.env` has no effect. Refer to [Run a Big Bench Audio Evaluation](#run-a-big-bench-audio-evaluation). |
+| `FDA_PROACTIVE_AFTER_S` | `15` | The seconds of silence, counted from the end of the agent's speech, after which the frontend speaks a fixed status line while the backend works. The lines come from `status_proactive_lines` of the prompt profile, and no LLM call is made. Compose sets `15` as a literal value, and only the BBA overlay, `docker/docker-compose.fda-bba.yaml`, sets `1.0`. Setting it in `.env` has no effect. The value is part of the loaded configuration, so it changes the `config hash`. |
+| `FDA_PROACTIVE_MAX_PER_RUN` | `1` | The most status lines that the frontend speaks for each backend run, for OpenAI Realtime sessions only. Browser UI sessions ignore it. The value must be a whole number from 1 to 10, or the Realtime runtime refuses to start with an error that names the variable. Compose sets `1` as a literal value, and only the BBA overlay sets `3`. Setting it in `.env` has no effect. It does not change the `config hash`. |
+| `FDA_BACKEND_REASONING_BUDGET` | `1024` | The `reasoning_budget` of every backend LLM request, in tokens. It replaces `backend.request_overrides.extra_body.reasoning_budget` in `gateway.yaml`. The value must be a whole number of 0 or more, and `0` omits the parameter for a model that rejects it. Any other value fails the gateway configuration load with an error that names the key. Compose sets `1024` as a literal value on the voice service, and only the Super VL overlay, `docker/docker-compose.fda-llm-super-vl.yaml`, sets `0`. Setting it in `.env` has no effect. The Hermes backend does not receive this variable and keeps the default `1024`. Refer to [Change the Backend Model of the LLM Backend](#change-the-backend-model-of-the-llm-backend). |
 
 Do not set `UVICORN_WS_PING_INTERVAL` for this recipe. Compose sets it to `0` on the voice service, and Realtime sessions refuse to start when the server pings WebSocket clients.
 
@@ -565,6 +589,8 @@ The eval Pipecat settings, `config/adapters/pipecat.eval.yaml`, measure the end 
 | `vad.audio_idle_timeout` | `1.0` (wall clock) | `0` (off) | A wall-clock timer would end the turn when the client pauses its input. |
 | `turn.user_speech_timeout` | `0.6` (wall clock) | `0` | No wall-clock wait follows the VAD stop. |
 
+Big Bench Audio runs are the one exception to `vad.stop_secs` 0.8. The BBA overlay sets `FDA_VAD_STOP_SECS=0.5`, which replaces `vad.stop_secs` with 0.5 for Realtime sessions only. Every other eval run keeps 0.8. The BBA overlay also sets the proactive status to 1.0 second and at most 3 lines for each backend run, in place of 15 seconds and 1 line. The Pipecat settings are not part of the `config hash`. `session.created` still reports `silence_duration_ms: 800`, a value that the agent reports only and that does not drive the VAD. Refer to [Run a Big Bench Audio Evaluation](#run-a-big-bench-audio-evaluation).
+
 To deploy in eval mode, complete the following steps:
 
 1. Complete [Configure the Environment](#configure-the-environment) and steps 1 and 2 of [Start the Deployment](#start-the-deployment). For the Hermes backend, also complete [Get Hermes](#get-hermes).
@@ -633,7 +659,7 @@ The `config hash` includes the backend link, the gateway configuration file, and
 
 ## Run a VoiceBench Evaluation
 
-VoiceBench in `voice-agent-evaluation` connects through OpenAI Realtime with the server VAD and never sends `response.create`. It ends each case on the first `response.done` and scores only the audio transcript of that response. This agent speaks each filler and each proactive status line as its own response, so on a delegated turn VoiceBench would score the filler instead of the backend's answer.
+VoiceBench in `voice-agent-evaluation` connects through OpenAI Realtime with the server VAD and never sends `response.create`. It ends each case on the first `response.done` and scores only the audio transcript of that response. This agent speaks each filler and each proactive status line as its own response, so on a delegated turn VoiceBench would score the filler instead of the backend's answer. Big Bench Audio works differently: it records everything that the agent speaks within the client's stop rules, so it does not use the silent frontend. Refer to [Run a Big Bench Audio Evaluation](#run-a-big-bench-audio-evaluation).
 
 The silent-frontend overlay, `docker/docker-compose.fda-silent-frontend.yaml`, sets `FDA_SILENT_FRONTEND=true`, which turns on the `delegation.silent_frontend` switch. With the switch on, the agent behaves as follows:
 
@@ -649,7 +675,7 @@ A VoiceBench run makes two choices:
 - Silent frontend: add the silent-frontend overlay, or leave it out. The default is to leave it out.
 - Prompt profile: set `FDA_PROMPT_PROFILE`. The suggested profile is `general_qa`, whose frontend delegates every request. Without the variable, eval mode uses `customer_service`. Refer to [Prompt Profiles](#prompt-profiles).
 
-Use the silent-frontend overlay for single-turn evaluations, such as VoiceBench, only. Tau runs need the spoken filler and status lines.
+Use the silent-frontend overlay for single-turn evaluations, such as VoiceBench, only. Tau runs need the spoken filler and status lines. Big Bench Audio records the full reply, the filler and the backend's answer, as the final response, so a BBA run never uses the overlay either.
 
 To run a VoiceBench evaluation with a silent frontend and the `general_qa` profile, complete the following steps:
 
@@ -684,7 +710,53 @@ To run a VoiceBench evaluation with a silent frontend and the `general_qa` profi
 
 5. Record the backend, the prompt profile, and the `config hash` from the app log with the results. The switch is part of the effective settings only when it is on, so the `config hash` of a run with a silent frontend differs from that of a normal eval run. The prompt paths are part of the effective settings too, so another prompt profile also changes the hash. With the switch off, the hash is the same as before the switch existed.
 
-To switch back to a Tau or other evaluation deployment, rerun the `up -d --build` command of your backend from [Deploy in Eval Mode](#deploy-in-eval-mode) without the silent-frontend overlay and without `FDA_PROMPT_PROFILE`. Compose then recreates the containers with `FDA_SILENT_FRONTEND=false` and the `customer_service` prompt profile.
+To switch back to a Tau or other evaluation deployment, rerun the `up -d --build` command of your backend from [Deploy in Eval Mode](#deploy-in-eval-mode) without the silent-frontend overlay, without the BBA overlay, and without `FDA_PROMPT_PROFILE`. Compose then recreates the containers with `FDA_SILENT_FRONTEND=false`, `FDA_VAD_STOP_SECS=0.8`, `FDA_PROACTIVE_AFTER_S=15`, `FDA_PROACTIVE_MAX_PER_RUN=1`, and the `customer_service` prompt profile. A BBA run itself keeps the BBA overlay and `FDA_PROMPT_PROFILE=general_qa`.
+
+## Run a Big Bench Audio Evaluation
+
+Big Bench Audio (BBA) streams each spoken question over the OpenAI Realtime API with `speech-inference.py --transport realtime`, and records the agent's whole reply in `output.wav` as the final response. On this agent, the reply holds the frontend's filler and then the backend's answer. The client's timing constants and stop rules are the same as for the `/api/ws` transport.
+
+A BBA run uses the following configuration:
+
+- Eval mode.
+- The LLM backend. The Hermes backend is not supported for BBA, because its per-session worker start can exceed the client's 30-second handshake limit.
+- The `general_qa` prompt profile, set with `FDA_PROMPT_PROFILE`.
+- The BBA overlay, `docker/docker-compose.fda-bba.yaml`, which sets `FDA_VAD_STOP_SECS=0.5`, `FDA_PROACTIVE_AFTER_S=1.0`, and `FDA_PROACTIVE_MAX_PER_RUN=3`. A Realtime session then ends a user turn after 0.5 seconds of silence in place of 0.8 seconds. While the backend works, the frontend speaks a status line, such as "Still checking, one moment.", after 1.0 second of silence, at most 3 times for each backend run. The client stops listening 2 seconds after the last audio, so the status lines keep it listening for a slower answer. Every other deployment keeps 15 seconds and 1 line.
+- No silent-frontend overlay.
+
+To run a BBA evaluation, complete the following steps:
+
+1. Complete step 1 of [Deploy in Eval Mode](#deploy-in-eval-mode). Then start the recipe with the four Compose files in this order: `docker-compose.yml`, the eval overlay, the LLM backend overlay, and the BBA overlay:
+
+    ```bash
+    FDA_FILES="-f docker-compose.yml -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-bba.yaml"
+    FDA_PROMPT_PROFILE=general_qa docker compose $FDA_FILES \
+      --profile frontend-delegation-agent/single-gpu up -d --build
+    ```
+
+    Pass the same `-f` files in every Compose command for this deployment, including `exec`, `logs`, and `down`. Commands that recreate the containers, such as `up`, also need the same `FDA_PROMPT_PROFILE` value.
+
+2. Complete steps 3 to 5 of [Deploy in Eval Mode](#deploy-in-eval-mode) with this `FDA_FILES` value. For a BBA run, the settings check prints `general_qa` in place of `customer_service`. Also check the VAD stop and the proactive status settings, which print `0.5`, `1.0`, and `3`:
+
+    ```bash
+    docker compose $FDA_FILES --profile frontend-delegation-agent/single-gpu \
+      exec frontend-delegation-agent-single-gpu printenv FDA_VAD_STOP_SECS FDA_PROACTIVE_AFTER_S FDA_PROACTIVE_MAX_PER_RUN
+    ```
+
+3. From `benchmarking_tools/AA-BigBenchAudio-Eval/`, run one warm-up sample first. The first session after a container start also runs the agent's warm-up, which counts against the client's handshake limit:
+
+    ```bash
+    uv run python speech-inference.py --input_dir ./datasets/bigbench_audio --inference \
+      --transport realtime --server-url http://127.0.0.1:7860 --start 0 --end 0
+    ```
+
+    After the warm-up sample, the `Pipecat adapter settings` line of the app log shows `stop_secs` 0.5. Every other eval run shows 0.8. The next line reads `proactive status enabled=True after_s=1 max_per_run=3`.
+
+4. Run the full dataset with the same command without `--start` and `--end`. Use `--batch_size 4`: fDA serves at most 4 Realtime sessions and frees a session when its client disconnects, and the client waits 1 second after each sample before it starts the next one. Rerun failed samples, such as `server_busy` failures, with `--retry_samples`.
+
+5. Record the backend, the prompt profile, `FDA_VAD_STOP_SECS`, `FDA_PROACTIVE_AFTER_S`, `FDA_PROACTIVE_MAX_PER_RUN`, the `Pipecat adapter settings` line, the `proactive status` line, and the `config hash` from the app log with the results. The Pipecat settings are not part of the `config hash`, so record them separately.
+
+For the full procedure, including the dataset, the scoring, and troubleshooting, follow the [Frontend Delegation Agent Runbook](../../benchmarking_tools/AA-BigBenchAudio-Eval/RUNBOOK-FDA.md).
 
 ## Read the Logs
 
@@ -739,7 +811,7 @@ docker compose $FDA_FILES --profile frontend-delegation-agent/single-gpu down
 
 In the OpenShell runtime, `fda-hermes` saves the sandbox's `/app/logs` to `logs/openshell/<time>/` and then deletes the sandbox. The stop can take up to 60 seconds. If the controller crashed and left a sandbox behind, the next start saves its logs and deletes it before it creates a new one.
 
-If you started the deployment with the silent-frontend overlay, pass it last as well.
+If you started the deployment with the silent-frontend overlay or the BBA overlay, pass it last as well.
 
 In the plain runtime, the gateway closes open sessions one after another, so the stop can take up to 75 seconds. Pass the plain overlay to `down` as well.
 
@@ -781,6 +853,7 @@ The following table lists common failures for this recipe. For general startup i
 | A code change works on the voice side but not in Hermes, or the source hash in the `FDA gateway` line differs from your checkout. | The Hermes image runs the source that was built into it. | Rerun the `up` command with `--build`. |
 | A benchmark run shows other backend prompt hashes than expected, or the Hermes logs name `gateway.yaml`. | The deployment runs without the eval overlay, or `FDA_PROMPT_PROFILE` is set in the shell or in `.env`. | Redeploy with `-f docker/docker-compose.fda-eval.yaml`, and pass it in every Compose command. Remove `FDA_PROMPT_PROFILE` for a `customer_service` run. |
 | A session, or the FDA gateway at startup, fails with an error that names a missing prompt file under `config/prompts/`. | `FDA_PROMPT_PROFILE` names a prompt profile that does not exist, or it is set to an empty value. A profile that you added can also miss `backend/llm.yaml` or `backend/hermes.yaml`. | Set `FDA_PROMPT_PROFILE` to an existing profile name, such as `generic`, `customer_service`, or `general_qa`, or remove it from the shell and `.env`. Then rerun the `up -d --build` command. Refer to [Prompt Profiles](#prompt-profiles). |
+| In a Big Bench Audio run, the `Pipecat adapter settings` line shows `stop_secs` 0.8, `printenv FDA_VAD_STOP_SECS` prints `0.8`, or the `proactive status` line shows `after_s=15 max_per_run=1`. | The deployment runs without the BBA overlay. | Redeploy with `docker/docker-compose.fda-bba.yaml` after the LLM backend overlay, and pass it in every Compose command. Refer to [Run a Big Bench Audio Evaluation](#run-a-big-bench-audio-evaluation). |
 | The client fails with `ssl argument is incompatible with a ws:// URI`, or a `wss://` handshake fails with an SSL error. | The client and the server disagree on TLS. Eval mode serves plain `ws://`. | Use `ws://` for an eval-mode deployment and `wss://` for the standard deployment. |
 | The browser does not ask for the microphone. | The page is served over plain HTTP from another machine. | Keep `PIPELINE_TLS=true` (the default) and open the `https://` URL. |
 | The download script fails, or `nemo-speech` cannot find its models. | `HF_TOKEN` is missing or invalid, or the weights are in another directory. | Set `HF_TOKEN` in `.env` and rerun the script as your user, or point `NEMO_SPEECH_MODEL_LOC` at the weights. |
@@ -792,5 +865,6 @@ The following table lists common failures for this recipe. For general startup i
 - [Frontend Delegation Agent README](../../src/examples/frontend_delegation_agent/README.md)
 - [Deploy the Frontend/Backend Agent](deploy-frontend-backend-agent.md)
 - [Use the OpenAI Realtime-Compatible Gateway](use-realtime-gateway.md)
+- [Run Big Bench Audio on the Frontend Delegation Agent](../../benchmarking_tools/AA-BigBenchAudio-Eval/RUNBOOK-FDA.md)
 - [WebSocket Keepalive](tune-pipeline-performance.md#websocket-keepalive)
 - [Troubleshooting](../06-troubleshooting.md)

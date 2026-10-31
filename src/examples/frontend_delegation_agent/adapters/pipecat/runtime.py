@@ -31,8 +31,16 @@ from examples.frontend_delegation_agent.adapters.pipecat.profiles import (
     keepalive_mismatch,
     profile_name,
 )
-from examples.frontend_delegation_agent.adapters.pipecat.settings import PipecatHeadSettings, load_pipecat_settings
-from examples.frontend_delegation_agent.core.config import DelegationConfig, load_delegation_config
+from examples.frontend_delegation_agent.adapters.pipecat.settings import (
+    PipecatHeadSettings,
+    load_pipecat_settings,
+    with_vad_stop_override,
+)
+from examples.frontend_delegation_agent.core.config import (
+    DelegationConfig,
+    load_delegation_config,
+    with_proactive_max_override,
+)
 from examples.frontend_delegation_agent.core.engine.filler import FillerLog
 from examples.frontend_delegation_agent.core.engine.sinks import EventLog, SessionRoutingSink
 from examples.frontend_delegation_agent.core.frontend.llm import ChatModel
@@ -109,6 +117,11 @@ class FdaRuntime:
                 f"{', '.join(str(path) for path in config.source_files)} (config hash {config.config_hash})"
             )
             logger.info(f"Pipecat adapter settings {self.settings.summary()}")
+            proactive = config.output.proactive_status
+            logger.info(
+                f"proactive status enabled={proactive.enabled} after_s={proactive.after_s:g} "
+                f"max_per_run={proactive.max_per_run}"
+            )
             logger.info(f"health {self.health()}")
             logger.info(
                 f"frontend={config.frontend.decider}:{config.frontend.llm.model} backend={config.backend.link}:"
@@ -155,15 +168,20 @@ _REALTIME: dict[str, FdaRuntime] = {}
 
 
 def realtime_runtime(environ: Mapping[str, str] | None = None) -> FdaRuntime:
-    """The runtime of every OpenAI Realtime session: always the ``eval`` profile (``FDA_PROFILE`` is still checked)."""
+    """The runtime of every OpenAI Realtime session: always the ``eval`` profile (``FDA_PROFILE`` is still checked).
+
+    ``FDA_VAD_STOP_SECS`` and ``FDA_PROACTIVE_MAX_PER_RUN`` apply here only, so browser UI sessions keep
+    their own settings.
+    """
     profile_name(environ)
     runtime = _REALTIME.get(REALTIME_PROFILE)
     if runtime is None:
         profile = PROFILES[REALTIME_PROFILE]
-        config = load_delegation_config(profile.delegation_path)
+        config = with_proactive_max_override(load_delegation_config(profile.delegation_path), environ)
         mismatch = keepalive_mismatch(config.voice.server.ws_ping_interval_s, environ)
         if mismatch:
             raise ProfileError(mismatch)
-        runtime = FdaRuntime(config, load_pipecat_settings(profile.pipecat_settings), profile=REALTIME_PROFILE)
+        settings = with_vad_stop_override(load_pipecat_settings(profile.pipecat_settings), environ)
+        runtime = FdaRuntime(config, settings, profile=REALTIME_PROFILE)
         _REALTIME[REALTIME_PROFILE] = runtime
     return runtime

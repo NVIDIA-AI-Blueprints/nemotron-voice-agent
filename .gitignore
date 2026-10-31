@@ -46,6 +46,7 @@ audio_dumps/
 # Benchmarking results
 benchmarking_tools/scaling-perf/results_*/
 benchmarking_tools/scaling-perf/perf_suite_*/
+benchmarking_tools/AA-BigBenchAudio-Eval/datasets/
 
 # Frontend
 client/node_modules/

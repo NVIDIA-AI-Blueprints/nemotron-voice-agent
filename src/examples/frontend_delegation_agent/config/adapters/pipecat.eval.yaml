@@ -5,7 +5,9 @@
 # keeps Pipecat's defaults (pipecat.yaml). A benchmark client can pause its input between turns,
 # sometimes for seconds, so the end of a turn is measured in input audio only, like the former
 # server's 800 ms:
-#   - vad.stop_secs 0.8: Silero counts the silence in audio chunks.
+#   - vad.stop_secs 0.8: Silero counts the silence in audio chunks. FDA_VAD_STOP_SECS replaces it
+#     for OpenAI Realtime sessions (docker-compose.yml sets 0.8; the Big Bench Audio overlay,
+#     docker/docker-compose.fda-bba.yaml, sets 0.5).
 #   - vad.audio_idle_timeout 0: disables the VADProcessor's wall-clock forced speech stop, which
 #     cut users off mid-utterance whenever the client's input stalled for more than about 1.6 s.
 #   - turn.user_speech_timeout 0: no wall-clock wait after the VAD stop.

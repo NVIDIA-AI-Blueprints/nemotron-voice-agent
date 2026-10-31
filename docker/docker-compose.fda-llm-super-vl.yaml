@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The LLM backend of the Frontend Delegation Agent on nvidia/nvidia/nemotron-3.5-super-vl instead of
+# nvidia/nvidia/nemotron-3-ultra. The model rejects the reasoning_budget parameter, so
+# FDA_BACKEND_REASONING_BUDGET 0 omits it; reasoning stays on (enable_thinking: true and
+# llm.reasoning_effort of config/gateway.yaml). Apply after docker/docker-compose.fda-llm.yaml, for
+# example for Big Bench Audio:
+#
+#   FDA_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml \
+#     -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml \
+#     -f docker/docker-compose.fda-llm-super-vl.yaml -f docker/docker-compose.fda-bba.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build frontend-delegation-agent-single-gpu
+#
+# The LLM backend only: Hermes reads its model from docker/fda/gateway.env. Every value is a literal,
+# as in docker-compose.yml.
+
+services:
+  frontend-delegation-agent-single-gpu:
+    environment:
+      BACKEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-super-vl
+      FDA_BACKEND_REASONING_BUDGET: "0"

@@ -14,8 +14,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -366,6 +368,32 @@ class DelegationConfig:
         """Short hash of the effective settings (secrets excluded), for grouping runs."""
         blob = json.dumps(self.effective, sort_keys=True, default=str).encode()
         return hashlib.sha256(blob).hexdigest()[:12]
+
+
+#: Replaces ``output.proactive_status.max_per_run`` of OpenAI Realtime sessions (Big Bench Audio sets 3).
+PROACTIVE_MAX_PER_RUN_ENV = "FDA_PROACTIVE_MAX_PER_RUN"
+MAX_PROACTIVE_PER_RUN = 10
+
+
+def with_proactive_max_override(config: DelegationConfig, environ: Mapping[str, str] | None = None) -> DelegationConfig:
+    """``config`` with ``FDA_PROACTIVE_MAX_PER_RUN`` applied; unset or empty returns ``config`` itself.
+
+    Applied after loading, like ``FDA_VAD_STOP_SECS``, so the loaded settings and the config hash of a
+    run without the variable stay exactly as they are. The run's condition card records the value.
+    """
+    raw = (os.environ if environ is None else environ).get(PROACTIVE_MAX_PER_RUN_ENV, "").strip()
+    if not raw:
+        return config
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if not 1 <= value <= MAX_PROACTIVE_PER_RUN:
+        raise DelegationConfigError(
+            f"{PROACTIVE_MAX_PER_RUN_ENV} must be a whole number from 1 to {MAX_PROACTIVE_PER_RUN}, got {raw!r}"
+        )
+    proactive = replace(config.output.proactive_status, max_per_run=value)
+    return replace(config, output=replace(config.output, proactive_status=proactive))
 
 
 def load_delegation_config(path: str | Path = DEFAULT_CONFIG_PATH) -> DelegationConfig:
