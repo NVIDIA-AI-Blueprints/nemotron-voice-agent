@@ -153,8 +153,18 @@ class RoutingTests(Call):
         await self.turn("What is the weather?")
         await self.turn("Any update?")
         self.assertNotIn("Work in progress", runtime_data(self.frontend.calls[1]))
-        self.assertEqual(runtime_data(self.frontend.calls[1]), "\n" + self.session.agent.talker.runtime_data())
+        talker = self.session.agent.talker
+        self.assertEqual(runtime_data(self.frontend.calls[1]), "\n" + talker.runtime_data(turn="Any update?"))
         self.assertEqual(self.session.worknote.open(), [])
+
+    async def test_after_a_wait_the_next_decision_names_only_the_newer_turn(self):
+        # The turn waited on and the newer one reach the talker as one message: the runtime data names the newer one.
+        await self.call([TalkerDecision("wait"), delegate("Let me check.")])
+        await self.turn("Can you wait?")
+        await self.turn("My zip is one nine one two two.")
+        newest = PROMPTS.newest_turn.format(turn="My zip is one nine one two two.")
+        self.assertIn(newest, runtime_data(self.frontend.calls[1]))
+        self.assertNotIn("Can you wait?", runtime_data(self.frontend.calls[1]))
 
     async def test_wait_says_and_delegates_nothing(self):
         # The prompt set declares `wait`, so the talker's floor keeps it.

@@ -5,9 +5,9 @@
 
 Entries move only on the frontend's own calls and the official events the reader reads (``cascade/delegations.py``).
 A request is reserved before it is sent, so no turn decided meanwhile reads "none" while the hand-off is in flight. An
-entry reads "answer ready" while a result of it waits to be heard, so the talker never answers a result about to be
-said. Only a delegation part that reports events gets entries (``tracks``): no event ever ends a client delegation, so
-in Live client mode the talker reads no work line at all.
+entry reads as answered while a result of it waits to be heard, so the talker never requests or answers a result
+about to be said. Only a delegation part that reports events gets entries (``tracks``): no event ever ends a client
+delegation, so in Live client mode the talker reads no work line at all.
 """
 
 from __future__ import annotations
@@ -84,6 +84,7 @@ class WorkNote:
         self.prompts, self.tracks, self.clock, self.observe = prompts, tracks, clock, observe
         self.entries: dict[str, OpenWork] = {}  # the open delegations, oldest first
         self._made = 0  # how many entries were made: each entry's place in the order of requests
+        self.on_answer: Callable[[], None] = lambda: None  # the caller turns hear of each result that arrives
 
     def __contains__(self, delegation_id: str) -> bool:
         """Whether the delegation is open in the note."""
@@ -170,16 +171,24 @@ class WorkNote:
 
     def answered(self, delegation_id: str) -> None:
         """A result of the delegation waits to be said."""
-        entry = self.entries.get(delegation_id)
+        entry = self._entry(delegation_id)
         if entry is not None:
             entry.ready += 1
+        self.on_answer()
 
     def said(self, delegation_id: str) -> None:
         """The caller heard a result of the delegation, or it is not said; an ended one leaves once none waits."""
-        entry = self.entries.get(delegation_id)
+        entry = self._entry(delegation_id)
         if entry is not None:
             entry.ready = max(0, entry.ready - 1)
             self._leave_if_done(entry)
+
+    def _entry(self, delegation_id: str) -> OpenWork | None:
+        """The delegation's entry, or the entry of the delegation that carries its work."""
+        entry = self.entries.get(delegation_id)
+        if entry is None:
+            entry = next((each for each in self.entries.values() if delegation_id in each.carries), None)
+        return entry
 
     def ended(self, delegation_id: str) -> None:
         """The delegation ended: it leaves once nothing of it waits to be heard."""
@@ -188,15 +197,12 @@ class WorkNote:
             entry.ended = True
             self._leave_if_done(entry)
 
-    def remove(self, delegation_id: str) -> None:
-        """The delegation leaves the note at once."""
-        self.entries.pop(delegation_id, None)
-
     def hand_over(self, delegation_id: str, taker: str) -> None:
         """The IM named ``taker`` as the delegation that carries this one's work: words, clocks and count go to it.
 
-        The taker's entry reads "older words / newer words" and keeps the older clocks and progress-line count.
-        Its ``carries`` gains the delegation and every delegation that one carried.
+        The taker's entry reads "older words / newer words" and keeps the older clocks and progress-line count, and the
+        results of the delegation that wait to be heard. Its ``carries`` gains the delegation and every delegation that
+        one carried.
         """
         entry = self.entries.pop(delegation_id, None)
         carrier = self.entries.get(taker)
@@ -208,6 +214,7 @@ class WorkNote:
         starts = [start for start in (carrier.started_at, entry.started_at) if start is not None]
         carrier.started_at = min(starts) if starts else None
         carrier.lines_said += entry.lines_said
+        carrier.ready += entry.ready
         carrier.carries += (entry.id, *entry.carries)
         self.observe("worknote.joined", delegation_id=delegation_id, taker=taker)
 
@@ -220,7 +227,7 @@ class WorkNote:
         return list(self.entries.values())
 
     def answer_ready(self) -> bool:
-        """Whether an answer of an open delegation waits to be heard: its entry reads "answer ready"."""
+        """Whether an answer of an open delegation waits to be heard: its entry reads as answered."""
         return any(entry.ready for entry in self.entries.values())
 
     def newer_requests(self, delegation_ids: list[str]) -> tuple[str, ...]:

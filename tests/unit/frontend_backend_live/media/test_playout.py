@@ -35,6 +35,7 @@ from examples.frontend_backend_live.media.services import (
     PerSentence,
     Stitched,
     build_tts,
+    load_speech,
     speech_mode,
 )
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_OUT_SAMPLE_RATE, build_pipeline_params
@@ -42,6 +43,7 @@ from live.ports import EXCHANGE_RATE
 from live.protocol import SessionConfig
 from tests.unit.cascade_helpers import LIVE_CONFIG as CASCADE_TEST_CONFIG
 from tests.unit.cascade_helpers import FakeTTS
+from tests.unit.contracts.delegation_port import ScriptedDelegationPort
 from tests.unit.frontend_backend_live.adapter.adapter_helpers import FLUSH, Probe, RecordingPort, run_frames, tone
 
 
@@ -273,8 +275,8 @@ class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
         tts = build_tts({}, {"server": "magpie-tts:50051"})
         self.assertEqual(tts._max_consecutive_zero_audio_contexts, 0)
 
-    async def test_a_slow_text_to_speech_setup_leaves_the_event_loop_free(self):
-        # Each blocking setup call runs in a worker thread: while a slow server answers, other sessions keep running.
+    async def test_a_slow_text_to_speech_load_runs_in_a_worker_thread_and_leaves_the_event_loop_free(self):
+        # A slow server's blocking calls hold only their worker thread: other sessions keep running meanwhile.
         tts = build_tts({}, {"server": "magpie-tts:50051"})
         loop_thread, threads, ticks = threading.current_thread(), [], []
 
@@ -288,19 +290,106 @@ class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
                 ticks.append(1)
                 await asyncio.sleep(0.01)
 
+        def opened():
+            blocking()
+            tts._service = SimpleNamespace()
+
         with (
-            patch.object(tts, "_initialize_client", lambda: blocking()),
+            patch.object(tts, "_initialize_client", opened),
             patch.object(tts, "_create_synthesis_config", lambda: blocking("config")),
             patch.object(tts, "_load_zero_shot_audio_prompt", lambda: blocking()),
-            patch.object(TTSService, "setup", AsyncMock()),
         ):
             task = asyncio.create_task(ticker())
-            await tts.setup(None)
+            await tts.load()
             task.cancel()
         self.assertEqual(tts._config, "config")
         self.assertEqual(len(threads), 3)
         self.assertNotIn(loop_thread, threads)
         self.assertGreater(len(ticks), 20)  # about 60 ticks of 10 ms in 0.6 s of blocking calls
+
+    async def test_a_text_to_speech_the_session_loaded_has_nothing_left_to_load_in_its_setup(self):
+        tts = build_tts({}, {"server": "magpie-tts:50051"})
+        loads = []
+
+        def opened():
+            loads.append("client")
+            tts._service = SimpleNamespace()
+
+        with (
+            patch.object(tts, "_initialize_client", opened),
+            patch.object(tts, "_create_synthesis_config", lambda: loads.append("config")),
+            patch.object(tts, "_load_zero_shot_audio_prompt", lambda: None),
+            patch.object(TTSService, "setup", AsyncMock()),
+        ):
+            await load_speech(tts)
+            await tts.setup(None)
+        self.assertEqual(loads, ["client", "config"])  # loaded once, before the pipeline's setup
+        await load_speech(FakeTTS())  # a service with nothing to load before the session starts
+
+    @staticmethod
+    def opening(tts, channel):
+        """Patch ``tts`` to open a client on ``channel``."""
+
+        def opened():
+            tts._service = SimpleNamespace(auth=SimpleNamespace(channel=channel))
+
+        return patch.object(tts, "_initialize_client", opened)
+
+    async def test_a_text_to_speech_load_that_fails_closes_the_channel_it_opened(self):
+        tts, channel = build_tts({}, {"server": "magpie-tts:50051"}), MagicMock()
+        failing = MagicMock(side_effect=ConnectionError("the server went away"))
+        with (
+            self.opening(tts, channel),
+            patch.object(tts, "_create_synthesis_config", failing),
+            self.assertRaises(ConnectionError),
+        ):
+            await tts.load()
+        channel.close.assert_called_once()
+        self.assertIsNone(tts._service)
+
+    async def test_a_text_to_speech_load_given_up_closes_the_channel_it_opened_once_its_thread_ends(self):
+        # The session's start timed out: the blocking calls run on in their thread, which nothing can stop.
+        tts, channel = build_tts({}, {"server": "magpie-tts:50051"}), MagicMock()
+        release, closed = threading.Event(), asyncio.Event()
+        channel.close.side_effect = closed.set
+        with (
+            self.opening(tts, channel),
+            patch.object(tts, "_create_synthesis_config", lambda: release.wait(2)),
+            patch.object(tts, "_load_zero_shot_audio_prompt", lambda: None),
+        ):
+            with self.assertRaises(TimeoutError):
+                async with asyncio.timeout(0.05):
+                    await tts.load()
+            channel.close.assert_not_called()  # its thread still runs
+            release.set()
+            await asyncio.wait_for(closed.wait(), 2)
+        self.assertIsNone(tts._service)
+
+    async def test_a_session_loads_its_text_to_speech_before_its_pipeline_starts(self):
+        order = []
+        adapter = CascadeAdapter(
+            SessionConfig(model="live-1"),
+            "websocket",
+            None,
+            live_config=CASCADE_TEST_CONFIG,
+            frontend_endpoint=ModelEndpoint(model="talker", base_url="http://talker"),
+            instructions="",
+            stt=None,
+            tts=FakeTTS(),
+        )
+
+        async def loaded(tts):
+            order.append("text-to-speech loaded")
+
+        async def ran(*args, **kwargs):
+            order.append("pipeline started")
+
+        with (
+            patch("examples.frontend_backend_live.adapter.adapter.load_speech", loaded),
+            patch.object(CascadeAdapter, "run_pipeline", ran),
+        ):
+            await adapter.start(RecordingPort(), ScriptedDelegationPort())
+        self.assertEqual(order, ["text-to-speech loaded", "pipeline started"])
 
     async def test_a_stitched_magpie_line_reaches_the_transcript_after_its_audio(self):
         # The root builds a stitched Magpie TTS from the catalog and the adapter with no mode: a stitched line's text

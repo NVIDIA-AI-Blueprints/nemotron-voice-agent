@@ -320,7 +320,7 @@ class DelegationReader:
         """The delegation ended with no result to come: its line, if any, is said, and what it told is forgotten."""
         if line:
             self.results.notice(watched.id, line)
-        self.worknote.remove(watched.id)
+        self.worknote.ended(watched.id)  # it leaves once nothing of it waits to be heard
         self.results.ended(watched.id)
         self._end(watched, how)
 

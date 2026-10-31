@@ -12,7 +12,8 @@ covers is discarded before it says or sends anything, and those turns wait on th
 again, they are decided with no new turn, unless a decision runs then: speech with no words may bring no decision of
 its own. While turns wait or a decision runs, the floor is busy, so nothing the voice says on its own goes before the
 reply. A reply or a lead-in never starts while the caller speaks: it waits for the floor, and a lead-in is dropped once
-the caller starts speaking after its delegation was decided.
+the caller starts speaking after its delegation was decided. A result that arrives while a decision on caller turns
+runs cuts that decision off at once, since it read the work note before the result, and its turns wait the same way.
 """
 
 from __future__ import annotations
@@ -147,6 +148,8 @@ class CallerTurns:
         self._deciding = False
         self.handoffs: set[asyncio.Task] = set()  # hand-offs still running, whoever waited for them
         self.redecisions: set[asyncio.Task] = set()  # decisions of the turns a dropped decision left waiting
+        self._arrival: asyncio.Future | None = None  # set when a result arrives during a decision on caller turns
+        worknote.on_answer = self.answer_arrived
 
     def hear(self) -> None:
         """Take each caller turn the buffer gained: note it, and keep it waiting for a decision. Nothing awaits."""
@@ -218,14 +221,19 @@ class CallerTurns:
 
         A decision that covers turns is discarded when the caller spoke again after them (:meth:`_spoke_after`): it
         says, sends and records nothing, and those turns wait for the next decision, which covers them with the newer
-        words, or comes once the caller is silent (:meth:`_redecide`). A turn heard while the talker decides an
-        instruction alone is not in what it read, so it stays waiting for the next decision: its stop frame can come
-        during a decision no interruption cuts off.
+        words, or comes once the caller is silent (:meth:`_redecide`). A result that arrives while the talker decides
+        on turns cuts the decision off, and those turns wait the same way (:meth:`_decide_on_latest`). A turn heard
+        while the talker decides an instruction alone is not in what it read, so it stays waiting for the next
+        decision: its stop frame can come during a decision no interruption cuts off.
         """
         instructions, history = split_messages(self.memory.labeled())
         covered, started = len(self.waiting), self.floor.caller_starts
         open_work = bool(self.worknote.open())
-        decision = await self._decide(instructions, history, self.work_line(), work_open=open_work)
+        decision = await self._decide_on_latest(covered, instructions, history, work_open=open_work, turn=text)
+        if decision is None:
+            self.observe("talker.cut_off")
+            self.floor.when_caller_silent(self._redecide)
+            return
         if covered and self._spoke_after(covered, started):
             self.observe("talker.discarded", action=decision.action, **decision.diagnostics)
             self.floor.when_caller_silent(self._redecide)
@@ -237,6 +245,37 @@ class CallerTurns:
         # An action the table does not know would be spoken, as a reply is.
         action = self.actions.get(decision.action, self._speak)
         await action(decision, text, cut)
+
+    async def _decide_on_latest(
+        self, covered: int, instructions: str, history: list[dict], *, work_open: bool, turn: str
+    ) -> TalkerDecision | None:
+        """The talker's decision on the work note as it is now; ``None`` when a result arrives before it is made.
+
+        Only a decision that covers caller turns is cut off: the talker reads the work note when its call starts, so a
+        result that arrives during the call would leave the decision on the note before it. Such a decision names
+        ``turn``, the words of the turns it covers.
+        """
+        if not covered:
+            return await self._decide(instructions, history, self.work_line(), work_open=work_open)
+        self._arrival = arrival = asyncio.get_running_loop().create_future()
+        work_line = self.work_line()
+        deciding = asyncio.ensure_future(self._decide(instructions, history, work_line, work_open=work_open, turn=turn))
+        try:
+            await asyncio.wait([deciding, arrival], return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            deciding.cancel()
+            raise
+        finally:
+            self._arrival = None
+        if deciding.done():
+            return deciding.result()
+        deciding.cancel()
+        return None
+
+    def answer_arrived(self) -> None:
+        """A result arrived: the decision on caller turns under way, if any, is cut off (:meth:`_decide_on_latest`)."""
+        if self._arrival is not None and not self._arrival.done():
+            self._arrival.set_result(None)
 
     def _spoke_after(self, covered: int, started: int) -> bool:
         """Whether the caller spoke again after a decision's ``covered`` turns; ``started``: the starts counted then.
@@ -307,7 +346,7 @@ class CallerTurns:
     async def _hand_off(self, reservation: str | None, text: str) -> str:
         """Send the delegation with the heard log's input; confirm the reserved entry, or release it when refused.
 
-        The input notes an answer that waits to be heard as it is built: the work note's "answer ready".
+        The input notes an answer that waits to be heard as it is built (:meth:`WorkNote.answer_ready`).
         """
         try:
             delegation_id = await self.heard_log.delegate(self.delegation, unheard=self.worknote.answer_ready())
@@ -320,10 +359,11 @@ class CallerTurns:
         return delegation_id
 
     async def _decide(
-        self, instructions: str, history: list[dict], work_in_progress: str, *, work_open: bool
+        self, instructions: str, history: list[dict], work_in_progress: str, *, work_open: bool, turn: str = ""
     ) -> TalkerDecision:
         try:
-            return await self.agent.talker.decide(instructions, history, work_in_progress, work_open=work_open)
+            talker = self.agent.talker
+            return await talker.decide(instructions, history, work_in_progress, work_open=work_open, turn=turn)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

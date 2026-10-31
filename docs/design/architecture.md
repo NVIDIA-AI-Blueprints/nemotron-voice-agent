@@ -30,7 +30,7 @@ The following terms have a fixed meaning on this page and in the code:
 | Commit gate | While newer input waits to land, or waits for a model conductor's decision, no new call of the work it can concern is dispatched. |
 | Carrier, taker | The carrier is the delegation whose open response carries a Work's output. When a join lands, the newer delegation, the taker, becomes the carrier. |
 | Envelope | The speak and display shape of a result: a `show` item for the screen, then the `final_answer` message to speak. |
-| Voice note | Text the IM adds to the backend's instructions about the voice channel: the `texts.voice_notes` entry that `delegation.voice_note` names. The `default` note asks for plain spoken sentences that start with the substance, says how speech recognition writes spelled letters, numbers, and IDs, and says how to recover when a lookup by ID fails. An empty note adds nothing. |
+| Voice note | Text the IM adds to the backend's instructions about the voice channel: the `texts.voice_notes` entry that `delegation.voice_note` names. The `default` note asks for plain spoken sentences that start with the substance, says how speech recognition writes spelled letters, numbers, and IDs, and says how to recover when a lookup by ID fails. It also says that a cut-off reply was heard only up to the cut, so the backend repeats any question or request for confirmation after the cut before acting on what the caller said. An empty note adds nothing. |
 | One-shot session | A request with no conversation, the official stateless use. The Live Console's client-mode rounds use it. |
 
 ## The Four Boxes
@@ -110,7 +110,7 @@ the part of each side that handles it:
 | Point | Direction | Official event or item | Media side | IM side |
 | --- | --- | --- | --- | --- |
 | 1. A delegation creates work | Media to IM | `POST /v1/responses`; its response opens `response.created` (status `queued`), then `response.queued` | The caller's turns and the server delegation's ordered sender | Admission, then the conductor |
-| 1b. A request joins open work | IM to media | The taker's `response.in_progress` names the older response in `previous_response_id`; then the older response gets one `commentary` message, which names the taker's delegation ID, and `response.completed` | The reader moves the older delegation's words, lead-in, and clock to the taker | `WorkRun`, when the steering lands |
+| 1b. A request joins open work | IM to media | The taker's `response.in_progress` names the older response in `previous_response_id`; then the older response gets one `commentary` message, which names the taker's delegation ID, and `response.completed` | The reader moves the older delegation's words, lead-in, clock, and unheard results to the taker | `WorkRun`, when the steering lands |
 | 2. Short status | IM to media | `message` items with `phase: commentary`; `mcp_call` items for the tools the backend runs | The work note keeps the newest line of each delegation and the tool calls of its latest response: a backend call runs from its `response.output_item.added` and ends with the official status of its `response.output_item.done` | `ProgressNotes`, at most one note per delegation per `progress_note_seconds` |
 | 3. A ready result | IM to media | One `message` with `phase: final_answer` per task; `show` items before it; then the terminal event | The inbox, then idle, then memory and speech together; the display at once | `WorkRun` writes it at once, and the IM never waits for speech |
 | 3b. A wait for the app | Both | `function_call` items end the response; the app answers with `function_call_output` items and `response.create` | The app-wait clock and its line | The task waits, matched by `call_id` |
@@ -130,8 +130,8 @@ the caller heard it in full, because the backend holds its own answer.
 Instruction appends stay outside that limit. The first request that the core accepts after an append carries it in its
 place, and every later request carries it again before the header, under the `earlier` line, so it never reads as new
 input. Every request therefore repeats every instruction append. While an answer that the backend gave waits to be
-heard, which the work note shows as answer ready, the input ends with the `unheard` line, so the backend does not take
-the caller's newer words for a reply to it.
+heard, which the work note marks with the prompt set's `answer_ready_label`, the input ends with the `unheard` line, so
+the backend does not take the caller's newer words for a reply to it.
 
 The speech pipeline ends each caller turn as `frontend.cascade.speech.turn_end` sets
 ([`media/turns.py`](../../src/examples/frontend_backend_live/media/turns.py)). With `smart_turn`, the default, Smart
@@ -143,11 +143,17 @@ turn ends at the final, or 0.8 seconds after the request when no final comes, so
 missed does not wait for Pipecat's 5-second turn stop timeout. `shared` uses the turn detection of the shared pipeline,
 with its environment variables.
 
+Each live session loads its text-to-speech client, synthesis config, and zero-shot audio prompt in a worker thread
+before its pipeline starts, because the WebRTC transport can start sending audio during the pipeline's setup. A
+session's audio therefore begins only when it can speak.
+
 The talker decides the caller's turns one decision at a time. When the caller speaks again while the talker decides on
 their turns, that decision says, sends, and records nothing, and the turns wait for the next decision, which covers
 them together with the newer words. If that speech brings no words, the next decision comes when the caller is silent
-again and covers the waiting turns alone. A decision on an instruction append alone is never dropped this way. A reply,
-the `holding` line, and the `refusal` line wait until the caller is silent.
+again and covers the waiting turns alone. A result that arrives while the talker decides on the caller's turns cuts
+that decision off at once, because the talker read the work note before the result, and the turns wait the same way.
+The next decision comes when the caller is silent. A decision on an instruction append alone is never dropped this way.
+A reply, the `holding` line, and the `refusal` line wait until the caller is silent.
 
 When the caller's words cut a line and the talker waits on them, such as a bare "Okay," the voice says the unheard rest
 of that line once, as it does after a turn with no words, unless another line came since. Set
@@ -187,8 +193,8 @@ result from the backend to the caller:
    With `frontend.cascade.speech.heard_words: estimated`, the talker's memory also keeps the words that the line's
    audio likely carried past what played, estimated at the call's speaking rate. A cut line of stitched speech, which
    the heard log keeps whole, keeps only the estimated words in the memory. The heard log does not take the estimate.
-   An answered delegation leaves the talker's work note after the caller hears its results, even in part, so results
-   back in the inbox keep it listed as answer ready.
+   A delegation leaves the talker's work note after it ends and the caller hears its results, even in part, so results
+   back in the inbox keep it listed with the `answer_ready_label`.
 
 The writer reads the talker's instructions inside the prompt set's writer frame, so it keeps any limits that they set
 on what the caller may be told. `as_written` (`frontend.cascade.delegation.result_wording`) says each result as the
@@ -410,7 +416,8 @@ at most one per delegation every `delegation.progress_note_seconds`. Notes never
 question takes one of three paths:
 
 1. The talker answers it from its work line, with the newest progress note and the tool calls that run now or ended,
-   and nothing is delegated.
+   and nothing is delegated. When the work line lists the request with the `answer_ready_label`, the talker waits
+   instead, and the answer that plays right after is the reply.
 2. If the talker delegates it, a model conductor can answer it from the work records with `Answer` (the
    `answer_status` control tool), which ends the new delegation while the Work keeps running.
 3. With `llm`, whose conductor is a rule, the question joins the running Work. The records block and the closing line

@@ -152,7 +152,7 @@ class AcknowledgementTests(Call):
 
     async def test_an_instruction_keeps_it(self):
         class Waits:
-            async def decide(self, instructions, history, work_in_progress="", *, work_open=False):
+            async def decide(self, instructions, history, work_in_progress="", *, work_open=False, turn=""):
                 return TalkerDecision("wait")
 
         await self.slow_ack_call()

@@ -61,20 +61,58 @@ def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaForceEo
 
 
 class OffLoopSetupTTS(NvidiaTTSService):
-    """The NVIDIA text-to-speech, its setup's blocking calls run in a worker thread.
+    """The NVIDIA text-to-speech, its client, synthesis config and zero-shot prompt loaded in a worker thread.
 
     ``NvidiaTTSService.setup`` opens its client and fetches the server's synthesis config with blocking gRPC calls. On
     the event loop, a slow server holds every session of the process while one starts, so sessions that start together
     wait in line and can miss their start deadline. In a thread, a slow server delays only its own session.
+
+    A live session loads them before its pipeline starts (:func:`load_speech`), so its audio begins only when it can
+    speak.
     """
 
-    async def setup(self, setup: FrameProcessorSetup):
-        """The parent's setup, with its client, synthesis config and zero-shot prompt loaded off the event loop."""
-        await super(NvidiaTTSService, self).setup(setup)
-        await asyncio.to_thread(self._initialize_client)
-        self._config = await asyncio.to_thread(self._create_synthesis_config)
-        await asyncio.to_thread(self._load_zero_shot_audio_prompt)
+    async def load(self) -> None:
+        """Load the client, the synthesis config and the zero-shot prompt in a worker thread, unless they are loaded.
+
+        A load that fails closes the client it opened. A load given up (its start cancelled or timed out) runs on in its
+        thread, which nothing can stop, and closes what it opened once it ends.
+        """
+        if self._service is not None:
+            return
+        loading = asyncio.ensure_future(asyncio.to_thread(self._load))
+        try:
+            await asyncio.shield(loading)
+        except asyncio.CancelledError:
+            loading.add_done_callback(self._loaded_late)
+            raise
+
+    def _loaded_late(self, loading: asyncio.Future) -> None:
+        """A load given up ended in its thread: close what it opened, and read its failure, if any."""
+        if not loading.cancelled():
+            loading.exception()
+        self._close_client()
+
+    def _load(self) -> None:
+        try:
+            self._initialize_client()
+            self._config = self._create_synthesis_config()
+            self._load_zero_shot_audio_prompt()
+        except Exception:
+            self._close_client()
+            raise
         logger.debug(f"Initialized NvidiaTTSService with model: {self._settings.model}")
+
+    async def setup(self, setup: FrameProcessorSetup):
+        """The parent's processor setup, then :meth:`load`."""
+        await super(NvidiaTTSService, self).setup(setup)
+        await self.load()
+
+
+async def load_speech(tts: Any) -> None:
+    """Load what a text-to-speech needs before a session starts (:meth:`OffLoopSetupTTS.load`); others need nothing."""
+    load = getattr(tts, "load", None)
+    if load is not None:
+        await load()
 
 
 def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
