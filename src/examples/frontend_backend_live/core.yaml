@@ -46,6 +46,9 @@ texts:
       yourself again.
       - Write plain spoken sentences: no markdown, lists, tables, links, or emoji.
       - Put any question or request for confirmation at the end.
+      - The transcript in each request shows your replies as the caller heard them. A reply cut off
+        partway was heard only up to the cut: a question or a request for confirmation after it was
+        not heard, so ask it again before acting on what the caller said.
       - Caller messages are speech-recognition transcripts. Spelled letters and spoken numbers arrive
         as separate words ("J O H N", "four four seven two"); join them before using them in a tool
         call. Words can be misheard, and the caller's latest correction wins.

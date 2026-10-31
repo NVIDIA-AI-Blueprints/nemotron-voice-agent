@@ -8,8 +8,8 @@ Joins the client's instructions with the prompt set's frame and routing rules, a
 reply, a delegation, or a silent ``wait``. A decision that fails while work is open says the holding line instead of
 starting a new delegation, which would join the work in progress. The layout of the routing call's instructions is
 built once, part by part (:meth:`Talker.routing_parts`), so a view of the request (``/history``) shows what is sent.
-The call's runtime data, the work line and the decision cue, goes after the conversation (:meth:`Talker.runtime_data`),
-where the model reads it last.
+The call's runtime data, the work line, the newest turn and the decision cue, goes after the conversation
+(:meth:`Talker.runtime_data`), where the model reads it last.
 """
 
 from collections.abc import Sequence
@@ -57,26 +57,37 @@ class Talker:
         parts.append(PromptPart(f"prompt set {name}: routing rules", prompts.routing, "\n"))
         return parts
 
-    def runtime_data(self, work_line: str = "") -> str:
-        """The routing call's last user entry, after the conversation: the label, the work line (if any), the cue."""
+    def runtime_data(self, work_line: str = "", turn: str = "") -> str:
+        """The routing call's last user entry, after the conversation: the label, the work line (if any), the cue.
+
+        ``turn``: the words of the caller turns decided, named before the cue.
+        """
         prompts = self.prompts
-        return prompts.runtime_label + "\n" + (f"{work_line}\n\n" if work_line else "") + prompts.decision_cue
+        newest = prompts.newest_turn.format(turn=turn) + "\n" if turn else ""
+        return prompts.runtime_label + "\n" + (f"{work_line}\n\n" if work_line else "") + newest + prompts.decision_cue
 
     async def decide(
-        self, instructions: str, history: list[dict], work_in_progress: str = "", *, work_open: bool = False
+        self,
+        instructions: str,
+        history: list[dict],
+        work_in_progress: str = "",
+        *,
+        work_open: bool = False,
+        turn: str = "",
     ) -> TalkerDecision:
         """Return the routing decision for ``history`` under the client's ``instructions``, after :meth:`floored`.
 
         ``history`` is the voice history as the talker reads it (``TalkerMemory.labeled``). ``work_in_progress`` is the
         cascade's work line (``CallerTurns.work_line``): the delegations still open, or, with a server delegation, that
         none is open; it is empty in client mode. It goes after the conversation, in the runtime data. ``work_open``
-        says whether any delegation is open, so that a failed decision holds instead of delegating.
+        says whether any delegation is open, so that a failed decision holds instead of delegating. ``turn`` holds the
+        words of the caller turns decided: a turn decided earlier joins them in one message after a wait.
         """
         parts = self.routing_parts([PromptPart("instructions", instructions)])
         routing = "".join(part.sep + part.text for part in parts)
         # After the caller's newest turn, a line break sets the runtime data apart: the provider joins the two entries.
         joined = bool(history) and history[-1].get("role") == "user"
-        runtime = {"role": "user", "content": ("\n" if joined else "") + self.runtime_data(work_in_progress)}
+        runtime = {"role": "user", "content": ("\n" if joined else "") + self.runtime_data(work_in_progress, turn)}
         decision = await self.frontend.complete(routing, [*history, runtime], self.spec)
         return self.floored(decision, work_open=work_open)
 

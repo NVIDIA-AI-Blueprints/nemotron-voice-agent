@@ -13,6 +13,7 @@ delegation part; the adapter owns its pipeline, its presenter's task and its sil
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
-from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
+from examples.frontend_backend_live.adapter.pipeline_host import START_TIMEOUT_SECONDS, PipelineHost
 from examples.frontend_backend_live.adapter.readiness import EndpointReadiness
 from examples.frontend_backend_live.cascade.agent import LiveAgent, build_agent
 from examples.frontend_backend_live.cascade.memory import ContextConversation, message_text, split_messages
@@ -37,6 +38,7 @@ from examples.frontend_backend_live.media.services import (
     SpeechMode,
     build_stt,
     build_tts,
+    load_speech,
     speech_mode,
     speech_server,
 )
@@ -216,10 +218,13 @@ class CascadeAdapter(PipelineHost):
         """Build the pipeline and the cascade, start the cascade (its presenter and silence timer) and the pipeline.
 
         The cascade delegates to ``delegation``, the session's delegation part (its server delegation, or in client
-        mode its client delegation), and hears the playout tracker the host places after the output. It returns once
-        the pipeline runs.
+        mode its client delegation), and hears the playout tracker the host places after the output. The text-to-speech
+        loads first (:func:`load_speech`), within ``START_TIMEOUT_SECONDS``: the transport can send audio as soon as
+        the pipeline is set up, so the session's audio begins when it can speak. It returns once the pipeline runs.
         """
         self.session, self.delegation = session, delegation
+        async with asyncio.timeout(START_TIMEOUT_SECONDS):
+            await load_speech(self.tts)
         self.agent = build_agent(self.live_config, self.frontend_endpoint, frontend_client=self.frontend_client)
         context = LLMContext(seed_messages(self.config, self.instructions))
         # Only the caller's turns come from Pipecat's aggregator; the cascade writes its own lines (cascade.utterances).

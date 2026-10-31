@@ -89,7 +89,7 @@ class PromptSet:
     progress: str  # the writer's rules for a progress line, read in place of the commentary and answer texts
     work_in_progress: str  # the open delegations, one numbered line each: "{items}"
     no_work_in_progress: str  # what the talker reads, with a server delegation, when none is open
-    answer_ready_label: str  # an open delegation whose answer arrived and is said next
+    answer_ready_label: str  # an open delegation whose answer arrived and is being said
     typed_request_label: str  # work the frontend did not delegate: the client's own typed run
     work_texts: WorkTexts  # the words of each open delegation's line in the work note
     update_label: str  # in front of every update the writer words: backend results, the application's message, or both
@@ -107,6 +107,7 @@ class PromptSet:
     caller_label: str  # in front of a caller turn that follows a backend result or application context
     runtime_label: str  # in front of the routing decision's runtime data, sent after the conversation
     decision_cue: str  # the routing decision's last line, after the runtime data: what to decide now
+    newest_turn: str  # before the cue when caller turns are decided: "{turn}", their words
 
     def framed(self, instructions: str) -> str:
         """The client's instructions as the routing decision reads them: word for word, inside the set's frame."""

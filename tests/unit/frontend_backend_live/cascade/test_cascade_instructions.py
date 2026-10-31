@@ -14,7 +14,7 @@ from tests.unit.frontend_backend_live.cascade.doubles import PROMPTS, Call
 class Waits:
     """A talker that answers ``wait`` to everything."""
 
-    async def decide(self, instructions, history, work_in_progress="", *, work_open=False):
+    async def decide(self, instructions, history, work_in_progress="", *, work_open=False, turn=""):
         return TalkerDecision("wait")
 
 

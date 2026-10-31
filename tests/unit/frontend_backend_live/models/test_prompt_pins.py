@@ -39,7 +39,7 @@ class PromptTextTests(unittest.TestCase):
     DIGESTS = {
         "frame_before": "04cc4b783a0d3e808443a0e2b2afceab6f676c8839670590131c4d6fe1b299ef",
         "frame_after": "a77da78e0549fa2f0d1af6e4e860994f715eb0f2ab0b55ec17bb3cd280be3e9e",
-        "routing": "0d9267ea393245e853d1e640dd9385cced672c7b2c27c54703daf3abeeed6eea",
+        "routing": "43fa57dd0502b5f427b043597c8a31e1308b70df2dec8db2f1dfef71e813fbce",
         "commentary": "146751021894e1c4fe0087a48c765134e5845b5f0ecc9beb8eedf3b0d220716a",
         "answer": "af7ebcc6e7569591135df28b5ce7be26d88a5cfa050aa4fbd9b6db0f5ba9e364",
         "progress": "502d51902e0db2546702c47fc78cb60bf4f1ab4fbf195d3c51058f29deb3b6cc",
@@ -47,7 +47,7 @@ class PromptTextTests(unittest.TestCase):
         "writer_frame_after": "e26efe4b9939af11b8c172fcdca27d889062044d4605be26a5f1c11663af913f",
         "work_in_progress": "1e25d42ff394424d13d2998eba4933fd06251d7dace71ddd0831aaaa35d787a3",
         "no_work_in_progress": "3f24d1a22ca78b922fc3532e3078e0c76961a8d5d60b9c609ce43b1a80a6dc27",
-        "answer_ready_label": "9c562ef394b22efa854d34f0acd30c2d80066126b36a5dc51d13150fee320165",
+        "answer_ready_label": "b9f74dbe050460e447c8125ee599991fb6c40c18fa0b72886c7894b29c331d57",
         "typed_request_label": "d627e456ba2045be399c0b24fab0477a3dc4bb083a4b5a9efe344e39439e659a",
         "work_texts.item": "b51d1fd1c2d176204e95abfd041bc590561f27ff2ef019f687d808b8ace28659",
         "work_texts.running": "dfba91d1f5e7a6e1221ae8d3b7b3020024672394110ea6b3a1a1ad7887aeda78",
@@ -78,9 +78,11 @@ class PromptTextTests(unittest.TestCase):
         "normalizer_prompt.instructions": "3978976a4b16f66994070faa78c374eeed3cbaf76f494b29b4895ee433a6c051",
         "normalizer_prompt.newest_turn": "673e1768822895ba593fbfbb07d3e6b4f170a0e4ac8d31f1735d6c766bcd2e07",
         "caller_label": "1ec7b80cf30f2317fb81885fc40658a1e482ba2955eb96524444d85016c61194",
-        # The routing decision's runtime data, after the conversation: its label, then the work line and the cue.
+        # The routing decision's runtime data, after the conversation: its label, then the work line, the newest turn
+        # and the cue.
         "runtime_label": "0bc1ff415b7cb0d73d1ffeec3d1676480e33fe1d61c2749cd7ebd961e0cfd41a",
         "decision_cue": "556ccc32a84e84ee0cbeb4cbf0191db2d4568db1324fdbbaab0d19703e68bdb7",
+        "newest_turn": "10553a9d1f8dbc67a1a3046ffa6ebd130dec0a409185960cb45c803f42510acf",
     }
 
     @staticmethod

@@ -22,6 +22,7 @@ from tests.unit.frontend_backend_live.cascade.doubles import (
     answered_events,
     completed,
     created,
+    failed,
     function_call,
     in_progress,
     message,
@@ -132,6 +133,19 @@ class EntryTests(unittest.TestCase):
         self.assertIn('... / Oh, and add a reminder the day before."', work.line())
         self.assertEqual(work.entries["D2"].request, f"{older} / Oh, and add a reminder the day before.")
 
+    def test_a_join_keeps_the_answer_that_waits_and_the_taker_counts_the_results_of_the_one_it_carries(self):
+        work = note()
+        work.confirm(work.reserve("Teas?"), "D1")
+        work.confirm(work.reserve("Green only."), "D2")
+        work.answered("D1")
+        work.hand_over("D1", "D2")
+        joined = "Teas? / Green only."
+        self.assertIn(work_item(1, ANSWER_READY_LABEL, joined), work.line())
+        work.said("D1")  # the carried delegation's answer is heard
+        self.assertIn(work_item(1, WORK.waiting, joined), work.line())
+        work.answered("D1")  # a later result of it waits on the taker's entry
+        self.assertIn(work_item(1, ANSWER_READY_LABEL, joined), work.line())
+
 
 class ProgressOfferTests(unittest.TestCase):
     def running(self):
@@ -198,7 +212,24 @@ class AppWaitCallTests(Call):
         self.buffer.turn("Well?")
         self.session.caller_stopped()
         await self.session.on_turn()
-        self.assertIn('answer ready, said next: "Teas?"', runtime_data(self.frontend.calls[1]))
+        self.assertIn(f'{ANSWER_READY_LABEL}: "Teas?"', runtime_data(self.frontend.calls[1]))
+
+    async def test_a_result_arriving_during_a_decision_cuts_it_off_and_the_turn_is_decided_again_on_the_result(self):
+        # The decision read the work note before the result arrived.
+        slow = asyncio.get_running_loop().create_future()
+        script = [TalkerDecision("delegate", "Let me check."), slow, TalkerDecision("wait")]
+        await self.call(script, settings=AS_WRITTEN)
+        await self.turn("Teas?")
+        await self.said(1)
+        deciding = asyncio.create_task(self.turn("Is it ready?"))
+        await settle(lambda: len(self.frontend.calls) == 2)
+        self.emit("item_1", *answered_events("r1", "Earl Grey is in stock."))
+        await deciding
+        await self.said(2)
+        self.assertTrue(slow.cancelled())  # the stale call was cut off, not waited for
+        self.assertEqual(self.spoken, ["Let me check.", "Earl Grey is in stock."])
+        self.assertEqual((self.kinds().count("talker.cut_off"), len(self.port.requests)), (1, 1))
+        self.assertIn(READY, runtime_data(self.frontend.calls[2]))
 
 
 AS_WRITTEN = CascadeSettings.parse({"delegation": {"result_wording": "as_written", "progress_after_seconds": None}})
@@ -258,6 +289,15 @@ class HeardAnswerTests(Call):
         self.assertEqual(self.session.worknote.line(), NO_WORK_IN_PROGRESS)
         await asyncio.sleep(0.05)
         self.assertEqual(len(self.spoken), 2)
+
+    async def test_a_delegation_that_fails_after_its_answer_stays_until_the_answer_is_heard(self):
+        await self.asked()
+        self.emit("item_1", created("r1"), queued("r1"), in_progress("r1"), message("Earl Grey.", item_id="m1"))
+        await self.said(2)
+        self.emit("item_1", failed("r1"))  # no result to come
+        self.assertIn(READY, self.session.worknote.line())
+        self.heard()
+        self.assertEqual(self.session.worknote.line(), NO_WORK_IN_PROGRESS)
 
     async def test_a_delegation_with_two_results_leaves_once_both_are_heard(self):
         await self.asked()

@@ -15,6 +15,7 @@ from examples.frontend_backend_live.cascade.ports import Ending
 from examples.frontend_backend_live.cascade.worknote import WorkNote
 from tests.unit.contracts.endings import load, official_events
 from tests.unit.frontend_backend_live.cascade.doubles import (
+    ANSWER_READY_LABEL,
     WORK,
     RecordingDisplay,
     RecordingResults,
@@ -220,7 +221,7 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
         reading.delegated("D1")
         reading.hand("D1", created("r1"), in_progress("r1"), message("Tea: yes.", item_id="m1"))
         self.assertEqual(reading.arrived, ["D1"])  # its pending acknowledgement is dropped
-        self.assertIn('answer ready, said next: "request D1"', reading.note.line())
+        self.assertIn(f'{ANSWER_READY_LABEL}: "request D1"', reading.note.line())
         reading.hand("D1", message("Cake: no.", item_id="m2"), completed("r1"))
         ready = [call for call in reading.results.calls if call[0] == "ready"]
         self.assertEqual(ready, [("ready", "D1", "Tea: yes."), ("ready", "D1", "Cake: no.")])

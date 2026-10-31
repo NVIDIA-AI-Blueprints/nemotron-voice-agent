@@ -180,7 +180,7 @@ class HeardLog:
         """Delegate with everything noted so far, and return the delegation id.
 
         ``unheard`` tells whether an answer the backend gave waits to be heard as the input is built (the work note's
-        "answer ready"). The entries the input carried leave the log only once the request is accepted, so a refusal,
+        ``answer_ready``). The entries the input carried leave the log only once the request is accepted, so a refusal,
         which raises, keeps them all.
         """
         items, carried = self.delegation_input(unheard=unheard)

@@ -12,7 +12,7 @@ talker waited on, the line is said at once; a reply, a lead-in, an instruction, 
 request or a new item moves it, and everything is worded again once no caller turn waits or is decided (a decision
 moves it again): after a reply or a lead-in, while that line plays. A move cuts a wording under way short. A
 delegation's end or handover is applied in its turn, in order with its results. A delivery that raises is requeued once;
-a line nobody heard is requeued by the utterances. A result reads "answer ready" in the work note until the caller
+a line nobody heard is requeued by the utterances. A result reads as answered in the work note until the caller
 hears it, even in part. After a quiet spell, the quiet task words a short progress line about open work from the work
 note, beside the inbox, and says it only if nothing moved while it was worded.
 """
@@ -50,7 +50,7 @@ class Item:
 
     line_kind: ClassVar[LineKind]  # the kind of a line it is said in (the first of a mixed line's)
     worded: ClassVar[bool] = False  # worded with the batch's other worded items, or said as written
-    answers: ClassVar[bool] = False  # a delegation's result: "answer ready" in the work note until it is heard
+    answers: ClassVar[bool] = False  # a delegation's result: answered in the work note until it is heard
 
     def record(self, memory: TalkerMemory, line: Line) -> tuple[str, ...]:
         """Write what it adds to the talker's memory with ``line``; return the delegations it tells the caller about."""
