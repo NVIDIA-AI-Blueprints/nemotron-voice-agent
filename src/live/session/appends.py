@@ -9,8 +9,8 @@ or a client delegation this session announced (only the client delegation knows 
 appended context takes.
 
 A session accepts at most ``max_appends_per_minute`` appends in any 60 seconds, the three kinds together (a limit of
-this server's own: GPT-Live limits only each append's size); one more is refused with ``rate_limit_exceeded``, and it
-neither reaches the adapter nor is acknowledged.
+this server's own: the Live API limits only each append's size); one more is refused with ``rate_limit_exceeded``, and
+it neither reaches the adapter nor is acknowledged.
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@
 """The strict startup schema of a live session: what a client may send in ``session`` and the limits on it.
 
 A session's ``delegation`` is one of two classes, picked by its official ``type`` from :data:`DELEGATION_CONFIGS`:
-:class:`ClientDelegationConfig` (``client``; an omitted, ``null`` or ``{}`` delegation resolves to it, as GPT-Live's
+:class:`ClientDelegationConfig` (``client``; an omitted, ``null`` or ``{}`` delegation resolves to it, as the Live API's
 "Omitted or null selects your application") and :class:`ResponsesDelegationConfig` (``responses``). Each keeps
 its own ``session.update`` rule (:meth:`ClientDelegationConfig.updated`, :meth:`ResponsesDelegationConfig.updated`), so
 nothing outside the class compares the type.
@@ -61,7 +61,7 @@ class AudioOutput(StrictModel):
 
     @model_validator(mode="after")
     def valid_voice(self):
-        """Reject a name that is neither a GPT-Live voice nor one of the speech service's own."""
+        """Reject a name that is neither a Live API voice nor one of the speech service's own."""
         if isinstance(self.voice, str) and self.voice not in LIVE_VOICES | TTS_VOICES:
             raise ValueError("Unknown voice: use a built-in voice name or a custom voice {id}")
         if isinstance(self.voice, dict) and (set(self.voice) != {"id"} or not self.voice["id"]):
@@ -267,7 +267,7 @@ class Client(StrictModel):
     data_channel: Permissions = Field(default_factory=Permissions)
 
 
-# The startup limits on the session's own instructions and history, as GPT-Live's session.start sets them.
+# The startup limits on the session's own instructions and history, as the Live API's session.start sets them.
 MAX_INSTRUCTION_TOKENS = 16384
 MAX_INPUT_MESSAGES = 128
 MAX_INPUT_TOKENS = 8192
@@ -280,7 +280,7 @@ class SessionConfig(StrictModel):
     instructions: str | None = None
     input: list[dict] = Field(default_factory=list)
     audio: Audio = Field(default_factory=Audio)
-    # Omitted, null or {}: Live client mode, as in official GPT-Live ("Omitted or null selects your application").
+    # Omitted, null or {}: Live client mode, as in the official Live API ("Omitted or null selects your application").
     delegation: ClientDelegationConfig | ResponsesDelegationConfig = Field(default_factory=ClientDelegationConfig)
     client: Client | None = None
     store: bool = False

@@ -59,7 +59,7 @@ class TracingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse((await self.worker_arguments(setting))["enable_tracing"])
 
     async def test_no_server_idle_close(self):
-        self.assertIsNone((await self.worker_arguments(None))["idle_timeout_secs"])  # GPT-Live leaves it to the app
+        self.assertIsNone((await self.worker_arguments(None))["idle_timeout_secs"])  # the Live API leaves it to the app
 
 
 class CallerLevelTests(unittest.IsolatedAsyncioTestCase):

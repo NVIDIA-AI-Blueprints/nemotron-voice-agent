@@ -16,7 +16,7 @@ is one worker: one :class:`BackendRun`, which reads and reports through its own 
 split a request into independent tasks that run in parallel (:class:`Start`), and :class:`Steer` and :class:`Cancel`
 may name one task. Results are never merged or reworded: each task's answer is its own ``final_answer`` item in the
 Work's response, and the response ends when the Work's last task ends. When one task waits for the app's outputs, the
-response ends with that task's calls (GPT-Live requires it) while the other tasks run on; the IM holds their items
+response ends with that task's calls (the Live API requires it) while the other tasks run on; the IM holds their items
 until the continuation opens the next response, so no adapter sees the difference. The backend LLM, directly
 connected, always has exactly one task per Work.
 

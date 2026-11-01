@@ -5,7 +5,7 @@
 
 The frontend adapter advances the clock as it consumes caller audio. Events place themselves on it: the delegation
 announcement's ``offset_ms`` and the span of each append's acknowledgment. Appended context takes no audio time, so
-its span is zero-length at the clock (the GPT-Live reference: "For appended context, this can equal start_ms"), and the
+its span is zero-length at the clock (the Live API reference: "For appended context, this can equal start_ms"), and the
 acknowledgment goes out once the frontend adapter has taken the context.
 """
 

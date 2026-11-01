@@ -359,7 +359,7 @@ class ClientRoutes:
 
     # ---------------------------------------------------------------------------------- response.create
     def requests(self) -> list[Continuation]:
-        """What a ``response.create`` sends, by GPT-Live's rule for a continuation.
+        """What a ``response.create`` sends, by the Live API's rule for a continuation.
 
         Every waiting response whose calls all have results is continued, one request each, the oldest first, with its
         results in call order; the newest also takes the typed messages, after its results. A response with only some

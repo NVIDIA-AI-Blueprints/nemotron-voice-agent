@@ -6,7 +6,7 @@
 A :class:`ResponseWriter` writes one response in the official order: ``response.created`` and ``response.queued`` at
 acceptance (``in_progress`` at once for a one-shot request), ``response.in_progress`` when work runs, whole items with
 their own ``output_index``, then exactly one terminal. A response that takes over an older delegation's work names that
-delegation's open response in ``previous_response_id``, a convention of this core: GPT-Live names no taker of joined
+delegation's open response in ``previous_response_id``, a convention of this core: the Live API names no taker of joined
 work.
 """
 

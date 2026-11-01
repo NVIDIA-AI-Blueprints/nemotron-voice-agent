@@ -202,14 +202,14 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_it_reports_the_settings_a_runtime_that_owns_its_calls_cannot_honor(self):
         source = self.build()
-        tau = {
+        benchmark_body = {
             "model": "scripted/model",
             "instructions": "Policy.",
             "tools": [{"type": "function", "name": "get_user", "parameters": {}}],
             "tool_choice": "auto",
             "parallel_tool_calls": False,
         }
-        self.assertEqual(source.unsupported(tau), [])  # tau2's session body
+        self.assertEqual(source.unsupported(benchmark_body), [])  # the benchmark client's session body
         problems = source.unsupported(
             {
                 "max_output_tokens": 100,

@@ -3,7 +3,7 @@
 
 """The voice names a client may send. The cascade speaks with the voice its text-to-speech service is set to.
 
-``LIVE_VOICES`` are GPT-Live's built-in voices, as its API reference lists them; a custom voice is sent as
+``LIVE_VOICES`` are the Live API's built-in voices, as its API reference lists them; a custom voice is sent as
 ``{"id": ...}``. ``TTS_VOICES`` are the speech service's own names, which a client may also send.
 """
 

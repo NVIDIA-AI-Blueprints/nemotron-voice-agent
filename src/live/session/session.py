@@ -55,8 +55,8 @@ def no_core():
 
 Command = Callable[["LiveProtocolSession", dict, str, "str | None"], Awaitable[None]]
 # The connection whose command runs (its subscription key). An error the command causes goes back to that connection
-# only, a choice GPT-Live leaves open (it names only client_event_id), also when a task or a callback that runs in the
-# command's context reports it later.
+# only, a choice the Live API leaves open (it names only client_event_id), also when a task or a callback that runs in
+# the command's context reports it later.
 COMMAND_CONNECTION: ContextVar[str | None] = ContextVar("command_connection", default=None)
 
 

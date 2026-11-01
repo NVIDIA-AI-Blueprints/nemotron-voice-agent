@@ -6,7 +6,7 @@ manager handles work, the backend port and its three backend adapters, the exten
 the deployment, and the rules that the tests enforce. It is written for engineers who change or
 extend the example. To run and use the example, refer to its README.
 
-The live session protocol follows GPT-Live. Every event and item inside the pipeline uses GPT-Live's schema and the
+The live session protocol is the Live API's. Every event and item inside the pipeline uses the Live API's schema and the
 official Responses API, with no custom events or fields. In client delegation mode, the app runs the delegated work
 itself. The shared Nemotron Voice Agent pipeline (`src/examples/shared/`: voice activity detection, automatic speech
 recognition (ASR), text-to-speech (TTS), and the turn models) is outside this design.
@@ -117,7 +117,7 @@ the part of each side that handles it:
 | 3c. Endings | IM to media | `response.failed` with an official error code; `response.incomplete` at close; an empty `response.completed` for a late continuation | The voice's own fixed lines | The stop door and the failure path |
 | 4. Playback | None | Nothing crosses | Playout facts correct what the cascade wrote; heard words go into the next request | None |
 
-Nothing crosses at point 4, because GPT-Live has no receipt event that confirms what the caller heard. Playout facts
+Nothing crosses at point 4, because the Live API has no receipt event that confirms what the caller heard. Playout facts
 stay in the frontend: they correct the talker's memory and the heard log, and the heard words reach the backend in the
 next request.
 
@@ -159,7 +159,7 @@ When the caller's words cut a line and the talker waits on them, such as a bare 
 of that line once, as it does after a turn with no words, unless another line came since. Set
 `frontend.cascade.speech.resume_after_noise` to `false` to turn both off.
 
-GPT-Live requests a spoken acknowledgement for each delegation and lets its model word it. The talker words it in the
+The Live API requests a spoken acknowledgement for each delegation and lets its model word it. The talker words it in the
 decision that delegates the turn: its lead-in is the acknowledgement, which the voice says after the session's
 `delegation.acknowledgement_delay_ms`, and not while the caller speaks
 ([`turns.py`](../../src/examples/frontend_backend_live/cascade/turns.py), `Acknowledgements`). A result, the
@@ -291,7 +291,7 @@ newest one carries its response. A Work holds one or more tasks (`TaskRun`), and
   limit counts tasks across every Work of the session. A task that waits for the app holds no slot.
 - Each task's answer is its own `final_answer` item. Nothing merges or rewords the answers.
 - The Work's response ends when its last task ends.
-- When one task waits for the app, the response ends with that task's calls, as GPT-Live requires, while the other
+- When one task waits for the app, the response ends with that task's calls, as the Live API requires, while the other
   tasks run on. The IM holds their items in order and writes them when the continuation opens the next response.
 
 Each task reads the conversation within `delegation.context_tokens`, then its Work's requests, then its brief, if the
@@ -434,7 +434,7 @@ is a fact and never said as written. It can answer with no words, for example wh
 while the backend works. The wording runs beside the inbox, and any change of the floor, any item queued, or a moved
 memory drops the line, so no line is said over a result. A later line needs news in the work note, which is a backend
 step that ended or a new progress note, and every offer counts against `progress_max_per_delegation`. A progress line is
-never resumed or said again, and a wording that fails says nothing. `as_written` words no progress line. GPT-Live keeps
+never resumed or said again, and a wording that fails says nothing. `as_written` words no progress line. The Live API keeps
 still-running progress silent by default, and `progress_after_seconds: null` does the same.
 
 ### One-Shot Sessions
@@ -848,7 +848,7 @@ The model behind each role comes from a services slot of the example's registry 
 model from `frontend.cascade.slot` (`llm`), and the backend's default model from `backend.slot` (`thinker-llm`). The
 prompts come from the example's `prompts.yaml`, each used as written: `frontend.cascade.prompt` (`voice`) when a
 session sets no instructions or blank ones, and `backend.prompt` (`backend`) when a request sets none. Neither names a
-domain, and `voice` follows GPT-Live's Live prompt template. The UI bot keeps the cafe's prompts: its talker's prompt
+domain, and `voice` follows the Live API's Live prompt template. The UI bot keeps the cafe's prompts: its talker's prompt
 is the UI's choice, the cafe's `talker` by default, its profile names the cafe's `thinker`, and the bot adds the
 `channel` context after each. When the talker's services entry sets a `system_prompt`, the bot puts it before the
 talker's prompt, and the talker's memory keeps both as its instructions through compaction.
@@ -921,8 +921,8 @@ the same settings:
 | `frontend-backend-live/server` | Nemotron ASR NIM | Nemotron 3.5 Lightning NIM | Nemotron 3 Ultra, public NVIDIA API | Magpie TTS NIM |
 | `frontend-backend-live/single-gpu` | NeMo-Speech.cpp | Nemotron 3.5 Lightning through vLLM | Nemotron 3.5 Lightning through vLLM | NeMo-Speech.cpp |
 
-For the slot order, the sampling settings, and how to run the backend on a local Nemotron 3 Super NIM, refer to the
-example's [Default Models](../../src/examples/frontend_backend_live/README.md#default-models).
+For the slot order and the sampling settings, refer to the example's
+[Default Models](../../src/examples/frontend_backend_live/README.md#default-models).
 
 To run another backend adapter, point `CORE_CONFIG_PATH` at its profile. The path is relative to the working
 directory: the repository root on the host, and `/app` in the container, where `./src` is mounted. For example,

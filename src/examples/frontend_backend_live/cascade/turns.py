@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 class Acknowledgements:
     """The spoken acknowledgement of a delegation: the lead-in the talker wrote in the decision that delegated it.
 
-    GPT-Live requests an acknowledgement for each delegation and lets its model word it; the talker words it in the
+    The Live API requests an acknowledgement for each delegation and lets its model word it; the talker words it in the
     same decision. A delegation with no lead-in says nothing. The lead-in is said after the part's delay (0: at once),
     once the caller is silent; until then it is pending. It is dropped when the caller started speaking after its
     delegation was decided, since the next decision answers their newer words. A pending one is also dropped when its

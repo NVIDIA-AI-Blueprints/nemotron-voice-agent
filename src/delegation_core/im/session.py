@@ -9,7 +9,7 @@ every decision; what a ``decide()`` leaves unplaced joins the newest open Work, 
 conductor's failure never starts work beside open work. While an arrival waits for its decision, the commit gate holds
 every open Work's new calls, since any of them may be the one the caller changed, and with
 ``delegation.hold_answers_while_deciding`` their answers too. A typed run steers running work as a spoken request does,
-a deliberate deviation from GPT-Live, which queues it.
+a deliberate deviation from the Live API, which queues it.
 """
 
 from __future__ import annotations

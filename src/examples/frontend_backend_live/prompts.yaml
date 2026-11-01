@@ -81,7 +81,7 @@ thinker:
     Do not use Markdown, lists, or symbols; this text is spoken.
 
 # The talker's default for a Live session that sets no instructions, or blank ones (config.yaml
-# frontend.cascade.prompt), used as written: GPT-Live's documented Live prompt template, with capability lines that
+# frontend.cascade.prompt), used as written: the Live API's documented Live prompt template, with capability lines that
 # name no domain, since a client's own instructions and tools carry its domain. It is no prompt of the repository UI,
 # so the prompt list leaves it out (internal).
 voice:
@@ -113,7 +113,7 @@ voice:
     Do not guess the result while waiting.
 
 # The backend's default for a Live client that sets no delegation.responses.instructions (core.yaml backend.prompt):
-# GPT-Live's documented backend template, whose task instructions name no domain, since a client's own tools and
+# The Live API's documented backend template, whose task instructions name no domain, since a client's own tools and
 # instructions carry its domain. It is no talker prompt, so the prompt list leaves it out (internal).
 backend:
   internal: true

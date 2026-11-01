@@ -57,15 +57,15 @@ RESPONSES_SESSION = {
     },
 }
 
-# What tau2's Live client starts a session with: its own agent model, its policy as the backend's instructions, its
-# function tools, one call per round and an effort (tau2/voice/audio_native/openai/live_provider.py).
-TAU2_SESSION = {
+# What the benchmark's Live client starts a session with: its own agent model, its policy as the backend's instructions,
+# its function tools, one call per round and an effort.
+BENCHMARK_SESSION = {
     "model": "live-1",
     "instructions": "You are a customer service agent. Delegate every request.",
     "delegation": {
         "type": "responses",
         "responses": {
-            "model": "tau2/agent-model",
+            "model": "benchmark/agent-model",
             "instructions": "Policy.",
             "tools": [MENU_TOOL],
             "tool_choice": "auto",
@@ -346,12 +346,13 @@ class ClientToolsEndToEndTests(EngineHarness):
         )
         self.assertEqual(self.live_session.status, "active")
 
-    async def test_the_benchmark_profile_starts_tau2s_session_with_no_error_and_runs_its_model(self):
+    async def test_the_benchmark_profile_starts_the_benchmark_clients_session_with_no_error_and_runs_its_model(self):
         # The second real-core case of the background check: core.bench.yaml's unlisted_models: fallback runs a model
-        # the catalog does not list on the slot's endpoint. So tau2's session, which names its own agent model, starts
-        # with no error (core.yaml reports the model, as above), and its typed run goes to that endpoint as that model.
+        # the catalog does not list on the slot's endpoint. So the benchmark client's session, which names its own agent
+        # model, starts with no error (core.yaml reports the model, as above), and its typed run goes to that endpoint
+        # as that model.
         await self.serve(
-            TAU2_SESSION,
+            BENCHMARK_SESSION,
             [
                 [chunk("Your order is on its way.", finish="stop")],  # the backend: the typed run's round
                 _decision_chunks('{"action":"speak","speech":"Your order is on its way."}'),  # the writer
@@ -364,7 +365,7 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.ws.send({"type": "response.create", "event_id": "go"})
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "way." in e["delta"])
         self.assertNotIn("error", self.ws.kinds())
-        self.assertEqual(self.chat.requests[0]["model"], "tau2/agent-model")
+        self.assertEqual(self.chat.requests[0]["model"], "benchmark/agent-model")
 
     async def test_instruction_append_interrupts_and_acts_on_the_new_direction(self):
         await self.serve(RESPONSES_SESSION, [_decision_chunks('{"action":"speak","speech":"Understood."}')])

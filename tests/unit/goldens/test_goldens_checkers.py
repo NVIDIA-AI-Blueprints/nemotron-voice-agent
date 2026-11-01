@@ -5,11 +5,11 @@
 
 """Three checks beside the goldens: a strict client, the console's reads and the close order.
 
-* The strict client copies the rules by which tau2's Live client ends or stalls a benchmark run (tau2-bench 2174a60,
-  ``src/tau2/voice/audio_native/openai/live_provider.py``, cited as ``T2`` below, and its ``events.py``), with no
-  tau2 import. It reads the event channels of every recorded golden: each golden passes it, or each violation is one
-  the golden causes on purpose, a refusal of a command tau2 never sends (``PROVOKED_REFUSALS``) or an ending it
-  scripts (``SCRIPTED_ENDINGS``). A whole call answered with tau2's own timing passes it too.
+* The strict client copies the rules by which the benchmark's Live client ends or stalls a benchmark run (its event
+  reader and its continuation rules), with no import of it. It reads the event channels of every recorded golden: each
+  golden passes it, or each violation is one the golden causes on purpose, a refusal of a command the benchmark client
+  never sends (``PROVOKED_REFUSALS``) or an ending it scripts (``SCRIPTED_ENDINGS``). A whole call answered with the
+  benchmark client's own timing passes it too.
 * The console contract reads ``GET /v1/live/sessions/{id}/history``, ``GET /v1/live/info``, the WebRTC ``201`` answer
   and the usage report as the browser console does (``client/public/live/app.js``), from the real gateway and its
   HTTP routes with the cascade adapter. What the history panel reads through one whole call is pinned in
@@ -82,37 +82,34 @@ TEAS = '{"teas": ["Earl Grey", "Matcha"]}'
 
 
 # --------------------------------------------------------------------------------------------- the strict client
-# What ends or stalls a tau2 run, rule by rule (T2's _normalize_event and _accept_event, and its continuation of a
-# function-call batch).
+# What ends or stalls a benchmark run, rule by rule.
 RULES = {
-    "error": "a top-level error event: tau2 raises RuntimeError (T2:432-433)",
-    "unexpected_close": "session.closed before the client asked to close: tau2 raises ConnectionError (T2:428-431)",
-    "nested_failure": "a relayed response.failed, response.incomplete or error: tau2 raises RuntimeError (T2:466-467)",
+    "error": "a top-level error event: the benchmark client raises RuntimeError",
+    "unexpected_close": "session.closed before the client asked to close: the benchmark client raises ConnectionError",
+    "nested_failure": "a relayed response.failed, response.incomplete or error: the client raises RuntimeError",
     "call_before_created": (
-        "a function-call item with no relayed response.created of its own delegation before it: tau2 files each call "
-        "under its delegation's latest response id, and that lookup raises KeyError (T2:438-446)"
+        "a function-call item with no relayed response.created of its own delegation before it: the benchmark client "
+        "files each call under its delegation's latest response id, and that lookup raises KeyError"
     ),
     "stale_completed": (
         "a response.completed that carries another id than its delegation's latest response while calls are filed "
-        "under that latest response: tau2 continues only the calls filed under the id a response.completed carries "
-        "(T2:459-465), so those calls are not continued"
+        "under that latest response: the benchmark client continues only the calls filed under the id a "
+        "response.completed carries, so those calls are not continued"
     ),
     "uncontinued_calls": (
-        "a function call filed under a response that never completes: tau2 sends response.create only once the "
-        "response its calls are filed under has completed (T2:384-393, 459-465), so the call waits forever"
+        "a function call filed under a response that never completes: the benchmark client sends response.create only "
+        "once the response its calls are filed under has completed, so the call waits forever"
     ),
-    "missing_field": (
-        "a field tau2 reads is missing, or has a value its parser refuses (T2:177, 406-424, 435-457; events.py:62-66)"
-    ),
+    "missing_field": "a field the benchmark client reads is missing, or has a value its parser refuses",
 }
 NESTED_FAILURES = frozenset({"response.failed", "response.incomplete", "error"})
 
 
-# The fields tau2's own models parse from the events it reads, copied as models (not imported) so that the checker
-# parses them the same way: pydantic's lax mode, which takes "0", 0.0 and True as integers. The transcript models are
-# LiveTranscriptDelta and LiveInputTranscriptDelta; a call's fields fill FunctionCallArgumentsDoneEvent (events.py)
-# the first time tau2 passes the call to its agent. The wire's integer times are pinned by test_live_pipeline.py, not
-# here.
+# The fields the benchmark client's own models parse from the events it reads, copied as models (not imported) so that
+# the checker parses them the same way: pydantic's lax mode, which takes "0", 0.0 and True as integers. The transcript
+# models are LiveTranscriptDelta and LiveInputTranscriptDelta; a call's fields fill FunctionCallArgumentsDoneEvent
+# the first time the benchmark client passes the call to its agent. The wire's integer times are pinned by
+# test_live_pipeline.py, not here.
 class TranscriptFields(BaseModel):
     delta: str
     start_ms: int
@@ -130,7 +127,7 @@ class CallFields(BaseModel):
 
 
 def parse_problem(model, values):
-    """Why tau2's model refuses ``values``, or None when it parses them."""
+    """Why the benchmark client's model refuses ``values``, or None when it parses them."""
     try:
         model.model_validate(values)
     except ValidationError as error:
@@ -148,9 +145,10 @@ CLIENT_CLOSE_REASON = "close_requested"
 # for any delegation), what the violating event ``contains`` (each key with a matching value; see ``matches``) and a
 # note. An entry that no violation matches fails the test.
 
-# Refusals that a golden provokes on purpose, with a command tau2's client never sends: tau2 would stop on them, but
-# no tau2 run can meet them. tau2 sends response.create only to continue a response that has completed and whose every
-# call it has answered, and it sends no typed messages. Each entry names the client command by its event id.
+# Refusals that a golden provokes on purpose, with a command the benchmark client never sends: the benchmark
+# client would stop on them, but no benchmark run can meet them. The benchmark client sends response.create
+# only to continue a response that has completed and whose every call it has answered, and it sends no typed messages.
+# Each entry names the client command by its event id.
 PROVOKED_REFUSALS: dict[str, list[dict]] = {
     "G11": [
         {
@@ -175,8 +173,8 @@ PROVOKED_REFUSALS: dict[str, list[dict]] = {
 }
 
 # Endings a golden scripts on purpose: a backend round that fails or is cut by the output limit, or a close while work
-# runs. The core reports each with its official terminal (the gateway relays the close's ends before
-# session.closed), and tau2's client stops on any relayed failure, as it would on a real backend's. They are the
+# runs. The core reports each with its official terminal (the gateway relays the close's ends before session.closed),
+# and the benchmark client stops on any relayed failure, as it would on a real backend's. They are the
 # protocol, not a defect of the server.
 SCRIPTED_ENDINGS: dict[str, list[dict]] = {
     name: [
@@ -218,21 +216,23 @@ def response_id_of(inner):
 
 
 class StrictClient:
-    """tau2's Live client as a checker: feed it the server's events in order, then call :meth:`end`.
+    """The benchmark's Live client as a checker: feed it the server's events in order, then call :meth:`end`.
 
-    It keeps each rule the events break. tau2 raises at the first; the checker goes on, so one run shows every
-    violation. ``recorded=True`` reads a golden's normalized events, whose clock values are ``<clock>``: their presence
-    is checked, not their value.
+    It keeps each rule the events break. The benchmark client raises at the first; the checker goes on, so one run shows
+    every violation. ``recorded=True`` reads a golden's normalized events, whose clock values are ``<clock>``: their
+    presence is checked, not their value.
     """
 
     def __init__(self, *, recorded=False):
         self.recorded = recorded
         self.closing = False
         self.latest_response: dict[str, str] = {}  # delegation id -> the id of its latest relayed response.created
-        # Response id -> {call id: where the call's item arrived}: the calls tau2 files under that response and
-        # continues once a response.completed carries its id.
+        # Response id -> {call id: where the call's item arrived}: the calls the benchmark client files under that
+        # response and continues once a response.completed carries its id.
         self.filed: dict[str, dict] = {}
-        self.surfaced: set = set()  # the call ids tau2 has passed to its agent; it reads name and arguments only then
+        self.surfaced: set = (
+            set()
+        )  # the call ids the benchmark client has passed to its agent; it reads name and arguments only then
         self.violations: list[Violation] = []
 
     @classmethod
@@ -247,7 +247,7 @@ class StrictClient:
         return client.violations
 
     def close_requested(self):
-        """The client is closing: tau2 sets this before it sends session.close."""
+        """The client is closing: the benchmark client sets this before it sends session.close."""
         self.closing = True
 
     def end(self):
@@ -264,7 +264,7 @@ class StrictClient:
 
         kind = event.get("type") if isinstance(event, dict) else None
         if not isinstance(kind, str):
-            broke("missing_field", "an event with no type (T2:177)")
+            broke("missing_field", "an event with no type")
         elif kind in TRANSCRIPT_EVENTS:
             self.transcript(event, broke)
         elif kind == "session.closed" and not self.closing:
@@ -275,7 +275,8 @@ class StrictClient:
             self.response_event(event, broke, (channel, index, event))
 
     def transcript(self, event, broke):
-        # tau2 reads the text and the times with [], and an input delta's event id with get(), into its models.
+        # The benchmark client reads the text and the times with [], and an input delta's event id with get(), into its
+        # models.
         missing = [key for key in ("delta", "start_ms", "end_ms") if key not in event]
         if missing:
             broke("missing_field", f"{event['type']} without {', '.join(missing)}")
@@ -287,32 +288,32 @@ class StrictClient:
         if event["type"] == "session.input_transcript.delta":
             model, values["event_id"] = InputTranscriptFields, event.get("event_id")
         if problem := parse_problem(model, values):
-            broke("missing_field", f"{event['type']} that tau2 cannot parse: {problem}")
+            broke("missing_field", f"{event['type']} that the benchmark client cannot parse: {problem}")
 
     def response_event(self, event, broke, where):
         delegation_id, inner = event.get("delegation_id"), event.get("event")
         if not isinstance(delegation_id, str) or not isinstance(inner, dict) or not isinstance(inner.get("type"), str):
-            broke("missing_field", "a response.event without delegation_id, event or event.type (T2:435-437)")
+            broke("missing_field", "a response.event without delegation_id, event or event.type")
             return
         kind = inner["type"]
         if kind == "response.created":
             response_id = response_id_of(inner)
             if response_id is None:
-                broke("missing_field", "response.created without response.id (T2:439)")
+                broke("missing_field", "response.created without response.id")
             else:
                 self.latest_response[delegation_id] = response_id
         elif kind == "response.output_item.done":
             item = inner.get("item")
             if not isinstance(item, dict) or "type" not in item:
-                broke("missing_field", "response.output_item.done without item.type (T2:442)")
+                broke("missing_field", "response.output_item.done without item.type")
             elif item["type"] == "function_call":
                 self.function_call(delegation_id, item, broke, where)
         elif kind == "response.completed":
             response_id = response_id_of(inner)
             if response_id is None:
-                broke("missing_field", "response.completed without response.id (T2:460)")
+                broke("missing_field", "response.completed without response.id")
                 return
-            self.filed.pop(response_id, None)  # tau2 continues the calls filed under it
+            self.filed.pop(response_id, None)  # the benchmark client continues the calls filed under it
             latest = self.latest_response.get(delegation_id)
             if response_id != latest and self.filed.get(latest):
                 waiting = sorted(self.filed[latest])
@@ -321,19 +322,19 @@ class StrictClient:
             broke("nested_failure", f"{kind} relayed for {delegation_id}")
 
     def function_call(self, delegation_id, item, broke, where):
-        # tau2 files the call under its delegation's latest response id, then reads the call's id; it reads the name
-        # and the arguments only the first time it passes the call to its agent.
+        # The benchmark client files the call under its delegation's latest response id, then reads the call's id; it
+        # reads the name and the arguments only the first time it passes the call to its agent.
         if delegation_id not in self.latest_response:
             broke(
                 "call_before_created",
                 f"call {item.get('call_id')!r} of {delegation_id} has no response.created before it",
             )
         if "call_id" not in item:
-            broke("missing_field", "a function-call item without call_id (T2:446)")
+            broke("missing_field", "a function-call item without call_id")
             return
         call_id = item["call_id"]
         if problem := parse_problem(CallFields, {"call_id": call_id}):
-            broke("missing_field", f"a function-call item whose call_id tau2 cannot parse: {problem}")
+            broke("missing_field", f"a function-call item whose call_id the benchmark client cannot parse: {problem}")
             return
         if delegation_id in self.latest_response:
             self.filed.setdefault(self.latest_response[delegation_id], {})[call_id] = where
@@ -342,9 +343,9 @@ class StrictClient:
         self.surfaced.add(call_id)
         missing = [key for key in ("name", "arguments") if key not in item]
         if missing:
-            broke("missing_field", f"a function-call item without {', '.join(missing)} (T2:447-455)")
+            broke("missing_field", f"a function-call item without {', '.join(missing)}")
         elif problem := parse_problem(CallFields, {key: item[key] for key in ("call_id", "name", "arguments")}):
-            broke("missing_field", f"a function-call item that tau2 cannot parse: {problem}")
+            broke("missing_field", f"a function-call item that the benchmark client cannot parse: {problem}")
 
 
 def read_recorded(golden):
@@ -353,7 +354,7 @@ def read_recorded(golden):
     Every rule depends on one channel only: the closing rule on the session channel, a delegation's rules on its own
     events, a transcript rule on one event. So reading the channels one by one finds what the client finds in the
     call's real interleaving, which a golden does not keep. A golden ends at quiet, when the server waits for the
-    client: a call still filed then is one tau2 would never continue.
+    client: a call still filed then is one the benchmark client would never continue.
     """
     channels = golden["channels"]
     client = StrictClient(recorded=True)
@@ -430,7 +431,7 @@ def call_done(call_id="call_1"):
 
 
 class StrictClientRuleTests(unittest.TestCase):
-    """The checker itself, on short streams written by hand: each rule fires where tau2 would stop or stall.
+    """The checker itself, on short streams written by hand: each rule fires where the client would stop or stall.
 
     Real calls check the rest: no rule fires on a call with a client-tool round that the client closes
     (:class:`StrictClientCallTests`), a close the client did not ask for breaks one (:class:`CloseOrderTests`), and
@@ -449,8 +450,8 @@ class StrictClientRuleTests(unittest.TestCase):
         self.assertEqual(rules(StrictClient.read(elsewhere)), ["call_before_created"])
 
     def test_response_completed_continues_only_the_calls_filed_under_its_id(self):
-        # tau2 files each call under its delegation's latest response.created id, and continues a response's calls
-        # only when a response.completed carries that id.
+        # The benchmark client files each call under its delegation's latest response.created id, and continues a
+        # response's calls only when a response.completed carries that id.
         retried = [
             relayed("item_1", created("resp_1")),
             relayed("item_1", created("resp_2")),
@@ -486,14 +487,14 @@ class StrictClientRuleTests(unittest.TestCase):
         self.assertEqual(StrictClient.read([*apart, relayed("item_1", completed("resp_1"))]), [])
 
     def test_a_call_whose_response_never_completes_is_never_continued(self):
-        # For example a call whose response never gets a terminal on the wire: tau2 never sends its response.create,
-        # and the call waits until the server's tool wait runs out.
+        # For example a call whose response never gets a terminal on the wire: the benchmark client never sends its
+        # response.create, and the call waits until the server's tool wait runs out.
         events = [relayed("item_1", created("resp_1")), relayed("item_1", call_done())]
         self.assertEqual(rules(StrictClient.read(events)), ["uncontinued_calls"])
         relayed_end = [*events, relayed("item_1", {"type": "response.incomplete"})]
         self.assertEqual(rules(StrictClient.read(relayed_end)), ["nested_failure", "uncontinued_calls"])
 
-    def test_every_field_tau2_reads_must_be_there(self):
+    def test_every_field_the_benchmark_client_reads_must_be_there(self):
         for event in (
             {"delta": "no type"},
             {"type": "response.event", "event": created("resp_1")},
@@ -517,10 +518,10 @@ class StrictClientRuleTests(unittest.TestCase):
                     rules(StrictClient.read([relayed("item_1", created("resp_1")), done, complete])), ["missing_field"]
                 )
 
-    def test_values_are_parsed_as_tau2s_models_parse_them(self):
-        # tau2's models parse in pydantic's lax mode: an integer may come as text, a whole float or a
-        # boolean, and an input delta may have no event id. A call's name and arguments are read only when tau2 first
-        # passes the call to its agent, and a null name is allowed (T2's _normalize_event; events.py).
+    def test_values_are_parsed_as_the_benchmark_clients_models_parse_them(self):
+        # The benchmark client's models parse in pydantic's lax mode: an integer may come as text, a whole float or a
+        # boolean, and an input delta may have no event id. A call's name and arguments are read only when the benchmark
+        # client first passes the call to its agent, and a null name is allowed.
         lax = [
             {"type": "session.input_transcript.delta", "delta": "Hi.", "start_ms": "0", "end_ms": 300.0},
             {"type": "session.output_transcript.delta", "delta": "Hi.", "start_ms": True, "end_ms": 300},
@@ -559,7 +560,7 @@ class StrictClientRuleTests(unittest.TestCase):
         )
         golden["channels"]["session"][0]["reason"] = "expired"
         self.assertEqual(rules(read_recorded(golden)), ["unexpected_close", "missing_field"])
-        # The golden ends at quiet: a call still filed then is one tau2 would never continue.
+        # The golden ends at quiet: a call still filed then is one the benchmark client would never continue.
         golden["channels"]["delegations"]["<item_1>"].pop()
         self.assertEqual(
             [(v.channel, v.index, v.rule) for v in read_recorded(golden)][-1],
@@ -568,7 +569,7 @@ class StrictClientRuleTests(unittest.TestCase):
 
 
 class StrictClientGoldenTests(unittest.TestCase):
-    """Every recorded golden, read as tau2's Live client reads a call."""
+    """Every recorded golden, read as the benchmark's Live client reads a call."""
 
     def test_every_recorded_golden_passes_or_each_violation_is_known(self):
         paths = sorted(GOLDEN_DIR.glob("*.json"))
@@ -583,21 +584,21 @@ class StrictClientGoldenTests(unittest.TestCase):
                 self.assertIn(present, ([], list(EVENT_CHANNELS)), f"{path.name} lacks an event channel")
                 problems = unexplained(path.stem, read_recorded(golden))
                 if problems:
-                    self.fail(f"tau2's Live client would stop on {path.name}:\n" + "\n".join(problems))
+                    self.fail(f"the benchmark's Live client would stop on {path.name}:\n" + "\n".join(problems))
 
 
 class StrictClientCallTests(GoldenCase):
-    """A whole call through the real gateway, adapter and core, answered with tau2's own timing."""
+    """A whole call through the real gateway, adapter and core, answered with the benchmark client's own timing."""
 
-    async def test_a_client_that_answers_and_continues_as_early_as_tau2_does_is_never_refused(self):
+    async def test_a_client_that_answers_and_continues_as_early_as_the_benchmark_client_does_is_never_refused(self):
         await self.serve(
             frontend=[decision("delegate", "Let me check."), decision("speak", "We have Earl Grey and Matcha.")],
             backend=[tool_call_round(), answer_round("We have Earl Grey and Matcha.")],
         )
         await self.say("What teas do you have?")
         call = await self.wait_for_call("get_menu")
-        # tau2 returns a call's output as soon as its tool has run: here at once, which can be before the
-        # round's response.completed reaches the client.
+        # The benchmark client returns a call's output as soon as its tool has run: here at once, which can be before
+        # the round's response.completed reaches the client.
         self.send(result_item(call["call_id"], TEAS))
         # It asks to continue while it handles that response.completed, with no event id. The IM marks the work
         # waiting for the client before it writes that terminal, so the continue is never refused.
@@ -924,12 +925,12 @@ class CheckedCall(GoldenCase):
         client_event_id=None,
         *,
         asked_to_close_at=None,
-        tau2_stops_on=(),
+        benchmark_stops_on=(),
         backend_ran=False,
         steps=None,
         still_running=(),
     ):
-        """The close order every path keeps; ``tau2_stops_on`` lists the strict client's violations, in order.
+        """The close order every path keeps; ``benchmark_stops_on`` lists the strict client's violations, in order.
 
         ``backend_ran`` says the call's backend ran a round, whose model client the IM session's close closes.
         ``steps`` is the order of the close's steps, when it is not the path's own; ``still_running`` names the
@@ -957,7 +958,7 @@ class CheckedCall(GoldenCase):
         self.assertEqual(self.events_at_socket_close, len(events))
         self.assertNotIn(self.session_id, self.gateway.sessions)
         violations = StrictClient.read(events, asked_to_close_at=asked_to_close_at)
-        self.assertEqual(rules(violations), list(tau2_stops_on), [str(violation) for violation in violations])
+        self.assertEqual(rules(violations), list(benchmark_stops_on), [str(violation) for violation in violations])
 
     # ------------------------------------------------------------------------------------- the history route
     async def get_history(self):
@@ -1062,8 +1063,8 @@ class ConsoleHistoryTests(CheckedCall):
 class ConsoleWebRTCTests(unittest.IsolatedAsyncioTestCase):
     """The console's own transport: a WebRTC session with the cascade over loopback, through the real HTTP routes.
 
-    The console (``connect`` in app.js) and tau2 open a session the same way: they post an SDP offer with the
-    session config, read the 201 answer, then exchange events on the data channel.
+    The console (``connect`` in app.js) and the benchmark client open a session the same way: they post an SDP offer
+    with the session config, read the 201 answer, then exchange events on the data channel.
     """
 
     async def asyncSetUp(self):
@@ -1112,7 +1113,7 @@ class ConsoleWebRTCTests(unittest.IsolatedAsyncioTestCase):
                 self.arrived.clear()
                 await self.arrived.wait()
 
-    async def test_the_answer_the_history_and_the_close_as_the_console_and_tau2_read_them(self):
+    async def test_the_answer_the_history_and_the_close_as_the_console_and_the_benchmark_client_read_them(self):
         app = FastAPI()
         gateway = self.mount(app)
         http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
@@ -1143,9 +1144,9 @@ class ConsoleWebRTCTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201, response.text)  # response.ok (``connect``)
         answer = response.json()
         session = answer["session"]
-        self.assertIsInstance(session["id"], str)  # logged by the console, kept by tau2
+        self.assertIsInstance(session["id"], str)  # logged by the console, kept by the benchmark client
         # The answer is the official one, the session's id and the SDP answer, which the console and
-        # tau2 set as the remote answer. The resolved configuration comes on session.started.
+        # The benchmark client set as the remote answer. The resolved configuration comes on session.started.
         sdp = answer["transport"]["sdp"]
         self.assertIsInstance(sdp, str)
         self.assertEqual(answer, {"session": {"id": session["id"]}, "transport": {"type": "webrtc", "sdp": sdp}})
@@ -1289,9 +1290,9 @@ class CloseOrderTests(CheckedCall):
 
     async def test_a_client_close_while_a_backend_round_runs(self):
         # The backend round is held: its request is sent and its opening events are relayed, and the model has not
-        # answered when the client closes. The IM session's close cancels the round, after the pipeline has stopped,
-        # and ends the delegation's open response as the close's end (incomplete, status cancelled), which the
-        # gateway relays before session.closed (G13 pins the delegation's events). tau2 stops on that relayed
+        # answered when the client closes. The IM session's close cancels the round, after the pipeline has stopped, and
+        # ends the delegation's open response as the close's end (incomplete, status cancelled), which the gateway
+        # relays before session.closed (G13 pins the delegation's events). The benchmark client stops on that relayed
         # ending (SCRIPTED_ENDINGS: G13).
         held = HeldRound()
         held.on_cancel = lambda: self.close_watch.steps.append("backend round cancelled")
@@ -1319,7 +1320,7 @@ class CloseOrderTests(CheckedCall):
             "close_requested",
             "bye",
             asked_to_close_at=asked,
-            tau2_stops_on=["nested_failure"],
+            benchmark_stops_on=["nested_failure"],
             backend_ran=True,
             steps=steps,
         )
@@ -1359,9 +1360,9 @@ class CloseOrderTests(CheckedCall):
         session = self.gateway.sessions[self.session_id]
         session.max_session_seconds = 0
         await self.wait_for("session.closed")
-        # tau2 stops on a close it did not ask for, by its own rule. The task that asked for the close, which the
-        # usage report spawned (live/session/lifecycle.py), is the one session task still running then.
-        await self.assert_close_order("expired", tau2_stops_on=["unexpected_close"], still_running=["expiry"])
+        # The benchmark client stops on a close it did not ask for, by its own rule. The task that asked for the close,
+        # which the usage report spawned (live/session/lifecycle.py), is the one session task still running then.
+        await self.assert_close_order("expired", benchmark_stops_on=["unexpected_close"], still_running=["expiry"])
         # The usage report as the console reads it (app.js): usage.seconds, and context_window.usage_ratio, which
         # comes from the adapter's own count of the talker's context out of the talker's own window (the ContextMeter),
         # not from the fallbacks, the size of the session's config out of the protocol's window
@@ -1383,9 +1384,9 @@ class CloseOrderTests(CheckedCall):
         await self.say("Hi.")
         await self.wait_quiet()
         await self.gateway.close_all()
-        # A server shutdown is reported as connection_lost, the nearest official reason. tau2
+        # A server shutdown is reported as connection_lost, the nearest official reason. The benchmark client
         # stops on a close it did not ask for.
-        await self.assert_close_order("connection_lost", tau2_stops_on=["unexpected_close"])
+        await self.assert_close_order("connection_lost", benchmark_stops_on=["unexpected_close"])
 
     async def test_a_pipeline_that_ends_on_its_own(self):
         await self.serve_checked(frontend=[decision("speak", "Hello there.")])
@@ -1394,11 +1395,11 @@ class CloseOrderTests(CheckedCall):
         # The pipeline ends from inside, as its worker ends it when a processor cannot do its job
         # (ProcessorUnusablePolicy.END queues an EndFrame). The pipeline host's on_pipeline_finished handler then asks
         # the session to close, and the close runs in order: the cascade closes once, in the adapter's close. The task
-        # that asked for the close is the one session task still running when the parts' close starts, and tau2 stops on
-        # a close it did not ask for.
+        # that asked for the close is the one session task still running when the parts' close starts, and the benchmark
+        # client stops on a close it did not ask for.
         await self.engine.task.queue_frame(EndFrame())
         await self.assert_close_order(
-            "connection_lost", tau2_stops_on=["unexpected_close"], still_running=["adapter-close"]
+            "connection_lost", benchmark_stops_on=["unexpected_close"], still_running=["adapter-close"]
         )
 
 

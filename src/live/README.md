@@ -1,6 +1,6 @@
 # Live Gateway
 
-The Live gateway serves the live session protocol, which follows GPT-Live, at `/v1/live`. It owns each session: the
+The Live gateway serves the live session protocol at `/v1/live`. It owns each session: the
 order of its commands and of its close, the wire schema, and the relay of each delegation's events. It knows nothing
 about Pipecat or the cascade, and it reaches the frontend adapter and the delegation core only through the ports in
 [`ports.py`](ports.py). The [Frontend/Backend Live example](../examples/frontend_backend_live/README.md) plugs its own

@@ -43,8 +43,8 @@ from tests.unit.delegation_core.backend.agent.doubles import (
 )
 from tests.unit.delegation_core.backend.llm.doubles import FakeChat, RecordingTools, chunk, tool_fragment
 
-# What tau2 sends: functions, tool_choice auto, one call per round, maybe an effort.
-TAU2 = {
+# What the benchmark client sends: functions, tool_choice auto, one call per round, maybe an effort.
+BENCHMARK_BODY = {
     "model": "test/model",
     "instructions": "Policy.",
     "tools": [{"type": "function", "name": "get_menu", "parameters": {"type": "object", "properties": {}}}],
@@ -189,7 +189,7 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "does not serve the model 'unlisted/model'"):
             await built.check_model("unlisted/model")
         await build({"worker": {"unlisted_models": "fallback"}}).check_model("unlisted/model")
-        self.assertEqual(built.unsupported(TAU2), [])  # tau2's session body
+        self.assertEqual(built.unsupported(BENCHMARK_BODY), [])  # the benchmark client's session body
         self.assertEqual([param for param, _ in built.unsupported({"tools": [{"type": "web_search"}]})], ["tools"])
 
     def test_it_describes_what_it_serves_without_credentials(self):
@@ -244,8 +244,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await provider.close()
 
     async def test_workers_keep_one_call_per_round_and_the_requests_tool_choice(self):
-        # tau2 asks for one call per round (parallel_tool_calls: false) with tool_choice auto: the workers' chat
-        # provider keeps the reply's first call and sends the request's choice.
+        # The benchmark client asks for one call per round (parallel_tool_calls: false) with tool_choice auto: the
+        # workers' chat provider keeps the reply's first call and sends the request's choice.
         two_calls = [tool_fragment(0, "p1", "get_menu", "{}"), tool_fragment(1, "p2", "lookup", "{}")]
         chat = FakeChat([chunk(tool_calls=two_calls), chunk(finish="tool_calls")])
         built = AgentSource(
@@ -262,7 +262,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OneCallTask(FakeTaskContext):
-    """A task whose request asks for one call per round, as tau2's session body does."""
+    """A task whose request asks for one call per round, as the benchmark client's session body does."""
 
     def request(self):
         return {**super().request(), "parallel_tool_calls": False}

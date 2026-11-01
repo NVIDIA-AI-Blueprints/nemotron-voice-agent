@@ -21,7 +21,7 @@ audio belongs to: what the speech service announced since the sentence before (e
 speak, which it pushes ahead of that text's audio).
 
 The facts go to one listener (:meth:`PlayoutTracker.listen`): the cascade, which corrects its records of each line by
-them. Nothing crosses to the delegation core: GPT-Live has no playback receipt.
+them. Nothing crosses to the delegation core: the Live API has no playback receipt.
 
 Every host of the cascade wires the tracker, its text-to-speech's mode and the cascade together through
 :class:`SpeechPlayout`: the cascade adapter in a live session, and the repository UI bot in its own RTVI pipeline.

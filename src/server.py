@@ -556,10 +556,10 @@ def _status_probe(slot: str, entry: dict) -> tuple[str, bool] | None:
     return None
 
 
-def _probe_status(target: str, expects_ready_json: bool) -> ServiceStatus:
+def _probe_status(address: str, expects_ready_json: bool) -> ServiceStatus:
     timeout = _STATUS_PROBE_TIMEOUT_SECS
-    status = _probe_http(target, expects_ready_json, timeout) if "://" in target else _probe_tcp(target, timeout)
-    return _remembered_status(target, status)
+    status = _probe_http(address, expects_ready_json, timeout) if "://" in address else _probe_tcp(address, timeout)
+    return _remembered_status(address, status)
 
 
 async def _with_service_status(catalog: dict[str, list[dict]]) -> dict[str, list[dict]]:
