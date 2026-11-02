@@ -3,11 +3,10 @@
 
 # ruff: noqa: D100, D101, D102
 
-import asyncio
-import sqlite3
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,8 +17,8 @@ from fastapi.testclient import TestClient
 
 from examples.frontend_backend_agent.airline.backend import HTTPBookingBackend
 from examples.frontend_backend_agent.airline.database.api import BookingAPI, IdempotencyConflict
-from examples.frontend_backend_agent.airline.database.db import apply_schema
-from examples.frontend_backend_agent.airline.database.server import app, get_api
+from examples.frontend_backend_agent.airline.database.db import apply_schema, connect
+from examples.frontend_backend_agent.airline.database.server import app
 
 _REQUEST = {
     "passenger": "Ada Lovelace",
@@ -27,51 +26,43 @@ _REQUEST = {
     "destination": "LAX",
     "flight_number": "AA124",
 }
+_FLIGHT = {
+    "flight_id": "AA124",
+    "origin_airport": "JFK",
+    "dest_airport": "LAX",
+    "origin_city": "New York",
+    "dest_city": "Los Angeles",
+    "date": "2026-11-10",
+    "departure_time": "2026-11-10T10:00:00",
+}
 
 
-class BookingIdempotencyTests(unittest.TestCase):
+class BookingIdempotencyTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / "bookings.db"
-        with self.connect() as conn:
+        self.enterContext(patch("examples.frontend_backend_agent.airline.database.db.db_path", return_value=self.path))
+        with closing(connect()) as conn, conn:
             apply_schema(conn)
             conn.execute(
                 "INSERT INTO flights (flight_number, origin, destination, departure, arrival, cabin) "
                 "VALUES ('AA124', 'JFK', 'LAX', '2026-11-10T10:00:00', '2026-11-10T16:00:00', 'economy')"
             )
-        conn.close()
-
-    def connect(self):
-        conn = sqlite3.connect(self.path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        return conn
 
     def create(self, **kwargs):
-        conn = self.connect()
-        try:
+        with closing(connect()) as conn:
             return BookingAPI(conn).create_booking(**{**_REQUEST, **kwargs})
-        finally:
-            conn.close()
 
     def assert_counts(self, count):
-        conn = self.connect()
-        try:
+        with closing(connect()) as conn:
             for table in ("pnrs", "ancillaries", "confirmation_codes", "activity_log"):
                 self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], count, table)
-        finally:
-            conn.close()
 
     def test_replay_survives_new_connections_and_schema_reapplication(self):
         first = self.create(idempotency_key="retry")
-        conn = self.connect()
-        try:
+        with closing(connect()) as conn:
             apply_schema(conn)
-        finally:
-            conn.close()
         self.assertEqual(first, self.create(idempotency_key="retry"))
         self.assert_counts(1)
 
@@ -121,11 +112,8 @@ class BookingIdempotencyTests(unittest.TestCase):
         ):
             self.create(idempotency_key="retry")
         self.assert_counts(0)
-        conn = self.connect()
-        try:
+        with closing(connect()) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM booking_requests").fetchone()[0], 0)
-        finally:
-            conn.close()
         self.assertIsNotNone(self.create(idempotency_key="retry"))
         self.assert_counts(1)
 
@@ -136,30 +124,14 @@ class BookingIdempotencyTests(unittest.TestCase):
 
     def test_replay_does_not_reactivate_a_cancelled_booking(self):
         first = self.create(idempotency_key="retry")
-        conn = self.connect()
-        try:
-            with conn:
-                conn.execute("UPDATE pnrs SET status = 'cancelled' WHERE pnr = ?", (first["pnr"],))
-        finally:
-            conn.close()
+        with closing(connect()) as conn, conn:
+            conn.execute("UPDATE pnrs SET status = 'cancelled' WHERE pnr = ?", (first["pnr"],))
         self.assertEqual(first, self.create(idempotency_key="retry"))
-        conn = self.connect()
-        try:
+        with closing(connect()) as conn:
             self.assertEqual(BookingAPI(conn).get_pnr(first["pnr"])["booking_status"], "cancelled")
-        finally:
-            conn.close()
         self.assert_counts(1)
 
     def booking_client(self):
-        def api_override():
-            conn = self.connect()
-            try:
-                yield BookingAPI(conn)
-            finally:
-                conn.close()
-
-        app.dependency_overrides[get_api] = api_override
-        self.addCleanup(app.dependency_overrides.pop, get_api)
         client = TestClient(app)
         self.addCleanup(client.close)
         return client
@@ -177,7 +149,7 @@ class BookingIdempotencyTests(unittest.TestCase):
             self.assertEqual(client.post("/pnrs", json=_REQUEST, headers={"Idempotency-Key": key}).status_code, 422)
         self.assert_counts(1)
 
-    def test_http_backend_retry_after_server_commit_and_lost_response(self):
+    async def test_http_backend_retry_after_server_commit_and_lost_response(self):
         client = self.booking_client()
         committed = []
 
@@ -194,25 +166,12 @@ class BookingIdempotencyTests(unittest.TestCase):
             return httpx.Response(response.status_code, json=response.json())
 
         factory = partial(httpx.AsyncClient, transport=httpx.MockTransport(handle))
-        flight = {
-            "flight_id": "AA124",
-            "origin_airport": "JFK",
-            "dest_airport": "LAX",
-            "origin_city": "New York",
-            "dest_city": "Los Angeles",
-            "date": "2026-11-10",
-            "departure_time": "2026-11-10T10:00:00",
-        }
-
-        async def retry():
+        with patch("examples.frontend_backend_agent.airline.backend.httpx.AsyncClient", factory):
             backend = HTTPBookingBackend("http://booking.test")
-            kwargs = {"passenger_name": "Ada", "flight": flight, "idempotency_key": "lost-response"}
+            kwargs = {"passenger_name": "Ada", "flight": _FLIGHT, "idempotency_key": "lost-response"}
             with self.assertRaises(httpx.ReadTimeout):
                 await backend.create_booking(**kwargs)
-            return await backend.create_booking(**kwargs)
-
-        with patch("examples.frontend_backend_agent.airline.backend.httpx.AsyncClient", factory):
-            result = asyncio.run(retry())
+            result = await backend.create_booking(**kwargs)
         self.assertEqual(committed[0], committed[1])
         self.assertEqual(result["pnr"], committed[0]["pnr"])
         self.assertEqual(result["confirmation_code"], committed[0]["confirmation_code"])
@@ -228,19 +187,10 @@ class HTTPBookingBackendIdempotencyTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"pnr": "ABC123", "confirmation_code": "BOOK1234"})
 
         factory = partial(httpx.AsyncClient, transport=httpx.MockTransport(handle))
-        flight = {
-            "flight_id": "AA124",
-            "origin_airport": "JFK",
-            "dest_airport": "LAX",
-            "origin_city": "New York",
-            "dest_city": "Los Angeles",
-            "date": "2026-11-10",
-            "departure_time": "2026-11-10T10:00:00",
-        }
         with patch("examples.frontend_backend_agent.airline.backend.httpx.AsyncClient", factory):
             backend = HTTPBookingBackend("http://booking.test")
             for _ in range(2):
-                result = await backend.create_booking(passenger_name="Ada", flight=flight, idempotency_key="same-key")
+                result = await backend.create_booking(passenger_name="Ada", flight=_FLIGHT, idempotency_key="same-key")
                 self.assertEqual(result["pnr"], "ABC123")
         self.assertEqual([request.headers["Idempotency-Key"] for request in requests], ["same-key", "same-key"])
         self.assertEqual(requests[0].content, requests[1].content)

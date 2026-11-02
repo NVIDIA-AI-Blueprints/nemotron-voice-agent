@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from typing import Any
 
@@ -35,8 +34,8 @@ class BookingTool:
 
     async def continue_booking(self, slots: dict[str, Any]) -> dict[str, Any]:
         """Advance the current booking flow from planned slots."""
-        if self._state.booking_attempt is not None:
-            attempt = self._state.booking_attempt
+        attempt = self._state.booking_attempt
+        if attempt is not None:
             selected = slot(slots, "flight_selected")
             if selected and extract_selected_flight(selected, self._state.search_results) != attempt.flight:
                 return booking_outcome_unknown()
@@ -194,8 +193,6 @@ class BookingTool:
                 meal_pref=draft.meal_pref,
                 idempotency_key=draft.idempotency_key,
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as exc:
             logger.warning(f"booking backend failed while creating PNR: {exc}")
             return response_hint(
@@ -203,8 +200,7 @@ class BookingTool:
                 action="retry",
                 error=str(exc),
                 response_text=(
-                    "I could not verify whether that booking completed. "
-                    "Confirm again to retry the same booking safely, without creating a duplicate."
+                    "I could not verify whether that booking completed. Confirm again to check the same booking."
                 ),
                 context="booking",
             )
@@ -244,14 +240,13 @@ class BookingTool:
 
 
 def booking_outcome_unknown() -> dict[str, Any]:
-    """Report a submitted booking without implying that cancellation undid it."""
+    """Ask for reconfirmation when a submitted booking has no receipt."""
     return response_hint(
         reason="booking_outcome_unknown",
         action="confirm_booking",
         response_text=(
-            "A booking request was already sent and may have completed. "
-            "Stopping this task does not cancel a booked ticket. "
-            "Confirm again to retry the original booking safely before starting another."
+            "That booking might have completed. Stopping here does not cancel a booked ticket. "
+            "Confirm the same booking again to check the result."
         ),
         context="booking",
     )

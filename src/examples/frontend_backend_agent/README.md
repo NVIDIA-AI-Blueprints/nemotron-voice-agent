@@ -116,24 +116,9 @@ Use `cancel_backend` when the user says to stop, cancel, abandon, ignore, or nev
 
 ### Retry Bookings Without Creating Duplicates
 
-`POST /pnrs` accepts an optional `Idempotency-Key` header of 1 to 128 characters.
-The booking server returns HTTP `422` for an empty key or a key longer than 128 characters.
-The airline agent sends a key with each confirmed booking request.
-The booking server stores the original response in the same transaction as the booking, confirmation code, and audit event.
-A retry with the same key and parameters returns that stored response, including the same PNR and confirmation code.
-Replays also work after the server reconnects to the database or restarts with the same database file.
-Reusing a key with different booking parameters returns HTTP `409` and does not write a booking.
-Use a new key for each intentional booking, including a second booking for the same passenger and flight.
-Requests without a key keep the existing behavior: each call creates a new booking.
+The airline agent sends an `Idempotency-Key` with each confirmed booking, so a retry returns the original PNR instead of creating a second booking. After a timeout, a cancelled task, or a lost response, the voice session keeps the submitted booking details and key. To retry, confirm the same booking again. Until that booking succeeds or the server reports that it cannot book the flight, the agent does not start a new search or accept a different flight, passenger, seat, or meal. For the header rules and status codes, refer to the [booking server HTTP API quick reference](airline/database/README.md#http-api-quick-reference).
 
-After the agent submits a booking, the voice session keeps a snapshot of the submitted parameters and key.
-The snapshot survives a tool timeout, task cancellation, or lost response.
-To retry safely, confirm the original booking again; the agent resends the same parameters and key.
-Until that attempt resolves, the agent blocks new flight searches and changes to the flight, passenger, seat, or meal.
-If you call `cancel_backend` after the agent submits the booking, it does not report that the work stopped.
-Instead, it warns that the booking might have completed and asks you to confirm the original booking again.
-`cancel_backend` stops local workflow only; it does not call the booking server to cancel a ticket.
-The snapshot lives in memory for the current voice session, so reconnecting does not restore it.
+If you call `cancel_backend` after the booking is sent, the agent warns that the booking might have completed and asks you to confirm it again. `cancel_backend` stops only local work; it does not cancel the ticket on the booking server. The pending attempt is held in memory, so it is lost when the voice session reconnects.
 
 ### Re-test tool-calling accuracy after prompt changes
 

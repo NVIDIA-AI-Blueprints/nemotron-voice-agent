@@ -247,6 +247,8 @@ class ThinkerBackend:
         if tool_name == "pnr_status":
             return await pnr_status(backend=self._backend, slots=planned_slots)
         if tool_name == "flight_search":
+            if self.state.booking_attempt is not None:
+                return booking_outcome_unknown()
             return await flight_search(state=self.state, backend=self._backend, slots=planned_slots)
         if tool_name == "response_hint":
             return self._planner_response_hint(tool_call)

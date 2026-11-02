@@ -11,7 +11,6 @@ from loguru import logger
 
 from examples.frontend_backend_agent.airline.airports import airport_display_name
 from examples.frontend_backend_agent.airline.backend import BookingBackend
-from examples.frontend_backend_agent.airline.booking_tool import booking_outcome_unknown
 from examples.frontend_backend_agent.airline.branding import format_flight_option, user_facing_flight
 from examples.frontend_backend_agent.airline.slot_parsing import extract_route, slot
 from examples.frontend_backend_agent.airline.state import ThinkerSessionState
@@ -25,8 +24,6 @@ async def flight_search(
     slots: dict[str, Any],
 ) -> dict[str, Any]:
     """Search flights, update session search state, and return a Thinker payload."""
-    if state.booking_attempt is not None:
-        return booking_outcome_unknown()
     origin, destination = extract_route(slots)
     travel_date = slot(slots, "date")
     sorting = slot(slots, "sorting")
