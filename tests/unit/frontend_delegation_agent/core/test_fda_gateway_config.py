@@ -189,5 +189,35 @@ class ReasoningBudgetTest(unittest.TestCase):
         self.assertEqual(body["reasoning_effort"], "medium")
 
 
+class BackendThinkingTest(unittest.TestCase):
+    """``FDA_BACKEND_THINKING``: true by default, false turns the backend model's reasoning off."""
+
+    def load(self, value: str | None, name: str = "gateway.yaml") -> dict:
+        env = {k: v for k, v in os.environ.items() if k not in ("FDA_BACKEND_THINKING", "FDA_BACKEND_REASONING_BUDGET")}
+        if value is not None:
+            env["FDA_BACKEND_THINKING"] = value
+        with mock.patch.dict(os.environ, env, clear=True):
+            return dict(gc.load_gateway_config(gc.CONFIG_DIR / name).backend.request_overrides)
+
+    def test_unset_and_empty_keep_thinking_on(self) -> None:
+        for value in (None, "", "true"):
+            for name in ("gateway.yaml", "gateway.eval.yaml"):
+                with self.subTest(value=value, config=name):
+                    self.assertIs(self.load(value, name)["extra_body"]["chat_template_kwargs"]["enable_thinking"], True)
+
+    def test_false_turns_thinking_off(self) -> None:
+        for name in ("gateway.yaml", "gateway.eval.yaml"):
+            with self.subTest(config=name):
+                self.assertIs(self.load("false", name)["extra_body"]["chat_template_kwargs"]["enable_thinking"], False)
+
+    def test_invalid_values_are_refused(self) -> None:
+        for value in ("0", "1", "maybe"):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(gc.GatewayConfigError, "enable_thinking must be true or false"),
+            ):
+                self.load(value)
+
+
 if __name__ == "__main__":
     unittest.main()

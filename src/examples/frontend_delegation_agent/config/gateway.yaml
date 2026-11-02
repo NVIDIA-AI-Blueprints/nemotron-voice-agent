@@ -47,7 +47,8 @@ backend:
   status_timeout_s: 2
   request_overrides:
     extra_body:
-      chat_template_kwargs: {enable_thinking: true}
+      # FDA_BACKEND_THINKING (docker-compose.yml sets true); false turns the backend model's reasoning off.
+      chat_template_kwargs: {enable_thinking: ${FDA_BACKEND_THINKING:-true}}
       # FDA_BACKEND_REASONING_BUDGET (docker-compose.yml sets 1024); 0 omits the parameter, for a model
       # that rejects it (docker/docker-compose.fda-llm-super-vl.yaml).
       reasoning_budget: ${FDA_BACKEND_REASONING_BUDGET:-1024}

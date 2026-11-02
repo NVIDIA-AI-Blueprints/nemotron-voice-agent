@@ -313,6 +313,8 @@ services:
       # reasoning_budget of every backend LLM request (config/gateway.yaml); 0 omits it.
       # docker/docker-compose.fda-llm-super-vl.yaml sets 0 for a model that rejects the parameter.
       FDA_BACKEND_REASONING_BUDGET: "1024"
+      # enable_thinking of every backend LLM request (config/gateway.yaml); false turns reasoning off.
+      FDA_BACKEND_THINKING: "true"
       FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
       FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
       # The Hermes runtime's address (OpenShell: the gateway's routed host name; port 8080 is the

@@ -3,8 +3,8 @@
 #
 # The LLM backend of the Frontend Delegation Agent on nvidia/nvidia/nemotron-3.5-super-vl instead of
 # nvidia/nvidia/nemotron-3-ultra. The model rejects the reasoning_budget parameter, so
-# FDA_BACKEND_REASONING_BUDGET 0 omits it; reasoning stays on (enable_thinking: true and
-# llm.reasoning_effort of config/gateway.yaml). Apply after docker/docker-compose.fda-llm.yaml, for
+# FDA_BACKEND_REASONING_BUDGET 0 omits it; reasoning stays on (enable_thinking: true, which follows
+# FDA_BACKEND_THINKING, and llm.reasoning_effort of config/gateway.yaml). Apply after docker/docker-compose.fda-llm.yaml, for
 # example for Big Bench Audio:
 #
 #   FDA_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml \

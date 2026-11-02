@@ -51,6 +51,7 @@ The condition card states the exact configuration of the run that you are about 
 | `FDA_PROACTIVE_AFTER_S` | `1.0` |
 | `FDA_PROACTIVE_MAX_PER_RUN` | `3` |
 | `FDA_BACKEND_REASONING_BUDGET` | `1024` |
+| `FDA_BACKEND_THINKING` | `true` |
 | `FDA_MAX_SESSIONS` | `4` |
 | Pipecat settings | `settings_file` ending in `adapters/pipecat.eval.yaml`, `vad.stop_secs` 0.5, `vad.audio_idle_timeout` 0.0, `turn.user_speech_timeout` 0.0 |
 | Proactive status | Enabled, after 1.0 s of silence, at most 3 per backend run (`general_qa` status lines) |
@@ -221,7 +222,7 @@ The following table lists where to read the **This run** value of each dimension
 | Dimension | Where to read it |
 | --- | --- |
 | Frontend (FE) LLM | `printenv FRONTEND_LLM_MODEL FRONTEND_LLM_BASE_URL` in the voice container. Reasoning: `frontend.llm` in `src/examples/frontend_delegation_agent/config/delegation_agent.yaml`. |
-| Backend (BE) LLM | `printenv BACKEND_LLM_MODEL BACKEND_LLM_BASE_URL` in the voice container. Reasoning: `backend.request_overrides` and `llm.reasoning_effort` in `src/examples/frontend_delegation_agent/config/gateway.yaml`. The `reasoning_budget` comes from the `FDA_BACKEND_REASONING_BUDGET` row. |
+| Backend (BE) LLM | `printenv BACKEND_LLM_MODEL BACKEND_LLM_BASE_URL` in the voice container. Reasoning: `backend.request_overrides` and `llm.reasoning_effort` in `src/examples/frontend_delegation_agent/config/gateway.yaml`. The `reasoning_budget` comes from the `FDA_BACKEND_REASONING_BUDGET` row, and `enable_thinking` comes from the `FDA_BACKEND_THINKING` row. |
 | Agent ASR | The `singlegpu.asr` entry of `src/examples/frontend_delegation_agent/services.local.yaml`. `printenv FBA_ASR_SERVER` in the voice container must print an empty line; a value replaces the URL. |
 | Agent TTS | The `singlegpu.tts` entry of `src/examples/frontend_delegation_agent/services.local.yaml`. `printenv FBA_TTS_SERVER` in the voice container must print an empty line; a value replaces the URL. |
 | Judge LLM | The `--judge_api` and `--judge_model` options of `eval.py` and `EVAL_API_URL`. Never record `EVAL_API_KEY`. |
@@ -247,6 +248,7 @@ The following table lists where to read the **This run** value of each dimension
 | `FDA_PROACTIVE_AFTER_S` | `printenv` in the voice container |
 | `FDA_PROACTIVE_MAX_PER_RUN` | `printenv` in the voice container |
 | `FDA_BACKEND_REASONING_BUDGET` | `printenv` in the voice container. It sets `reasoning_budget` of the backend requests, and `0` omits the parameter. |
+| `FDA_BACKEND_THINKING` | `printenv` in the voice container. It sets `enable_thinking` of the backend requests, and `false` turns reasoning off. |
 | `FDA_MAX_SESSIONS` | `printenv` in the voice container |
 | Pipecat settings | The `Pipecat adapter settings` line of the app log, after the warm-up sample |
 | Proactive status | The `proactive status` line of the app log, after the warm-up sample |
@@ -279,7 +281,7 @@ Run the following commands from the repository root. They print no secret values
 
     ```bash
     docker compose $FDA_FILES --profile frontend-delegation-agent/single-gpu \
-      exec frontend-delegation-agent-single-gpu sh -c 'for v in FRONTEND_LLM_MODEL FRONTEND_LLM_BASE_URL BACKEND_LLM_MODEL BACKEND_LLM_BASE_URL FBA_ASR_SERVER FBA_TTS_SERVER FDA_PROFILE PIPELINE_TLS FDA_PROMPT_PROFILE FDA_BACKEND FDA_BACKEND_LINK FDA_GATEWAY_CONFIG FDA_SILENT_FRONTEND FDA_VAD_STOP_SECS FDA_PROACTIVE_AFTER_S FDA_PROACTIVE_MAX_PER_RUN FDA_BACKEND_REASONING_BUDGET FDA_MAX_SESSIONS; do printf "%s=%s\n" "$v" "$(printenv "$v")"; done'
+      exec frontend-delegation-agent-single-gpu sh -c 'for v in FRONTEND_LLM_MODEL FRONTEND_LLM_BASE_URL BACKEND_LLM_MODEL BACKEND_LLM_BASE_URL FBA_ASR_SERVER FBA_TTS_SERVER FDA_PROFILE PIPELINE_TLS FDA_PROMPT_PROFILE FDA_BACKEND FDA_BACKEND_LINK FDA_GATEWAY_CONFIG FDA_SILENT_FRONTEND FDA_VAD_STOP_SECS FDA_PROACTIVE_AFTER_S FDA_PROACTIVE_MAX_PER_RUN FDA_BACKEND_REASONING_BUDGET FDA_BACKEND_THINKING FDA_MAX_SESSIONS; do printf "%s=%s\n" "$v" "$(printenv "$v")"; done'
     ```
 
     The command prints one `NAME=value` line for each setting. Copy each value to its row. `FBA_ASR_SERVER` and `FBA_TTS_SERVER` print an empty value when the agent's ASR and TTS use the catalog URL.
@@ -389,7 +391,8 @@ Run the full dataset from `benchmarking_tools/AA-BigBenchAudio-Eval/` with `--ba
     no_answer = re.compile(
         r"one moment( please)?|still checking|still on it|thanks for waiting|almost there|still working on that for you"
     )
-    scored = set()
+    # A sample with a label is scored already, so a restarted monitor judges nothing twice.
+    scored = {path.parent.name for path in root.glob("*/result.txt")}
 
     def append(name, *cmd):
         with open(f"datasets/logs/{name}", "a", encoding="utf-8") as out:
@@ -398,29 +401,35 @@ Run the full dataset from `benchmarking_tools/AA-BigBenchAudio-Eval/` with `--ba
     def read(path):
         return path.read_text(encoding="utf-8").strip() if path.exists() else ""
 
-    print("| Done | Failed | Scored | Correct | Accuracy | No answer | Time left |")
-    print("| --- | --- | --- | --- | --- | --- | --- |")
-    while True:
-        marker, _, run = log.read_text(encoding="utf-8").rpartition("=== full run ")
+    print("| Done | Failed | Scored | Correct | Accuracy | Filler only | No answer | Time left |")
+    print("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    def progress():
+        _, _, run = log.read_text(encoding="utf-8").rpartition("=== full run ")
         started = datetime.fromisoformat(run.split()[0].replace("Z", "+00:00")).timestamp()
         done = set(re.findall(r"successfully processed idx: (\d+)", run))
-        failed = set(re.findall(r"unsuccessful idx: (\d+)", run)) - done
+        return started, done, set(re.findall(r"unsuccessful idx: (\d+)", run)) - done
+
+    while True:
+        started, done, failed = progress()
         new = ",".join(sorted(done - scored, key=int))
         if new:
             append("transcribe.log", "transcribe.py", "--input_dir", str(root), "--host", "localhost", "--port", "50051", "--retry_samples", new)
             append("eval.log", "eval.py", "--input_dir", str(root), "--retry_samples", new,
                    "--judge_api", "openai", "--judge_model", "aws/anthropic/bedrock-claude-sonnet-5")
             scored |= set(new.split(","))
+            started, done, failed = progress()  # the row shows the client's progress when it is printed
         labels = [read(root / i / "result.txt") for i in scored]
         graded = [label for label in labels if label in ("CORRECT", "INCORRECT")]
         correct = graded.count("CORRECT")
-        empty = sum(1 for i in scored if not no_answer.sub(" ", re.sub(r"[^a-z ]", " ", read(root / i / "response.txt").lower())).split())
+        words = {i: re.sub(r"[^a-z ]", " ", read(root / i / "response.txt").lower()).split() for i in scored}
+        filler = sum(1 for w in words.values() if w == ["one", "moment"])
+        empty = sum(1 for w in words.values() if not no_answer.sub(" ", " ".join(w)).split())  # " ".join: one space
         finished = len(done) + len(failed)
         rate = finished / max(time.time() - started, 1.0)
         left = (total - finished) / rate if rate else 0
         accuracy = f"{100 * correct / len(graded):.1f}%" if graded else "n/a"
-        eta = "done" if finished >= total else f"~{int(left // 3600)} h {int(left % 3600 // 60)} m"
-        print(f"| {len(done)} / {total} | {len(failed)} | {len(graded)} | {correct} | {accuracy} | {empty} | {eta} |", flush=True)
+        eta = "done" if finished >= total else f"~{int(left // 3600)} h {int(left % 3600 // 60)} m" if finished else "n/a"
+        print(f"| {len(done)} / {total} | {len(failed)} | {len(graded)} | {correct} | {accuracy} | {filler} | {empty} | {eta} |", flush=True)
         if finished >= total:
             break
         time.sleep(interval)
@@ -430,14 +439,14 @@ Run the full dataset from `benchmarking_tools/AA-BigBenchAudio-Eval/` with `--ba
     A row has the following form. The values are an example:
 
     ```text
-    | Done | Failed | Scored | Correct | Accuracy | No answer | Time left |
-    | --- | --- | --- | --- | --- | --- | --- |
-    | 412 / 1000 | 3 | 405 | 318 | 78.5% | 6 | ~1 h 40 m |
+    | Done | Failed | Scored | Correct | Accuracy | Filler only | No answer | Time left |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | 412 / 1000 | 3 | 405 | 318 | 78.5% | 2 | 6 | ~1 h 40 m |
     ```
 
     - **Done** counts the samples that the client finished, and **Failed** counts the samples with an `unsuccessful idx` line.
     - **Scored** counts the samples that have a `CORRECT` or `INCORRECT` label, and **Accuracy** is **Correct** divided by **Scored**.
-    - **No answer** counts the responses that hold only the filler and status lines.
+    - **Filler only** counts the responses that hold only the filler, "One moment.", and **No answer** counts the responses that hold only the filler and status lines, so it includes **Filler only**.
     - **Time left** extrapolates from the samples finished since the start of the full run.
 
     The monitor shares the `nemo-speech` container with the agent while it transcribes, and it calls the judge as samples finish. It stops after the last sample. The labels that it writes are the final labels of those samples: [Score the Results](#score-the-results) transcribes only the samples without a transcript, and its `eval.py` step judges every sample again with the same judge.
@@ -591,7 +600,7 @@ Run the following steps from the repository root, in the shell that holds `FDA_F
     for f in $FDA_FILES; do [ "$f" = -f ] || cp -p "$f" "$P/"; done
     docker compose $FDA_FILES --profile frontend-delegation-agent/single-gpu images > "$P/images.txt"
     docker compose $FDA_FILES --profile frontend-delegation-agent/single-gpu \
-      exec -T frontend-delegation-agent-single-gpu sh -c 'for v in FRONTEND_LLM_MODEL FRONTEND_LLM_BASE_URL BACKEND_LLM_MODEL BACKEND_LLM_BASE_URL FBA_ASR_SERVER FBA_TTS_SERVER FDA_PROFILE PIPELINE_TLS FDA_PROMPT_PROFILE FDA_BACKEND FDA_BACKEND_LINK FDA_GATEWAY_CONFIG FDA_SILENT_FRONTEND FDA_VAD_STOP_SECS FDA_PROACTIVE_AFTER_S FDA_PROACTIVE_MAX_PER_RUN FDA_BACKEND_REASONING_BUDGET FDA_MAX_SESSIONS; do printf "%s=%s\n" "$v" "$(printenv "$v")"; done' > "$P/fda-env.txt"
+      exec -T frontend-delegation-agent-single-gpu sh -c 'for v in FRONTEND_LLM_MODEL FRONTEND_LLM_BASE_URL BACKEND_LLM_MODEL BACKEND_LLM_BASE_URL FBA_ASR_SERVER FBA_TTS_SERVER FDA_PROFILE PIPELINE_TLS FDA_PROMPT_PROFILE FDA_BACKEND FDA_BACKEND_LINK FDA_GATEWAY_CONFIG FDA_SILENT_FRONTEND FDA_VAD_STOP_SECS FDA_PROACTIVE_AFTER_S FDA_PROACTIVE_MAX_PER_RUN FDA_BACKEND_REASONING_BUDGET FDA_BACKEND_THINKING FDA_MAX_SESSIONS; do printf "%s=%s\n" "$v" "$(printenv "$v")"; done' > "$P/fda-env.txt"
     grep -h -E 'frontend-delegation-agent ready|Pipecat adapter settings|proactive status' "$DUMP/logs/frontend-delegation-agent-single-gpu.log" > "$P/fda-startup.txt"
     grep -E '^(SAMPLE_RATE, CHUNK_MS|POST_SEND_INITIAL_WAIT_SEC|POST_SEND_GAP_TOLERANCE_SEC|RECV_TIMEOUT_SEC|OPEN_TIMEOUT_SEC|DEFAULT_REALTIME_MODEL|REALTIME_HANDSHAKE_TIMEOUT_SEC) =' \
       "$BBA/speech-inference.py" > "$P/client-constants.txt"
@@ -615,7 +624,7 @@ Run the following steps from the repository root, in the shell that holds `FDA_F
     )
 
     def no_answer(text):
-        words = re.sub(r"[^a-z ]", " ", text.lower())
+        words = " ".join(re.sub(r"[^a-z ]", " ", text.lower()).split())  # one space between words
         return not NO_ANSWER.sub(" ", words).split()
 
     def read(path):
@@ -631,14 +640,15 @@ Run the following steps from the repository root, in the shell that holds `FDA_F
         cell = response.replace("|", "\\|").replace("\n", " ")
         rows.append(f"| {d.name} | {meta.get('category', '')} | {meta.get('official_answer', '')} | {result} | {cell[:200]} |")
 
-    scored = counts.get("CORRECT", 0) + counts.get("INCORRECT", 0)
+    # As analyze_results.py: CORRECT over every sample with a label, so OTHER labels count against accuracy.
+    scored = sum(v for k, v in counts.items() if k != "not scored")
     accuracy = f"{100.0 * counts.get('CORRECT', 0) / scored:.2f}%" if scored else "n/a"
     lines = [
         f"# {dump.name}: Big Bench Audio on the Frontend Delegation Agent",
         "",
         f"- **Run window (UTC):** {start} .. {end}",
         f"- **Samples dumped:** {len(rows)}",
-        f"- **Accuracy (CORRECT / scored):** {accuracy}",
+        f"- **Accuracy (CORRECT / labelled, as analyze_results.py):** {accuracy}",
         f"- **Labels:** " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())),
         f"- **No answer (filler or status lines only):** {len(filler_only)}" + (f" ({', '.join(filler_only)})" if filler_only else ""),
         "",

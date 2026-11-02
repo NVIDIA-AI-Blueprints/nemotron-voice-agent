@@ -515,9 +515,16 @@ def _request_overrides(raw: Any) -> dict[str, Any]:
     Some models reject ``reasoning_budget`` (for example ``nvidia/nvidia/nemotron-3.5-super-vl``), and
     a child file cannot remove an inherited key (``None`` keeps the base value), so ``0`` means "do not
     send it". The value must be a whole number of tokens, 0 or more.
+    ``extra_body.chat_template_kwargs.enable_thinking`` must be ``true`` or ``false``.
     """
     overrides = copy.deepcopy(dict(raw or {}))
     extra = overrides.get("extra_body")
+    kwargs = extra.get("chat_template_kwargs") if isinstance(extra, Mapping) else None
+    if isinstance(kwargs, Mapping) and "enable_thinking" in kwargs and not isinstance(kwargs["enable_thinking"], bool):
+        raise GatewayConfigError(
+            "backend.request_overrides.extra_body.chat_template_kwargs.enable_thinking must be true or false, "
+            f"got {kwargs['enable_thinking']!r}"
+        )
     if isinstance(extra, Mapping) and "reasoning_budget" in extra:
         budget = extra["reasoning_budget"]
         if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:

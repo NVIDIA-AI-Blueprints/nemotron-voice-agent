@@ -66,6 +66,7 @@ VOICE_SETTINGS = {
     # The eval settings' vad.stop_secs; only the Big Bench Audio overlay changes it.
     "FDA_VAD_STOP_SECS": "0.8",
     "FDA_BACKEND_REASONING_BUDGET": "1024",
+    "FDA_BACKEND_THINKING": "true",
     "FDA_PROACTIVE_MAX_PER_RUN": "1",
 }
 #: The one variable the shell or .env may set: the prompt profile, with the default of each mode.
