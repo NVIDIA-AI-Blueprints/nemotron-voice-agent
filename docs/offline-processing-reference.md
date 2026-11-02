@@ -61,6 +61,13 @@ transcripts complete a turn and produce an LLM request. ASR finalization alone
 does not establish conversational end-of-turn. There is no word-to-VAD ownership
 join, whole-file recognition barrier, or whole-response trace barrier.
 
+Matching the Silero silence threshold alone does not guarantee identical context
+commits. Final ASR arrival, VAD decisions, queued processing, interruptions, and
+candidate selection can change which text reaches a native context boundary.
+Compare the delivered events and immutable request messages when investigating
+a difference. Equal concatenated ASR words do not establish equal request
+contexts, and these timing differences are not all proven fixed.
+
 Each actor publishes a complete callback batch and its future availability bound
 atomically. The scheduler checks these bounds before advancing the sample clock.
 Bounds describe the selected observed-processing schedule; they are not backend
@@ -272,6 +279,10 @@ Pipecat 1.12.0. The normal online service setup is unchanged.
 Text-only collection still initializes the native LLM and TTS services before
 starting source processing. Returning at LLM completion avoids waiting for TTS
 audio completion; it does not remove provider initialization from the server path.
+Provider initialization starts after the server validates and seals input EOF
+and its source hash. A start/acknowledgement capability probe that disconnects
+without input EOF does not construct providers. Pre-upload initialization would
+require a separate invalid-input and cancellation contract; it is not implemented.
 
 ## WebSocket and Recording Contract
 
@@ -279,6 +290,9 @@ The custom protocol is `nva.offline.v1`. The client starts with
 `offline.session.start`, declaring 16 kHz mono PCM16, the input sample count,
 and optional session configuration. The server acknowledges bounds before audio.
 The optional `completion` field selects `full_session` (default) or `text`.
+Configured offline clients send their prompt and configuration in this start
+message. They do not need a preceding `POST /api/session-config` or a
+process-local session ID.
 
 Binary packets contain a network-order `!4sQQI` header: magic, sequence,
 absolute start sample, and sample count. `NVAI` identifies input and `NVAO`
@@ -378,8 +392,10 @@ source and any finite tail. That boundary does not attest completed ASR work.
 The VoiceBench evaluator exposes the opt-in offline product setting
 `product.offline_response_start_timeout_s`. Its default is unset. A value of `10`
 bounds the first eligible nonempty raw LLM text to 10,000 ms after source and
-tail upload. It does not replace the existing receive or total-operation budgets,
-and it does not change the online collector.
+tail upload. This budget includes the subsequent provider initialization, ASR,
+turn processing, and LLM work before that text arrives. It does not replace the
+existing receive or total-operation budgets, and it does not change the online
+collector.
 Record the selected limit with coverage and retry counts. This offline option
 does not make the online and offline timeout policies identical.
 
@@ -388,6 +404,9 @@ appended by a benchmark client becomes part of the declared source PCM. For
 example, a 1,500 ms tail contains 24,000 zero-valued samples at 16 kHz. It does
 not instruct the server to wait 1,500 ms of execution time. The endpoint does
 not continuously append silence while a client waits for an answer.
+After explicit input completion, a client keeps the session open for the
+response-start budget and the separate completion limits. Waiting 10,000 ms
+for the first text does not require sending 10,000 ms of additional silence.
 
 The [VoiceBench checkpoint](offline-processing-progress.md#october-30-2026-voicebench-repeatability-and-context-timing)
 records completed real-service text cohorts. The
@@ -407,6 +426,10 @@ Each `provider_observation` inside an `offline.event` records `source`,
 Preserve fragment order, whitespace, and response identity. Upstream frames,
 TTS-normalized text, and thought frames do not supply candidate text. Cancelled
 generations cannot contribute stale callbacks to a successor.
+
+The native `LLMFullResponseEndFrame` ends a raw LLM response epoch. A benchmark
+collector applies its eligibility and interruption rules at that boundary.
+It does not infer text completion from a 5,000 ms audio gap or TTS inactivity.
 
 VoiceBench adapters must apply the existing online collector's interruption,
 epoch-reset, and first-eligible text-completion rules to these ordered events.
@@ -702,6 +725,11 @@ does not remove blocking work inside each process, and configured online
 sessions need routing affinity or shared session storage across workers.
 Record the worker count with concurrency results instead of assuming that a
 benchmark concurrency of six requires more than six workers.
+An offline-only multiworker profile can use the existing inline start-message
+configuration without creating process-local session IDs. This does not change
+or validate the configured online session path. Retain observed server process
+IDs with scalar timings; a configured worker count does not prove how sessions
+were distributed or how many provider RPCs ran concurrently.
 
 ### Reproduce the Paired Comparison
 

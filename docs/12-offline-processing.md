@@ -425,10 +425,14 @@ time.
 
 Model-free startup tests check event-loop progress, cancellation, and native
 configuration parity. They do not establish provider latency or a C6 speedup.
-The next paired evaluation compares online and offline at concurrency 1 and 6,
-using the same frozen 778 VoiceBench Lite cases, provider settings, judge, and
-text-completion policy. Coverage, retries, native scores, worker counts, and
-timing scopes must be audited before reporting a throughput conclusion.
+The opt-in four-cohort C1/C6 matrix remains a separate evaluation workflow.
+The current follow-up instead selects only offline C6 with 10 Uvicorn workers,
+after technical readiness checks, on the same frozen 778 VoiceBench Lite cases.
+It keeps the provider settings, judge, and text-completion policy. Existing
+online C6 and offline C1 results provide historical references; source and worker
+differences prevent an isolated mode-only conclusion. No C1-divided-by-six
+completion time or score match is guaranteed. Coverage, retries, native scores,
+worker counts, and timing scopes require audit before reporting throughput.
 
 Refer to the [implementation reference](offline-processing-reference.md#offline-native-service-startup)
 for the startup boundary and the
