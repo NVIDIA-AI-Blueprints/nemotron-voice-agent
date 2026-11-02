@@ -99,3 +99,5 @@ python scripts/docs-review-receipt.py report --since 2026-08-01 --format summary
 
 The report uses the authenticated GitHub CLI session and also supports `json`
 and `csv` output.
+
+<!-- Test PR created by Devin; safe to close. -->
