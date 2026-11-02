@@ -8,7 +8,6 @@ import asyncio
 import json
 import os
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -24,14 +23,13 @@ from examples.frontend_backend_live.media import playout
 from examples.frontend_backend_live.media.services import LineTextHold
 from examples.frontend_backend_live.media.task_cards import RtviTaskCards
 from examples.frontend_backend_live.prompts import get_prompt_set
-from examples.frontend_backend_live.prompts.catalog import CHANNEL_PROMPT_KEY, catalog_prompt
+from examples.frontend_backend_live.prompts.catalog import LINES_PATH, PROMPTS_DIR, get_profile
 from examples.shared.pipeline_utils import register_session_start_handlers
 from realtime.lifecycle import announce_response, finish_response
 from realtime.serializer import RealtimeFrameSerializer
 from tests.unit.frontend_backend_live.root.root_helpers import CATALOG
 
-PROMPTS = Path(pipeline.__file__).with_name("prompts.yaml")
-INTRO = yaml.safe_load(PROMPTS.read_text(encoding="utf-8"))["lines"]["intro"]  # the greeting the catalog holds
+INTRO = yaml.safe_load(LINES_PATH.read_text(encoding="utf-8"))["lines"]["intro"]  # the greeting the lines hold
 # What a Realtime client sends to type a line, and to ask for a response.
 TYPED = {
     "type": "conversation.item.create",
@@ -227,7 +225,7 @@ class SeedTests(BotCase):
     def setUp(self):
         super().setUp()
         self.enterContext(patch.dict(os.environ))
-        for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):  # the bot's talker is the catalog's own default
+        for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):  # the bot's talker is the default profile's
             os.environ.pop(name, None)
 
     async def seed(self) -> list[dict]:
@@ -235,8 +233,8 @@ class SeedTests(BotCase):
         return cascade.conversation.messages()
 
     async def test_the_bot_keeps_the_cafe_talker_and_its_channel_as_one_system_message(self):
-        talker = yaml.safe_load(PROMPTS.read_text(encoding="utf-8"))["talker"]["content"]
-        channel = catalog_prompt(CHANNEL_PROMPT_KEY)
+        talker = yaml.safe_load((PROMPTS_DIR / "cafe" / "talker.yaml").read_text(encoding="utf-8"))["content"]
+        channel = get_profile("cafe").prompt("channel")
         self.assertEqual(await self.seed(), [{"role": "system", "content": f"{talker}\n\n{channel}"}])
 
     async def test_with_a_system_prompt_the_talkers_prompt_stays_through_compaction(self):

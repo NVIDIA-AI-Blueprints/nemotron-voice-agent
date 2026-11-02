@@ -39,7 +39,7 @@ class Talker:
             frontend: The model that decides.
             prompts: The prompt set: the call's texts, its actions and its hint.
             holding: The line said word for word when a decision fails while work is open (``lines.holding`` in
-                ``prompts.yaml``); empty: such a turn is delegated, as when no work is open.
+                ``prompts/shared/lines.yaml``); empty: such a turn is delegated, as when no work is open.
         """
         self.frontend, self.prompts, self.holding = frontend, prompts, holding
         self.spec = CallSpec("talker", prompts.actions, prompts.call_hints.talker)

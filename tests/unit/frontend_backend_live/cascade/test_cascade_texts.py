@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The cascade reads its texts from the prompt set and its fixed lines from ``prompts.yaml``."""
+"""The cascade reads its texts from the prompt set and its fixed lines from ``prompts/shared/lines.yaml``."""
 
 import unittest
 from dataclasses import replace

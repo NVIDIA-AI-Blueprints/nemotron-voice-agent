@@ -12,8 +12,9 @@ from unittest.mock import patch
 
 from delegation_core.config import CoreSettings
 from examples.frontend_backend_live import pipeline
-from examples.frontend_backend_live.factory import backend_defaults, core_client, endpoint_lookup
+from examples.frontend_backend_live.factory import backend_defaults, core_client, endpoint_lookup, ui_bot_session
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
+from examples.frontend_backend_live.prompts.catalog import default_profile
 from tests.unit.contracts.base import ContractCase
 from tests.unit.frontend_backend_live.root.root_helpers import StubAdapter
 
@@ -65,7 +66,9 @@ class CafeOrderTests(ContractCase, unittest.IsolatedAsyncioTestCase):
             pipeline.bot_root.cache_clear()
             state = pipeline.bot_root()
         self.addCleanup(pipeline.bot_root.cache_clear)
-        settings: CoreSettings = state.core
+        # A session of the default prompt profile (the cafe's): its tools and backend prompt, as the bot builds them.
+        settings: CoreSettings
+        settings, instructions = ui_bot_session(state.core, default_profile())
         endpoints = endpoint_lookup(state.catalog, settings.backend.slot)
         spoken: list[str] = []
 
@@ -73,7 +76,9 @@ class CafeOrderTests(ContractCase, unittest.IsolatedAsyncioTestCase):
             spoken.append(text)
 
         with patch.object(providers, "AsyncOpenAI", return_value=client):  # every provider makes its client there
-            core = build_core(settings, endpoints=endpoints, defaults=backend_defaults(settings, endpoints))
+            core = build_core(
+                settings, endpoints=endpoints, defaults=backend_defaults(settings, endpoints, instructions)
+            )
             delegation = ServerDelegation(core_client(core))
             agent = build_agent(state.cascade, CASCADE_ENDPOINT, frontend_client=client)
             conversation = ListConversation(_messages())

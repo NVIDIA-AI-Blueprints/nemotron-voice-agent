@@ -20,9 +20,10 @@ does for a browser session; only its outside edges are replaced:
 * the environment: no audio recorder, no tracing, the welcome switch set by the test, no prompt path override.
 
 Everything else is the bot's own code: its root (:func:`golden_root` runs ``bot_root``'s own reading of
-``config.yaml`` and ``core.ui-bot.yaml``, so the prompt set and the voice note are the files' own), the cascade
-(talker, writer, work note, the greeting line, the task cards), its delegation core and the cafe tools, which its
-backend runs itself as server tools.
+``config.yaml`` and ``core.ui-bot.yaml``, so the prompt set and the voice note are the files' own), the session's
+prompt profile (the cafe's: its talker, channel, backend prompt and tools), the cascade (talker, writer, work note,
+the greeting line, the task cards), its delegation core and the cafe tools, which its backend runs itself as server
+tools.
 
 Timers: :func:`golden_root` sets the quiet before a progress line (``progress_after_seconds``) to an hour, so no golden
 gets a clock-driven line. The other timers keep the files' values, which these calls never reach (a held round is
@@ -127,7 +128,7 @@ BOT_CHANNELS = (
 )
 
 # What the browser client sends for a session of this example, less the model fields the catalog supplies.
-SESSION_BODY = {"pipeline_mode": "frontend-backend-live", "prompt_key": "talker", "session_id": "golden"}
+SESSION_BODY = {"pipeline_mode": "frontend-backend-live", "prompt_key": "cafe", "session_id": "golden"}
 
 # The catalog entries the bot reads (ExampleCatalog), in place of services.yaml and settings.yaml: the example's
 # default model for both roles, with its registry settings applied (examples_registry.yaml): reasoning off for the
@@ -889,8 +890,8 @@ class BotWiringTests(BotGoldenCase):
             (self.transport.input(), self.stt, session, self.tts, self.transport.output()),
         )
         # The backend runs the cafe tools itself, as server tools: the conversation's IM session's backend adapter holds
-        # the tool sources core.ui-bot.yaml names (backend.tools: cafe), with their schemas; the core's defaults offer
-        # no request tools of their own.
+        # the tool sources the session's prompt profile names (prompts/cafe/profile.yaml tools: cafe), with their
+        # schemas; the core's defaults offer no request tools of their own.
         im = self.ims[0]
         self.assertEqual([type(source) for source in im.backend.tools], [CafeTools])
         self.assertEqual(im.backend.tools[0].tools(), CAFE_TOOLS)

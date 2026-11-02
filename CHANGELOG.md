@@ -18,6 +18,8 @@ This release adds the Frontend/Backend Live example, built from the Live gateway
 - **Live Console** (`/live.html`), a developer console that starts live sessions over WebRTC, shows their events, delegations, and conversation history, and steers them.
 - The `nemotron-ultra` entry in `services.yaml`: Nemotron 3 Ultra 550B A55B on the public NVIDIA API, the default backend model of the Frontend/Backend Live Cloud and Server profiles.
 - The Frontend/Backend Live Architecture page (`docs/design/architecture.md`), which describes each part, its configuration and extension points, and how to connect your own harness.
+- **Frontend/Backend Live prompt profiles.** Each profile is a folder under `src/examples/frontend_backend_live/prompts/` with its talker, backend, and channel prompts and its server tools. The repository UI lists `cafe`, the default, and selecting a profile switches the UI bot's talker, backend prompt, and tools together. The internal `generic` profile supplies the Live defaults.
+- The optional `prompt_catalog` key of an `examples_registry.yaml` entry names a `module.path:callable` that builds the example's UI prompt list in place of its `prompts.yaml`. `PROMPT_FILE_PATH` still takes precedence.
 
 ### Changed
 

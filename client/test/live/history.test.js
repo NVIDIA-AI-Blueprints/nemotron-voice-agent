@@ -48,7 +48,7 @@ test("each pending line is styled by its kind and shown as the backend reads it"
 test("a prompt part says whose it is: the client's, the config's or the server's", () => {
   assert.equal(promptOrigin("session.instructions"), "client");
   assert.equal(promptOrigin("delegation.responses.instructions"), "client");
-  assert.equal(promptOrigin("prompts.yaml: frontend"), "config");
+  assert.equal(promptOrigin("prompts/generic/talker.yaml"), "config");
   assert.equal(promptOrigin("the core: the newest request's instructions"), "server");
   const [entry] = promptEntries([{ source: "session.instructions", text: "Line one\nLine two" }]);
   assert.equal(entry.cls, "prompt client");

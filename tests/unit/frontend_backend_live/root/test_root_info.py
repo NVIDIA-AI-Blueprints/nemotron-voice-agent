@@ -5,22 +5,17 @@
 """``GET /v1/live/info``'s example half, composed by the root."""
 
 import asyncio
-import tempfile
 import threading
 import unittest
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import yaml
-
 from examples.frontend_backend_live import factory
 from examples.frontend_backend_live.cascade.lines import catalog_lines
-from examples.frontend_backend_live.prompts.catalog import CATALOG_PATH, role_instructions
+from examples.frontend_backend_live.prompts.catalog import get_profile
 from tests.unit.contracts.base import ContractCase
 from tests.unit.frontend_backend_live.root.root_helpers import StubAdapter, clear_root_caches, stub_root
-from utils import load_yaml_file
 
 # What each backend adapter's source says of itself (its describe()), as the core adds it to its own.
 CORE_HALVES = {
@@ -102,14 +97,15 @@ class DescribeTests(DescribeCase):
                 "slot": "thinker-llm",
                 "model": "org/back",
                 "base_url": "http://back/v1",
-                "prompt": "backend",  # the core's own default, for a request with no instructions
+                "prompt": "generic",  # the core's own default profile, for a request with no instructions
             },
         )
         self.assertEqual(info["backend"]["provider"], "chat-completions")  # the console's backend badge
         self.assertEqual(info["backend_models"], ["org/back", "org/other"])  # the default first
-        # Both prefills are the cafe demo's prompts, which the console runs with the cafe's sample tools.
+        # Both prefills are the default profile's (the cafe demo's), which the console runs with its sample tools.
+        cafe = get_profile("cafe")
         self.assertEqual(
-            info["instructions"], {"frontend": role_instructions("talker"), "backend": role_instructions("thinker")}
+            info["instructions"], {"frontend": cafe.instructions("talker"), "backend": cafe.instructions("thinker")}
         )
         self.assertEqual(info["warnings"], [])
 
@@ -126,8 +122,9 @@ class DescribeTests(DescribeCase):
             },
         )
 
-    def test_the_console_gets_the_catalogs_append_presets_as_written(self):
-        block = load_yaml_file(CATALOG_PATH).get("console_presets") or {}
+    def test_the_console_gets_the_default_profiles_append_presets_as_written(self):
+        block = get_profile("cafe").console_presets
+        self.assertTrue(block)
         self.assertEqual(self.describe(CORE_HALVES["llm"])["presets"], block)
 
     def test_the_adapters_warnings_reach_the_console(self):
@@ -135,21 +132,23 @@ class DescribeTests(DescribeCase):
         with patch.object(StubAdapter, "describe", return_value=warned):
             self.assertEqual(self.describe(CORE_HALVES["llm"])["warnings"], ["the talker is degraded"])
 
-    def test_the_sample_tools_are_the_ui_bot_profiles_tool_sources_built_by_name(self):
+    def test_the_sample_tools_are_the_default_profiles_tool_sources_built_by_name(self):
         info = self.describe(CORE_HALVES["llm"])
-        self.assertEqual(self.blocks, [{"cafe": {}}])  # core.ui-bot.yaml's backend.tools
+        self.assertEqual(self.blocks, [{"cafe": {}}])  # prompts/cafe/profile.yaml's tools
         self.assertEqual([tool["name"] for tool in info["sample_tools"]], ["get_menu", "manage_cart", "checkout"])
         self.describe(CORE_HALVES["llm"])
         self.assertEqual(len(self.blocks), 1)  # built once
 
-    def test_the_backend_prefill_and_the_sample_tools_come_from_the_ui_bot_profile_together(self):
-        shipped = factory.ui_bot_core(self.state.config)
-        profile = replace(shipped, backend=replace(shipped.backend, prompt="talker", tools={"kiosk": {}}))
-        with patch.object(factory, "ui_bot_core", return_value=profile) as read:
+    def test_the_prefills_and_the_sample_tools_come_from_one_read_of_the_default_profile(self):
+        cafe = get_profile("cafe")
+        roles = {**cafe.roles, "thinker": {"content": "Run the kiosk.\n"}}
+        profile = replace(cafe, roles=roles, tools={"kiosk": {}})
+        with patch.object(factory, "default_profile", return_value=profile) as read:
             info = self.describe(CORE_HALVES["llm"])
-        self.assertEqual(info["instructions"]["backend"], role_instructions("talker"))  # as the UI bot's backend starts
+        backend = f"Run the kiosk.\n\n{cafe.prompt('channel')}"  # as a UI bot session of the profile starts its backend
+        self.assertEqual(info["instructions"], {"frontend": cafe.instructions("talker"), "backend": backend})
         self.assertEqual(self.blocks, [{"kiosk": {}}])
-        self.assertEqual(read.call_count, 1)  # one read of the profile for both
+        self.assertEqual(read.call_count, 1)  # one read of the profile for the prefills, the tools and the presets
         self.assertEqual(info["backend"]["prompt"], self.state.core.backend.prompt)  # the core keeps its own default
 
     def test_describe_reads_off_the_event_loop(self):
@@ -165,19 +164,15 @@ class DescribeTests(DescribeCase):
 
 
 class ConsolePresetsTests(unittest.TestCase):
-    def setUp(self):
-        self.catalog = Path(self.enterContext(tempfile.TemporaryDirectory())) / "prompts.yaml"
-        self.enterContext(patch.object(factory, "CATALOG_PATH", self.catalog))
+    def profile(self, presets):
+        """The cafe profile with ``presets`` as its ``console_presets`` setting."""
+        return replace(get_profile("cafe"), console_presets=presets)
 
-    def write(self, contents: dict) -> None:
-        self.catalog.write_text(yaml.safe_dump(contents), encoding="utf-8")
-
-    def test_the_presets_are_the_blocks_pairs_and_none_without_it(self):
+    def test_the_presets_are_the_settings_pairs_and_none_without_it(self):
         presets = {"session.thinking.append": [["Store state", "The machine is busy."]]}
-        self.write({"console_presets": presets})
-        self.assertEqual(factory.console_presets(), presets)
-        self.write({"lines": {}})
-        self.assertEqual(factory.console_presets(), {})
+        self.assertEqual(factory.console_presets(self.profile(presets)), presets)
+        self.assertEqual(factory.console_presets(self.profile({})), {})
+        self.assertEqual(factory.console_presets(get_profile("generic")), {})  # a profile without the setting
 
     def test_a_malformed_block_is_refused(self):
         malformed = {
@@ -186,10 +181,11 @@ class ConsolePresetsTests(unittest.TestCase):
             "a preset that is no text": {"session.thinking.append": [["Count", 3]]},
         }
         for name, block in malformed.items():
-            with self.subTest(malformed=name):
-                self.write({"console_presets": block})
-                with self.assertRaisesRegex(ValueError, "console_presets must map each append type"):
-                    factory.console_presets()
+            with (
+                self.subTest(malformed=name),
+                self.assertRaisesRegex(ValueError, "prompts/cafe/profile.yaml console_presets must map each"),
+            ):
+                factory.console_presets(self.profile(block))
 
 
 class ShippedSampleTests(ContractCase, unittest.TestCase):

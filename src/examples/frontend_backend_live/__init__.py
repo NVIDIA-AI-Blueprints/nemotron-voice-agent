@@ -14,7 +14,7 @@ Two composition roots build each call:
   frontend adapter, of the class ``frontend.adapter`` names; ``core`` gives the client of the process's one delegation
   core, built on first use from ``core.yaml``; ``describe`` describes the example for ``GET /v1/live/info``.
 * ``pipeline.py``: the repository UI bot, with the same cascade parts, a delegation core of its own from
-  ``core.ui-bot.yaml``, and the task cards.
+  ``core.ui-bot.yaml`` and the session's prompt profile, and the task cards.
 
 Packages, one per responsibility:
 
@@ -26,7 +26,8 @@ Packages, one per responsibility:
   the cascade, the speech services and TTS modes, the playout tracker, the reply pre-roll, and the UI bot's task cards.
 * ``models``: the ``Frontend`` base class and its providers, the decision parser, the example's catalog and endpoint
   resolution, and retries with backoff.
-* ``prompts``: the prompt sets and the reader of the example's ``prompts.yaml``.
+* ``prompts``: the prompt sets, and the example's prompt profiles (one folder each: a talker, a backend prompt, a
+  channel and tools that switch together) with their reader and the shared lines.
 * ``config_manager``: ``config.yaml`` loading and validation.
 * ``parked``: code that nothing imports, runs or tests.
 """

@@ -357,10 +357,16 @@ print(sorted(name for name in sys.modules if name.startswith(("examples", "live"
 
 # ------------------------------------------------------------------------------------------------ the profiles
 class ProfileTests(unittest.TestCase):
-    def test_the_ui_bot_profile_runs_the_cafe_tools_the_cafe_prompt_and_the_envelope(self):
+    def test_the_ui_bot_profile_writes_the_envelope_and_a_session_runs_its_prompt_profiles_tools_and_prompt(self):
+        from examples.frontend_backend_live.factory import ui_bot_session
+        from examples.frontend_backend_live.prompts.catalog import default_profile
+
         ui_bot = CoreSettings.load(FBL / "core.ui-bot.yaml")
-        self.assertEqual({name: dict(block) for name, block in ui_bot.backend.tools.items()}, {"cafe": {}})
-        self.assertEqual((ui_bot.backend.prompt, SHIPPED.backend.prompt), ("thinker", "backend"))
+        self.assertEqual(ui_bot.backend, SHIPPED.backend)  # a session's prompt profile sets its prompt and tools
+        session, _ = ui_bot_session(ui_bot, default_profile())
+        self.assertEqual({name: dict(block) for name, block in session.backend.tools.items()}, {"cafe": {}})
+        self.assertEqual((session.backend.prompt, SHIPPED.backend.prompt), ("cafe", "generic"))
+        self.assertEqual(replace(session.backend, prompt="generic", tools=SHIPPED.backend.tools), SHIPPED.backend)
         self.assertEqual(ui_bot.delegation.result_format, "speak_display")
         self.assertEqual(replace(ui_bot.delegation, result_format="plain"), SHIPPED.delegation)
         self.assertEqual(ui_bot.texts, SHIPPED.texts)
