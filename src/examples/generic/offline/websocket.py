@@ -9,6 +9,7 @@ stalled operations; they never invent silence, speech stops, or media offsets.
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import json
 import logging
@@ -23,6 +24,14 @@ from typing import Any
 
 from grpc import RpcError, StatusCode
 
+from .diagnostics import (
+    bind_diagnostics,
+    create_diagnostics,
+    current_diagnostics,
+    persist_diagnostics,
+    record,
+    reset_diagnostics,
+)
 from .models import RATE, AudioSource, SessionResult
 from .protocol import (
     CAPABILITIES,
@@ -53,6 +62,8 @@ class _LiveEventWriter:
         self.queue = asyncio.Queue(maxsize=limits.max_pending_stream_events)
         self.pending_bytes = 0
         self.last_sample = 0
+        self._diagnostics = current_diagnostics()
+        self._first_text_sent = set()
 
     def observe(self, event):
         """Snapshot a committed event or fail explicitly instead of dropping it."""
@@ -73,6 +84,28 @@ class _LiveEventWriter:
             payload, size = await self.queue.get()
             try:
                 await self.websocket.send_json(payload)
+                if self._diagnostics is None:
+                    continue
+                event = payload.get("event", {})
+                kind = event.get("type")
+                if kind == "asr_transcript" and event.get("final") is True:
+                    record(
+                        self._diagnostics,
+                        "asr_final_sent",
+                        sequence=event.get("sequence"),
+                        processed_sample=event.get("processed_sample"),
+                        sample=event.get("sample"),
+                    )
+                elif kind == "response_requested":
+                    record(self._diagnostics, "llm_request_event_sent", response_id=event.get("response_id"))
+                elif kind == "provider_observation" and event.get("source") == "llm":
+                    identity = event.get("response_id")
+                    if event.get("frame") == "LLMTextFrame" and event.get("text", "").strip():
+                        if identity not in self._first_text_sent and len(self._first_text_sent) < 4096:
+                            self._first_text_sent.add(identity)
+                            record(self._diagnostics, "llm_first_text_sent", response_id=identity)
+                    elif event.get("frame") == "LLMFullResponseEndFrame":
+                        record(self._diagnostics, "llm_end_sent", response_id=identity)
             finally:
                 self.pending_bytes -= size
                 self.queue.task_done()
@@ -90,6 +123,7 @@ async def _execute_text(websocket, receiver, runtime_factory, start, source, lim
             runtime = await value if inspect.isawaitable(value) else value
             configuration = redact_private(getattr(runtime, "configuration", start.get("config", {})))
             _check_client(receiver)
+            diagnostics = current_diagnostics()
             await websocket.send_json(
                 {
                     "type": "offline.runtime.configuration",
@@ -97,6 +131,7 @@ async def _execute_text(websocket, receiver, runtime_factory, start, source, lim
                     "completion": "text",
                     "configuration": configuration,
                     "configuration_fingerprint": configuration_fingerprint(configuration),
+                    **({"server_metrics_session_id": diagnostics.session_id} if diagnostics is not None else {}),
                 }
             )
 
@@ -372,6 +407,37 @@ async def serve_offline_session(
     limits: SessionLimits | None = None,
     clock: Callable[[], int] = time.monotonic_ns,
 ) -> None:
+    """Observe optional scalar timings without changing the offline wire policy."""
+    diagnostics, root = create_diagnostics()
+    if diagnostics is None:
+        return await _serve_offline_session(websocket, runtime_factory, record_root, limits=limits, clock=clock)
+    token = bind_diagnostics(diagnostics)
+    record(diagnostics, "session_started")
+    try:
+        return await _serve_offline_session(websocket, runtime_factory, record_root, limits=limits, clock=clock)
+    except BaseException as error:
+        record(diagnostics, "session_error", error_type=type(error).__name__)
+        raise
+    finally:
+        record(diagnostics, "session_returned")
+        try:
+            await asyncio.shield(asyncio.to_thread(persist_diagnostics, root, diagnostics))
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logging.getLogger(__name__).warning("Offline scalar metrics unavailable: %s", type(error).__name__)
+        finally:
+            reset_diagnostics(token)
+
+
+async def _serve_offline_session(
+    websocket: Any,
+    runtime_factory: Callable,
+    record_root: Path | str,
+    *,
+    limits: SessionLimits | None = None,
+    clock: Callable[[], int] = time.monotonic_ns,
+) -> None:
     """Accept, seal, evaluate, record, and publish one finite WebSocket session.
 
     ``runtime_factory(start_message)`` may return a runtime or an awaitable. The
@@ -402,6 +468,13 @@ async def serve_offline_session(
     try:
         async with asyncio.timeout(limits.upload_timeout_seconds):
             start, source = await _sealed_source(websocket, limits, milestones=milestones, clock=clock)
+        if current_diagnostics() is not None:
+            record(
+                current_diagnostics(),
+                "source_sealed",
+                input_samples=source.sample_count,
+                source_sha256=hashlib.sha256(source.pcm).hexdigest(),
+            )
         directory = Path(record_root) / str(uuid.uuid4())
         create_private_directory(directory, exist_ok=False)
         async with _monitor_client(websocket) as receiver:
@@ -485,6 +558,7 @@ async def serve_offline_session(
                     clock=clock,
                 )
     except _ClientDisconnected:
+        record(current_diagnostics(), "session_cancelled", outcome="client_disconnected")
         if start is not None and start.get("completion") == "text" and directory is not None:
             write_private_text(
                 directory / "cancellation.json",
@@ -494,9 +568,11 @@ async def serve_offline_session(
             _failure_record(directory, "client_disconnected")
         return
     except asyncio.CancelledError:
+        record(current_diagnostics(), "session_cancelled", outcome="server_cancelled")
         _failure_record(directory, "server_cancelled")
         raise
     except Exception as error:
+        record(current_diagnostics(), "session_failed", error_type=type(error).__name__)
         diagnostics = _public_failure_diagnostics(error)
         status_suffix = "".join(f" {name}={value}" for name, value in diagnostics.items())
         logging.getLogger(__name__).error(
@@ -513,10 +589,10 @@ async def serve_offline_session(
         else:
             code, message = "session_failed", "Offline session failed; check server diagnostics"
         _failure_record(directory, code, diagnostics=diagnostics)
-        record = {"type": "offline.session.error", "code": code, "message": message}
-        record.update(diagnostics)
+        error_record = {"type": "offline.session.error", "code": code, "message": message}
+        error_record.update(diagnostics)
         with contextlib.suppress(Exception):
-            await websocket.send_json(record)
+            await websocket.send_json(error_record)
         with contextlib.suppress(Exception):
             await websocket.close(code=1008 if isinstance(error, OfflineProtocolError) else 1011)
         return

@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
@@ -21,7 +22,6 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
 from examples.shared.nvidia_tts_explicit_eof import (
     EXPLICIT_EOF_COMPLETION_POLICY,
-    TTS_PROVIDER_IDLE_TIMEOUT_SECONDS,
     explicit_eof_tts_options,
 )
 from examples.shared.pipeline_utils import (
@@ -47,9 +47,12 @@ from utils import (
 
 from .detection import create_generic_detector
 from .native_response import (
+    OFFLINE_TTS_CONFIG_TIMEOUT_SECONDS,
+    OFFLINE_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS,
     CapturingNativeNvidiaLLMService,
     CapturingNativeNvidiaTTSService,
     NativeResponseSession,
+    _diagnose,
 )
 from .providers import create_riva_recognizer
 
@@ -67,6 +70,7 @@ class GenericOfflineRuntime:
         *,
         provider_observations: Callable[[], dict[str, Any]] | None = None,
         evaluation_trace=None,
+        diagnostics=None,
     ):
         """Keep session-owned provider resources out of the scheduling core."""
         self._engine = engine
@@ -75,6 +79,7 @@ class GenericOfflineRuntime:
         self._synthesis = synthesis
         self._provider_observations = provider_observations
         self._evaluation_trace = evaluation_trace
+        self.diagnostics = diagnostics
         self.configuration = configuration
         self._closed = False
         self._close_lock = asyncio.Lock()
@@ -156,11 +161,14 @@ class GenericOfflineRuntime:
         return result
 
 
-def build_runtime(config: dict) -> GenericOfflineRuntime:
+def build_runtime(config: dict, *, diagnostics=None) -> GenericOfflineRuntime:
     """Use the same generic prompt, service entries, text filter, and tool schemas."""
     from examples.generic.tool_handlers import TOOL_HANDLERS
 
+    from .diagnostics import current_diagnostics
     from .incremental import IncrementalSessionEngine
+
+    diagnostics = diagnostics if diagnostics is not None else current_diagnostics()
 
     module_file = Path(__file__).resolve().parents[1] / "pipeline.py"
     prompt_key, prompt = resolve_prompt(module_file, config.get("prompt_content", ""), config.get("prompt_key", ""))
@@ -259,7 +267,9 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
             handlers[name] = TOOL_HANDLERS[name]
     if tools:
         raise ValueError("Incremental offline execution currently requires a prompt without tools")
+    vad_started = time.monotonic_ns()
     detector = create_generic_detector()
+    _diagnose(diagnostics, "vad_initialization_end", duration_ms=(time.monotonic_ns() - vad_started) / 1e6)
     if detector.configuration["policy"] != "silero":
         raise ValueError("Chunk-driven offline replay currently requires USE_SILERO_VAD_TURN_DETECTION=true")
     recognizer = create_riva_recognizer(settings, capture_events=True)
@@ -296,10 +306,15 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
             text_filters=[NemotronSpeechTextFilter()],
             custom_dictionary=settings["custom_dictionary"],
             **explicit_eof_tts_options(synthesis_mode),
+            provider_idle_timeout_s=OFFLINE_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS,
+            config_timeout_s=OFFLINE_TTS_CONFIG_TIMEOUT_SECONDS,
+            diagnostics=diagnostics,
             **model_map,
         )
 
-    responder = NativeResponseSession(llm_factory, tts_factory, sample_rate=settings["tts_sample_rate"])
+    responder = NativeResponseSession(
+        llm_factory, tts_factory, sample_rate=settings["tts_sample_rate"], diagnostics=diagnostics
+    )
     configuration = {
         "mode": "offline",
         "sample_rate": 16000,
@@ -326,7 +341,8 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "llm_service": "pipecat.NvidiaLLMService",
         "tts_service": "pipecat.NvidiaTTSService",
         "tts_context_completion_policy": EXPLICIT_EOF_COMPLETION_POLICY,
-        "tts_provider_idle_timeout_seconds": TTS_PROVIDER_IDLE_TIMEOUT_SECONDS,
+        "tts_provider_idle_timeout_seconds": OFFLINE_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS,
+        "tts_config_timeout_seconds": OFFLINE_TTS_CONFIG_TIMEOUT_SECONDS,
         "pronunciation_dictionary_sha256": hashlib.sha256(
             json.dumps(settings["custom_dictionary"] or {}, sort_keys=True).encode()
         ).hexdigest(),
@@ -367,4 +383,5 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         configuration,
         provider_observations=responder.get_provider_observations,
         evaluation_trace=evaluation_trace,
+        diagnostics=diagnostics,
     )

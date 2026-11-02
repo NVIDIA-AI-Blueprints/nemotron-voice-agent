@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .actors import ActorEvent, ActorStream, EventActor
+from .diagnostics import current_diagnostics, record
 from .models import RATE, AudioSource, ns_to_samples, samples_to_ns
 
 
@@ -83,6 +84,7 @@ class ChunkProgressASR:
         self._stream = stream
         self._cancel = cancel
         self._clock = clock
+        self._diagnostics = current_diagnostics()
 
     def cancel(self):
         """Cancel RPC work when its owning session is cancelled."""
@@ -130,6 +132,7 @@ class ChunkProgressASR:
 
     def _recognize(self, source: AudioSource, *, actor=None, state=None) -> ASREventTrace:
         started = self._clock()
+        record(self._diagnostics, "asr_started", input_samples=source.sample_count)
         positions: list[int] = []
         supplied: list[int] = []
         lock = threading.Lock()
@@ -152,6 +155,8 @@ class ChunkProgressASR:
                 with lock:
                     positions.append(chunk.end_sample)
                     supplied.append(self._clock())
+                    if len(positions) == 1:
+                        record(self._diagnostics, "asr_first_audio_supplied", elapsed_ms=(supplied[0] - started) / 1e6)
                 yield chunk.pcm
 
             def supplied_eof(now):
@@ -160,6 +165,7 @@ class ChunkProgressASR:
                 exhausted_at = now - started
                 if state is not None:
                     state["input_eof_wall"] = now
+                record(self._diagnostics, "asr_input_exhausted", elapsed_ms=(now - started) / 1e6)
                 return ()
 
             if actor is None:
@@ -172,6 +178,7 @@ class ChunkProgressASR:
             nonlocal previous_progress_tolerance
             if first_response is None:
                 first_response = arrival - started
+                record(self._diagnostics, "asr_first_response", elapsed_ms=first_response / 1e6)
             responses += 1
             batch = []
             for result in response.results:
@@ -225,8 +232,10 @@ class ChunkProgressASR:
                     continue
                 if first_transcript is None:
                     first_transcript = arrival - started
+                    record(self._diagnostics, "asr_first_transcript", elapsed_ms=first_transcript / 1e6)
                 if result.is_final and first_final is None:
                     first_final = arrival - started
+                    record(self._diagnostics, "asr_first_final", elapsed_ms=first_final / 1e6)
                 event = ASRChunkEvent(
                     len(events),
                     progress,
@@ -238,6 +247,15 @@ class ChunkProgressASR:
                     processing_ns,
                 )
                 events.append(event)
+                if event.final:
+                    record(
+                        self._diagnostics,
+                        "asr_final_callback",
+                        sequence=event.sequence,
+                        processed_sample=progress,
+                        dependency_chunk_end=chunk_end,
+                        elapsed_ms=(arrival - started) / 1e6,
+                    )
                 batch.append(ActorEvent(processing_clock.available_ns, "asr", event))
             return batch
 
@@ -256,6 +274,7 @@ class ChunkProgressASR:
         if not exhausted or (source.sample_count and positions[-1] != source.sample_count):
             raise ValueError("ASR RPC ended before consuming the entire finite source")
         ended = self._clock() - started
+        record(self._diagnostics, "asr_stream_eof", elapsed_ms=ended / 1e6)
         return ASREventTrace(
             tuple(events),
             {

@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from time import perf_counter_ns
 from typing import Any, Protocol
 
-from .models import RATE, AudioSource, DetectionTrace, SpeechInterval, UserTurn, samples_to_ns
+from .diagnostics import current_diagnostics, duration, record
+from .models import RATE, AudioSource, DetectionTrace, SpeechInterval, UserTurn, ns_to_samples, samples_to_ns
 
 
 class VADPort(Protocol):
@@ -77,6 +78,7 @@ class SampleTimedSileroMixin:
         self._offline_source_end_sample = 0
         self._offline_next_reset_sample: int | None = None
         self._offline_model_reset_offsets: list[int] = []
+        self._offline_diagnostics = current_diagnostics()
         super().__init__(*args, **kwargs)
 
     @property
@@ -94,6 +96,7 @@ class SampleTimedSileroMixin:
         """Retain native first-window reset and five seconds since each reset."""
         import numpy as np
 
+        observed_start = perf_counter_ns() if self._offline_diagnostics is not None else None
         audio = np.frombuffer(buffer, dtype=np.int16).astype(np.float32) / 32768.0
         confidence = float(np.asarray(self._model(audio, self.sample_rate)).reshape(-1)[0])
         period_samples = 5 * self.sample_rate
@@ -107,7 +110,23 @@ class SampleTimedSileroMixin:
             self._model.reset_states()
             self._offline_model_reset_offsets.append(self._offline_source_end_sample)
             self._offline_next_reset_sample = self._offline_source_end_sample + period_samples
+        if observed_start is not None:
+            duration(self._offline_diagnostics, "vad_model", perf_counter_ns() - observed_start)
         return confidence
+
+    def _run_analyzer(self, buffer):
+        """Time the complete native executor body without replacing its work.
+
+        This includes native volume/state work beyond the model body. Its
+        elapsed duration excludes executor queueing and loop resumption; it is
+        not thread CPU time or an isolated ONNX inference measurement.
+        """
+        observed_start = perf_counter_ns() if self._offline_diagnostics is not None else None
+        try:
+            return super()._run_analyzer(buffer)
+        finally:
+            if observed_start is not None:
+                duration(self._offline_diagnostics, "vad_executor", perf_counter_ns() - observed_start)
 
 
 class SampleTimedSmartTurnMixin:
@@ -234,6 +253,8 @@ class AudioOffsetDetector:
 
     async def _detect_source(self, source: AudioSource, *, on_checkpoint=None) -> DetectionTrace:
         """Consume fixed analysis windows without losing within-upload transitions."""
+        diagnostics = current_diagnostics()
+        record(diagnostics, "vad_started", input_samples=source.sample_count)
         self._vad.set_sample_rate(source.sample_rate)
         window_samples = self._vad.num_frames_required()
         if window_samples != 512:
@@ -300,6 +321,7 @@ class AudioOffsetDetector:
             before_vad = perf_counter_ns()
             state = (await self._vad.analyze_audio(inference_audio)).name
             vad_compute_ns = perf_counter_ns() - before_vad
+            duration(diagnostics, "vad_await", vad_compute_ns)
             total_vad_ns += vad_compute_ns
             stopped = False
             turn_compute_ns = 0
@@ -364,6 +386,14 @@ class AudioOffsetDetector:
 
             previous_state = state
             available_ns = max(samples_to_ns(end_sample), available_ns) + vad_compute_ns + turn_compute_ns
+            if stopped:
+                record(
+                    diagnostics,
+                    "vad_stop_ready",
+                    decision_sample=end_sample,
+                    available_sample=ns_to_samples(available_ns),
+                    analyzed_sample=end_sample,
+                )
             if on_checkpoint is not None:
                 await on_checkpoint(tuple(events[emitted:]), available_ns, chunk)
                 emitted = len(events)
@@ -387,6 +417,7 @@ class AudioOffsetDetector:
         )
         if on_checkpoint is not None:
             await on_checkpoint(tuple(events[emitted:]), max(available_ns, samples_to_ns(source.sample_count)), None)
+        record(diagnostics, "vad_complete", input_samples=source.sample_count)
         return DetectionTrace(tuple(intervals), tuple(turns), tuple(events))
 
 

@@ -90,6 +90,21 @@ class FactoryTests(unittest.TestCase):
         self.assertNotIn("api_key", runtime.configuration)
         self.assertEqual(runtime.configuration["detector"]["vad"]["stop_secs"], 0.5)
 
+    def test_offline_deadlines_and_diagnostics_are_scoped_to_owned_services(self):
+        diagnostics = Mock()
+        with patch("examples.generic.offline.diagnostics.current_diagnostics", return_value=diagnostics):
+            runtime, _, tts = self.build({})
+        self.assertIs(runtime.diagnostics, diagnostics)
+        self.assertIs(runtime._synthesis._diagnostics, diagnostics)
+        self.assertIs(tts["diagnostics"], diagnostics)
+        self.assertEqual(tts["provider_idle_timeout_s"], 60)
+        self.assertEqual(tts["config_timeout_s"], 60)
+        self.assertEqual(runtime.configuration["tts_provider_idle_timeout_seconds"], 60)
+        self.assertEqual(runtime.configuration["tts_config_timeout_seconds"], 60)
+        diagnostics.record.assert_called_once()
+        self.assertEqual(diagnostics.record.call_args.args, ("vad_initialization_end",))
+        self.assertGreaterEqual(diagnostics.record.call_args.kwargs["duration_ms"], 0)
+
     def test_hub_llm_key_does_not_replace_speech_credentials(self):
         with patch.dict(os.environ, {"TEST_NVA_LLM_KEY": "hub-only-key"}):
             runtime, asr, tts = self.build({}, llm_api_key_env="TEST_NVA_LLM_KEY")

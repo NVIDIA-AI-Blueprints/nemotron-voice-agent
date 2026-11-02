@@ -218,17 +218,22 @@ closure, it closes only that response's owned context, unless native EOF already
 requested closure. It preserves native error frames and recovery for later generations.
 Native provider request loops and request serialization remain inherited.
 
-A provider-inactivity failure bound of 600,000 ms resets only after a successful
-append of nonempty owned provider PCM. Empty responses do not extend it. Expiry uses
-native RPC cancellation and emits an error frame; it cannot end user speech or report
-silent success. The existing offline total-generation watchdog is also 600,000 ms,
-but remains a separate limit. The live path retains native session/evaluator cancellation
-bounds without adding a total-generation watchdog. WebRTC and live per-sentence
-synthesis bypass this compatibility wrapper and retain native idle handling.
+A provider-inactivity failure bound resets only after a successful append of
+nonempty owned provider PCM. Empty responses do not extend it. Offline sets this
+bound to 60,000 ms; the shared live WebSocket default remains 600,000 ms. Expiry
+uses native RPC cancellation and emits an error frame. It cannot end user speech
+or report silent success. The existing offline total-generation watchdog remains
+600,000 ms, with a separate scope. None of these limits is a benchmark's deadline
+for receiving the first LLM token.
 
-Offline configuration records `tts_context_completion_policy` and
-`tts_provider_idle_timeout_seconds=600`. The live startup log and optional evaluation
-trace identify the completion policy. The earlier full-audio readiness gates exercise
+The live path retains native session/evaluator cancellation bounds without adding
+a total-generation watchdog. WebRTC and live per-sentence synthesis bypass this
+compatibility wrapper and retain native idle handling.
+
+Offline configuration records `tts_context_completion_policy`,
+`tts_provider_idle_timeout_seconds=60`, and `tts_config_timeout_seconds=60`.
+The live startup log and optional evaluation trace identify the completion
+policy. The earlier full-audio readiness gates exercise
 explicit EOF with real services, but do not validate the later lifecycle corrections.
 Their focused model-free checks and remaining gates are recorded in the
 [merge-review checkpoint](offline-processing-progress.md#october-30-2026-merge-review-and-validation-gates).
@@ -250,6 +255,23 @@ Cleanup attempts every owned resource release even when an earlier release fails
 Repeated cleanup retries failed releases without repeating completed ones. If execution
 and cleanup both fail, the execution error remains primary; cleanup does not turn a
 failed run into success.
+
+### Offline Native Service Startup
+
+The offline adapter fetches the native TTS configuration without blocking the
+application event loop. Only the owned `GetRivaSynthesisConfig` RPC and result
+wait run on a worker. Its 60,000 ms deadline includes worker queueing. Cancellation
+retires that setup and cancels its owned RPC; it does not claim to stop a Python
+thread. Late results cannot install a configuration into a retired service.
+
+The adapter then runs the native setup on its owning event loop using the fetched
+configuration. Native queues, task management, synthesis requests, and response
+loops retain their execution policy. This compatibility boundary requires exactly
+Pipecat 1.12.0. The normal online service setup is unchanged.
+
+Text-only collection still initializes the native LLM and TTS services before
+starting source processing. Returning at LLM completion avoids waiting for TTS
+audio completion; it does not remove provider initialization from the server path.
 
 ## WebSocket and Recording Contract
 
@@ -345,6 +367,28 @@ cancellation, not candidate success.
 Text success does not attest a complete output WAV, final recording alignment,
 provider cleanup, or success of later provider work. The default full-session
 path retains those separate completion and recording boundaries.
+
+Keep a client's response-start deadline separate from its response-completion
+deadline. The first measures elapsed wall time until nonempty raw LLM text
+arrives. The second bounds an answer that has started streaming. ASR events,
+configuration records, and an LLM start frame do not establish that answer text
+has arrived. A client deadline does not change the server's turn policy.
+When a client measures this deadline after upload, it starts after sending the
+source and any finite tail. That boundary does not attest completed ASR work.
+The VoiceBench evaluator exposes the opt-in offline product setting
+`product.offline_response_start_timeout_s`. Its default is unset. A value of `10`
+bounds the first eligible nonempty raw LLM text to 10,000 ms after source and
+tail upload. It does not replace the existing receive or total-operation budgets,
+and it does not change the online collector.
+Record the selected limit with coverage and retry counts. This offline option
+does not make the online and offline timeout policies identical.
+
+Input silence and wall-clock deadlines also have different scopes. Any silence
+appended by a benchmark client becomes part of the declared source PCM. For
+example, a 1,500 ms tail contains 24,000 zero-valued samples at 16 kHz. It does
+not instruct the server to wait 1,500 ms of execution time. The endpoint does
+not continuously append silence while a client waits for an answer.
+
 The [VoiceBench checkpoint](offline-processing-progress.md#october-30-2026-voicebench-repeatability-and-context-timing)
 records completed real-service text cohorts. The
 [rebased validation checkpoint](offline-processing-progress.md#rebased-source-validation-and-native-policy-contract)
@@ -386,6 +430,56 @@ values and the allowlisted native provider fields described above. `total`
 counts all captured callbacks, including forwarded duplicates and closed
 generations; `truncated` indicates omitted entries. These are observations,
 not unique failure counts, and do not override completion or scoring.
+
+### Offline Scalar Server Metrics
+
+Set the trusted server environment variable `NVA_OFFLINE_SERVER_METRICS_DIR` to
+a job-owned directory to retain bounded scalar measurements for offline sessions.
+This observer is disabled by default and is separate from request tracing with
+`NVA_EVAL_TRACE_DIR`. It does not change the normal online collector or add
+provider requests.
+
+Each private JSON file uses schema `nva.offline.scalar-metrics.v1`. Its random
+`session_id` is also exposed as optional `server_metrics_session_id` in
+`offline.runtime.configuration`, so a client can associate case evidence with
+the correct server file. Verify the association rather than matching files only
+by order. The source digest identifies the sealed PCM, including any client tail.
+
+The observer retains server-monotonic event times, numeric duration summaries,
+and allowlisted labels. It excludes transcripts, audio, request messages,
+provider bodies, credentials, and exception messages. Inspect `truncated` and
+`rejected_fields` before interpreting missing measurements. Persistence is
+attempted after the offline handler returns; a missing file is an observability
+gap, not evidence that a provider returned no events.
+
+The measurements distinguish these boundaries.
+
+| Boundary | Interpretation |
+| --- | --- |
+| ASR request, first supplied audio, callbacks, and stream EOF | Observed provider and transport lifetime; a first final segment does not establish complete utterance ownership. |
+| ASR final callback and matching event send | Server scheduling and delivery observations, joined by sequence. A completed socket write does not establish client receipt. |
+| `duration_summaries.vad_model` | Wall time inside the voice-confidence function, including conversion, model execution, and state reset. This is not isolated ONNX compute or thread CPU time. |
+| `duration_summaries.vad_executor` | Wall time inside the full native analyzer body, including volume and state work. It excludes executor queueing and event-loop resumption. |
+| `duration_summaries.vad_await` | Wall time around awaited audio analysis. Differences from the analyzer-body measurement include several scheduling and dispatch boundaries, not only executor wait. |
+| TTS configuration queue, RPC, and native setup | Worker queueing, configuration fetch, and service setup remain separate from synthesis latency. |
+| LLM context queue, first nonempty text, and native end | Generation-relative wall observations with response identity, separate from native TTFB metric semantics. |
+| Native provider metrics | Typed `TTFBMetricsData`, `TTFATMetricsData`, and `ProcessingMetricsData` values retain their original processor and metric labels. They do not isolate GPU compute. |
+
+Text completion can cancel the session before ASR EOF or later TTS observations.
+Keep those fields absent or censored instead of completing them from client
+timestamps. The scalar file does not attest full provider EOF or per-session
+cleanup. Its execution-time observations do not advance the sample clock.
+Recording adds observation overhead, so retain observer enablement with benchmark
+provenance when comparing execution times.
+
+Use the client case result and inner outcome events when checking success.
+`session_failed` retains only the exception type. `session_cancelled` distinguishes
+client disconnection from server cancellation. `session_returned` records handler
+return, which can follow a handled failure or cancellation. In text mode, a client
+can already have accepted its answer before disconnecting and triggering cleanup.
+None of these observations alone establishes full provider EOF or successful cleanup.
+
+### Passive Session Traces
 
 Set `NVA_EVAL_TRACE_DIR` on the server to retain passive session traces for
 normal Generic Assistant streaming and offline processing. Without that setting,
@@ -601,6 +695,13 @@ conversion in provenance. The optional configuration uses the existing Generic
 Assistant session keys. A session created through `/api/session-config` can
 instead be passed as `?session_id=...`; those process-local IDs are not supported
 across workers. Direct handshake configuration avoids that lookup.
+
+A Uvicorn worker is a separate process, not a single-conversation slot. One
+worker can serve concurrent asynchronous sessions. Increasing the worker count
+does not remove blocking work inside each process, and configured online
+sessions need routing affinity or shared session storage across workers.
+Record the worker count with concurrency results instead of assuming that a
+benchmark concurrency of six requires more than six workers.
 
 ### Reproduce the Paired Comparison
 

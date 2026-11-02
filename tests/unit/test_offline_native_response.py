@@ -8,7 +8,7 @@ import copy
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from grpc import Call, RpcError, StatusCode
 from pipecat.frames.frames import (
@@ -17,9 +17,11 @@ from pipecat.frames.frames import (
     ErrorFrame,
     LLMFullResponseEndFrame,
     LLMTextFrame,
+    MetricsFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
 )
+from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.tts import NvidiaTTSSettings
 from pipecat.utils.errors import ErrorCategory
@@ -970,6 +972,42 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "setup failure"):
                 await session.start()
         self.assertEqual(self.tts.cleanup_calls, 1)
+
+    async def test_optional_diagnostics_keep_native_requests_frames_and_numeric_metric_values(self):
+        """Capture queued generation timing before drain without retaining text."""
+        observer = Mock()
+        self.session._diagnostics = observer
+        messages = [{"role": "user", "content": "private synthetic context"}]
+        actor = await self.session.begin(messages, 0, "first", self.changed)
+        await self.wait_event(self.llm.entered)
+        metrics = MetricsFrame(
+            data=[TTFBMetricsData(processor="llm", value=0.2), ProcessingMetricsData(processor="llm", value=0.4)]
+        )
+        metrics.metadata["nva_offline_response_generation"] = "first"
+        await self.llm.push_frame(metrics)
+        self.llm.release.set()
+        self.tts.release.set()
+        result = await asyncio.wait_for(actor.result(), 1)
+        self.assertEqual(self.llm.requests, [messages])
+        self.assertEqual(result.text, "Hello world. More words.")
+        calls = observer.record.call_args_list
+        names = [call.args[0] for call in calls]
+        for name in ("llm_context_queued", "llm_response_start", "llm_first_text", "llm_response_end"):
+            self.assertIn(name, names)
+        values = [call.kwargs for call in calls if call.args == ("native_metric",)]
+        self.assertTrue(any(value["value_ms"] == 200 for value in values))
+        self.assertTrue(any(value["value_ms"] == 400 for value in values))
+        self.assertNotIn("private synthetic context", json.dumps([call.kwargs for call in calls]))
+        self.assertNotIn("Hello world", json.dumps([call.kwargs for call in calls]))
+
+    async def test_optional_generation_diagnostic_errors_do_not_change_response(self):
+        """An unavailable observation sink cannot fail native generation."""
+        self.session._diagnostics = SimpleNamespace(record=Mock(side_effect=RuntimeError("sink failed")))
+        actor = await self.session.begin([{"role": "user", "content": "first"}], 0, "first", self.changed)
+        self.llm.release.set()
+        self.tts.release.set()
+        result = await asyncio.wait_for(actor.result(), 1)
+        self.assertEqual(result.text, "Hello world. More words.")
 
     def test_direct_mode_is_rejected_to_preserve_native_interruption_semantics(self):
         """Normal processor queues are required to cancel native HTTP generation."""

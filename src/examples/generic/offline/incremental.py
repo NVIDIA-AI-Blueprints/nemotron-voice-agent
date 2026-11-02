@@ -34,7 +34,9 @@ from examples.shared.evaluation_trace import _observe
 
 from .actors import ActorEvent, EventActor
 from .aggregation import ChunkPositionedFrame, SharedAssistantAggregation, SharedUserAggregation
+from .diagnostics import current_diagnostics, record
 from .models import RATE, SessionResult, ns_to_samples, samples_to_ns
+from .native_response import native_metric_values
 from .output_stream import IncrementalOutput
 
 
@@ -124,6 +126,19 @@ class _Session:
     def _append_event(self, event, *, stream=True):
         """Observe committed append order without awaiting network or provider work."""
         self.events.append(event)
+        if event.get("type") in {
+            "user_turn_started",
+            "user_turn_stopped",
+            "user_turn_message_added",
+            "response_requested",
+        }:
+            record(
+                current_diagnostics(),
+                "semantic_boundary",
+                phase=event["type"],
+                sample=event["sample"],
+                response_id=event.get("response_id"),
+            )
         if self.engine.evaluation_trace:
             _observe(self.engine.evaluation_trace, "offline_event", event)
         if stream and self._event_sink is not None:
@@ -314,6 +329,12 @@ class _Session:
             await self.user.feed_batch([ChunkPositionedFrame(sample, frame)], settle_timers=False)
         elif event.kind == "provider_frame":
             value = event.payload
+            if current_diagnostics() is not None:
+                metrics = native_metric_values(value.frame)
+                if metrics:
+                    self.emit(
+                        "provider_metric", response_id=event.generation, source=value.source, native_metrics=metrics
+                    )
             if value.direction == FrameDirection.DOWNSTREAM:
                 if isinstance(value.frame, SystemFrame):
                     await self.assistant.feed(ChunkPositionedFrame(sample, value.frame))
@@ -340,6 +361,10 @@ class _Session:
                 # Preserve the native pre-TTS stream for text-scored benchmarks.
                 # TTS filtering and assistant-history commits have other semantics.
                 details["text"] = value.frame.text
+            if current_diagnostics() is not None:
+                metrics = native_metric_values(value.frame)
+                if metrics:
+                    details["native_metrics"] = metrics
             self.emit("provider_observation", **details)
         elif event.kind == "output_forward":
             await self.assistant.feed(ChunkPositionedFrame(sample, event.payload))

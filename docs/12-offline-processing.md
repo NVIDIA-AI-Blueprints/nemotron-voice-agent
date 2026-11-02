@@ -397,3 +397,40 @@ restarts. Any shared late-final revision policy remains contingent on an explici
 ownership and closure contract. The [progress
 record](offline-processing-progress.md#rebased-source-validation-and-native-policy-contract)
 retains current results, historical failures, and timing limits.
+
+## November 02, 2026: Offline Startup and Evaluation Boundaries
+
+Offline service startup keeps the native provider setup and queues on their
+owning event loop. The offline TTS adapter fetches its native configuration
+through a cancellable RPC on a worker, with a 60,000 ms deadline that includes
+queueing. A cancelled setup retires late results. This narrow adapter does not
+replace native synthesis or response loops, and normal online setup is unchanged.
+
+The offline provider-inactivity bound is 60,000 ms. The shared live WebSocket
+default remains 600,000 ms. These are failure bounds, separate from input silence,
+turn detection, and a benchmark's deadline for receiving its first raw LLM token.
+The existing offline total-generation watchdog has a separate 600,000 ms scope.
+
+Text-scored evaluation returns at the first eligible native LLM completion. It
+does not wait for complete TTS audio, but the native TTS service is still
+initialized before source processing. A finite client silence tail remains
+source audio; replacing it with a response timeout would change the experiment.
+
+Optional scalar server measurements distinguish ASR callbacks, local VAD waits,
+provider setup, native provider metric labels, and nonempty LLM text boundaries.
+Enable them with the trusted `NVA_OFFLINE_SERVER_METRICS_DIR` setting. They do not
+capture transcripts or request bodies, and text completion can leave later
+provider observations unavailable. Execution timers do not advance conversation
+time.
+
+Model-free startup tests check event-loop progress, cancellation, and native
+configuration parity. They do not establish provider latency or a C6 speedup.
+The next paired evaluation compares online and offline at concurrency 1 and 6,
+using the same frozen 778 VoiceBench Lite cases, provider settings, judge, and
+text-completion policy. Coverage, retries, native scores, worker counts, and
+timing scopes must be audited before reporting a throughput conclusion.
+
+Refer to the [implementation reference](offline-processing-reference.md#offline-native-service-startup)
+for the startup boundary and the
+[text-completion contract](offline-processing-reference.md#incremental-text-completion)
+for client deadlines and finite input silence.

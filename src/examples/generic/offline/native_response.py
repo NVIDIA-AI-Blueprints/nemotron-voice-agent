@@ -14,14 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import math
+import re
+import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from importlib.metadata import version
 from typing import Any, Literal
 
-from grpc import Call, StatusCode
+from grpc import Call, FutureTimeoutError, StatusCode
 from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
     CancelFrame,
@@ -30,12 +34,13 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     LLMTextFrame,
     MetricsFrame,
     StartFrame,
     TTSAudioRawFrame,
 )
-from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
+from pipecat.metrics.metrics import ProcessingMetricsData, TTFATMetricsData, TTFBMetricsData
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
 from pipecat.services.nvidia.llm import NvidiaLLMService
@@ -55,6 +60,124 @@ _GENERATION_KEY = "nva_offline_response_generation"
 _GENERATION: ContextVar[str | None] = ContextVar("nva_native_response_generation", default=None)
 _ERROR_DIAGNOSTIC_KEY = "_nva_native_provider_error_diagnostic"
 _PROVIDER_OBSERVATION_LIMIT = 64
+OFFLINE_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS = 60.0
+OFFLINE_TTS_CONFIG_TIMEOUT_SECONDS = 60.0
+_NO_CONFIG = object()
+
+
+def _diagnose(diagnostics, event, **scalars):
+    """Keep optional scalar observations outside native error/control policy."""
+    if diagnostics is not None:
+        with suppress(Exception):
+            diagnostics.record(event, **scalars)
+
+
+def native_metric_values(frame) -> list[dict[str, str | float]]:
+    """Copy only finite latency values and bounded native processor labels."""
+    if not isinstance(frame, MetricsFrame):
+        return []
+    values = []
+    for datum in frame.data:
+        if not isinstance(datum, (TTFBMetricsData, TTFATMetricsData, ProcessingMetricsData)):
+            continue
+        value = datum.ttfat if isinstance(datum, TTFATMetricsData) else datum.value
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
+            continue
+        value_ms = float(value) * 1000
+        if not math.isfinite(value_ms):
+            continue
+        processor = datum.processor
+        values.append(
+            {
+                "metric_type": type(datum).__name__,
+                "processor": (
+                    processor
+                    if isinstance(processor, str) and re.fullmatch(r"[A-Za-z0-9_#.-]{1,128}", processor)
+                    else "other"
+                ),
+                "value_ms": value_ms,
+            }
+        )
+    return values
+
+
+class _SynthesisConfigStub:
+    """Bound one owned config RPC, then serve its result to real native setup.
+
+    Only the blocking RPC/result wait runs on a worker. Native service mutation,
+    setup, queues and final config assignment remain on their owning loop.
+    The original synthesis stub is restored before any generation starts.
+    """
+
+    def __init__(self, stub, *, timeout, diagnostics):
+        self.original = stub
+        self.timeout = timeout
+        self.diagnostics = diagnostics
+        self.queued_ns = time.monotonic_ns()
+        self.loop_thread = threading.get_ident()
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._call = None
+        self._value = _NO_CONFIG
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+    def cancel(self):
+        """Retire late results and cancel only this setup's actual gRPC call."""
+        with self._lock:
+            self._cancelled = True
+            call = self._call
+        if call is not None:
+            with suppress(Exception):
+                call.cancel()
+
+    def GetRivaSynthesisConfig(self, request):  # noqa: N802 -- exact native stub method
+        """Use the public cancellable unary future and its explicit deadline."""
+        with self._lock:
+            if self._cancelled:
+                raise RuntimeError("Offline TTS configuration fetch was retired")
+            if self._value is not _NO_CONFIG:
+                return self._value
+        if threading.get_ident() == self.loop_thread:
+            raise RuntimeError("Offline TTS configuration RPC must be prefetched off the event loop")
+        started = time.monotonic_ns()
+        remaining = self.timeout - (started - self.queued_ns) / 1e9
+        if remaining <= 0:
+            raise TimeoutError("Offline TTS configuration deadline expired before RPC dispatch")
+        _diagnose(self.diagnostics, "tts_config_rpc_start", queue_ms=(started - self.queued_ns) / 1e6)
+        outcome = "error"
+        try:
+            call = self.original.GetRivaSynthesisConfig.future(request, timeout=remaining)
+            with self._lock:
+                self._call = call
+                cancelled = self._cancelled
+            if cancelled:
+                call.cancel()
+                raise RuntimeError("Offline TTS configuration fetch was retired")
+            try:
+                value = call.result(timeout=max(0, self.timeout - (time.monotonic_ns() - self.queued_ns) / 1e9))
+            except FutureTimeoutError as error:
+                self.cancel()
+                raise TimeoutError("Offline TTS configuration RPC timed out") from error
+            with self._lock:
+                if self._cancelled:
+                    raise RuntimeError("Offline TTS configuration fetch was retired")
+                self._value = value
+            outcome = "completed"
+            return value
+        except TimeoutError:
+            outcome = "timeout"
+            raise
+        finally:
+            _diagnose(
+                self.diagnostics,
+                "tts_config_rpc_end",
+                duration_ms=(time.monotonic_ns() - started) / 1e6,
+                outcome=outcome,
+            )
+
+
 _ProviderOperation = Literal[
     "tts_audio_context",
     "tts_context_audio_outcome_no_audio",
@@ -197,17 +320,101 @@ class CapturingNativeNvidiaLLMService(LLMRequestTraceMixin, NvidiaLLMService):
 class CapturingNativeNvidiaTTSService(ExplicitEOFCompletionMixin, NvidiaTTSService):
     """Keep native synthesis state persistent and correlate delayed context output."""
 
-    def __init__(self, *, capture: Capture, **kwargs):
+    def __init__(
+        self,
+        *,
+        capture: Capture,
+        diagnostics=None,
+        config_timeout_s=OFFLINE_TTS_CONFIG_TIMEOUT_SECONDS,
+        provider_idle_timeout_s=OFFLINE_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS,
+        **kwargs,
+    ):
         """Observe native serialized frames without changing synthesis settings."""
         if kwargs.get("enable_direct_mode"):
             raise ValueError("Native response actors require the native TTS processor queues")
-        super().__init__(**kwargs)
+        if (
+            isinstance(config_timeout_s, bool)
+            or not isinstance(config_timeout_s, int | float)
+            or not math.isfinite(config_timeout_s)
+            or not 0 < config_timeout_s <= OFFLINE_TTS_CONFIG_TIMEOUT_SECONDS
+        ):
+            raise ValueError("Offline TTS configuration deadline must be positive and at most 60 seconds")
+        super().__init__(provider_idle_timeout_s=provider_idle_timeout_s, **kwargs)
         self._native_capture = capture
+        self._diagnostics = diagnostics
+        self._offline_config_timeout_s = float(config_timeout_s)
+        self._offline_setup_started = False
         self._native_context_generations: dict[str, str] = {}
         self._native_workers: dict[str, asyncio.Event] = {}
         self._native_audio_context_drained: dict[str, asyncio.Event] = {}
         self._native_audio_context_interrupted: set[str] = set()
         self._native_rpc_states: dict[str, list[_NativeRpcStateRegistration]] = {}
+
+    async def setup(self, setup):
+        """Prefetch only the blocking native config RPC, then run native setup."""
+        if version("pipecat-ai") != "1.12.0":
+            raise RuntimeError("Offline TTS configuration adapter requires exactly Pipecat 1.12.0")
+        if self._offline_setup_started:
+            raise RuntimeError("Offline TTS service setup can only run once")
+        self._offline_setup_started = True
+        started = time.monotonic_ns()
+        proxy = None
+        service = None
+        worker = None
+        outcome = "error"
+        try:
+            self._initialize_client()
+            service = self._service
+            # Scripted provider-free subclasses can override the native helper
+            # without creating a remote client. Real clients use the exact
+            # native helper against a temporary, one-method bounded stub.
+            if service is not None:
+                proxy = _SynthesisConfigStub(
+                    service.stub, timeout=self._offline_config_timeout_s, diagnostics=self._diagnostics
+                )
+                service.stub = proxy
+            _diagnose(self._diagnostics, "tts_config_fetch_queued")
+            worker = asyncio.create_task(asyncio.to_thread(self._create_synthesis_config))
+
+            def consume_result(task):
+                if not task.cancelled():
+                    with suppress(BaseException):
+                        task.result()
+
+            worker.add_done_callback(consume_result)
+            async with asyncio.timeout(self._offline_config_timeout_s):
+                await asyncio.shield(worker)
+            native_started = time.monotonic_ns()
+            _diagnose(self._diagnostics, "tts_native_setup_start")
+            # Native setup still sets sample rate/task manager and assigns the
+            # config on-loop. Its helper reads the completed cache, not an RPC.
+            await super().setup(setup)
+            _diagnose(
+                self._diagnostics,
+                "tts_native_setup_end",
+                duration_ms=(time.monotonic_ns() - native_started) / 1e6,
+            )
+            outcome = "completed"
+        except BaseException as error:
+            outcome = "cancelled" if isinstance(error, asyncio.CancelledError) else "error"
+            if isinstance(error, TimeoutError):
+                outcome = "timeout"
+            if proxy is not None:
+                proxy.cancel()
+            if worker is not None and not worker.done():
+                worker.cancel()
+            # A worker cannot install _config. Closing this exact owned channel
+            # also retires a late/noncooperative result without closing another
+            # session's service. Cancelling a thread itself is never claimed.
+            if service is not None and self._service is service:
+                self._close_client()
+            raise
+        finally:
+            if proxy is not None and service.stub is proxy:
+                service.stub = proxy.original
+            _diagnose(
+                self._diagnostics, "tts_setup_end", duration_ms=(time.monotonic_ns() - started) / 1e6, outcome=outcome
+            )
 
     async def process_frame(self, frame, direction):
         """Retain provenance while native processing creates synthesis contexts."""
@@ -382,7 +589,16 @@ class _GenerationState:
 class NativeResponseSession:
     """One persistent native LLM/TTS pair whose generations yield incrementally."""
 
-    def __init__(self, llm_factory, tts_factory, *, sample_rate: int, clock=time.monotonic_ns, failure_timeout=600):
+    def __init__(
+        self,
+        llm_factory,
+        tts_factory,
+        *,
+        sample_rate: int,
+        clock=time.monotonic_ns,
+        failure_timeout=600,
+        diagnostics=None,
+    ):
         """Factories accept a capture callback and return the native subclasses."""
         if sample_rate <= 0:
             raise ValueError("Native TTS sample rate must be positive")
@@ -391,6 +607,7 @@ class NativeResponseSession:
         self._sample_rate = sample_rate
         self._clock = clock
         self._failure_timeout = failure_timeout
+        self._diagnostics = diagnostics
         self._manager = None
         self._llm = None
         self._tts = None
@@ -420,6 +637,8 @@ class NativeResponseSession:
             raise self._failure
         if self._llm is not None:
             return
+        started = self._clock()
+        _diagnose(self._diagnostics, "response_session_setup_start")
         self._ready = asyncio.get_running_loop().create_future()
         self._manager = TaskManager()
         provider_clock = SystemClock()
@@ -435,12 +654,28 @@ class NativeResponseSession:
         try:
             self._llm = self._llm_factory(self._from_llm)
             self._tts = self._tts_factory(self._from_tts)
+            stage_started = self._clock()
             await self._llm.setup(setup)
+            _diagnose(self._diagnostics, "llm_setup_end", duration_ms=(self._clock() - stage_started) / 1e6)
             await self._tts.setup(setup)
             await self._llm.queue_frame(StartFrame())
+            ready_started = self._clock()
             async with asyncio.timeout(self._failure_timeout):
                 await self._ready
+            _diagnose(self._diagnostics, "native_ready", duration_ms=(self._clock() - ready_started) / 1e6)
+            _diagnose(
+                self._diagnostics,
+                "response_session_setup_end",
+                duration_ms=(self._clock() - started) / 1e6,
+                outcome="completed",
+            )
         except BaseException as error:
+            _diagnose(
+                self._diagnostics,
+                "response_session_setup_end",
+                duration_ms=(self._clock() - started) / 1e6,
+                outcome="cancelled" if isinstance(error, asyncio.CancelledError) else "error",
+            )
             try:
                 await self.aclose()
             except BaseException as cleanup_error:
@@ -536,6 +771,7 @@ class NativeResponseSession:
             await self._tts.queue_frame(frame, direction)
             return
         state = self._state_for(frame)
+        self._record_native_metrics(frame, state, "llm")
         if isinstance(frame, ErrorFrame):
             self._provider_error(state, frame, observed_callback_boundary="llm")
             return
@@ -543,11 +779,16 @@ class NativeResponseSession:
             return
         self._publish(state, "provider_observation", NativeProviderFrame(frame, direction, "llm"))
         elapsed = max(0, self._clock() - state.wall_start_ns)
+        if isinstance(frame, LLMFullResponseStartFrame):
+            _diagnose(self._diagnostics, "llm_response_start", response_id=state.identity, elapsed_ms=elapsed / 1e6)
         if isinstance(frame, LLMTextFrame) and frame.text:
+            if "llm_first_text_ns" not in state.metrics:
+                _diagnose(self._diagnostics, "llm_first_text", response_id=state.identity, elapsed_ms=elapsed / 1e6)
             state.metrics.setdefault("llm_first_text_ns", elapsed)
             state.text.append(frame.text)
         if isinstance(frame, LLMFullResponseEndFrame):
             state.metrics["llm_complete_ns"] = elapsed
+            _diagnose(self._diagnostics, "llm_response_end", response_id=state.identity, elapsed_ms=elapsed / 1e6)
         if direction == FrameDirection.DOWNSTREAM:
             await self._tts.queue_frame(frame, direction)
 
@@ -562,6 +803,7 @@ class NativeResponseSession:
                 ack.set()
             return
         state = self._state_for(frame)
+        self._record_native_metrics(frame, state, "tts")
         if isinstance(frame, ErrorFrame):
             self._provider_error(state, frame, observed_callback_boundary="tts")
             return
@@ -590,6 +832,18 @@ class NativeResponseSession:
                     )
         if isinstance(frame, LLMFullResponseEndFrame) and direction == FrameDirection.DOWNSTREAM:
             state.serialized_end.set()
+
+    def _record_native_metrics(self, frame, state, boundary):
+        if self._diagnostics is None:
+            return
+        for value in native_metric_values(frame):
+            _diagnose(
+                self._diagnostics,
+                "native_metric",
+                response_id=state.identity if state is not None else "unowned",
+                boundary=boundary,
+                **value,
+            )
 
     async def begin(self, messages: Sequence[dict], logical_start_ns: int, generation_id: str, changed: asyncio.Event):
         """Dispatch a context snapshot and return before its first token or PCM."""
@@ -624,6 +878,7 @@ class NativeResponseSession:
                 request_messages=copy.deepcopy(snapshot),
             )
         await self._llm.queue_frame(request)
+        _diagnose(self._diagnostics, "llm_context_queued", response_id=generation_id, frame_id=request.id)
         task = asyncio.create_task(self._finish_generation(state))
         actor.bind_worker(task)
         return actor
