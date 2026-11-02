@@ -211,39 +211,39 @@ The dictionary loads at session start and applies to every TTS request. Restart 
 
 ### TTS Text Filter
 
-LLM output frequently contains Markdown emphasis and characters the Magpie preprocessor reserves for its own markup. Unfiltered, these are spoken literally, make synthesis fail, or produce odd audio. A text filter sits between the LLM and TTS and strips them before synthesis. The default filter removes:
+LLM output frequently contains Markdown emphasis and characters the Magpie preprocessor reserves for its own markup. Unfiltered, these are spoken literally, make synthesis fail, or produce odd audio. A text transform sits between the LLM and TTS and strips them before synthesis. The default transform removes:
 
 - **`*`**: Markdown emphasis markers (for example `**bold**` and `*italic*`).
 - **`{` and `}`**: ARPAbet phoneme tokens such as `{@AW1}`.
 - **`<tag>`**: SSML tags parsed by the TTS engine.
 
-These appear naturally in code, JSON, Markdown, or HTML output. The filter classes live in [`src/examples/shared/nemotron_speech_text_filter.py`](../../src/examples/shared/nemotron_speech_text_filter.py):
+These appear naturally in code, JSON, Markdown, or HTML output. The transforms live in [`src/examples/shared/nemotron_speech_text_filter.py`](../../src/examples/shared/nemotron_speech_text_filter.py):
 
-#### `NemotronSpeechTextFilter` (default)
+#### `nemotron_speech_text_transform` (default)
 
 A single regex pass that strips `*`, `{`, `}`, and tag-opening `<`. Everything else passes through unchanged: comparison operators (`5 < 7`), currency, emoji, and non-Latin scripts. Use it for plain or lightly formatted prose.
 
 ```python
 # src/examples/generic/pipeline.py
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 
 tts = NvidiaTTSService(
     ...
-    text_filters=[NemotronSpeechTextFilter()],  # default
+    text_transforms=[("*", nemotron_speech_text_transform)],  # default
 )
 ```
 
-#### `NemotronSpeechMarkdownTextFilter`
+#### `nemotron_speech_markdown_text_transform`
 
-Extends Pipecat's `MarkdownTextFilter` with the same reserved-character strip. Use it when the LLM streams Markdown. All `MarkdownTextFilter` settings (`filter_code`, `filter_tables`) are inherited.
+Strips Markdown with Pipecat's `strip_markdown`, then applies the same reserved-character cleanup. Use it when the LLM streams Markdown.
 
 ```python
 # src/examples/generic/pipeline.py
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechMarkdownTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_markdown_text_transform
 
 tts = NvidiaTTSService(
     ...
-    text_filters=[NemotronSpeechMarkdownTextFilter()],
+    text_transforms=[("*", nemotron_speech_markdown_text_transform)],
 )
 ```
 

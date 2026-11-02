@@ -233,7 +233,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         committed = next(event for event in emitted if event["type"] == "input_audio_buffer.committed")
         self.assertEqual(committed["item_id"], emitted[0]["item_id"])
 
-    async def test_raw_vad_pause_does_not_duplicate_or_commit_events(self) -> None:
+    async def test_vad_cycle_without_user_turn_does_not_swallow_the_next_cycle(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -257,8 +257,8 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
             )
 
         types = [event["type"] for event in emitted]
-        self.assertEqual(types.count("input_audio_buffer.speech_started"), 1)
-        self.assertEqual(types.count("input_audio_buffer.speech_stopped"), 1)
+        self.assertEqual(types.count("input_audio_buffer.speech_started"), 2)
+        self.assertEqual(types.count("input_audio_buffer.speech_stopped"), 2)
         self.assertNotIn("input_audio_buffer.committed", types)
         self.assertNotIn("conversation.item.created", types)
 

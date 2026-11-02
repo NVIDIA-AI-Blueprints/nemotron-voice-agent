@@ -52,7 +52,7 @@ from realtime.events import (
     server_event,
 )
 from realtime.lifecycle import announce_response, finish_response
-from realtime.metrics import RealtimeMetricsAccumulator, RealtimeResponseTelemetry
+from realtime.metrics import RealtimeMetricsAccumulator, RealtimeResponseTelemetry, _processor_category
 
 # Frames this observer maps to Realtime events (ignore the rest for dedupe).
 _OBSERVED_FRAME_TYPES = (
@@ -291,8 +291,7 @@ class RealtimeLifecycleObserver(BaseObserver):
                             self._conversation.response_requested or self._conversation.response_status == "in_progress"
                         )
                         new_asr_started = isinstance(frame, MetricsFrame) and any(
-                            isinstance(item, TTFBMetricsData)
-                            and ("asr" in item.processor.lower() or "stt" in item.processor.lower())
+                            isinstance(item, TTFBMetricsData) and _processor_category(item.processor) == "asr"
                             for item in frame.data
                         )
                         if not response_started and not new_asr_started:
@@ -315,6 +314,8 @@ class RealtimeLifecycleObserver(BaseObserver):
 
     async def _handle_frame(self, frame: Frame) -> None:
         if isinstance(frame, VADUserStartedSpeakingFrame):
+            if self._speech_stopped_emitted:
+                self._reset_speech_events()
             item_id = self._conversation.begin_user_item()
             await self._emit_speech_started(item_id, self._input_audio_ms())
             return
@@ -328,8 +329,6 @@ class RealtimeLifecycleObserver(BaseObserver):
 
         if isinstance(frame, UserStartedSpeakingFrame):
             item_id, audio_start_ms = self._conversation.begin_user_turn()
-            # Providers and pipelines without raw VAD frames retain the
-            # finalized-turn fallback.
             await self._emit_speech_started(item_id, audio_start_ms)
             return
 

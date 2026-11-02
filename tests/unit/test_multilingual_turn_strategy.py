@@ -9,7 +9,7 @@ import unittest
 from argparse import Namespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import TranscriptionUserTurnStartStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
@@ -79,6 +79,12 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
         args.cli_args = Namespace(transport="websocket")
 
         self.assertFalse(_is_eval_transport(args))
+
+    def test_eval_transport_detects_websocket_session_transport(self) -> None:
+        args = WebSocketRunnerArguments(websocket=Mock())
+        args.transport_type = "eval"
+
+        self.assertTrue(_is_eval_transport(args))
 
     def test_default_multilingual_turn_start_is_vad_only(self) -> None:
         with (

@@ -305,6 +305,47 @@ class SpeakerDiarizationProcessorTest(unittest.IsolatedAsyncioTestCase):
             [(0, "hello"), (1, "there"), (0, "again")],
         )
 
+    async def test_native_speaker_finals_join_a_cut_word(self):
+        processor = await self._processor(multi_speaker_support=True)
+        first = TranscriptionFrame(
+            text="Assist",
+            user_id="3",
+            timestamp="",
+            result=SimpleNamespace(
+                alternatives=[
+                    SimpleNamespace(
+                        transcript="Assist",
+                        words=[SimpleNamespace(word="Assist", speaker_tag=3, start_time=0, end_time=400)],
+                    )
+                ]
+            ),
+            finalized=True,
+        )
+        second = TranscriptionFrame(
+            text="ant",
+            user_id="3",
+            timestamp="",
+            result=SimpleNamespace(
+                alternatives=[
+                    SimpleNamespace(
+                        transcript="ant",
+                        words=[SimpleNamespace(word="ant", speaker_tag=3, start_time=400, end_time=700)],
+                    )
+                ]
+            ),
+            finalized=True,
+        )
+
+        await processor.process_frame(first, FrameDirection.DOWNSTREAM)
+        await processor.process_frame(second, FrameDirection.DOWNSTREAM)
+
+        self.assertEqual(
+            [(fragment.speaker_id, fragment.text) for fragment in processor.turn_fragments],
+            [(0, "Assistant")],
+        )
+        pushed = [call.args[0].text for call in processor.push_frame.await_args_list]
+        self.assertEqual(pushed, [" Speaker 1: Assist", "ant"])
+
     async def test_start_frame_resets_primary_speaker_for_new_connection(self):
         processor = await self._processor(multi_speaker_support=False)
         await processor.process_frame(_frame("one", _result(_word("one", 2))), FrameDirection.DOWNSTREAM)

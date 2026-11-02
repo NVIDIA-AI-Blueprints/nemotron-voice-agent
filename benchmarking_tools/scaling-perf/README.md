@@ -315,7 +315,7 @@ count across all clients in a run):
 The LLM metrics (`llm_ttfb`, `llm_ttfat`, `llm_processing_time`, and
 `llm_tokens_per_sec`) have one sample per LLM request, not one per user turn.
 A turn that calls a tool makes two LLM requests, so it adds two samples to each
-LLM metric: one for the tool call and one for the follow-up answer. Because
+LLM metric: one for the tool call and one for the follow-up answer.
 `llm_ttfb` and `llm_ttfat` are both counted per LLM request. The
 `llm_thinking_time` and `tts_leading_silence` columns use Pipecat's direct
 breakdown fields rather than recomputing differences between independently
@@ -324,8 +324,8 @@ remain readable. To measure latency per user turn, use `server_e2e`.
 Speech-to-speech LLM services do not report `llm_ttfat`.
 Pipecat's RTVI token-usage entries do not include a processor identity, so
 `llm_tokens_per_sec` pairs each usage record with the next LLM processing
-record. It is reliable for the benchmark's single-LLM Generic Assistant path;
-do not treat it as per-model throughput in a pipeline with multiple LLMs.
+record. It is reliable for the benchmark's single-LLM Generic Assistant path.
+Do not treat it as per-model throughput in a pipeline with multiple LLMs.
 
 The Nemotron Realtime gateway maps Pipecat token accounting to the standard
 `response.done.response.usage` object. It also places response-scoped server

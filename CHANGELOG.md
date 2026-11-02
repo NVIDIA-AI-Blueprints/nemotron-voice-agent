@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
 
+### Changed
+
+- **Pipecat 1.15.** The server and browser client move from Pipecat 1.12 to 1.15, including Silero VAD state retention and the current service APIs.
+- **Scaling metric names.** `llm_ttft` is reported as `llm_ttfb`. `vad_smart_turn` is reported as `turn_taking_latency`, measured from the VAD stop to the LLM request for any configured turn strategy. Result files that still contain `llm_ttft` remain readable.
+
 ## [2.3.1] - 2026-10-29
 
 This patch release adds Nemotron 3.5 Bolt E4B on NVIDIA Cloud, server, and single-GPU hosts, and Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.

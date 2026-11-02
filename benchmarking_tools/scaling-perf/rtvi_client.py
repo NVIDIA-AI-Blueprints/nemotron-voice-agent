@@ -38,8 +38,17 @@ def categorize_processor(processor: str) -> str:
 def _finite_number(value: Any) -> float | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
     return number if math.isfinite(number) else None
+
+
+def _non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _positive_number(value: Any) -> float | None:
@@ -76,7 +85,7 @@ class RTVIClient(ProtocolClient):
         self.server_metric_samples = {key: [] for key in SERVER_METRIC_KEYS}
         self.rtvi_messages: list[dict[str, Any]] = []
         self.collecting_metrics = False
-        self._pending_llm_completion_tokens: list[float] = []
+        self._pending_llm_completion_tokens: list[int] = []
 
     @property
     def ready_log(self) -> None:
@@ -180,7 +189,7 @@ class RTVIClient(ProtocolClient):
         for item in metrics.get("tokens", []):
             if not isinstance(item, dict):
                 continue
-            completion_tokens = _positive_number(item.get("completion_tokens"))
+            completion_tokens = _non_negative_int(item.get("completion_tokens"))
             if completion_tokens is not None:
                 self._pending_llm_completion_tokens.append(completion_tokens)
         for item in metrics.get("processing", []):

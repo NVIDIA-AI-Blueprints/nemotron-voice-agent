@@ -277,7 +277,7 @@ class SpeakerDiarizationProcessor(FrameProcessor):
 
             continues_word = False
             continues_speaker: int | None = None
-            if is_final and mapped_speaker is None:
+            if is_final:
                 continues_word = continues_previous_word(frame.result, self._previous_final_end_s)
                 if continues_word:
                     runs = reassign_first_word(runs, self._previous_final_speaker_id)
