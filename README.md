@@ -216,3 +216,5 @@ Recent releases are in [News](#-news). See the [CHANGELOG](CHANGELOG.md) for the
 ## ⚖️ License
 
 This NVIDIA AI BLUEPRINT is dual-licensed: documentation, skills, and assets under CC-BY-4.0, and source code under Apache-2.0. See [LICENSE](LICENSE) for details. This project may download and install additional third-party open source software and containers. Review the license terms of these projects in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) before use.
+
+<!-- SWQA test PR: no functional change. Do not merge. -->
