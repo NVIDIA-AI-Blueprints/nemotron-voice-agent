@@ -125,7 +125,10 @@ class ThinkerBackend:
             or self.state.waiting_for_confirmation
         )
         if has_pending_work:
-            self.state.reset_search_and_booking()
+            if self.state.booking_attempt is not None:
+                self.state.reset_booking()
+            else:
+                self.state.reset_search_and_booking()
         return has_pending_work
 
     def cancellation_warning(self) -> dict[str, Any] | None:

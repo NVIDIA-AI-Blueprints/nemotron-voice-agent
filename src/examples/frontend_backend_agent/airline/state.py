@@ -41,7 +41,7 @@ class ThinkerSessionState:
     waiting_for_confirmation: bool = False
 
     def reset_booking(self) -> None:
-        """Clear booking-scoped state while preserving completed PNR records."""
+        """Clear the editable draft without discarding a submitted attempt."""
         self.booking_draft = None
         self.waiting_for_preferences = False
         self.waiting_for_confirmation = False

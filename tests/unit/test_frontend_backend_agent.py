@@ -1732,7 +1732,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(changed["reason"], "booking_outcome_unknown")
         self.assertEqual(len(backend.attempts), 1)
-        retry = await thinker.call("Confirm original booking again", slots={"confirmed": True})
+        retry = await thinker.call("Confirm original booking again", slots={"confirmed": True, "flight_selected": "1"})
         self.assertEqual(retry["data"]["pnr"], "TTK001")
         self.assertEqual(backend.attempts[0], backend.attempts[1])
         self.assertIsNone(thinker.state.booking_attempt)

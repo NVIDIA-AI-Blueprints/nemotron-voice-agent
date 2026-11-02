@@ -3,6 +3,7 @@
 
 # ruff: noqa: D100, D101, D102
 
+import asyncio
 import sqlite3
 import threading
 import unittest
@@ -149,7 +150,7 @@ class BookingIdempotencyTests(unittest.TestCase):
             conn.close()
         self.assert_counts(1)
 
-    def test_http_replay_conflict_and_key_validation(self):
+    def booking_client(self):
         def api_override():
             conn = self.connect()
             try:
@@ -161,6 +162,10 @@ class BookingIdempotencyTests(unittest.TestCase):
         self.addCleanup(app.dependency_overrides.pop, get_api)
         client = TestClient(app)
         self.addCleanup(client.close)
+        return client
+
+    def test_http_replay_conflict_and_key_validation(self):
+        client = self.booking_client()
         headers = {"Idempotency-Key": "http-retry"}
         first = client.post("/pnrs", json=_REQUEST, headers=headers)
         second = client.post("/pnrs", json=_REQUEST, headers=headers)
@@ -172,9 +177,50 @@ class BookingIdempotencyTests(unittest.TestCase):
             self.assertEqual(client.post("/pnrs", json=_REQUEST, headers={"Idempotency-Key": key}).status_code, 422)
         self.assert_counts(1)
 
+    def test_http_backend_retry_after_server_commit_and_lost_response(self):
+        client = self.booking_client()
+        committed = []
+
+        def handle(request):
+            response = client.post(
+                "/pnrs",
+                content=request.content,
+                headers={"Idempotency-Key": request.headers["Idempotency-Key"], "Content-Type": "application/json"},
+            )
+            self.assertEqual(response.status_code, 200)
+            committed.append(response.json())
+            if len(committed) == 1:
+                raise httpx.ReadTimeout("response lost after server commit", request=request)
+            return httpx.Response(response.status_code, json=response.json())
+
+        factory = partial(httpx.AsyncClient, transport=httpx.MockTransport(handle))
+        flight = {
+            "flight_id": "AA124",
+            "origin_airport": "JFK",
+            "dest_airport": "LAX",
+            "origin_city": "New York",
+            "dest_city": "Los Angeles",
+            "date": "2026-11-10",
+            "departure_time": "2026-11-10T10:00:00",
+        }
+
+        async def retry():
+            backend = HTTPBookingBackend("http://booking.test")
+            kwargs = {"passenger_name": "Ada", "flight": flight, "idempotency_key": "lost-response"}
+            with self.assertRaises(httpx.ReadTimeout):
+                await backend.create_booking(**kwargs)
+            return await backend.create_booking(**kwargs)
+
+        with patch("examples.frontend_backend_agent.airline.backend.httpx.AsyncClient", factory):
+            result = asyncio.run(retry())
+        self.assertEqual(committed[0], committed[1])
+        self.assertEqual(result["pnr"], committed[0]["pnr"])
+        self.assertEqual(result["confirmation_code"], committed[0]["confirmation_code"])
+        self.assert_counts(1)
+
 
 class HTTPBookingBackendIdempotencyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_backend_forwards_key_and_replays_the_server_receipt(self):
+    async def test_backend_forwards_stable_key_and_request_body(self):
         requests = []
 
         def handle(request):
