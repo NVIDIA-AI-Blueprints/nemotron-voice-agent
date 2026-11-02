@@ -14,7 +14,7 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_agent.airline.backend import BookingBackend
-from examples.frontend_backend_agent.airline.booking_tool import BookingTool
+from examples.frontend_backend_agent.airline.booking_tool import BookingTool, booking_outcome_unknown
 from examples.frontend_backend_agent.airline.flight_search import flight_search
 from examples.frontend_backend_agent.airline.plan_parsing import (
     combine_parallel_payloads,
@@ -127,6 +127,10 @@ class ThinkerBackend:
         if has_pending_work:
             self.state.reset_search_and_booking()
         return has_pending_work
+
+    def cancellation_warning(self) -> dict[str, Any] | None:
+        """Warn when stopping local work cannot undo a submitted booking."""
+        return booking_outcome_unknown() if self.state.booking_attempt is not None else None
 
     async def _run_call(self, call_id: str, query: str, slots: dict[str, Any]) -> dict[str, Any]:
         """Dispatch the query to internal Thinker tools."""
@@ -251,7 +255,7 @@ class ThinkerBackend:
         )
 
     def _planner_state(self) -> dict[str, Any]:
-        draft = self.state.booking_draft
+        draft = self.state.booking_attempt or self.state.booking_draft
         return {
             "search_context": self.state.search_context,
             "search_results": self.state.search_results,
@@ -264,7 +268,7 @@ class ThinkerBackend:
             if draft
             else None,
             "waiting_for_preferences": self.state.waiting_for_preferences,
-            "waiting_for_confirmation": self.state.waiting_for_confirmation,
+            "waiting_for_confirmation": self.state.waiting_for_confirmation or self.state.booking_attempt is not None,
         }
 
     def _planner_response_hint(self, plan: dict[str, Any]) -> dict[str, Any]:

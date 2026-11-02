@@ -38,6 +38,7 @@ class BookingBackend(Protocol):
         flight: dict[str, Any],
         seat_pref: str | None = None,
         meal_pref: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any] | None:
         """Create a booking for ``flight``."""
 
@@ -79,6 +80,7 @@ class HTTPBookingBackend:
         flight: dict[str, Any],
         seat_pref: str | None = None,
         meal_pref: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any] | None:
         """Create a PNR through the booking server."""
         payload = {
@@ -91,7 +93,11 @@ class HTTPBookingBackend:
             "meal": meal_pref,
         }
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
-            response = await client.post("/pnrs", json={key: value for key, value in payload.items() if value})
+            response = await client.post(
+                "/pnrs",
+                json={key: value for key, value in payload.items() if value},
+                headers={"Idempotency-Key": idempotency_key} if idempotency_key is not None else {},
+            )
         if response.status_code == 404:
             return None
         response.raise_for_status()

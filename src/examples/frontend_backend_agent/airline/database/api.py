@@ -29,6 +29,10 @@ from loguru import logger
 _CODE_RETRIES = 10
 
 
+class IdempotencyConflict(ValueError):
+    """An idempotency key was reused with different booking parameters."""
+
+
 def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
@@ -564,6 +568,7 @@ class BookingAPI:
         cabin: str | None = None,
         fare_basis: str = "nonrefundable",
         session_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict | None:
         """Create a brand-new PNR on ``flight_number`` for ``passenger``.
 
@@ -574,11 +579,44 @@ class BookingAPI:
         mismatch is logged but does not override.  This keeps the
         receipt and the durable record in agreement; cabin selection
         belongs at flight-pick time, not at booking time.
+
+        With an idempotency key, replay the original response for retries.
+        Reusing the key with different parameters raises IdempotencyConflict.
         """
         origin_u = origin.strip().upper()
         destination_u = destination.strip().upper()
         flight_u = flight_number.strip().upper()
         with self._conn:
+            if idempotency_key is not None:
+                request_json = json.dumps(
+                    {
+                        "passenger": passenger.strip() or "Guest",
+                        "origin": origin_u,
+                        "destination": destination_u,
+                        "flight_number": flight_u,
+                        "departure": departure,
+                        "seat": (seat or "").strip().upper() or None,
+                        "meal": _canonical_meal(meal),
+                        "cabin": (cabin or "").strip().lower() or None,
+                        "fare_basis": fare_basis,
+                        "session_id": session_id,
+                    },
+                    sort_keys=True,
+                )
+                # Acquire the write lock before reading, including across workers.
+                self._conn.execute(
+                    "INSERT INTO booking_requests (idempotency_key, request_json) VALUES (?, ?) "
+                    "ON CONFLICT(idempotency_key) DO NOTHING",
+                    (idempotency_key, request_json),
+                )
+                attempt = self._conn.execute(
+                    "SELECT request_json, response_json FROM booking_requests WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if attempt["request_json"] != request_json:
+                    raise IdempotencyConflict("Idempotency-Key was already used for a different booking request")
+                if attempt["response_json"] is not None:
+                    return json.loads(attempt["response_json"])
             flight_row = self._find_or_create_flight_row(
                 flight_number=flight_u,
                 origin=origin_u,
@@ -586,6 +624,7 @@ class BookingAPI:
                 departure=departure,
             )
             if flight_row is None:
+                self._conn.execute("DELETE FROM booking_requests WHERE idempotency_key = ?", (idempotency_key,))
                 return None
             if cabin and cabin.strip().lower() != (flight_row["cabin"] or "").lower():
                 logger.warning(
@@ -605,6 +644,7 @@ class BookingAPI:
                     new_pnr = candidate
                     break
             if new_pnr is None:
+                self._conn.execute("DELETE FROM booking_requests WHERE idempotency_key = ?", (idempotency_key,))
                 return None
             ts = _now()
             self._conn.execute(
@@ -632,18 +672,24 @@ class BookingAPI:
                 outcome="booked",
                 confirmation_code=code,
             )
-        return {
-            "pnr": new_pnr,
-            "confirmation_code": code,
-            "flight_number": flight_row["flight_number"],
-            "origin": flight_row["origin"],
-            "destination": flight_row["destination"],
-            "departure": flight_row["departure"],
-            "cabin": effective_cabin,
-            "fare_basis": fare_basis,
-            "price": price,
-            "currency": "USD",
-        }
+            result = {
+                "pnr": new_pnr,
+                "confirmation_code": code,
+                "flight_number": flight_row["flight_number"],
+                "origin": flight_row["origin"],
+                "destination": flight_row["destination"],
+                "departure": flight_row["departure"],
+                "cabin": effective_cabin,
+                "fare_basis": fare_basis,
+                "price": price,
+                "currency": "USD",
+            }
+            if idempotency_key is not None:
+                self._conn.execute(
+                    "UPDATE booking_requests SET response_json = ? WHERE idempotency_key = ?",
+                    (json.dumps(result), idempotency_key),
+                )
+        return result
 
     def list_standby(
         self,

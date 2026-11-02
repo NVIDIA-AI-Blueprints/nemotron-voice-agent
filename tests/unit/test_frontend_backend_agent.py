@@ -178,6 +178,7 @@ class _TestBookingBackend:
         flight: dict[str, Any],
         seat_pref: str | None = None,
         meal_pref: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any] | None:
         pnr = f"TTK{self._next_pnr_index:03d}"
         self._next_pnr_index += 1
@@ -241,6 +242,26 @@ class _BlockingCreateBackend(_TestBookingBackend):
         self.create_started.set()
         await asyncio.sleep(10)
         return await super().create_booking(**kwargs)
+
+
+class _LostBookingResponseBackend(_TestBookingBackend):
+    def __init__(self, *, block_after_commit=False) -> None:
+        super().__init__()
+        self.receipts = {}
+        self.attempts = []
+        self.committed = asyncio.Event()
+        self.block_after_commit = block_after_commit
+
+    async def create_booking(self, **kwargs):
+        self.attempts.append(kwargs)
+        key = kwargs["idempotency_key"]
+        if key in self.receipts:
+            return self.receipts[key]
+        self.receipts[key] = await super().create_booking(**kwargs)
+        self.committed.set()
+        if self.block_after_commit:
+            await asyncio.Event().wait()
+        raise TimeoutError("response lost after commit")
 
 
 class _RaisingThinker:
@@ -1494,7 +1515,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["type"], "response_hint")
         self.assertEqual(payload["reason"], "tool_error")
-        self.assertIn("could not complete", payload["response_text"].lower())
+        self.assertIn("could not verify", payload["response_text"].lower())
 
     async def test_flight_search_accepts_city_names_when_planner_omits_iata_codes(self) -> None:
         thinker = _make_thinker()
@@ -1668,7 +1689,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         with suppress(asyncio.CancelledError):
             await previous_task
 
-    async def test_booking_finalization_cancellation_clears_pending_draft(self) -> None:
+    async def test_booking_finalization_cancellation_preserves_attempt_for_safe_retry(self) -> None:
         backend = _BlockingCreateBackend()
         thinker = _make_thinker(backend=backend)
 
@@ -1687,9 +1708,74 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(asyncio.CancelledError):
             await confirm_task
-        self.assertIsNone(thinker.state.booking_draft)
-        self.assertFalse(thinker.state.waiting_for_preferences)
-        self.assertFalse(thinker.state.waiting_for_confirmation)
+        self.assertIsNotNone(thinker.state.booking_attempt)
+        self.assertEqual(thinker.state.booking_attempt.idempotency_key, thinker.state.booking_draft.idempotency_key)
+
+    async def test_lost_booking_response_retries_original_key_and_parameters(self) -> None:
+        backend = _LostBookingResponseBackend()
+        thinker = _make_thinker(backend=backend)
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        failed = await thinker.call("Confirm", slots={"confirmed": True})
+        self.assertEqual(failed["reason"], "tool_error")
+        original_key = thinker.state.booking_attempt.idempotency_key
+        blocked = await thinker.call(
+            "Search a different route",
+            slots={"origin_airport": "SFO", "dest_airport": "LAX", "date": "2026-05-26"},
+        )
+        self.assertEqual(blocked["reason"], "booking_outcome_unknown")
+        changed = await thinker.call(
+            "Confirm for another passenger", slots={"confirmed": True, "passenger_name": "Someone Else"}
+        )
+        self.assertEqual(changed["reason"], "booking_outcome_unknown")
+        self.assertEqual(len(backend.attempts), 1)
+        retry = await thinker.call("Confirm original booking again", slots={"confirmed": True})
+        self.assertEqual(retry["data"]["pnr"], "TTK001")
+        self.assertEqual(backend.attempts[0], backend.attempts[1])
+        self.assertIsNone(thinker.state.booking_attempt)
+        await thinker.call("Book second flight", slots={"flight_selected": "2", "use_defaults": True})
+        await thinker.call("Confirm", slots={"confirmed": True})
+        self.assertNotEqual(thinker.state.booking_attempt.idempotency_key, original_key)
+
+    async def test_cancel_racing_committed_booking_warns_and_preserves_retry(self) -> None:
+        backend = _LostBookingResponseBackend(block_after_commit=True)
+        thinker = _make_thinker(backend=backend)
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        confirmation = asyncio.create_task(thinker.call("Confirm", slots={"confirmed": True}))
+        await backend.committed.wait()
+        results = []
+
+        async def result_callback(result, *, properties=None):
+            results.append(result)
+
+        params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_committed",
+            arguments={},
+            llm=_FrameCapturingLLM(),
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+        await build_handlers(thinker)["cancel_backend"](params)
+        with self.assertRaises(asyncio.CancelledError):
+            await confirmation
+        self.assertEqual(results[-1]["reason"], "booking_outcome_unknown")
+        self.assertIn("does not cancel a booked ticket", results[-1]["response_text"])
+        self.assertIsNotNone(thinker.state.booking_attempt)
+        stopped = await thinker.call("No, stop", slots={"confirmed": False})
+        self.assertEqual(stopped["reason"], "booking_outcome_unknown")
+        self.assertEqual(len(backend.attempts), 1)
+        retry = await thinker.call("Confirm original booking again", slots={"confirmed": True})
+        self.assertEqual(retry["data"]["pnr"], "TTK001")
+        self.assertEqual(backend.attempts[0], backend.attempts[1])
 
 
 if __name__ == "__main__":

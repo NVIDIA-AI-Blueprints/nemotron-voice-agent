@@ -53,6 +53,9 @@ class ThinkerBackend(Protocol):
     def cancel_pending_booking(self) -> bool:
         """Cancel pending domain work that has no active task."""
 
+    def cancellation_warning(self) -> dict[str, Any] | None:
+        """Return a warning for side effects that local cancellation cannot undo."""
+
 
 def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float = 0.8) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent."""
@@ -190,6 +193,9 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
             "context": "cancel_backend",
         }
+        warning = getattr(thinker, "cancellation_warning", lambda: None)()
+        if warning is not None:
+            payload = {**warning, "context": "cancel_backend"}
         if _direct_tool_response_enabled():
             await _emit_talker_response(params.llm, str(payload["response_text"]))
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))

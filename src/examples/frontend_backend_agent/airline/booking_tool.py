@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 from loguru import logger
@@ -34,6 +35,18 @@ class BookingTool:
 
     async def continue_booking(self, slots: dict[str, Any]) -> dict[str, Any]:
         """Advance the current booking flow from planned slots."""
+        if self._state.booking_attempt is not None:
+            attempt = self._state.booking_attempt
+            selected = slot(slots, "flight_selected")
+            if selected and extract_selected_flight(selected, self._state.search_results) != attempt.flight:
+                return booking_outcome_unknown()
+            for key in ("passenger_name", "seat_pref", "meal_pref"):
+                value = slot(slots, key)
+                if value and value != getattr(attempt, key):
+                    return booking_outcome_unknown()
+            if bool_slot(slots, "confirmed") is True:
+                return await self._finalize_booking()
+            return booking_outcome_unknown()
         if not self._state.search_results:
             return response_hint(
                 reason="missing_search_context",
@@ -161,7 +174,7 @@ class BookingTool:
         )
 
     async def _finalize_booking(self) -> dict[str, Any]:
-        draft = self._state.booking_draft
+        draft = self._state.booking_attempt or self._state.booking_draft
         if draft is None:
             return response_hint(
                 reason="params_missing",
@@ -170,15 +183,18 @@ class BookingTool:
                 response_text="Which flight should I book?",
                 context="booking",
             )
+        if self._state.booking_attempt is None:
+            self._state.booking_attempt = replace(draft, flight=dict(draft.flight))
+        draft = self._state.booking_attempt
         try:
             record = await self._backend.create_booking(
                 passenger_name=draft.passenger_name,
                 flight=draft.flight,
                 seat_pref=draft.seat_pref,
                 meal_pref=draft.meal_pref,
+                idempotency_key=draft.idempotency_key,
             )
         except asyncio.CancelledError:
-            self._state.reset_booking()
             raise
         except Exception as exc:
             logger.warning(f"booking backend failed while creating PNR: {exc}")
@@ -186,10 +202,14 @@ class BookingTool:
                 reason="tool_error",
                 action="retry",
                 error=str(exc),
-                response_text="I could not complete that booking right now. Please try again.",
+                response_text=(
+                    "I could not verify whether that booking completed. "
+                    "Confirm again to retry the same booking safely, without creating a duplicate."
+                ),
                 context="booking",
             )
         if record is None:
+            self._state.booking_attempt = None
             return response_hint(
                 reason="tool_error",
                 action="req_params",
@@ -198,6 +218,7 @@ class BookingTool:
                 response_text="I could not complete that booking. Please choose another flight.",
                 context="booking",
             )
+        self._state.booking_attempt = None
         self._state.reset_booking()
         return tool_result(
             tool="booking",
@@ -220,3 +241,17 @@ class BookingTool:
             draft.meal_pref = meal
         if passenger:
             draft.passenger_name = passenger
+
+
+def booking_outcome_unknown() -> dict[str, Any]:
+    """Report a submitted booking without implying that cancellation undid it."""
+    return response_hint(
+        reason="booking_outcome_unknown",
+        action="confirm_booking",
+        response_text=(
+            "A booking request was already sent and may have completed. "
+            "Stopping this task does not cancel a booked ticket. "
+            "Confirm again to retry the original booking safely before starting another."
+        ),
+        context="booking",
+    )

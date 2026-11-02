@@ -37,7 +37,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from loguru import logger
 
-from examples.frontend_backend_agent.airline.database.api import BookingAPI
+from examples.frontend_backend_agent.airline.database.api import BookingAPI, IdempotencyConflict
 from examples.frontend_backend_agent.airline.database.db import connect, init_db
 from examples.frontend_backend_agent.airline.database.schemas import (
     ActivityEvent,
@@ -197,19 +197,24 @@ def create_booking(
     body: BookingCreateRequest,
     api: ApiDependency,
     x_session_id: str | None = SessionHeader,
+    idempotency_key: Annotated[str | None, Header(min_length=1, max_length=128)] = None,
 ) -> dict:
     """Mint a brand-new PNR for the caller and return the booking + code."""
-    result = api.create_booking(
-        passenger=body.passenger,
-        origin=body.origin,
-        destination=body.destination,
-        flight_number=body.flight_number,
-        departure=body.departure,
-        seat=body.seat,
-        meal=body.meal,
-        cabin=body.cabin,
-        session_id=x_session_id,
-    )
+    try:
+        result = api.create_booking(
+            passenger=body.passenger,
+            origin=body.origin,
+            destination=body.destination,
+            flight_number=body.flight_number,
+            departure=body.departure,
+            seat=body.seat,
+            meal=body.meal,
+            cabin=body.cabin,
+            session_id=x_session_id,
+            idempotency_key=idempotency_key,
+        )
+    except IdempotencyConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=404,

@@ -114,6 +114,22 @@ Each `call_backend` query should describe the complete current request using the
 
 Use `cancel_backend` when the user says to stop, cancel, abandon, ignore, or never mind pending flight work. Also use it when the user switches to unrelated small talk or a non-flight topic while flight work may still be pending. This prevents stale backend results from reaching the user later.
 
+### Retry Bookings Without Creating Duplicates
+
+The airline agent sends an `Idempotency-Key` header with each confirmed booking request to `POST /pnrs`.
+The booking server stores the original response atomically with the booking, confirmation code, and audit event.
+Retries with the same key and parameters return that response, including the same PNR and confirmation code, even after a server restart.
+Reusing a key with different parameters returns HTTP `409`.
+Use a new key for each intentional booking, including another booking for the same passenger and flight.
+Direct API calls without a key retain the existing behavior: each call creates a new booking.
+
+After a timeout or lost response, the voice session preserves the submitted booking parameters and key.
+Confirm again to retry the original request safely before selecting a different flight or starting another search.
+Stopping local work after submission does not undo a committed booking.
+In this case, `cancel_backend` warns that the booking may have completed instead of claiming it was stopped.
+This tool stops the workflow; it does not cancel an issued ticket through the booking server.
+Unresolved attempt recovery is scoped to the current voice session; reconnecting does not restore its in-memory key.
+
 ### Re-test tool-calling accuracy after prompt changes
 
 Prompt edits can silently break the architecture contract. After changing the frontend or backend prompts, test both routing layers:
