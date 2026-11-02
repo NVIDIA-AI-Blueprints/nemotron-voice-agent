@@ -179,10 +179,16 @@ directly with `curl` for debugging:
 | `GET`  | `/flights/{flight_number}/pnrs` | Active PNRs on a flight |
 | `GET`  | `/routes?origin=...` *or* `?destination=...` | Reachable destinations / inbound origins |
 | `GET`  | `/price?origin=...&destination=...&cabin=...` | Fare quote |
-| `POST` | `/pnrs` | Create booking |
+| `POST` | `/pnrs` | Create booking; supports an optional `Idempotency-Key` header |
 | `POST` | `/pnrs/{pnr}/rebook` | Commit rebook |
 | `POST` | `/pnrs/{pnr}/cancel` | Cancel |
 | `POST` | `/pnrs/{pnr}/standby` | Standby listing |
+
+For retry-safe creation, send the same `Idempotency-Key` and booking parameters on each retry.
+Keys must contain 1 to 128 characters; invalid lengths return HTTP `422`.
+The same key and parameters replay the original response; different parameters with an existing key return HTTP `409`.
+Use a new key for an intentional new booking. Requests without a key create a new booking on each call.
+Refer to [Retry Bookings Without Creating Duplicates](../../README.md#retry-bookings-without-creating-duplicates) for voice-session cancellation and recovery behavior.
 
 Server defaults to `http://localhost:8001`. Override the SQLite path
 with `BOOKING_DB_PATH=...`.
