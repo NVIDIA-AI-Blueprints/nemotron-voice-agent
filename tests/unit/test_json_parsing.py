@@ -20,3 +20,15 @@ def test_skips_malformed_prefix_before_valid_object() -> None:
 
 def test_returns_empty_for_no_object() -> None:
     assert extract_json_object("plain text") == {}
+
+
+def test_extracts_nested_object_with_trailing_text() -> None:
+    assert extract_json_object('prefix {"outer":{"items":[1,{"valid":true}]}} trailing') == {
+        "outer": {"items": [1, {"valid": True}]}
+    }
+
+
+def test_preserves_braces_and_escaped_quotes_in_strings() -> None:
+    assert extract_json_object(r'{"text":"a } brace, a { brace, and a \"quote\""} trailing') == {
+        "text": 'a } brace, a { brace, and a "quote"'
+    }
