@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The generic profile: the domain-neutral defaults of any Live client, used as written when a session sets no or blank
+# instructions (talker.yaml) or a request sets none (thinker.yaml). It has no channel, so it is internal: the UI does
+# not list it and a UI bot session cannot select it.
+
+internal: true
+tools: {}

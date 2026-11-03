@@ -162,6 +162,7 @@ services:
     <<: *vllm-lightning-service
     profiles:
       - frontend-backend-agent/single-gpu
+      - frontend-backend-live/single-gpu
     environment:
       FLASHINFER_DISABLE_VERSION_CHECK: "1"
       VLLM_USE_V2_MODEL_RUNNER: "0"

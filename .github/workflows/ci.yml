@@ -89,5 +89,8 @@ jobs:
       - name: Lint client
         run: npm --prefix client run lint
 
+      - name: Test the Live Console's modules
+        run: node --test client/test/live/*.test.js
+
       - name: Build client
         run: npm --prefix client run build
