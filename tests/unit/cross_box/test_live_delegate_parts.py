@@ -43,8 +43,10 @@ def answer(text):
     return [chunk(text), chunk(finish="stop")]
 
 
-def voice_note(name="default"):
-    return CoreSettings.load(CORE).texts.voice_notes[name]
+def notes(name="default"):
+    """The notes the core adds to every task's instructions: the caller note, then the voice note."""
+    texts = CoreSettings.load(CORE).texts
+    return texts.caller_notes[name], texts.voice_notes[name]
 
 
 class Hanging:
@@ -189,15 +191,15 @@ class RoundTests(ServedRoute):
             body = {"input": [USER], "model": model, "instructions": "Be terse.", "tools": tools}
             chosen = http.post("/v1/live/delegate", json=body).json()
         first, second = chat.requests
-        # The core's defaults: the backend slot's default model and its prompt as written, then the voice note.
+        # The core's defaults: the backend slot's default model and its prompt as written, then the notes.
         prompt = load_prompts().text("Backend", info["backend"]["prompt"])
         self.assertEqual((first["model"], default["sent_request"]["model"]), (info["backend"]["model"],) * 2)
-        self.assertEqual(first["messages"][0]["content"], compose(prompt, voice_note()))
+        self.assertEqual(first["messages"][0]["content"], compose(prompt, *notes()))
         self.assertNotIn("tools", first)
         # The client's own: a model the catalog lists for the slot, its instructions and its tools. The reply names a
         # hosted tool by its type; the chat-completions backend gets the function tools only.
         self.assertEqual((second["model"], chosen["sent_request"]["model"]), (model, model))
-        self.assertEqual(second["messages"][0]["content"], compose("Be terse.", voice_note()))
+        self.assertEqual(second["messages"][0]["content"], compose("Be terse.", *notes()))
         self.assertEqual(chosen["sent_request"]["tools"], ["get_menu", "web_search"])
         self.assertEqual([tool["function"]["name"] for tool in second["tools"]], ["get_menu"])
 

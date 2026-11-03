@@ -178,8 +178,8 @@ USAGE_INTERVAL_SECONDS = 3600
 # The prompt set the goldens run on: the shipped prompts.yaml's, so a change to its texts shows in every golden's
 # frontend requests.
 GOLDEN_PROMPTS = load_prompts().cascade
-# The core's voice note the goldens run on: the shipped one, which every golden's backend requests carry.
-GOLDEN_CORE = {"voice_note": "default"}
+# The core's notes the goldens run on: the shipped ones, which every golden's backend requests carry.
+GOLDEN_CORE = {"caller_note": "default", "voice_note": "default"}
 # The models the core's catalog lists besides the session's: a session.update may choose them (core.yaml reports an
 # unlisted one).
 GOLDEN_MODELS = ("org/other-model",)

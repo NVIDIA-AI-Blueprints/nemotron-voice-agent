@@ -9,6 +9,7 @@ which a composition root reads once and hands to ``app.build_core``.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
@@ -62,6 +63,7 @@ TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "failed_output": ("name", "error"),
         "misrouted_output": ("name",),
         "repeated_call_output": ("output",),
+        "shape_hint": ("value",),
         "cut_output": ("chars",),
         "conductor_prompt": ("max_running",),
     }
@@ -106,6 +108,16 @@ def _flag(where: str, value: Any) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{where} must be true or false")
     return value
+
+
+def _pattern(where: str, value: Any) -> str:
+    """A regular expression Python compiles, kept as written."""
+    text = _text(where, value)
+    try:
+        re.compile(text)
+    except re.error as error:
+        raise ValueError(f"{where} is not a valid regular expression: {error}") from None
+    return text
 
 
 def _text(where: str, value: Any, *, empty: bool = False) -> str:
@@ -168,6 +180,11 @@ class DelegationSettings:
     records_max_works: int = 5  # the recently ended Works the work records list, after the open ones
     context_tokens: int = 24_000  # the backend history's budget (fits a 32,768-token local window)
     tool_output_chars: int = 8_000  # a longer tool output enters the backend history cut to its head and tail
+    caller_note: str = "default"  # a name in texts.caller_notes: the note on how to work with the caller
+    # After an app call's output matches not_found_pattern, add texts.shape_hint with the failed value written in the
+    # shape the app's ids take, when the session has not tried that form (im/recovery.py).
+    shape_hints: bool = True
+    not_found_pattern: str = r"(?i)\b(not found|does not exist|no such)\b"  # an output that names nothing
     voice_note: str = "default"  # a name in texts.voice_notes: the note that describes the voice channel
 
     @classmethod
@@ -187,8 +204,10 @@ class DelegationSettings:
                 values[key] = _seconds(where, value)
             elif key == "progress_note_seconds":
                 values[key] = _seconds(where, value, zero=True)
-            elif key == "hold_answers_while_deciding":
+            elif key in ("hold_answers_while_deciding", "shape_hints"):
                 values[key] = _flag(where, value)
+            elif key == "not_found_pattern":
+                values[key] = _pattern(where, value)
             elif key == "work_tools":
                 if not isinstance(value, list):
                     raise ValueError(f"{where} must be a list of work tool names")
@@ -207,6 +226,8 @@ class Texts:
     exception's, a timed-out call's) comes from the code that reports it.
     """
 
+    # By name: what the IM adds to every task's instructions about working with the caller, before the voice note.
+    caller_notes: Mapping[str, str]
     voice_notes: Mapping[str, str]  # by name: what the IM adds to every task's instructions about the voice channel
     result_formats: Mapping[str, str]  # by name: the note each result format adds (plain: none)
     # The older delegation's commentary line when a newer request carries its Work: holds {delegation}, the newer
@@ -218,12 +239,16 @@ class Texts:
     not_run_output: str  # the output of a call refused while newer input waits (the commit gate): it was not run
     stopped_output: str  # the output of a call refused once its work is stopping (a stop, or its own cancel_work)
     clash_output: str  # the output of a call refused because the app and a work tool name the same function
-    unknown_tool_output: str  # the error output of a call to a name no tool offers: holds {name} and {offered}
+    # The error output of a call to a name no tool offers: holds {name} and {offered}, and says how to ask the caller to
+    # do a step that is theirs.
+    unknown_tool_output: str
     failed_output: str  # the error output of a call that raised: holds {name} and {error}
     misrouted_output: str  # the error output of an app function the IM routes to a harness's agent: holds {name}
     # The output of an app call that repeats the newest call that ran, which its task made and the app answered, with
     # no request since: holds {output}, that answer, which the IM gives instead of sending the call again.
     repeated_call_output: str
+    # Added to an app output that found nothing ({value}: the failed value in the shape the app's ids take).
+    shape_hint: str
     cut_output: str  # between the head and the tail of a tool output cut to its size cap: holds {chars}, those left out
     none: str  # how an empty list of names reads in these texts: no tool offered, no request named
     records_block: str  # what the Works have done, on every Work's input and every steer: holds {records}
@@ -243,7 +268,15 @@ class Texts:
         """Validate the ``texts`` block: every key present, every line text, the templates with their fields."""
         names = [f.name for f in fields(cls)]
         block = _keys("texts", raw, names, names)
-        mappings = ("voice_notes", "result_formats", "outcomes", "refusal_reasons", "control_tools", "work_tools")
+        mappings = (
+            "caller_notes",
+            "voice_notes",
+            "result_formats",
+            "outcomes",
+            "refusal_reasons",
+            "control_tools",
+            "work_tools",
+        )
         lines = {key: _text(f"texts.{key}", block[key]) for key in names if key not in mappings}
         for key, template_fields in TEMPLATE_FIELDS.items():
             _template(f"texts.{key}", lines[key], template_fields)
@@ -261,6 +294,7 @@ class Texts:
         if not isinstance(control_tools, Mapping):
             raise ValueError("texts.control_tools must be a mapping")
         return cls(
+            caller_notes=_texts("texts.caller_notes", block["caller_notes"], empty=True),
             voice_notes=_texts("texts.voice_notes", block["voice_notes"], empty=True),
             result_formats=_texts("texts.result_formats", block["result_formats"], empty=True),
             outcomes=outcomes,
@@ -343,6 +377,8 @@ class CoreSettings:
             backend=BackendChoice.parse(top["backend"]),
         )
         delegation, texts = settings.delegation, settings.texts
+        if delegation.caller_note not in texts.caller_notes:
+            raise ValueError(f"delegation.caller_note {delegation.caller_note!r} is not in texts.caller_notes")
         if delegation.voice_note not in texts.voice_notes:
             raise ValueError(f"delegation.voice_note {delegation.voice_note!r} is not in texts.voice_notes")
         if delegation.result_format not in texts.result_formats:

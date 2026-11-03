@@ -28,8 +28,8 @@ class CoreSettingsFileTests(unittest.TestCase):
         self.assertEqual(sorted(backend.blocks), ["harness", "llm", "llm-agent"])
         self.assertEqual(backend.blocks["llm"]["conductor"], "steer")
         self.assertEqual(
-            (delegation.result_format, delegation.voice_note, delegation.work_tools),
-            ("plain", "default", ("cancel_work",)),
+            (delegation.result_format, delegation.caller_note, delegation.voice_note, delegation.work_tools),
+            ("plain", "default", "default", ("cancel_work",)),
         )
         # The backend LLM and the agent's workers get thirty rounds before the capped one.
         self.assertEqual(LlmSettings.parse(backend.blocks["llm"]).max_tool_rounds, 30)

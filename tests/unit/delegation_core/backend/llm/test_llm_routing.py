@@ -100,7 +100,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         error = json.loads(task.outcomes["call_invented"][0])["error"]
         self.assertEqual(
             (error, task.outcomes["call_invented"][1]),
-            ("Unknown tool: invented. The tools offered: get_menu, slow", "failed"),
+            (TEXTS.unknown_tool_output.format(name="invented", offered="get_menu, slow"), "failed"),
         )
         self.assertIn(("call_invented", "llm"), task.started)
 

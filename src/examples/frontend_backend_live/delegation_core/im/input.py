@@ -3,9 +3,9 @@
 
 """What the backend is told besides the conversation: each request's settings, the composed instructions, the records.
 
-Instructions are composed in one order: the request's instructions or the default, then the voice note, then the
-result format's note. The work records go in as ``input_text`` parts of a request's user message: the newest request at
-a Work's start, and every steered request when it lands.
+Instructions are composed in one order: the request's instructions or the default, then the caller note, the voice
+note, and the result format's note. The work records go in as ``input_text`` parts of a request's user message: the
+newest request at a Work's start, and every steered request when it lands.
 """
 
 from __future__ import annotations
