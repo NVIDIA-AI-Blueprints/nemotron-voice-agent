@@ -29,7 +29,6 @@ WALKED = ("live", "examples/frontend_backend_live", "delegation_core", "server.p
 # ----------------------------------------------------------------------------------------------------- groups
 ADAPTER = "adapter"
 ROOT = "composition root"
-PARKED = "parked"
 FBL = "examples.frontend_backend_live"
 
 GROUPS = {
@@ -46,11 +45,10 @@ GROUPS = {
     "live.extras": "live.extras",
     "live.mount": "live.mount",
     # The example package is the frontend adapter (adapter/, cascade/, media/, models/, prompts/, config_manager/),
-    # except its two composition roots and the parked Realtime adapter.
+    # except its two composition roots.
     FBL: ADAPTER,
     f"{FBL}.factory": ROOT,
     f"{FBL}.pipeline": ROOT,
-    f"{FBL}.parked": PARKED,
     # The delegation core.
     "delegation_core": "delegation_core",
     "delegation_core.api": "delegation_core.api",
@@ -176,7 +174,7 @@ MAY_IMPORT = {
 
 WEB_EDGES = ("live.gateway", "live.mount", "live.extras", "delegation_core.api.http")
 CODEC = ("live.media.audio", "live.gateway.websocket")
-# Where each outside package may be imported. Composition roots and the parked code are not checked.
+# Where each outside package may be imported. Composition roots are not checked.
 PACKAGE_RULES = {
     # The voice agent's speech pipeline (media/), the cascade adapter's Pipecat modules, and the WebRTC peer that the
     # gateway shares with them (a documented exception). The cascade stays Pipecat-free.
@@ -212,7 +210,7 @@ NOT_MODEL_STREAMS = {
     ("delegation_core.im.stream", "self"): "ResponseWriter.stream: the response stream the writer writes into",
 }
 
-# The tests are no group of the tables. No walked module may import them, roots and parked code included.
+# The tests are no group of the tables. No walked module may import them, roots included.
 TESTS = "tests"
 # The delegation core's own tests and their helpers, relative to the repository: they may import only the core, those
 # helpers, the standard library, the OpenAI client and the HTTP types its errors carry.
@@ -405,7 +403,7 @@ def computed_loads() -> tuple[Import, ...]:
 
 @cache
 def stream_references() -> tuple[StreamReference, ...]:
-    """Every read of an attribute named ``stream`` in the walked modules, roots and parked code included."""
+    """Every read of an attribute named ``stream`` in the walked modules, roots included."""
     found = []
     for path in walked_files():
         for line, receiver in stream_references_in(path.read_text(encoding="utf-8")):
@@ -467,10 +465,6 @@ def group_of(module: str) -> str:
 
 
 def allowed(source: str, target: str) -> bool:
-    if source == PARKED:
-        return True
-    if target == PARKED:
-        return False
     return source == ROOT or target == source or target in MAY_IMPORT[source]
 
 
@@ -486,7 +480,7 @@ def internal_violation(imp: Import) -> Violation | None:
 def package_violation(imp: Import) -> Violation | None:
     package = imp.imported.split(".")[0]
     places = PACKAGE_RULES.get(package)
-    if places is None or group_of(imp.importer) in (ROOT, PARKED):
+    if places is None or group_of(imp.importer) == ROOT:
         return None
     if any(within(imp.importer, place) for place in places):
         return None
@@ -502,7 +496,7 @@ def package_violations() -> list[Violation]:
 
 
 def imports_the_tests(imp: Import) -> Violation | None:
-    """A walked module that imports the tests. Unlike the group rules, this one exempts no root and no parked code."""
+    """A walked module that imports the tests. Unlike the group rules, this one exempts no root."""
     if not within(imp.imported, TESTS):
         return None
     return Violation(imp, f"{imp.importer} may not import the tests (no walked module may, whatever its group)")
@@ -637,7 +631,7 @@ class LayoutTests(RuleCase):
 
 
 class TestModuleRuleTests(RuleCase):
-    def test_no_walked_module_imports_the_tests_roots_and_parked_code_included(self):
+    def test_no_walked_module_imports_the_tests_roots_included(self):
         problems = [violation for imp in all_imports() if (violation := imports_the_tests(imp))]
         self.assert_no_problems("Production modules that import the tests:", problems)
 
@@ -659,7 +653,7 @@ class WalkTests(RuleCase):
             self.assertIn(module, importers)
 
     def test_every_group_has_a_rule(self):
-        self.assertEqual(set(GROUPS.values()) - set(MAY_IMPORT) - {ROOT, PARKED}, set())
+        self.assertEqual(set(GROUPS.values()) - set(MAY_IMPORT) - {ROOT}, set())
 
 
 class WalkerTests(unittest.TestCase):
@@ -761,7 +755,6 @@ class RuleTests(unittest.TestCase):
             "delegation_core.backend.providers.chat_completions": "delegation_core.backend",
             "delegation_core.backend.harness.acp.codec": "delegation_core.backend.harness",
             "delegation_core.backend.control": "delegation_core.backend",
-            f"{FBL}.parked.realtime.engine": PARKED,
             f"{FBL}.factory": ROOT,
             f"{FBL}.cascade.turns": ADAPTER,
             f"{FBL}.media.playout": ADAPTER,
@@ -780,7 +773,6 @@ class RuleTests(unittest.TestCase):
             ("delegation_core.backend.agent", "delegation_core.backend.llm"),
             ("delegation_core.backend", "delegation_core.backend.harness"),
             (ROOT, ADAPTER),
-            (PARKED, "live.session"),
         }
         refused_pairs = {
             (ADAPTER, "live.session"),
@@ -797,7 +789,6 @@ class RuleTests(unittest.TestCase):
             ("delegation_core.backend.llm", "delegation_core.backend.harness"),
             ("delegation_core.backend.port", "delegation_core.backend"),
             ("delegation_core.api", "delegation_core.ledger"),
-            (ROOT, PARKED),
             ("live.mount", "examples_registry"),  # the server reads the registry and hands the mount its hooks
             # live/extras.py serves POST /v1/live/delegate; live/mount.py hands it the composition root's hook.
             ("live.extras", "delegation_core.app"),
@@ -826,8 +817,8 @@ class RuleTests(unittest.TestCase):
         for importer in (f"{FBL}.cascade.processor", f"{FBL}.cascade.session"):
             self.assertIsNotNone(package_violation(Import(path, 1, importer, "pipecat.frames.frames")), importer)
 
-    def test_no_group_may_import_the_tests_not_even_a_root_or_the_parked_code(self):
-        importers = ("server", f"{FBL}.factory", f"{FBL}.pipeline", f"{FBL}.parked.realtime.engine", "live.mount")
+    def test_no_group_may_import_the_tests_not_even_a_root(self):
+        importers = ("server", f"{FBL}.factory", f"{FBL}.pipeline", "live.mount")
         for importer in importers:
             for imported in ("tests.unit.core_helpers", "tests.unit.live_helpers", "tests"):
                 imp = Import("src/x.py", 1, importer, imported)
