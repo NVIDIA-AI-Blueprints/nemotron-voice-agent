@@ -1,6 +1,6 @@
 # Configure Prompts
 
-You can customize your voice agent's personality, behavior, and response format using system prompts. Built-in prompts are defined in example-local `prompts.yaml` files and can be switched or added at runtime via the UI.
+You can customize your voice agent's personality, behavior, and response format using system prompts. Built-in prompts are defined in example-local `prompts.yaml` files and can be switched or added at runtime via the UI. The Frontend/Backend Live example is the exception: its built-in prompts live in prompt profile folders under `src/examples/frontend_backend_live/prompts/`, which the `prompt_catalog` key of its `examples_registry.yaml` entry serves to the UI. Refer to [Prompt Profiles](../../src/examples/frontend_backend_live/README.md#prompt-profiles).
 
 ## Switching / Adding Prompts via the UI
 
@@ -23,7 +23,7 @@ Prompt presets are defined per example. The Generic Cascaded example currently p
 
 ## Changing the Default Prompt
 
-Set the per-example default with `defaults.prompt` in `examples_registry.yaml`. As a fallback (when that key is not one of the active example's prompt keys in `prompts.yaml`), the entry marked `default: true` is used, otherwise the first entry.
+Set the per-example default with `defaults.prompt` in `examples_registry.yaml`. As a fallback (when that key is not one of the active example's prompt keys in `prompts.yaml`), the entry marked `default: true` is used, otherwise the first entry. For the Frontend/Backend Live example, `defaults.prompt` names a prompt profile, `cafe`.
 
 ```yaml
 my_prompt:
@@ -35,7 +35,7 @@ my_prompt:
 
 ## Adding Built-In Prompts via `prompts.yaml`
 
-To make a prompt available as a built-in option for all users of an example, add an entry to that example's `prompts.yaml`, such as [`src/examples/generic/prompts.yaml`](../../src/examples/generic/prompts.yaml). The client loads built-in prompts for the active example. Refresh open browser tabs after editing YAML.
+To make a prompt available as a built-in option for all users of an example, add an entry to that example's `prompts.yaml`, such as [`src/examples/generic/prompts.yaml`](../../src/examples/generic/prompts.yaml). The client loads built-in prompts for the active example. Refresh open browser tabs after editing YAML. To add a built-in prompt to the Frontend/Backend Live example, add a prompt profile folder instead, as [Prompt Profiles](../../src/examples/frontend_backend_live/README.md#prompt-profiles) describes.
 
 ```yaml
 my_custom_prompt:

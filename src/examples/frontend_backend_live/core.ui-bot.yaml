@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The delegation core of the repository UI bot: core.yaml, with what differs.
+# config.yaml names this file under ui_bot.core_config. Each session's prompt profile (prompts/<profile>/, the one the
+# UI selected, the cafe's by default) sets backend.prompt and backend.tools over this file's, so the backend's prompt
+# and tools switch with the session's talker.
+
+extends: core.yaml
+
+delegation:
+  result_format: speak_display         # a show item for the task cards, then the answer to speak
