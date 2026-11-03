@@ -72,8 +72,6 @@ The Lightning Compose matrix selects the following model and precision automatic
 - Ada/Hopper workstation: NVFP4 checkpoint served as W4A16 via Marlin.
 - Older compute capabilities: unsupported → cloud.
 
-The Frontend/Backend `/single-gpu` recipes run `nvidia-llm-vllm-lightning-frontend-backend` with `VLLM_USE_V2_MODEL_RUNNER: "0"` (Model Runner V1), so DGX Spark and Blackwell workstations serve NVFP4 there without DSpark or DFlash speculative decoding.
-
 Lightning vLLM health: `curl -f http://localhost:18000/health`. The same server serves chat completions and the streaming-input WebSocket at `ws://localhost:18000/v1/streaming-session`.
 
 The Bolt E4B command scales Lightning to zero, so port `18000` does not answer. Bolt E4B vLLM health: `curl -f http://localhost:18004/health`.

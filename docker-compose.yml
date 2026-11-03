@@ -13,7 +13,6 @@ name: nemotron-voice-agent
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
 #   frontend-backend-agent               Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
-#   frontend-backend-live                Cascaded Frontend/Backend Live Pipeline (Bluebird Cafe)
 #
 # Hardware targets:
 #   server                    NIM ASR + LLM + TTS. Recommended for scaling
@@ -27,7 +26,6 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant up
 #   docker compose --profile omni-assistant-subagents up
 #   docker compose --profile frontend-backend-agent up
-#   docker compose --profile frontend-backend-live up
 #
 # On-prem recipes:
 #   docker compose --profile generic-assistant/server up
@@ -41,8 +39,6 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-agent/server up
 #   docker compose --profile frontend-backend-agent/single-gpu up
-#   docker compose --profile frontend-backend-live/server up
-#   docker compose --profile frontend-backend-live/single-gpu up
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
@@ -255,34 +251,3 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       THINKER_TOOL_TIMEOUT_SECONDS: ${THINKER_TOOL_TIMEOUT_SECONDS:-90}
       FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE: ${FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE:-true}
-
-  frontend-backend-live:
-    <<: *app-base
-    profiles:
-      - frontend-backend-live
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
-      SERVICE_RECIPE: cloud
-      # The Live routes (/v1/live) stay on with any EXAMPLE_SELECTION; LIVE_ENABLED=false turns them off.
-      LIVE_ENABLED: ${LIVE_ENABLED:-true}
-
-  frontend-backend-live-server:
-    <<: *app-base
-    profiles:
-      - frontend-backend-live/server
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
-      LIVE_ENABLED: ${LIVE_ENABLED:-true}
-
-  frontend-backend-live-single-gpu:
-    <<: *app-base
-    profiles:
-      - frontend-backend-live/single-gpu
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: single-gpu
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
-      LIVE_ENABLED: ${LIVE_ENABLED:-true}
