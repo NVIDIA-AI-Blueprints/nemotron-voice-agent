@@ -165,7 +165,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     a task card, corrects its records by what the caller heard, and closes when the pipeline has finished.
     """
     logger.info("Starting Frontend/Backend Live cascaded pipeline")
-    transport = create_transport(runner_args)
+    transport = await create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     state = await asyncio.to_thread(bot_root)

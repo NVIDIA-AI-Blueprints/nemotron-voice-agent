@@ -52,7 +52,7 @@ class RateProbe(FrameProcessor):
 class PipelineRateTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_pipeline_runs_at_nvas_shared_rates_so_magpie_gets_a_rate_it_makes(self):
         port = RecordingPort()
-        host = SimpleNamespace(session=port, gate=None, task=None, runner_task=None)
+        host = SimpleNamespace(session=port, gate=SimpleNamespace(input_ms=0), task=None, runner_task=None)
         await PipelineHost.run_pipeline(host, [RateProbe()], stt=object(), tts=object())
         await host.task.queue_frame(EndFrame())
         async with asyncio.timeout(5):

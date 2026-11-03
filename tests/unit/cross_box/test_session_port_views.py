@@ -328,7 +328,7 @@ class AdapterFailureTests(unittest.IsolatedAsyncioTestCase):
         for active, requests in ((True, [("request_close", "connection_lost")]), (False, [])):
             with self.subTest(active=active):
                 port = RecordingPort()
-                host = SimpleNamespace(session=port, gate=None, task=None, runner_task=None)
+                host = SimpleNamespace(session=port, gate=SimpleNamespace(input_ms=0), task=None, runner_task=None)
                 await PipelineHost.run_pipeline(host, [Passthrough()], stt=object(), tts=object())
                 port.active = active
                 await host.task.queue_frame(EndFrame())

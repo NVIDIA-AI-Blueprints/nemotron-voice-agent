@@ -16,6 +16,7 @@ from pipecat.frames.frames import (
     AggregatedTextFrame,
     InterruptionFrame,
     LLMTextFrame,
+    TextType,
     TTSAudioRawFrame,
     TTSStartedFrame,
     TTSTextFrame,
@@ -36,7 +37,7 @@ PART_AUDIO = b"\x10\x10" * 6000  # 250 ms
 
 def announced(sentence: str) -> AggregatedTextFrame:
     """The sentence a text-to-speech takes, announced ahead of its audio as Pipecat's does."""
-    frame = AggregatedTextFrame(text=sentence, aggregated_by="sentence")
+    frame = AggregatedTextFrame(text=sentence, text_type=TextType.SENTENCE)
     frame.will_be_spoken = True
     return frame
 
@@ -63,7 +64,7 @@ class FirstSentenceTTS(FrameProcessor):
         await self.push_frame(announced(first))
         await self.push_frame(TTSStartedFrame())
         await self.push_frame(TTSAudioRawFrame(audio=SENTENCE_AUDIO, sample_rate=24000, num_channels=1))
-        await self.push_frame(TTSTextFrame(text=first, aggregated_by="sentence"))
+        await self.push_frame(TTSTextFrame(text=first, text_type=TextType.SENTENCE))
         self.utterances.append(frame.text)
         self.on_change()
 

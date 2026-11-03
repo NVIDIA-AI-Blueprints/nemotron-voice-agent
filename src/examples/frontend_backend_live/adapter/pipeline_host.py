@@ -151,9 +151,12 @@ class PipelineHost:
             setup_timeout_secs=120.0,
         )
         started = asyncio.Event()
+        # A WebRTC input reads the caller while later processors set up: the gate drops that audio until the start.
+        self.gate.muted = True
 
         @self.task.event_handler("on_pipeline_started")
         async def on_started(worker, frame):
+            self.gate.muted = False
             started.set()
 
         @self.task.event_handler("on_pipeline_finished")
@@ -166,6 +169,9 @@ class PipelineHost:
         self.runner_task = asyncio.create_task(runner.run(), name=f"{session.id}:pipeline")
         async with asyncio.timeout(START_TIMEOUT_SECONDS):
             await started.wait()
+        # Pipecat starts the pipeline once each processor's setup has ended, a failed one included: it fails the start.
+        if failed := [str(processor) for processor in processors if not processor.is_usable]:
+            raise RuntimeError(f"Processors that could not set up: {', '.join(failed)}")
 
     async def stop_pipeline(self) -> None:
         """Cancel the background commands and the pipeline."""

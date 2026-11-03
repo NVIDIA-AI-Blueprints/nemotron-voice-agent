@@ -81,7 +81,7 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
                 runtime_config=runtime_config,
             )
 
-    def _response_handler(self, iterator: AudioChunkIterator):
+    def _response_handler(self, iterator: AudioChunkIterator, config):
         """Reuse the parent stream loop, injecting force_eou on gRPC requests."""
         asr_service = self._asr_service
         original = asr_service.streaming_response_generator
@@ -94,7 +94,7 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
 
         asr_service.streaming_response_generator = streaming_response_generator
         try:
-            super()._response_handler(iterator)
+            super()._response_handler(iterator, config)
         finally:
             asr_service.streaming_response_generator = original
             if iterator.closed:

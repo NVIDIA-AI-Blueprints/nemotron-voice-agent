@@ -143,9 +143,10 @@ turn ends at the final, or 0.8 seconds after the request when no final comes, so
 missed does not wait for Pipecat's 5-second turn stop timeout. `shared` uses the turn detection of the shared pipeline,
 with its environment variables.
 
-Each live session loads its text-to-speech client, synthesis config, and zero-shot audio prompt in a worker thread
-before its pipeline starts, because the WebRTC transport can start sending audio during the pipeline's setup. A
-session's audio therefore begins only when it can speak.
+A live session starts after its pipeline has started. Pipecat starts the pipeline only after every processor is set up,
+the text-to-speech's client, synthesis config, and zero-shot audio prompt included, so a session's audio begins only
+when it can speak. A WebRTC input reads the caller while the processors after it are set up, so the input gate drops
+that audio until the pipeline has started. A processor that cannot set up fails the session's start.
 
 The talker decides the caller's turns one decision at a time. When the caller speaks again while the talker decides on
 their turns, that decision says, sends, and records nothing, and the turns wait for the next decision, which covers

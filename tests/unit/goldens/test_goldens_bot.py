@@ -70,8 +70,9 @@ import unittest
 from collections import Counter
 from contextlib import ExitStack
 from dataclasses import replace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+from pipecat import version as pipecat_version
 from pipecat.frames.frames import (
     InputTransportMessageFrame,
     OutputTransportMessageFrame,
@@ -83,6 +84,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frameworks.rtvi import models as RTVI
 from pipecat.runner.types import RunnerArguments
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.turns.user_start import ExternalUserTurnStartStrategy
@@ -163,13 +165,15 @@ WELCOME_VARIABLE = "ENABLE_WELCOME_MESSAGE"
 # Variables that would point the bot at another prompt catalog or prompt (utils.resolve_prompt); removed for the test.
 PROMPT_VARIABLES = ("PROMPT_FILE_PATH", "PROMPT_SELECTOR")
 
-# The message the browser client (@pipecat-ai/client-js 1.13.1, client/package.json) sends once it is connected.
+# The message the browser client sends once it is connected, at the RTVI protocol version Pipecat speaks.
 CLIENT_READY = {
     "label": "rtvi-ai",
     "type": "client-ready",
     "id": "ready",
-    "data": {"version": "2.1.0", "about": {"library": "@pipecat-ai/client-js", "library_version": "1.13.1"}},
+    "data": {"version": RTVI.PROTOCOL_VERSION, "about": {"library": "@pipecat-ai/client-js"}},
 }
+# The bot-ready message's version fields, when they are the installed Pipecat's own, which change with each release.
+RTVI_VERSION, PIPECAT_VERSION = "<rtvi version>", "<pipecat version>"
 # Pipecat's timing reports; no channel keeps them.
 METRICS_MESSAGE = "metrics"
 
@@ -320,8 +324,15 @@ class FakeTransport(BaseTransport):
 
 # --------------------------------------------------------------------------------------------- the golden
 def normalize_bot_channels(raw):
-    """Normalize every channel on its own, with the harness's normalizer."""
-    return {channel: Normalizer()(raw[channel]) for channel in BOT_CHANNELS}
+    """Normalize every channel on its own, with the harness's normalizer, and bot-ready's Pipecat versions."""
+    channels = {channel: Normalizer()(raw[channel]) for channel in BOT_CHANNELS}
+    for message in channels["client_bot"]:
+        data = message.get("data") if message.get("type") == "bot-ready" else None
+        if data and data.get("version") == RTVI.PROTOCOL_VERSION:
+            data["version"] = RTVI_VERSION
+        if data and data.get("about", {}).get("library_version") == pipecat_version():
+            data["about"]["library_version"] = PIPECAT_VERSION
+    return channels
 
 
 def changed_bot_channels(name, expected, recorded):
@@ -411,7 +422,7 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
 
         edges = {
             "bot_root": golden_root,
-            "create_transport": lambda runner_args: case.transport,
+            "create_transport": AsyncMock(return_value=case.transport),
             "build_stt": lambda body, entry, turn_end: case.stt,
             "build_tts": lambda body, entry: case.tts,
             "TURN_ENDS": dict.fromkeys(pipeline.TURN_ENDS, ExternalTurns),

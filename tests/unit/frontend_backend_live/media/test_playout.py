@@ -10,24 +10,27 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from pipecat.frames.frames import (
     AggregatedTextFrame,
+    InputAudioRawFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
     OutputAudioRawFrame,
+    StartFrame,
+    TextType,
     TTSStartedFrame,
     TTSStoppedFrame,
     TTSTextFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection
-from pipecat.services.tts_service import TTSService
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
 from examples.frontend_backend_live.adapter.bridge import LiveOutputTranscript, LiveWebSocketAudioOutput
+from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
 from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
 from examples.frontend_backend_live.media.playout import PlayoutTracker
 from examples.frontend_backend_live.media.services import (
@@ -35,7 +38,6 @@ from examples.frontend_backend_live.media.services import (
     PerSentence,
     Stitched,
     build_tts,
-    load_speech,
     speech_mode,
 )
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_OUT_SAMPLE_RATE, build_pipeline_params
@@ -43,7 +45,6 @@ from live.ports import EXCHANGE_RATE
 from live.protocol import SessionConfig
 from tests.unit.cascade_helpers import LIVE_CONFIG as CASCADE_TEST_CONFIG
 from tests.unit.cascade_helpers import FakeTTS
-from tests.unit.contracts.delegation_port import ScriptedDelegationPort
 from tests.unit.frontend_backend_live.adapter.adapter_helpers import FLUSH, Probe, RecordingPort, run_frames, tone
 
 
@@ -52,12 +53,12 @@ def audio(ms: int) -> OutputAudioRawFrame:
 
 
 def text(words: str) -> TTSTextFrame:
-    return TTSTextFrame(text=words, aggregated_by="sentence")
+    return TTSTextFrame(text=words, text_type=TextType.SENTENCE)
 
 
 def will_speak(words: str) -> AggregatedTextFrame:
     """The text a speech service takes, announced ahead of its audio as Pipecat's text-to-speech does."""
-    frame = AggregatedTextFrame(text=words, aggregated_by="sentence")
+    frame = AggregatedTextFrame(text=words, text_type=TextType.SENTENCE)
     frame.will_be_spoken = True
     return frame
 
@@ -275,121 +276,80 @@ class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
         tts = build_tts({}, {"server": "magpie-tts:50051"})
         self.assertEqual(tts._max_consecutive_zero_audio_contexts, 0)
 
-    async def test_a_slow_text_to_speech_load_runs_in_a_worker_thread_and_leaves_the_event_loop_free(self):
-        # A slow server's blocking calls hold only their worker thread: other sessions keep running meanwhile.
+    async def test_a_text_to_speech_that_cannot_set_up_fails_the_sessions_start(self):
+        # Pipecat starts the pipeline once every processor's setup has ended, a failed one included.
         tts = build_tts({}, {"server": "magpie-tts:50051"})
-        loop_thread, threads, ticks = threading.current_thread(), [], []
 
-        def blocking(result=None):
-            threads.append(threading.current_thread())
-            time.sleep(0.2)
-            return result
+        async def unavailable():
+            raise RuntimeError("startup failed while fetching synthesis config (gRPC UNAVAILABLE)")
 
-        async def ticker():
-            while True:
-                ticks.append(1)
-                await asyncio.sleep(0.01)
+        host = SimpleNamespace(session=RecordingPort(), gate=SimpleNamespace(input_ms=0), task=None, runner_task=None)
+        try:
+            with patch.object(tts, "_create_synthesis_config", unavailable), self.assertRaises(RuntimeError) as failed:
+                await PipelineHost.run_pipeline(host, [tts], stt=None, tts=tts)
+        finally:
+            await PipelineHost.stop_pipeline(SimpleNamespace(background=set(), **vars(host)))
+        self.assertIn(str(tts), str(failed.exception))
 
-        def opened():
-            blocking()
-            tts._service = SimpleNamespace()
-
-        with (
-            patch.object(tts, "_initialize_client", opened),
-            patch.object(tts, "_create_synthesis_config", lambda: blocking("config")),
-            patch.object(tts, "_load_zero_shot_audio_prompt", lambda: blocking()),
-        ):
-            task = asyncio.create_task(ticker())
-            await tts.load()
-            task.cancel()
-        self.assertEqual(tts._config, "config")
-        self.assertEqual(len(threads), 3)
-        self.assertNotIn(loop_thread, threads)
-        self.assertGreater(len(ticks), 20)  # about 60 ticks of 10 ms in 0.6 s of blocking calls
-
-    async def test_a_text_to_speech_the_session_loaded_has_nothing_left_to_load_in_its_setup(self):
+    async def test_the_caller_is_heard_only_once_the_pipeline_has_started(self):
+        # A WebRTC input starts reading the caller when it gets its StartFrame, while the text-to-speech still sets up.
         tts = build_tts({}, {"server": "magpie-tts:50051"})
-        loads = []
+        heard, session = Probe(), RecordingPort()
 
-        def opened():
-            loads.append("client")
-            tts._service = SimpleNamespace()
+        class Input(FrameProcessor):
+            async def process_frame(self, frame, direction):
+                await super().process_frame(frame, direction)
+                await self.push_frame(frame, direction)
+                if isinstance(frame, StartFrame):
+                    self.create_task(self.feed())
 
+            async def feed(self):
+                for _ in range(20):
+                    await self.push_frame(InputAudioRawFrame(audio=b"\1\0" * 160, sample_rate=16000, num_channels=1))
+                    await asyncio.sleep(0.01)
+
+        async def slow_config():
+            await asyncio.sleep(0.1)
+
+        host = PipelineHost()
+        host.session = session
+        processors = host.audio_pipeline([heard, tts], transport="websocket", connection=None, audio_in_rate=16000)
+        processors = [Input(), *processors[:-2], processors[-1]]  # the WebRTC input in place of the WebSocket output
         with (
-            patch.object(tts, "_initialize_client", opened),
-            patch.object(tts, "_create_synthesis_config", lambda: loads.append("config")),
+            patch.object(tts, "_initialize_client", lambda: None),
+            patch.object(tts, "_create_synthesis_config", slow_config),
             patch.object(tts, "_load_zero_shot_audio_prompt", lambda: None),
-            patch.object(TTSService, "setup", AsyncMock()),
         ):
-            await load_speech(tts)
-            await tts.setup(None)
-        self.assertEqual(loads, ["client", "config"])  # loaded once, before the pipeline's setup
-        await load_speech(FakeTTS())  # a service with nothing to load before the session starts
+            try:
+                await host.run_pipeline(processors, stt=None, tts=tts)
+                before = [frame for frame in heard.frames if isinstance(frame, InputAudioRawFrame)]
+                await asyncio.sleep(0.15)
+                after = [frame for frame in heard.frames if isinstance(frame, InputAudioRawFrame)]
+            finally:
+                await host.stop_pipeline()
+        self.assertEqual(before, [])
+        self.assertTrue(after)
+        self.assertGreater(session.input_ms, 0)  # the audio the gate dropped still advances the input clock
 
-    @staticmethod
-    def opening(tts, channel):
-        """Patch ``tts`` to open a client on ``channel``."""
+    async def test_a_start_given_up_while_the_text_to_speech_loads_closes_the_channel_it_opened(self):
+        # The session's start timed out: cancelling the pipeline closes the channel, which ends the request.
+        tts, channel = build_tts({}, {"server": "magpie-tts:50051"}), MagicMock()
+        release = threading.Event()
+        channel.close.side_effect = release.set
 
         def opened():
-            tts._service = SimpleNamespace(auth=SimpleNamespace(channel=channel))
+            tts._service = SimpleNamespace(
+                auth=SimpleNamespace(channel=channel),
+                stub=SimpleNamespace(GetRivaSynthesisConfig=lambda request: release.wait(2)),
+            )
 
-        return patch.object(tts, "_initialize_client", opened)
-
-    async def test_a_text_to_speech_load_that_fails_closes_the_channel_it_opened(self):
-        tts, channel = build_tts({}, {"server": "magpie-tts:50051"}), MagicMock()
-        failing = MagicMock(side_effect=ConnectionError("the server went away"))
-        with (
-            self.opening(tts, channel),
-            patch.object(tts, "_create_synthesis_config", failing),
-            self.assertRaises(ConnectionError),
-        ):
-            await tts.load()
+        host = SimpleNamespace(session=RecordingPort(), gate=SimpleNamespace(input_ms=0), task=None, runner_task=None)
+        with patch.object(tts, "_initialize_client", opened), self.assertRaises(TimeoutError):
+            async with asyncio.timeout(0.2):
+                await PipelineHost.run_pipeline(host, [tts], stt=None, tts=tts)
+        await PipelineHost.stop_pipeline(SimpleNamespace(background=set(), **vars(host)))
         channel.close.assert_called_once()
         self.assertIsNone(tts._service)
-
-    async def test_a_text_to_speech_load_given_up_closes_the_channel_it_opened_once_its_thread_ends(self):
-        # The session's start timed out: the blocking calls run on in their thread, which nothing can stop.
-        tts, channel = build_tts({}, {"server": "magpie-tts:50051"}), MagicMock()
-        release, closed = threading.Event(), asyncio.Event()
-        channel.close.side_effect = closed.set
-        with (
-            self.opening(tts, channel),
-            patch.object(tts, "_create_synthesis_config", lambda: release.wait(2)),
-            patch.object(tts, "_load_zero_shot_audio_prompt", lambda: None),
-        ):
-            with self.assertRaises(TimeoutError):
-                async with asyncio.timeout(0.05):
-                    await tts.load()
-            channel.close.assert_not_called()  # its thread still runs
-            release.set()
-            await asyncio.wait_for(closed.wait(), 2)
-        self.assertIsNone(tts._service)
-
-    async def test_a_session_loads_its_text_to_speech_before_its_pipeline_starts(self):
-        order = []
-        adapter = CascadeAdapter(
-            SessionConfig(model="live-1"),
-            "websocket",
-            None,
-            live_config=CASCADE_TEST_CONFIG,
-            frontend_endpoint=ModelEndpoint(model="talker", base_url="http://talker"),
-            instructions="",
-            stt=None,
-            tts=FakeTTS(),
-        )
-
-        async def loaded(tts):
-            order.append("text-to-speech loaded")
-
-        async def ran(*args, **kwargs):
-            order.append("pipeline started")
-
-        with (
-            patch("examples.frontend_backend_live.adapter.adapter.load_speech", loaded),
-            patch.object(CascadeAdapter, "run_pipeline", ran),
-        ):
-            await adapter.start(RecordingPort(), ScriptedDelegationPort())
-        self.assertEqual(order, ["text-to-speech loaded", "pipeline started"])
 
     async def test_a_stitched_magpie_line_reaches_the_transcript_after_its_audio(self):
         # The root builds a stitched Magpie TTS from the catalog and the adapter with no mode: a stitched line's text
