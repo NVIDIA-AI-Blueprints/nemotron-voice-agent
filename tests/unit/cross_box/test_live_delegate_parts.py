@@ -74,7 +74,7 @@ class ServedRoute(unittest.TestCase):
 
     def setUp(self):
         # The bundled files and the registry's hooks; the catalog's self-hosted section, named outright, and no NVIDIA
-        # Cloud key, so no reachability probe picks another. The test client sends Host: testserver, which the console
+        # Cloud key, so no reachability probe picks another. The test client sends Host: testserver, which the delegate
         # route answers with no token only when it is allowed.
         live = {"LIVE_ENABLED": "true", "LIVE_API_TOKEN": "", "LIVE_ALLOWED_HOSTS": "testserver"}
         env = patch.dict(os.environ, {**live, "SERVICE_RECIPE": "server", "NVIDIA_API_KEY": ""})
@@ -126,7 +126,7 @@ class ServedRoute(unittest.TestCase):
             yield http, sent
 
     def round(self, body, *script, core=None, chat=None):
-        """One console round on a fresh core: the reply, the model client and the requests sent to the core."""
+        """One delegate round on a fresh core: the reply, the model client and the requests sent to the core."""
         chat = chat or FakeChat(*script)
         with self.served(chat, core=core) as (http, sent):
             response = http.post("/v1/live/delegate", json=body)
@@ -423,10 +423,10 @@ class RouteSeamTests(ServedRoute):
         self.assertEqual(chat.requests, [])
 
     def test_the_route_reads_its_body_through_the_gateways_guard(self):
-        # The gateway's guard: a JSON object, within the console's size limit, from the same origin.
+        # The gateway's guard: a JSON object, within the route's size limit, from the same origin.
         big = json.dumps({"input": [USER] * 12000})
         cases = {
-            "over the console's limit": ({"content": big, "headers": {"content-type": "application/json"}}, 413),
+            "over the route's limit": ({"content": big, "headers": {"content-type": "application/json"}}, 413),
             "a JSON array": ({"json": [USER]}, 400),
             "not JSON": ({"content": b"hello", "headers": {"content-type": "application/json"}}, 400),
             "a cross-site origin": ({"json": {"input": [USER]}, "headers": {"Origin": "http://evil.example"}}, 403),

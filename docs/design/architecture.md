@@ -874,13 +874,13 @@ The following variables configure the Live routes and the example's files:
 | `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS` | The session limits (8 sessions, 1,800 seconds). |
 | `LIVE_MAX_APPENDS_PER_MINUTE` | The append limit of each session (64 in any 60 seconds), counting `session.instructions.append`, `session.thinking.append`, and `session.commentary.append` together. An append over the limit gets a `rate_limit_exceeded` error, and the gateway neither passes it to the frontend adapter nor acknowledges it. |
 | `LIVE_ICE_URLS` | More ICE servers for the Live gateway's WebRTC peer, comma-separated, beside the TURN server that `TURN_USERNAME`, `TURN_PASSWORD`, and `TURN_URL` configure. |
-| `LIVE_MAX_CONSOLE_ROUNDS`, `LIVE_ALLOWED_HOSTS` | The console route's limits: rounds at once (2), and, with no token, the host names besides IP addresses and `localhost` that it answers to. |
+| `LIVE_MAX_DELEGATE_ROUNDS`, `LIVE_ALLOWED_HOSTS` | The limits of `POST /v1/live/delegate`: rounds at once (2), and, with no token, the host names besides IP addresses and `localhost` that it answers to. |
 | `LIVE_CONFIG_PATH`, `CORE_CONFIG_PATH` | Another `config.yaml` or `core.yaml`, such as a profile. |
 | `LIVE_ADAPTER_FACTORY` | Another factory of each session's frontend adapter, as `module:function`: an async function of the session's settings, transport, and WebRTC peer that returns `SessionParts` (`live/ports.py`). |
 | `UVICORN_WORKERS` | The number of server workers. With more than one, the Live routes are not served, because a session lives in one process. |
 
 When the Live routes are served, a value of `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS`,
-`LIVE_MAX_APPENDS_PER_MINUTE`, or `LIVE_MAX_CONSOLE_ROUNDS` that is not a whole number of at least 1 stops the server at
+`LIVE_MAX_APPENDS_PER_MINUTE`, or `LIVE_MAX_DELEGATE_ROUNDS` that is not a whole number of at least 1 stops the server at
 startup. `UVICORN_WORKERS` is read before that check: for a value that is not a whole number of at least 1, the server
 logs a warning and runs one worker.
 
@@ -900,7 +900,7 @@ docker compose --profile frontend-backend-live/single-gpu up -d   # vLLM and NeM
 The delegation core runs in that process, and the gateway reaches it only through its Responses API:
 
 - The gateway holds one delegation core, built on first use from `core.yaml` (or the file that `CORE_CONFIG_PATH`
-  names) by the `live.core` hook. Every Responses-mode session and every console round use it, and
+  names) by the `live.core` hook. Every Responses-mode session and every `POST /v1/live/delegate` round use it, and
   `GET /v1/live/info` reports its settings. A client-mode session never asks for it.
 - When the server shuts down, the gateway closes every session and then the core, which releases the core's backend
   resources, such as the harness's tool bridge.

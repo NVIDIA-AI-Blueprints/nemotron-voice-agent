@@ -6,7 +6,7 @@
 """The mount: one shared core client, the session registry and the WebRTC peers' ICE servers.
 
 The gateway builds one delegation core client from the ``core`` hook on first use, shares it with every ``responses``
-session and console round, and closes it once at shutdown, only if it was built. Each WebRTC peer gets the root's ICE
+session and delegate round, and closes it once at shutdown, only if it was built. Each WebRTC peer gets the root's ICE
 servers, TURN credentials included.
 """
 

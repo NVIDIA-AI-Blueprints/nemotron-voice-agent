@@ -38,7 +38,7 @@ class CoreClient:
     """The gateway's one delegation core client: the root's ``core`` hook builds it on first use.
 
     It is a ``ResponsesClient`` a session's server delegation gets at once; the core is built when the first
-    ``responses`` session or console round uses it. Concurrent first uses wait for the one build; a failed build is
+    ``responses`` session or delegate round uses it. Concurrent first uses wait for the one build; a failed build is
     reported as ``server_error`` and tried again on the next use. :meth:`aclose` closes the built client once, at
     server shutdown, and never builds a core only to close it.
     """
@@ -133,8 +133,8 @@ class LiveGateway:
             factory: Builds each session's frontend adapter.
             settings: The operator settings; read from the environment when omitted.
             core: The root's hook that builds the one client of the delegation core every ``responses`` session and
-                every console round uses; a coroutine function or a plain one, run on first use (:class:`CoreClient`).
-                Without it, ``responses`` sessions and console rounds are refused.
+                every delegate round uses; a coroutine function or a plain one, run on first use (:class:`CoreClient`).
+                Without it, ``responses`` sessions and delegate rounds are refused.
             ice_servers: The ICE servers (TURN included) of each WebRTC session's peer, for the creating request.
         """
         self.factory = factory

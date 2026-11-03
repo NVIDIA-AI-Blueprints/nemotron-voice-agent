@@ -116,7 +116,7 @@ class SettingsTests(unittest.TestCase):
             ("LIVE_MAX_SESSIONS", "max_sessions"),
             ("LIVE_MAX_SESSION_SECONDS", "max_session_seconds"),
             ("LIVE_MAX_APPENDS_PER_MINUTE", "max_appends_per_minute"),
-            ("LIVE_MAX_CONSOLE_ROUNDS", "max_console_rounds"),
+            ("LIVE_MAX_DELEGATE_ROUNDS", "max_delegate_rounds"),
         ):
             with self.subTest(name=name):
                 with patch.dict(os.environ, {name: " 3 "}):

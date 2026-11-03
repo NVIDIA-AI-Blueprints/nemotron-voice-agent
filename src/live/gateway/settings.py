@@ -39,13 +39,13 @@ class LiveSettings:
     ice_urls: tuple[str, ...] = field(default_factory=tuple)
     # Live sessions live in one server process, so the routes are served only with one uvicorn worker.
     workers: int = 1
-    # The backstop of one console round (POST /v1/live/delegate): the core ends a round that runs past its own limit
+    # The backstop of one delegate round (POST /v1/live/delegate): the core ends a round that runs past its own limit
     # (the backend LLM's ``first_event_timeout_seconds``, 45 s by default), so this is twice that.
-    console_round_seconds: float = 90.0
-    # The console route's limits: rounds at once, and the size of one round's body (its whole history).
-    max_console_rounds: int = 2
-    console_body_bytes: int = 512 * 1024
-    # With no token, the names besides IP literals and ``localhost`` that the console route answers to: a request for
+    delegate_round_seconds: float = 90.0
+    # The delegate route's limits: rounds at once, and the size of one round's body (its whole history).
+    max_delegate_rounds: int = 2
+    delegate_body_bytes: int = 512 * 1024
+    # With no token, the names besides IP literals and ``localhost`` that the delegate route answers to: a request for
     # any other ``Host`` is refused, which stops DNS rebinding on plain HTTP.
     allowed_hosts: tuple[str, ...] = field(default_factory=tuple)
 
@@ -54,7 +54,7 @@ class LiveSettings:
         """Read the live settings from the environment; an unset or empty value is the default.
 
         The variables: ``LIVE_API_TOKEN``, ``LIVE_MAX_SESSIONS``, ``LIVE_MAX_SESSION_SECONDS``, ``LIVE_ICE_URLS``,
-        ``LIVE_MAX_APPENDS_PER_MINUTE``, ``LIVE_MAX_CONSOLE_ROUNDS``, ``LIVE_ALLOWED_HOSTS`` (comma-separated) and
+        ``LIVE_MAX_APPENDS_PER_MINUTE``, ``LIVE_MAX_DELEGATE_ROUNDS``, ``LIVE_ALLOWED_HOSTS`` (comma-separated) and
         ``UVICORN_WORKERS``.
 
         Raises:
@@ -67,7 +67,7 @@ class LiveSettings:
             max_appends_per_minute=positive_setting("LIVE_MAX_APPENDS_PER_MINUTE", cls.max_appends_per_minute),
             ice_urls=listed("LIVE_ICE_URLS"),
             workers=positive_setting("UVICORN_WORKERS", cls.workers),
-            max_console_rounds=positive_setting("LIVE_MAX_CONSOLE_ROUNDS", cls.max_console_rounds),
+            max_delegate_rounds=positive_setting("LIVE_MAX_DELEGATE_ROUNDS", cls.max_delegate_rounds),
             allowed_hosts=tuple(name.lower() for name in listed("LIVE_ALLOWED_HOSTS")),
         )
 

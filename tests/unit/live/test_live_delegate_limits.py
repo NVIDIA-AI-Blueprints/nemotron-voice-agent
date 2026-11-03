@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103, D105, D107
 
-"""The console route's limits: rounds at once, served models, body size and the ``Host`` header.
+"""The delegate route's limits: rounds at once, served models, body size and the ``Host`` header.
 
 With no token, the route answers only an IP literal, ``localhost`` or a name in ``LIVE_ALLOWED_HOSTS``, which refuses
 a page on another site whose name resolves to this server (DNS rebinding).
@@ -47,8 +47,8 @@ class Round:
         pass
 
 
-class ConsoleCore(FakeAdapter):
-    """The gateway's core for console rounds; ``go`` holds every round until it is set."""
+class DelegateCore(FakeAdapter):
+    """The gateway's core for delegate rounds; ``go`` holds every round until it is set."""
 
     def __init__(self, go=None):
         super().__init__()
@@ -81,7 +81,7 @@ class LimitCase(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def post(self, body, host="127.0.0.1", settings=None, core=None, headers=None):
-        self.core = core or ConsoleCore()
+        self.core = core or DelegateCore()
         with TestClient(app_with(self.core, settings)) as client:
             return client.post("/v1/live/delegate", json=body, headers={"host": host, **(headers or {})})
 
@@ -89,8 +89,8 @@ class LimitCase(unittest.TestCase):
 class CapTests(unittest.IsolatedAsyncioTestCase):
     async def test_over_the_cap_gives_429_and_a_finished_round_frees_its_place(self):
         go = asyncio.Event()
-        core = ConsoleCore(go)
-        app = app_with(core, LiveSettings(max_console_rounds=1))
+        core = DelegateCore(go)
+        app = app_with(core, LiveSettings(max_delegate_rounds=1))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as http:
             first = asyncio.create_task(http.post("/v1/live/delegate", json={"input": INPUT}))
             async with asyncio.timeout(2):
@@ -100,7 +100,9 @@ class CapTests(unittest.IsolatedAsyncioTestCase):
             go.set()
             done = await first
             again = await http.post("/v1/live/delegate", json={"input": INPUT})
-        self.assertEqual((over.status_code, over.json()["detail"]), (429, "Too many console rounds: at most 1 at once"))
+        self.assertEqual(
+            (over.status_code, over.json()["detail"]), (429, "Too many delegate rounds: at most 1 at once")
+        )
         self.assertEqual((done.status_code, again.status_code), (200, 200))
         self.assertEqual(len(core.rounds), 2)  # the refused one ran nothing
 
@@ -129,10 +131,10 @@ class HostTests(LimitCase):
                 self.assertEqual(self.post({"input": INPUT}, host=host).status_code, 200)
 
     def test_an_allowed_name_is_accepted(self):
-        settings = LiveSettings(allowed_hosts=("console.lab",))
-        self.assertEqual(self.post({"input": INPUT}, host="Console.Lab:8000", settings=settings).status_code, 200)
-        with patch.dict(os.environ, {"LIVE_ALLOWED_HOSTS": " console.lab , Other.Lab "}):
-            self.assertEqual(LiveSettings.from_env().allowed_hosts, ("console.lab", "other.lab"))
+        settings = LiveSettings(allowed_hosts=("voice.lab",))
+        self.assertEqual(self.post({"input": INPUT}, host="Voice.Lab:8000", settings=settings).status_code, 200)
+        with patch.dict(os.environ, {"LIVE_ALLOWED_HOSTS": " voice.lab , Other.Lab "}):
+            self.assertEqual(LiveSettings.from_env().allowed_hosts, ("voice.lab", "other.lab"))
 
     def test_with_a_token_the_token_decides_not_the_name(self):
         settings = LiveSettings(api_token="secret")
@@ -142,8 +144,8 @@ class HostTests(LimitCase):
 
 
 class BodyTests(LimitCase):
-    def test_a_body_over_the_console_limit_is_a_413_and_runs_no_round(self):
-        settings = LiveSettings(console_body_bytes=1024)
+    def test_a_body_over_the_limit_is_a_413_and_runs_no_round(self):
+        settings = LiveSettings(delegate_body_bytes=1024)
         big = [{"role": "user", "content": [{"type": "input_text", "text": "x" * 2048}]}]
         response = self.post({"input": big}, settings=settings)
         self.assertEqual(response.status_code, 413)
