@@ -96,7 +96,7 @@ def reset_stubs() -> None:
 
 def clear_root_caches(case: unittest.TestCase) -> None:
     """Make the root read and build again, now and after the test."""
-    for cached in (factory.root, factory.delegation_core, factory.responses_client, factory.console_sample):
+    for cached in (factory.root, factory.delegation_core, factory.responses_client):
         cached.cache_clear()
         case.addCleanup(cached.cache_clear)
 

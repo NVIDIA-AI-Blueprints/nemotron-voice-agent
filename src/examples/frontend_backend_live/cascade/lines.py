@@ -27,10 +27,8 @@ class FixedLines:
     refusal: str  # the delegation was refused before any work
     app_wait_line: str  # the app has not answered a delegation's calls yet
     holding: str  # the talker failed while work is open
-    still_working: str  # the Live Console's progress line for a slow function batch; the cascade says none
-    intro: str  # the greeting instructions: the UI bot's, and the Live Console's "Greet first" preset
+    intro: str  # the UI bot's greeting instructions
     greeting: str  # the UI bot's greeting when its instructions cannot be worded
-    app_started: str  # the Live Console's silent note that a client delegation's work started; never said
 
     @classmethod
     def parse(cls, block: Mapping[str, Any]) -> FixedLines:

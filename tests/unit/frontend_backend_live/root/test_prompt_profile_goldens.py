@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D101, D102, D103, D107
-"""Prompt profiles move the example's prompts, never what a model, the caller or the Live Console reads.
+"""Prompt profiles move the example's prompts, never what a model or the caller reads.
 
 ``prompt_profile_goldens.json`` holds a SHA-256 and a length for every observation below, taken from the code before
 the prompts moved into ``prompts/<profile>/``. Each observation comes from the real code path: the UI bot's ``bot()``
 (its talker seed, and the settings and defaults it builds its core from), the Live core's build, the Live sessions'
-default talker, the lines, the Live Console's sample and the UI's prompt list. A prompt edited on purpose changes its
+default talker, the lines and the UI's prompt list. A prompt edited on purpose changes its
 hashes: rerun the observations and update the file in the same change.
 """
 
@@ -133,16 +133,6 @@ class ProfileGoldenCase(BotCase):
         name = LiveConfig.parse(factory.with_display_label(factory.adapter_block(config), core)).prompt
         return CATALOG.prompt(name)
 
-    def console(self) -> dict:
-        """The Live Console's sample in ``GET /v1/live/info``: its prefills, tools, lines and presets."""
-        clear_root_caches(self)
-        with (
-            patch.object(factory, "root", return_value=stub_root()),
-            patch.object(factory, "delegation_core", return_value=SimpleNamespace(describe=dict)),
-        ):
-            info = asyncio.run(asyncio.to_thread(factory._describe))
-        return {key: info[key] for key in ("instructions", "sample_tools", "lines", "presets")}
-
     def prompt_list(self) -> dict:
         """The UI's prompt list for the example (``/api/prompts``) and its registry default, without the keys."""
         for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):
@@ -170,8 +160,6 @@ class ProfileGoldenCase(BotCase):
         lines = catalog_lines()
         observed["lines.parsed"] = repr(lines)
         observed["lines.by_name"] = {field.name: catalog_line(field.name) for field in fields(FixedLines)}
-        for part, value in (await asyncio.to_thread(self.console)).items():
-            observed[f"console.{part}"] = value
         for part, value in self.prompt_list().items():
             observed[f"prompt_list.{part}"] = value
         for name in CORE_FILES:

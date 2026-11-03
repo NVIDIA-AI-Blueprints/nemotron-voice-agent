@@ -370,7 +370,7 @@ class UnclearCallTests(IMCase):
         self.assertIn("response.mcp_call.failed", [event["type"] for event in events])
 
 
-# The app's functions of the repeated-call tests: a lookup and a write (the cafe's cart, client/public/live/cafe.js).
+# The app's functions of the repeated-call tests: a lookup and a write (the cafe's cart).
 USER = {"type": "function", "name": "get_user_details", "parameters": {"type": "object", "properties": {}}}
 CART = {"type": "function", "name": "manage_cart", "parameters": {"type": "object", "properties": {}}}
 APP = {"tools": [USER, CART]}

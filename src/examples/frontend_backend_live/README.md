@@ -4,7 +4,7 @@ This example is a cascaded voice agent that puts a routing talker in front of ba
 
 The example has two ways in:
 
-- **Live session clients**, such as the **Live Console** (`/live.html`), Pipecat apps, and benchmark clients, connect through `POST /v1/live/sessions` or `WS /v1/live/sessions` and supply the prompts. For details, refer to [Live Sessions](#live-sessions).
+- **Live session clients**, such as Pipecat apps and benchmark clients, connect through `POST /v1/live/sessions` or `WS /v1/live/sessions` and supply the prompts. For details, refer to [Live Sessions](#live-sessions).
 - **The repository UI** (`/`) runs a bot whose backend runs the cafe tools on the server and shows each delegation as a task card. The Realtime gateway (`WS /v1/realtime`) drives the same bot.
 
 Four parts serve a live session, and the [Frontend/Backend Live Architecture](../../../docs/design/architecture.md) page describes what each one owns and how they meet:
@@ -66,7 +66,7 @@ This example runs with the **Cloud**, **Server**, and **Single GPU** profiles. S
    | `frontend-backend-live/server` | `frontend-backend-live-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
    | `frontend-backend-live/single-gpu` | `frontend-backend-live-single-gpu` | `nvidia-llm-vllm-lightning-frontend-backend`, `nemo-speech` |
 
-4. Open the **Live Console** at `https://localhost:7860/live.html`, press **Start conversation**, allow the microphone, and ask what teas the cafe has. The repository UI is at `https://localhost:7860/`. Keep TLS enabled for browser testing, because browsers allow the microphone only on `localhost` or over HTTPS. `PIPELINE_TLS=false` serves plain HTTP. For plain-HTTP browser testing, refer to [browser access](../../../docs/06-troubleshooting.md#browser-access).
+4. Open the UI at `https://localhost:7860/` and ask what teas the cafe has. Keep TLS enabled for browser testing, because browsers allow the microphone only on `localhost` or over HTTPS. `PIPELINE_TLS=false` serves plain HTTP. For plain-HTTP browser testing, refer to [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
 5. Clean up when you are done by tearing down with the same profile that you started, for example `docker compose --profile frontend-backend-live down`.
 
@@ -78,8 +78,6 @@ cd client && npm ci && npm run build && cd ..
 EXAMPLE_SELECTION=frontend-backend-live uv run python src/server.py --host 0.0.0.0 --port 7860
 ```
 
-The Live Console shows every protocol event and each delegation, and it can steer the session while the call runs. Its **Delegation** setting starts each session in Responses mode or in client mode, which [Live Sessions](#live-sessions) describes.
-
 ## Configuration
 
 The following files configure the example. The server reads `config.yaml` and `core.yaml` once, on first use, so an edit takes effect at the next restart. Unknown keys are errors, and a key in the wrong file stops the load with a message that names where it belongs.
@@ -89,7 +87,7 @@ The following files configure the example. The server reads `config.yaml` and `c
 | [`examples_registry.yaml`](../../../examples_registry.yaml) | The `services.yaml` entries that each slot offers (`llm` for the talker and the writer, `thinker-llm` for the backend), and their sampling and reasoning settings. |
 | [`config.yaml`](config.yaml) | The frontend: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`). `LIVE_CONFIG_PATH` selects another file. |
 | [`core.yaml`](core.yaml) | The delegation core: the IM's settings (`delegation`), the lines that the IM and the backend write (`texts`), and the backend adapter with its blocks (`backend`). `CORE_CONFIG_PATH` selects another file. |
-| [`prompts/`](prompts/) | The prompt profiles, one folder each. The internal `generic` profile holds the talker and backend prompts used as written when a session or a request sets none (neither names a domain). The `cafe` profile, the default, holds the cafe's talker, backend prompt, and channel context, its server tools, and the Live Console's other append presets (`console_presets`). [`prompts/shared/lines.yaml`](prompts/shared/lines.yaml) holds the lines that the voice says word for word or the Live Console sends (`lines`). Refer to [Prompt Profiles](#prompt-profiles). |
+| [`prompts/`](prompts/) | The prompt profiles, one folder each. The internal `generic` profile holds the talker and backend prompts used as written when a session or a request sets none (neither names a domain). The `cafe` profile, the default, holds the cafe's talker, backend prompt, and channel context, and its server tools. [`prompts/shared/lines.yaml`](prompts/shared/lines.yaml) holds the lines that the voice says word for word (`lines`). Refer to [Prompt Profiles](#prompt-profiles). |
 
 A profile is a file that names the file it builds on (`extends: core.yaml`) and sets only what differs. The example ships the following profiles:
 
@@ -160,7 +158,7 @@ To switch adapters, set `CORE_CONFIG_PATH` to its profile in `.env` (for Compose
 
 A prompt profile is a folder under [`prompts/`](prompts/) that holds the following files:
 
-- `profile.yaml` holds the profile's settings: `default` (the profile a UI bot session gets when it selects none, and the Live Console's sample), `internal` (the UI does not list it), `tools` (the backend's server tool sources for UI bot sessions), and `console_presets`.
+- `profile.yaml` holds the profile's settings: `default` (the profile a UI bot session gets when it selects none), `internal` (the UI does not list it), and `tools` (the backend's server tool sources for UI bot sessions).
 - `talker.yaml` holds the talker's prompt, as a `description` and a `content`.
 - `thinker.yaml` holds the backend's prompt, in the same form.
 - `channel.yaml` holds the context that the UI bot adds after both prompts, in the same form.
@@ -212,9 +210,9 @@ llm = OpenAILiveLLMService(
 
 The server serves the Live routes when `LIVE_ENABLED` is `true`, when `LIVE_API_TOKEN` is set, or when the deployment runs this example alone (`EXAMPLE_SELECTION=frontend-backend-live`). `LIVE_ENABLED=false` turns them off, and this example's Compose profiles default it to `true`. A server with more than one worker (`UVICORN_WORKERS`) serves no Live route, because a session lives in one process. For the session limits and the other variables, refer to [Environment Variables](../../../docs/design/architecture.md#environment-variables) on the architecture page. The following list describes the routes and the settings that apply to every live session:
 
-- **Authentication.** Set `LIVE_API_TOKEN` to require a bearer token on every Live route. Without one, anyone who can reach the server can use the routes. The Live Console asks for the token, or takes it from the page link as `live.html#token=<token>`. Browsers cannot send a header on a WebSocket, so use WebRTC from a browser when a token is set.
-- **Server information.** `GET /v1/live/info` returns the voices, the backend's default model (`backend.model`) and the models it serves (`backend_models`), the names of the default prompts (`frontend.prompt` and `backend.prompt`), and a `warnings` list for configuration problems. For the Live Console, it also returns the default prompt profile's talker prompt, the cafe's (`instructions.frontend`), that profile's backend prompt and tools, as the repository UI bot uses them (`instructions.backend` and `sample_tools`), and the lines and append presets that the console sends (`lines` and `presets`).
-- **Client-mode rounds.** `POST /v1/live/delegate` runs one stateless backend round for a client app that does its own delegated work, such as the Live Console in client mode. At most `LIVE_MAX_DELEGATE_ROUNDS` (2) rounds run at once. With no token, the route answers only a `Host` that is an IP address, `localhost`, or a name in `LIVE_ALLOWED_HOSTS`.
+- **Authentication.** Set `LIVE_API_TOKEN` to require a bearer token on every Live route. Without one, anyone who can reach the server can use the routes. The routes refuse a browser page from another origin with `403 Unexpected browser origin`. A browser cannot send the token on a WebSocket, so a page that this server serves uses WebRTC when a token is set.
+- **Server information.** `GET /v1/live/info` returns the voices, the backend's default model (`backend.model`) and the models it serves (`backend_models`), the names of the default prompts (`frontend.prompt` and `backend.prompt`), and a `warnings` list. A frontend adapter can report configuration problems there, and the cascade adapter reports none.
+- **Client-mode rounds.** `POST /v1/live/delegate` runs one stateless backend round for a client app that does its own delegated work. At most `LIVE_MAX_DELEGATE_ROUNDS` (2) rounds run at once. With no token, the route answers only a `Host` that is an IP address, `localhost`, or a name in `LIVE_ALLOWED_HOSTS`.
 - **Conversation history.** `GET /v1/live/sessions/{id}/history` returns what the talker and the backend hold now, with each system prompt split into parts named by source. The talker's last part is the runtime data its next call sends after the conversation: the open work and a one-line decision cue. A call that decides caller turns also quotes their words before the cue, as the caller's newest turn, and the history leaves that line out. Each talker message (`frontend.messages`) has a `kind`, and each line that the next delegation carries (`backend.pending`) is `{kind, text}`. In client mode, `backend` is `null`.
 - **Voices.** The cascade speaks with the voice of its TTS service. Send `{"id": "<voice id>"}` to choose one of that service's voices.
 - **Backend settings.** `delegation.responses.reasoning`, `text`, `service_tier`, and `parallel_tool_calls` reach a backend on the `openai-responses` provider as they are. A setting that the backend cannot honor, such as a hosted tool on a `chat-completions` backend, reaches the client as a nonfatal `responses_validation_failed` error.

@@ -210,7 +210,7 @@ texts:
 # adapter's own block: its source validates it, and its settings class holds the defaults.
 backend:
   adapter: llm                         # llm (directly connected, the default) | llm-agent | harness
-  one_shot_adapter: llm                # the adapter that serves stateless requests (the console's client-mode rounds)
+  one_shot_adapter: llm                # the adapter that serves stateless requests (POST /v1/live/delegate)
   slot: thinker-llm
   prompt: generic                      # the generic profile, with no domain; a UI bot session uses its own profile's
   tools: {}                            # server tool sources by name; a UI bot session uses its own profile's

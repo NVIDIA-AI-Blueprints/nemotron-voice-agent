@@ -53,15 +53,14 @@ class ReaderTests(ProfilesCase):
         self.assertEqual(catalog.listed_profile_names(), ["cafe", "kiosk"])
         self.assertEqual(catalog.default_profile().name, "cafe")
 
-    def test_a_profile_reads_its_roles_its_tools_and_its_presets(self):
+    def test_a_profile_reads_its_roles_and_its_tools(self):
         cafe = catalog.get_profile("cafe")
         self.assertEqual((cafe.default, cafe.internal, dict(cafe.tools)), (True, False, {"cafe": {}}))
-        self.assertTrue(cafe.console_presets)
         self.assertTrue(cafe.content("talker").endswith("\n"))  # as the file holds it
         self.assertEqual(cafe.prompt("talker"), cafe.content("talker").strip())
         self.assertEqual(cafe.instructions("thinker"), f"{cafe.prompt('thinker')}\n\n{cafe.prompt('channel')}")
         generic = catalog.get_profile("generic")
-        self.assertEqual((generic.internal, dict(generic.tools), generic.console_presets), (True, {}, {}))
+        self.assertEqual((generic.internal, dict(generic.tools)), (True, {}))
         self.assertEqual(generic.instructions("thinker"), generic.prompt("thinker"))  # no channel follows it
 
     def test_an_edit_takes_effect_at_the_next_read(self):
