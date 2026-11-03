@@ -29,5 +29,4 @@ Packages, one per responsibility:
 * ``prompts``: the prompt sets, and the example's prompt profiles (one folder each: a talker, a backend prompt, a
   channel and tools that switch together) with their reader and the shared lines.
 * ``config_manager``: ``config.yaml`` loading and validation.
-* ``parked``: code that nothing imports, runs or tests.
 """

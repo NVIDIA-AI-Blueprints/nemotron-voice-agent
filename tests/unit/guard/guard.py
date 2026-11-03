@@ -5,7 +5,7 @@
 
 Every extension point is an interface whose implementations are named in config and picked by a composition root, so
 no code branches on a kind. The guard walks the modules the import rules walk (``src/live``,
-``src/examples/frontend_backend_live`` without its parked code, ``src/delegation_core`` and ``src/server.py``) and
+``src/examples/frontend_backend_live``, ``src/delegation_core`` and ``src/server.py``) and
 finds four kinds of site:
 
 * ``compare``: a comparison of a kind attribute (``.mode``, ``.target``, ``.provider``, ``.kind``, ``.adapter``,
@@ -34,7 +34,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "src"
 WALKED = ("live", "examples/frontend_backend_live", "delegation_core", "server.py")
-PARKED = "examples.frontend_backend_live.parked"
 
 # The kinds a config names: comparing one against a literal is a branch on a kind.
 KIND_ATTRIBUTES = frozenset(
@@ -113,11 +112,6 @@ class Site:
     name: str  # the attribute compared, the class checked, the flag, or "pick"
 
 
-def within(name: str, prefix: str) -> bool:
-    """Whether ``name`` is the module ``prefix`` or inside it."""
-    return name == prefix or name.startswith(prefix + ".")
-
-
 def module_name(path: Path) -> str:
     """The module a file under ``src`` is."""
     parts = path.relative_to(SRC).with_suffix("").parts
@@ -125,12 +119,12 @@ def module_name(path: Path) -> str:
 
 
 def walked_files() -> list[Path]:
-    """The files the guard reads: the walked trees, without the parked code."""
+    """The files the guard reads: the walked trees."""
     files = []
     for name in WALKED:
         root = SRC / name
         files += [root] if root.is_file() else sorted(root.rglob("*.py"))
-    return [path for path in files if not within(module_name(path), PARKED)]
+    return files
 
 
 def _is_kind(node: ast.AST) -> str | None:

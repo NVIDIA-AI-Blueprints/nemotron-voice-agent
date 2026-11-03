@@ -231,7 +231,7 @@ The following list describes the common changes and where each one is documented
 - **Prompt set.** Refer to [Add a Prompt Set](../../../docs/design/architecture.md#add-a-prompt-set).
 - **Frontend adapter, backend adapter, or harness agent.** Refer to [Extension Recipes](../../../docs/design/architecture.md#extension-recipes).
 
-The [`parked/realtime/`](parked/realtime/) package holds a Realtime frontend, which puts a remote model that speaks the OpenAI Realtime protocol in place of the cascade. No setting selects it. For models, services, and prompts in general, refer to [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure Services](../../../docs/how-to/configure-services.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md). The Live tests run offline with scripted models. For their commands, refer to [Tests](../../../docs/design/architecture.md#tests) on the architecture page.
+For models, services, and prompts in general, refer to [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure Services](../../../docs/how-to/configure-services.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md). The Live tests run offline with scripted models. For their commands, refer to [Tests](../../../docs/design/architecture.md#tests) on the architecture page.
 
 ## Troubleshooting
 

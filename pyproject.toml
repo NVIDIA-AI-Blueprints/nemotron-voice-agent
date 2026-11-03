@@ -88,11 +88,5 @@ select = [
 
 ignore = ["SIM108", "E402"]
 
-[tool.ruff.lint.per-file-ignores]
-# The parked Realtime frontend adapter is kept as it is and imports modules this repository does not have, so ruff
-# would re-sort its imports; skip import order there instead of editing the parked files.
-"src/examples/frontend_backend_live/parked/**" = ["I001"]
-"tests/unit/parked/**" = ["I001"]
-
 [tool.ruff.lint.pydocstyle]
 convention = "google"
