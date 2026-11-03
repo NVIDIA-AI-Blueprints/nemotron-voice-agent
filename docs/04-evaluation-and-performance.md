@@ -12,6 +12,9 @@ outcomes; offline turnaround does not measure real-world response latency.
 An experimental opt-in text mode can analyze PCM prefixes during upload while
 withholding results until input validation and source recording finish. It has
 no published benchmark result and preserves the default sealed-input path.
+A separate [offline worker-pool prototype](offline-processing-reference.md#use-the-exclusive-offline-worker-pool-prototype)
+provides exclusive stream admission; it has no validated throughput or accuracy
+claim and does not change the normal online server.
 For commands, recording files, and exact metric scopes, refer to the
 [implementation and evaluation reference](offline-processing-reference.md).
 For dated architecture decisions and validation findings, refer to the

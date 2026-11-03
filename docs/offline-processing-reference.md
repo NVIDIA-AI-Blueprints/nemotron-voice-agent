@@ -150,6 +150,9 @@ The first integration currently lives in `src/examples/generic/offline/`.
 | `recorder.py` | Span validation, zero-filled rendering, WAVs, and audit records |
 | `protocol.py` and `websocket.py` | Bounded upload, offset validation, explicit EOF, cancellation, publication, and failure watchdogs |
 | `factory.py` | Generic Assistant prompt/service composition, supported-scope guards, and session-owned resources |
+| `pool_supervisor.py` | Optional front-door startup and owned private single-worker processes |
+| `pool_proxy.py` | Exclusive stream admission, bounded forwarding, and authenticated lease draining |
+| `worker.py` | Private request guard, one offline handler per process, and handler-return status |
 | `src/examples/shared/evaluation_trace.py` | Optional passive timing observations for the normal live pipeline, separate from offline scheduling |
 
 These boundaries apply the SOLID principles directly. Each module owns one
@@ -808,6 +811,95 @@ configuration without creating process-local session IDs. This does not change
 or validate the configured online session path. Retain observed server process
 IDs with scalar timings; a configured worker count does not prove how sessions
 were distributed or how many provider RPCs ran concurrently.
+
+### Use the Exclusive Offline Worker Pool Prototype
+
+This separate startup mode assigns at most one active offline ASGI handler to
+each backend process. It uses a front door and 10 single-worker backends by
+default. It does not change the normal `server.py` startup, live pipeline,
+dependencies, provider selection, or default deployment configuration.
+
+From the repository root, use the same configured Generic Assistant service
+environment as the ordinary offline endpoint and choose a free front-door port:
+
+```bash
+PYTHONPATH=src uv run python -m examples.generic.offline.pool_supervisor \
+  --host 127.0.0.1 --port 17927 --pool-size 10 \
+  --startup-timeout-seconds 60 --drain-timeout-seconds 60 \
+  --admission-wait-seconds 1
+```
+
+The prototype requires POSIX inherited sockets. The supervisor prebinds private
+ephemeral IPv4 TCP sockets and passes each descriptor to one owned child. Each
+worker validates that private endpoint and ensures it is listening without
+rebinding it. The front door remains a single process. Internal authentication
+and lease headers belong to the pool; clients do not configure or receive those
+credentials.
+Worker children retire if their original supervisor disappears. Stop this
+foreground process to close the pool and its owned children. Ordinary shutdown
+joins owned child cleanup before propagating caller cancellation. Cleanup
+failures remain errors.
+
+The public surface is limited to these routes:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Front-door and worker-pool state |
+| `GET /api/deployment` | Native deployment metadata for client preflight |
+| `/api/ws/offline` | One leased native offline WebSocket stream |
+
+The front door does not serve the Web UI, live `/api/ws`, or
+`POST /api/session-config`. Supply configuration inline in
+`offline.session.start`. Query-based configuration and session IDs are
+unsupported; a nonempty WebSocket query is rejected with close code `1008`
+before worker admission. Source-offset packets and the selected native
+completion policy pass through without in-flight replay to another backend.
+Both sealed and negotiated `during_upload` input retain their existing rules.
+
+A reserved connection rechecks the worker's authenticated identity and idle
+state before opening its backend WebSocket. A connection owns its worker lease
+through native handler cleanup. Closing a socket moves that lease to draining.
+The pool releases it only after an authenticated status response matches the
+worker PID and exact completed lease, with no active handler. Unverified
+identity or lease state, drain expiry, and
+crashed workers are quarantined. Quarantined slots stay unavailable until the
+pool restarts. Handler errors remain failed attempts even after their lifecycle
+permits lease release.
+This evidence concerns ASGI handler return; it does not attest every provider
+RPC's EOF or completion of noncooperative native executor work.
+
+Admission does not classify audio or recognize capability probes. An ACK-only
+probe also leases a worker. When every slot is active, a new stream receives
+WebSocket close code `1013` immediately. If capacity is draining, admission can
+wait up to 1 second for verified release, with pending admissions bounded by
+pool size. Expiry still rejects with `1013`; it never grants early reuse.
+
+The following bounds have separate responsibilities:
+
+| Bound | Default | Scope |
+| --- | --- | --- |
+| Pool size | 10 | Exclusive backend slots; configurable from 1 through 64 |
+| Startup watchdog | 60 seconds | Authenticate readiness of all owned backends |
+| Admission wait | 1 second | Await already-draining capacity before native ACK |
+| Drain watchdog | 60 seconds | Confirm handler return; expiry quarantines the worker |
+| Private status/preflight HTTP call | 5 seconds | Bound one internal metadata or status request |
+| Backend WebSocket connection | 10 seconds | Connect to the reserved worker; no replay |
+| Backend close handshake | 5 seconds | Bound socket close within the drain budget |
+| Child stop/join | 5 seconds per phase | Await TERM, then forced stop if needed |
+| WebSocket message / receive queue | 8 MiB / 1 message | Bounded front-door and backend transport buffering |
+
+The drain watchdog is a maximum failure bound, not a delay after each successful
+case. It does not replace the evaluator's post-upload 10-second first-text
+deadline, the separate response-completion limits, or native provider guards.
+The pool adds no input silence, TTS completion wait, or audio-gap completion rule.
+Any caller retry is a new attempt and must retain the original failure evidence.
+Client wall time includes admission and forwarding overhead; keep it separate
+from native provider TTFB measurements.
+
+This is a local prototype with fake-provider validation only. Pool readiness
+does not establish real model readiness, production suitability, score
+equivalence, or throughput improvement. Preserve source pins, input hashes,
+lease outcomes, failures, and timing scopes before interpreting later tests.
 
 ### Reproduce the Paired Comparison
 

@@ -1026,3 +1026,31 @@ validation stages. This checkpoint adds no real-provider benchmark, latency,
 score-equivalence, or scaling conclusion.
 Refer to the [input-processing contract](offline-processing-reference.md#process-text-input-during-upload)
 for negotiation and publication boundaries.
+
+## November 03, 2026: Exclusive Offline Worker Pool
+
+The new local prototype addresses stream admission independently of provider
+or turn-policy changes. A separate front door assigns a stream to one private
+single-worker backend and retains an exclusive lease through handler cleanup.
+It does not change the normal shared-socket Uvicorn server or the online flow.
+
+The supervisor owns private prebound loopback sockets and child processes.
+The front door preserves `GET /api/deployment` and `/api/ws/offline`; it does
+not expose the Web UI or process-local session-configuration POST route.
+Clients supply configuration inline in `offline.session.start`.
+
+Socket close moves a lease into draining. Reuse requires authenticated status
+matching the worker PID and lease after the handler has returned. Unverified
+identity, lease, or drain state and crashed workers are quarantined. An accepted
+upload is never replayed on a replacement backend. Handler return remains
+distinct from full provider EOF or native executor completion.
+
+A fully active pool rejects with `1013`. When capacity is draining, admission
+can wait within a separate bounded interval for verified release. The admission
+wait, background drain watchdog, and evaluator response-start budget retain
+different scopes; none inserts input silence or changes native LLM completion.
+
+Validation is limited to local, model-free behavior at this checkpoint. No
+new benchmark or cloud deployment is part of this prototype. The existing
+C6/C3 evaluation jobs retain their original frozen source, cases, providers,
+settings, and failure denominators.

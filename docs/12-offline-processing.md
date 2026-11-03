@@ -470,3 +470,28 @@ scored results remain evidence for their pinned sealed-input versions. Future
 validation must measure actual setup/upload overlap, input integrity, native
 context and candidate boundaries, failures, and cleanup before interpreting
 scores or throughput.
+
+## November 03, 2026: Exclusive Offline Worker Pool Prototype
+
+A separate local prototype assigns each offline WebSocket to an exclusive
+single-worker backend. The front door owns a fixed pool, with 10 backends by
+default. It preserves inline session configuration and the native offline
+protocol. The normal server, live pipeline, dependencies, and default deployment
+configuration remain unchanged.
+
+The pool keeps the worker lease after socket close until authenticated status
+confirms that the same PID and lease have returned from the ASGI handler and
+its cleanup path. Unknown or crashed workers are quarantined. This handler
+lifecycle evidence does not attest full provider EOF or completion of every
+native executor operation. Accepted input is never replayed to another worker.
+
+Capacity admission is separate from response timing. Fully active pools reject
+new streams with WebSocket code `1013`. A short bounded wait can accommodate
+slots that are already draining; it cannot authorize early reuse. The
+[worker-pool reference](offline-processing-reference.md#use-the-exclusive-offline-worker-pool-prototype)
+defines startup, routes, admission, cleanup, and transport bounds.
+
+The prototype has no production-readiness, throughput, or score-equivalence
+claim. Local fake-provider checks do not establish behavior under real model
+load. Existing scored and in-progress evaluations remain pinned to their
+original application versions.
