@@ -264,7 +264,7 @@ async def create_frontend_adapter(config: SessionConfig, transport: str, connect
 async def core() -> LocalResponsesClient:
     """``live.core``: the client of the process's one delegation core, built on first use, off the event loop.
 
-    Every ``responses`` session and every console round reaches the same core; a client-mode session never asks for
+    Every ``responses`` session and every delegate round reaches the same core; a client-mode session never asks for
     it. A bad backend block fails the first use that needs the core, not the client-mode sessions before it.
     """
     return await asyncio.to_thread(responses_client)

@@ -53,7 +53,7 @@ def mount_live(
     Args:
         app: The server's app.
         factory: Builds each session's frontend adapter; without it, no live route is served.
-        core: Builds the one delegation core client of the gateway, on first use (``responses`` sessions and console
+        core: Builds the one delegation core client of the gateway, on first use (``responses`` sessions and delegate
             rounds); without it they are refused.
         describe: What ``GET /v1/live/info`` adds about the example.
         settings: The operator settings; read from the environment when omitted.

@@ -25,8 +25,8 @@ from live.protocol import LIVE_VOICES, BackendConfig, ProtocolError
 Describe = Callable[[], Awaitable[dict]]
 
 
-def console_request(payload: dict) -> dict:
-    """The stateless Responses request of one console round, from the client's body.
+def delegate_request(payload: dict) -> dict:
+    """The stateless Responses request of one delegate round, from the client's body.
 
     Raises:
         HTTPException: 400: ``input`` is not a non-empty list of items, a tool is not an official one, ``model`` or
@@ -54,7 +54,7 @@ def console_request(payload: dict) -> dict:
 
 
 async def read_round(stream) -> dict:
-    """Read a console round's stream to its end; return the completed response.
+    """Read a delegate round's stream to its end; return the completed response.
 
     Raises:
         RuntimeError: The round ended ``failed`` or ``incomplete``, or with no terminal.
@@ -83,7 +83,7 @@ async def run_round(gateway: LiveGateway, request: dict) -> dict:
     """
     try:
         core = gateway.core()
-        async with asyncio.timeout(gateway.settings.console_round_seconds):
+        async with asyncio.timeout(gateway.settings.delegate_round_seconds):
             if "model" in request:
                 try:
                     await core.retrieve_model(request["model"])
@@ -99,7 +99,7 @@ async def run_round(gateway: LiveGateway, request: dict) -> dict:
     except ProtocolError as exc:  # no core, or one that could not be built: the server's fault, said without detail
         raise HTTPException(503, "The delegation core is not available") from exc
     except Exception as exc:
-        logger.exception(f"A console round failed: {exc}")
+        logger.exception(f"A delegate round failed: {exc}")
         raise HTTPException(502, "The backend could not complete the round") from exc
 
 
@@ -107,11 +107,11 @@ def add_extras(app: FastAPI, gateway: LiveGateway, describe: Describe | None = N
     """Add ``GET /v1/live/info`` and ``POST /v1/live/delegate`` to ``app``, behind ``gateway``'s security.
 
     ``describe`` returns plain JSON for ``/info``. ``/delegate`` runs on the gateway's one delegation core client
-    (``LiveGateway.core``), which it builds on first use, within the console route's limits: at most
-    ``max_console_rounds`` rounds at once (429 over it), a body of at most ``console_body_bytes``, a model the core
+    (``LiveGateway.core``), which it builds on first use, within the route's limits: at most
+    ``max_delegate_rounds`` rounds at once (429 over it), a body of at most ``delegate_body_bytes``, a model the core
     serves (400 otherwise), and, with no token, a ``Host`` that is an IP literal, ``localhost`` or an allowed name.
     """
-    running = 0  # console rounds in flight
+    running = 0  # delegate rounds in flight
 
     @app.get("/v1/live/info")
     async def info(request: Request) -> dict:
@@ -131,10 +131,12 @@ def add_extras(app: FastAPI, gateway: LiveGateway, describe: Describe | None = N
         """
         nonlocal running
         security.check_host(gateway.settings, request)
-        data = await gateway.body(request, gateway.settings.console_body_bytes)
-        round_request = console_request(data)
-        if running >= gateway.settings.max_console_rounds:
-            raise HTTPException(429, f"Too many console rounds: at most {gateway.settings.max_console_rounds} at once")
+        data = await gateway.body(request, gateway.settings.delegate_body_bytes)
+        round_request = delegate_request(data)
+        if running >= gateway.settings.max_delegate_rounds:
+            raise HTTPException(
+                429, f"Too many delegate rounds: at most {gateway.settings.max_delegate_rounds} at once"
+            )
         running += 1
         try:
             completed = await run_round(gateway, round_request)

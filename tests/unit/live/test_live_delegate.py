@@ -30,7 +30,7 @@ def round_with(*items, finish="response.completed"):
 
 
 class RoundStream:
-    """A console round's stream: its events, an optional wait, and whether the route closed it."""
+    """A delegate round's stream: its events, an optional wait, and whether the route closed it."""
 
     def __init__(self, events, delay=0.0):
         self.events, self.delay, self.closed = list(events), delay, False
@@ -49,7 +49,7 @@ class RoundStream:
 
 
 class RoundCore(FakeAdapter):
-    """The gateway's core: it answers each console round with ``events``, or refuses it with ``refusal``."""
+    """The gateway's core: it answers each delegate round with ``events``, or refuses it with ``refusal``."""
 
     def __init__(self, events=None, refusal=None, delay=0.0):
         super().__init__()
@@ -72,7 +72,7 @@ async def no_session(config, transport, connection):
 
 class DelegateRouteTests(unittest.TestCase):
     def setUp(self):
-        # The test client sends Host: testserver, a name the console route answers to only when it is allowed.
+        # The test client sends Host: testserver, a name the route answers to only when it is allowed.
         env = patch.dict(os.environ, {"LIVE_ENABLED": "true", "LIVE_API_TOKEN": "", "LIVE_ALLOWED_HOSTS": "testserver"})
         env.start()
         self.addCleanup(env.stop)
@@ -138,7 +138,7 @@ class DelegateRouteTests(unittest.TestCase):
         )
 
     def test_a_round_past_the_backstop_is_a_502_and_its_work_is_stopped(self):
-        settings = LiveSettings(console_round_seconds=0.05, allowed_hosts=("testserver",))
+        settings = LiveSettings(delegate_round_seconds=0.05, allowed_hosts=("testserver",))
         response = self.post({"input": INPUT}, RoundCore(delay=1.0), settings=settings)
         self.assertEqual(response.status_code, 502)
         self.assertTrue(self.core.streams[0].closed)
