@@ -4,9 +4,10 @@
 """Source-offset turn detection using the generic assistant's Pipecat models.
 
 Upload packet boundaries and arrival times never reach this component. It consumes
-one sealed PCM source, feeds Silero exactly one analysis window at a time, and
+one contiguous PCM source, feeds Silero exactly one analysis window at a time, and
 stores Smart Turn's pre-speech audio at integer sample offsets. Monotonic time is
 used exclusively to measure model work, never to decide a conversational event.
+An open upload waits for more samples; only its validated seal supplies EOF.
 
 The two mixins deliberately isolate the small compatibility surface with pinned
 Pipecat 1.12.0. Model loading is lazy so scripted runtime tests need no model files.
@@ -312,7 +313,7 @@ class AudioOffsetDetector:
             if self._turn is not None:
                 self._turn.clear()
 
-        for chunk in source.chunks(window_samples):
+        async for chunk in source.async_chunks(window_samples):
             start_sample, end_sample, audio = chunk.start_sample, chunk.end_sample, chunk.pcm
             inference_audio = audio.ljust(window_samples * 2, b"\0")
             set_window_end = getattr(self._vad, "set_source_window_end", None)

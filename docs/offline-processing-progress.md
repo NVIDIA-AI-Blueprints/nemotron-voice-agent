@@ -994,3 +994,35 @@ If a correction fails its acceptance checks, revert that logical change and reta
 failure evidence. Do not restore apparent success by relaxing errors, changing providers,
 or omitting failed cases. Record the validated source revision and receipts before
 publishing a new implementation or performance conclusion.
+
+## November 03, 2026: Experimental Processing During Upload
+
+The opt-in text prototype separates input acceptance, provisional processing,
+and successful publication. A session requests `input_processing="during_upload"`
+with `completion="text"` and a nonempty finite extent. The server advertises
+`streaming_input_text_v1` and echoes the selected mode. Clients must verify both
+before sending PCM. Existing requests retain the sealed-input default.
+
+The first valid nonempty packet starts owned native setup. After setup, ASR and
+VAD read accepted prefixes with independent cursors and canonical analysis
+windows. Input gaps wait for additional samples; they do not inject silence,
+advance conversation time, or end the source. Explicit, count- and hash-validated
+EOF makes a final partial window and source completion available.
+
+The server keeps generated events provisional and bounded. It publishes the
+effective configuration and then semantic events only after validated EOF and
+source recording. Invalid input, timeout, or disconnect aborts waiting readers
+and cancels owned tasks. This changes the opt-in resource lifecycle: a prefix
+can have reached a provider before a later validation failure. Such work cannot
+establish a successful case or replace its failure denominator.
+
+Raw native LLM response end remains the text-completion boundary. The prototype
+adds no TTS completion wait, audio-gap delay, or continuous silence while waiting
+for a response. The existing online pipeline and prior source-pinned scored
+baseline remain unchanged.
+
+Model-free correctness checks and real-provider evaluation remain separate
+validation stages. This checkpoint adds no real-provider benchmark, latency,
+score-equivalence, or scaling conclusion.
+Refer to the [input-processing contract](offline-processing-reference.md#process-text-input-during-upload)
+for negotiation and publication boundaries.

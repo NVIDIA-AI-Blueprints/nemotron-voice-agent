@@ -42,12 +42,12 @@ separate from Silero's silence threshold and adds no separate scheduler delay.
 
 ## Architecture
 
-The server validates and seals the complete source before processing. VAD,
+By default, the server validates and seals the complete source before processing. VAD,
 turn detection, and one continuous ASR request analyze that immutable recording.
 A scheduler replays their events in source order, requests responses, and commits
 the audio and conversation history that survive interruptions.
 
-The following diagram shows the processing boundaries.
+The following diagram shows the default sealed-input processing boundaries.
 
 ```mermaid
 flowchart LR
@@ -59,6 +59,13 @@ flowchart LR
     Replay --> Commit[Committed audio and history]
     Commit --> Output[Aligned WAVs, events, and positioned output]
 ```
+
+An experimental text-only mode can start native setup and consume accepted PCM
+prefixes during upload. It withholds configuration and semantic events until
+explicit input validation and source recording finish. This opt-in mode adds a
+provisional processing stage; it does not change the sealed default or the
+online pipeline. Refer to the
+[input-processing contract](offline-processing-reference.md#process-text-input-during-upload).
 
 Source analysis can run ahead, but response generation receives only transcripts
 whose source dependency and availability have been reached. Each response uses
@@ -438,3 +445,28 @@ Refer to the [implementation reference](offline-processing-reference.md#offline-
 for the startup boundary and the
 [text-completion contract](offline-processing-reference.md#incremental-text-completion)
 for client deadlines and finite input silence.
+
+## November 03, 2026: Processing During Upload Prototype
+
+The new experimental text mode requests `input_processing="during_upload"` and
+requires the `streaming_input_text_v1` capability plus an acknowledgement of that
+selected mode. The default remains `sealed`. The opt-in requires nonempty finite
+input and begins owned runtime setup only after the first valid nonempty packet.
+Acknowledgement-only probes remain provider-free.
+
+After native setup, independent ASR and VAD readers consume available canonical
+windows while upload continues. A temporary shortage of input does not mean EOF
+or silence. Final extent, packet count, and SHA-256 validation still control the
+source seal. Configuration and queued semantic events remain unpublished until
+that seal and source recording complete.
+
+Pre-EOF provider work is provisional. Rejected or abandoned input aborts blocked
+readers and cancels owned work; it cannot produce a successful result. The
+collector still uses the first eligible native raw LLM response end. There is
+no added TTS wait, audio-gap completion rule, or continuous input silence.
+
+This prototype has no new benchmark or real-provider latency result. Prior
+scored results remain evidence for their pinned sealed-input versions. Future
+validation must measure actual setup/upload overlap, input integrity, native
+context and candidate boundaries, failures, and cleanup before interpreting
+scores or throughput.

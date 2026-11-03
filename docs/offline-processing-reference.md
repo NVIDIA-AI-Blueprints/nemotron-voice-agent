@@ -139,7 +139,7 @@ The first integration currently lives in `src/examples/generic/offline/`.
 
 | Module | Responsibility |
 | --- | --- |
-| `models.py` | Immutable source chunks, sample positions, and committed-span records |
+| `models.py` | Immutable sources, bounded upload-prefix readers, sample positions, and committed-span records |
 | `detection.py` | Source-indexed Silero decisions, periodic state resets, and per-window checkpoints |
 | `actors.py` and `recognition.py` | Atomic callback batches, availability bounds, continuous Riva ASR, and explicit result-stream drain |
 | `aggregation.py` | Actual Pipecat user/assistant aggregation with sample-clock policy waits |
@@ -277,12 +277,22 @@ loops retain their execution policy. This compatibility boundary requires exactl
 Pipecat 1.12.0. The normal online service setup is unchanged.
 
 Text-only collection still initializes the native LLM and TTS services before
-starting source processing. Returning at LLM completion avoids waiting for TTS
-audio completion; it does not remove provider initialization from the server path.
-Provider initialization starts after the server validates and seals input EOF
-and its source hash. A start/acknowledgement capability probe that disconnects
-without input EOF does not construct providers. Pre-upload initialization would
-require a separate invalid-input and cancellation contract; it is not implemented.
+starting the ASR and VAD actors. Returning at LLM completion avoids waiting for
+TTS audio completion; it does not remove provider initialization from the server
+path.
+
+The default `input_processing=sealed` path constructs providers after the server
+validates and seals input EOF and its source hash. The experimental
+[`during_upload` text mode](#process-text-input-during-upload) starts owned setup
+after the first validated nonempty packet. It can overlap subsequent upload,
+but a fast upload can finish before native setup and source analysis are ready.
+An acknowledgement-only capability probe does not construct providers in either
+path. The normal online pipeline is unchanged.
+
+`GenericOfflineRuntime.prepare()` is an optional owning-loop warmup hook.
+Concurrent callers join one preparation task; the runtime owner retires it
+during cleanup. The sealed default leaves native startup in its existing engine
+path. A first preparation call after execution starts is rejected.
 
 ## WebSocket and Recording Contract
 
@@ -290,6 +300,9 @@ The custom protocol is `nva.offline.v1`. The client starts with
 `offline.session.start`, declaring 16 kHz mono PCM16, the input sample count,
 and optional session configuration. The server acknowledges bounds before audio.
 The optional `completion` field selects `full_session` (default) or `text`.
+The optional `input_processing` field selects `sealed` (default) or the
+experimental, text-only `during_upload` path. The acknowledgement echoes the
+selected `input_processing` value.
 Configured offline clients send their prompt and configuration in this start
 message. They do not need a preceding `POST /api/session-config` or a
 process-local session ID.
@@ -360,7 +373,8 @@ an explicit `ASR_STOP_HISTORY_MS` override.
 ### Incremental Text Completion
 
 Clients selecting `completion=text` must require `incremental_text_events_v1`.
-They upload the same finite source without realtime pacing. After sealing,
+They upload the same finite source without realtime pacing. With the default
+sealed input path, processing starts after source validation. After sealing,
 the server sends `offline.runtime.configuration`, including `protocol`,
 `configuration`, and `configuration_fingerprint`, before incremental
 `offline.event` records. Verify configuration before accepting candidate text.
@@ -392,10 +406,11 @@ source and any finite tail. That boundary does not attest completed ASR work.
 The VoiceBench evaluator exposes the opt-in offline product setting
 `product.offline_response_start_timeout_s`. Its default is unset. A value of `10`
 bounds the first eligible nonempty raw LLM text to 10,000 ms after source and
-tail upload. This budget includes the subsequent provider initialization, ASR,
-turn processing, and LLM work before that text arrives. It does not replace the
-existing receive or total-operation budgets, and it does not change the online
-collector.
+tail upload. In the sealed path, this budget includes subsequent provider
+initialization, ASR, turn processing, and LLM work before that text arrives.
+Work that overlaps upload in `during_upload` has a different measured scope.
+Retain its actual timestamps. The option does not replace the existing receive
+or total-operation budgets, and it does not change the online collector.
 Record the selected limit with coverage and retry counts. This offline option
 does not make the online and offline timeout policies identical.
 
@@ -413,6 +428,69 @@ records completed real-service text cohorts. The
 [rebased validation checkpoint](offline-processing-progress.md#rebased-source-validation-and-native-policy-contract)
 records a later matched-source diagnostic. Neither establishes full-session
 completion or benchmark-wide behavioral equivalence.
+
+### Process Text Input During Upload
+
+The experimental input mode overlaps native service setup and source analysis
+with a finite upload. It is an unbenchmarked prototype; existing scored results
+describe the sealed input path. Select it by adding these fields to an otherwise
+valid session start:
+
+```json
+{
+  "completion": "text",
+  "input_processing": "during_upload"
+}
+```
+
+These fields belong to the session start, outside `config`. Existing example
+client commands retain the sealed default.
+
+The declared input must be nonempty and finite. Before uploading PCM, require
+`streaming_input_text_v1` in the server capabilities and an acknowledgement with
+`input_processing: "during_upload"`. Reject a missing or different echo. Older
+servers can ignore unknown start fields, so a requested field alone does not
+establish that the mode is active. Omitting it preserves the sealed default.
+The protocol remains `nva.offline.v1`; existing packet envelopes are unchanged.
+
+The two input modes have these boundaries:
+
+| Mode | Source Processing | Configuration and Text Publication |
+| --- | --- | --- |
+| `sealed` | Starts after explicit extent, packet-count, and hash validation | Follows validated input and source recording |
+| `during_upload` | Starts setup after the first valid nonempty packet; ASR and VAD then await available canonical windows | Waits for the same final validation and source recording |
+
+ASR and VAD use independent cursors over the same accepted PCM prefixes.
+They retain fixed analysis windows across packet boundaries. An upload stall
+does not supply silence or EOF; a final partial window becomes available only
+after validated EOF. The declaration is a total extent, not received progress.
+
+Native turn/context processing can submit LLM requests before seal. This work
+and its generated events remain provisional. The server queues
+events within its existing bounds and publishes configuration before events
+after validation and source recording finish. A full gated buffer fails with
+`provisional_event_overflow`; it does not discard events. After publication
+starts, the existing `event_queue_overflow` bound applies. A bad hash, malformed
+packet, upload timeout, or disconnect aborts the source and cancels owned work.
+Blocked readers wake with an abort, not a successful EOF. Provider work already
+performed on a rejected prefix cannot be undone and does not make the case
+successful.
+
+With optional trusted request tracing enabled, private capture can include
+provisional LLM requests before seal. The source-identity snapshot waits for
+validated EOF. An aborted upload can retain private request observations;
+their presence does not establish input validation or case success.
+
+The mode adds no continuous silence, TTS completion wait, or audio-gap completion
+rule. A client still selects the first eligible native raw LLM response end.
+Record the negotiated input mode and actual setup/upload/analysis timestamps
+with any later comparison. No throughput gain, score equivalence, or latency
+reduction has been established for this prototype.
+
+Native readiness still precedes ASR and VAD startup. In this mode, engine-relative
+physical timings begin after explicit preparation; WebSocket/session diagnostics
+retain setup time. ASR callback intervals include observed transport and queueing;
+they do not isolate model inference time.
 
 ### Raw LLM Text for Benchmark Adapters
 

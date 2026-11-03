@@ -3,8 +3,10 @@
 
 """WebSocket boundary for finite evaluation, independent of paced transport.
 
-The factory is invoked only after source validation and sealing. Watchdogs fail
-stalled operations; they never invent silence, speech stops, or media offsets.
+By default the factory follows source validation and sealing. Explicit text-only
+upload processing can prepare providers and analyze validated prefixes earlier;
+publication still requires final hash validation. Watchdogs never invent silence,
+speech stops, source EOF, or media offsets.
 """
 
 import asyncio
@@ -56,7 +58,7 @@ class _ClientDisconnected(Exception):
 class _LiveEventWriter:
     """Bound text-stream buffering without backpressuring the media scheduler."""
 
-    def __init__(self, websocket, limits):
+    def __init__(self, websocket, limits, *, publication_ready=None):
         self.websocket = websocket
         self.limits = limits
         self.queue = asyncio.Queue(maxsize=limits.max_pending_stream_events)
@@ -64,6 +66,7 @@ class _LiveEventWriter:
         self.last_sample = 0
         self._diagnostics = current_diagnostics()
         self._first_text_sent = set()
+        self._publication_ready = publication_ready
 
     def observe(self, event):
         """Snapshot a committed event or fail explicitly instead of dropping it."""
@@ -73,6 +76,10 @@ class _LiveEventWriter:
         payload = {"type": "offline.event", "event": redact_private(event)}
         size = len(json.dumps(payload, allow_nan=False).encode("utf-8"))
         if self.queue.full() or self.pending_bytes + size > self.limits.max_pending_stream_bytes:
+            if self._publication_ready is not None and not self._publication_ready.is_set():
+                raise OfflineProtocolError(
+                    "provisional_event_overflow", "Pre-EOF event buffering exceeded the configured limit"
+                )
             raise OfflineProtocolError("event_queue_overflow", "Client cannot keep up with incremental events")
         self.queue.put_nowait((payload, size))
         self.pending_bytes += size
@@ -111,7 +118,7 @@ class _LiveEventWriter:
                 self.queue.task_done()
 
 
-async def _execute_text(websocket, receiver, runtime_factory, start, source, limits):
+async def _execute_text(websocket, receiver, runtime_factory, start, source, limits, *, publication_ready=None):
     """Publish raw event evidence while native providers continue, until disconnect."""
     runtime = None
     prepare = runner = writer = drain = None
@@ -121,28 +128,45 @@ async def _execute_text(websocket, receiver, runtime_factory, start, source, lim
             nonlocal runtime
             value = runtime_factory(start)
             runtime = await value if inspect.isawaitable(value) else value
+            if publication_ready is not None and hasattr(runtime, "prepare"):
+                # Warmup is explicit in the opt-in path. The sealed default
+                # retains native initialization inside its existing engine.
+                await runtime.prepare()
             configuration = redact_private(getattr(runtime, "configuration", start.get("config", {})))
             _check_client(receiver)
             diagnostics = current_diagnostics()
-            await websocket.send_json(
-                {
-                    "type": "offline.runtime.configuration",
-                    "protocol": PROTOCOL,
-                    "completion": "text",
-                    "configuration": configuration,
-                    "configuration_fingerprint": configuration_fingerprint(configuration),
-                    **({"server_metrics_session_id": diagnostics.session_id} if diagnostics is not None else {}),
-                }
-            )
+            payload = {
+                "type": "offline.runtime.configuration",
+                "protocol": PROTOCOL,
+                "completion": "text",
+                "configuration": configuration,
+                "configuration_fingerprint": configuration_fingerprint(configuration),
+                **({"server_metrics_session_id": diagnostics.session_id} if diagnostics is not None else {}),
+            }
+            if publication_ready is None:
+                await websocket.send_json(payload)
+            return payload
 
         prepare = asyncio.create_task(prepare_runtime())
         await asyncio.wait((prepare, receiver), return_when=asyncio.FIRST_COMPLETED)
         if prepare.done():
             prepare.result()
         _check_client(receiver)
-        await prepare
-        stream = _LiveEventWriter(websocket, limits)
-        writer = asyncio.create_task(stream.run())
+        configuration_payload = await prepare
+        stream = _LiveEventWriter(websocket, limits, publication_ready=publication_ready)
+        writer_ready = asyncio.Event()
+
+        async def write_stream():
+            if publication_ready is not None:
+                # Pre-EOF provider work is provisional. Never publish text or
+                # configuration as a validated-input result before hash seal.
+                await publication_ready.wait()
+                _check_client(receiver)
+                await websocket.send_json(configuration_payload)
+            writer_ready.set()
+            await stream.run()
+
+        writer = asyncio.create_task(write_stream())
         runner = asyncio.create_task(runtime.run(source, event_sink=stream.observe))
 
         async def guarded(operation):
@@ -160,6 +184,9 @@ async def _execute_text(websocket, receiver, runtime_factory, start, source, lim
         await guarded(runner)
 
         async def finish_stream():
+            if publication_ready is not None:
+                await publication_ready.wait()
+            await writer_ready.wait()
             await stream.queue.join()
             _check_client(receiver)
             await websocket.send_json({"type": "offline.events.complete", "protocol": PROTOCOL, "completion": "text"})
@@ -212,14 +239,8 @@ async def _receive(websocket: Any) -> bytes | str:
     raise OfflineProtocolError("invalid_message", "Expected exactly one text or binary payload")
 
 
-async def _sealed_source(
-    websocket: Any,
-    limits: SessionLimits,
-    *,
-    milestones: dict[str, int] | None = None,
-    clock: Callable[[], int] = time.monotonic_ns,
-) -> tuple[dict[str, Any], AudioSource]:
-    """Acknowledge capabilities, then receive a finite, hash-validated source."""
+async def _accepted_start(websocket, limits, *, milestones=None, clock=time.monotonic_ns):
+    """Validate the finite request and acknowledge capabilities without providers."""
     message = await _receive(websocket)
     if milestones is not None:
         milestones["input_start_received"] = clock()
@@ -231,6 +252,7 @@ async def _sealed_source(
             "type": "offline.session.accepted",
             "protocol": PROTOCOL,
             "capabilities": list(CAPABILITIES),
+            "input_processing": start.get("input_processing", "sealed"),
             "output_sample_rate": RATE,
             "request_fingerprint": configuration_fingerprint(start.get("config", {})),
             "limits": {
@@ -242,6 +264,20 @@ async def _sealed_source(
     )
     if milestones is not None:
         milestones["upload_accepted"] = clock()
+    return start
+
+
+async def _sealed_source(
+    websocket: Any,
+    limits: SessionLimits,
+    *,
+    milestones: dict[str, int] | None = None,
+    clock: Callable[[], int] = time.monotonic_ns,
+    start=None,
+) -> tuple[dict[str, Any], AudioSource]:
+    """Acknowledge capabilities, then receive a finite, hash-validated source."""
+    if start is None:
+        start = await _accepted_start(websocket, limits, milestones=milestones, clock=clock)
     upload = InputUpload(start["input_samples"], limits)
     while True:
         message = await _receive(websocket)
@@ -252,6 +288,90 @@ async def _sealed_source(
             if milestones is not None:
                 milestones["source_sealed"] = clock()
             return start, source
+
+
+async def _execute_during_upload(websocket, runtime_factory, start, directory, limits, upload_deadline):
+    """Overlap owned native setup/analysis with ingress, keeping EOF as a validation barrier."""
+    from .models import StreamingAudioSource
+    from .recorder import write_source
+
+    source = StreamingAudioSource(start["input_samples"], max_samples=limits.max_input_samples)
+    upload = InputUpload(start["input_samples"], limits, streaming_source=source)
+    sealed = asyncio.Event()
+    publication_ready = asyncio.Event()
+    execution = pending_receive = None
+
+    async def monitor_after_seal():
+        # Exactly one coroutine reads the socket in each phase. A missing
+        # packet or a disconnect during upload is never interpreted as EOF.
+        await sealed.wait()
+        await _receive(websocket)
+        raise OfflineProtocolError("input_sealed", "No messages are accepted after offline.input.complete")
+
+    receiver = asyncio.create_task(monitor_after_seal())
+
+    async def run():
+        async with asyncio.timeout(limits.execution_timeout_seconds):
+            await _execute_text(
+                websocket, receiver, runtime_factory, start, source, limits, publication_ready=publication_ready
+            )
+
+    try:
+        async with asyncio.timeout_at(upload_deadline):
+            while True:
+                pending_receive = asyncio.create_task(_receive(websocket))
+                if execution is not None:
+                    await asyncio.wait((pending_receive, execution), return_when=asyncio.FIRST_COMPLETED)
+                    if execution.done():
+                        execution.result()
+                        raise RuntimeError("Streaming execution ended before validated input EOF")
+                message = await pending_receive
+                pending_receive = None
+                if isinstance(message, bytes):
+                    upload.append(message)
+                    if execution is None:
+                        # Start only after a valid nonempty packet. ACK-only
+                        # capability probes do not initialize native services.
+                        execution = asyncio.create_task(run())
+                else:
+                    canonical = upload.seal(parse_control(message, limits))
+                    record(
+                        current_diagnostics(),
+                        "source_sealed",
+                        input_samples=canonical.sample_count,
+                        source_sha256=hashlib.sha256(canonical.pcm).hexdigest(),
+                    )
+                    sealed.set()
+                    await asyncio.to_thread(write_source, directory, canonical)
+                    _check_client(receiver)
+                    publication_ready.set()
+                    break
+        if execution is None:
+            raise OfflineProtocolError("input_extent", "Streaming input requires a nonempty audio packet")
+        await execution
+    finally:
+        # Abort before joining: the ASR transport can be blocked in a sync
+        # chunk reader waiting for ingress. Cancellation must wake that reader.
+        if not source.sealed:
+            source.abort()
+        tasks = [task for task in (execution, pending_receive, receiver) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        primary = sys.exception()
+        errors = [
+            outcome
+            for task, outcome in zip(tasks, outcomes, strict=True)
+            if task is execution
+            and isinstance(outcome, BaseException)
+            and not isinstance(outcome, asyncio.CancelledError)
+            and outcome is not primary
+        ]
+        if errors:
+            if primary is None or isinstance(primary, (_ClientDisconnected, asyncio.CancelledError)):
+                raise errors[0]
+            primary.add_note("Streaming cleanup also failed: " + type(errors[0]).__name__)
 
 
 @contextlib.asynccontextmanager
@@ -466,8 +586,20 @@ async def _serve_offline_session(
     await websocket.accept()
     milestones = {"socket_accepted": clock()}
     try:
-        async with asyncio.timeout(limits.upload_timeout_seconds):
-            start, source = await _sealed_source(websocket, limits, milestones=milestones, clock=clock)
+        async with asyncio.timeout(limits.upload_timeout_seconds) as upload_timeout:
+            start = await _accepted_start(websocket, limits, milestones=milestones, clock=clock)
+            if start.get("input_processing", "sealed") == "during_upload":
+                # This explicit opt-in keeps the scored sealed-input baseline
+                # unchanged. Upload and execution have independent watchdogs.
+                deadline = upload_timeout.when()
+                upload_timeout.reschedule(None)
+                directory = Path(record_root) / str(uuid.uuid4())
+                create_private_directory(directory, exist_ok=False)
+                await _execute_during_upload(websocket, runtime_factory, start, directory, limits, deadline)
+                with contextlib.suppress(Exception):
+                    await websocket.close(code=1000)
+                return
+            start, source = await _sealed_source(websocket, limits, milestones=milestones, clock=clock, start=start)
         if current_diagnostics() is not None:
             record(
                 current_diagnostics(),

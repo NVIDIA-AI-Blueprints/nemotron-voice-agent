@@ -26,6 +26,7 @@ CAPABILITIES = (
     "raw_llm_text_events_v1",
     "effective_configuration_v1",
     "incremental_text_events_v1",
+    "streaming_input_text_v1",
 )
 _PRIVATE_KEYS = frozenset({"api_key", "authorization", "password", "secret", "token", "credentials"})
 
@@ -115,6 +116,13 @@ def validate_start(message: dict[str, Any], limits: SessionLimits) -> dict[str, 
         raise OfflineProtocolError("invalid_control", "config must be a JSON object")
     if message.get("completion", "full_session") not in ("full_session", "text"):
         raise OfflineProtocolError("unsupported_completion", "completion must be full_session or text")
+    processing = message.get("input_processing", "sealed")
+    if processing not in ("sealed", "during_upload"):
+        raise OfflineProtocolError("unsupported_input_processing", "input_processing must be sealed or during_upload")
+    if processing == "during_upload" and (message.get("completion") != "text" or extent == 0):
+        raise OfflineProtocolError(
+            "unsupported_input_processing", "during_upload requires text completion and nonempty finite input"
+        )
     return message
 
 
@@ -148,12 +156,13 @@ def encode_packet(magic: bytes, sequence: int, offset: int, pcm: bytes) -> bytes
 class InputUpload:
     """Own contiguous, bounded input until explicit extent/hash-verified EOF."""
 
-    def __init__(self, declared_samples: int, limits: SessionLimits):
+    def __init__(self, declared_samples: int, limits: SessionLimits, *, streaming_source=None):
         """Create the upload independently of the conversation runtime."""
         self.declared_samples = declared_samples
         self.limits = limits
         self.packet_count = 0
         self._pcm = bytearray()
+        self._streaming_source = streaming_source
         self._digest = hashlib.sha256()
         self._sealed = False
 
@@ -162,11 +171,17 @@ class InputUpload:
         if self._sealed:
             raise OfflineProtocolError("input_sealed", "Input has already been sealed")
         sequence, offset, pcm = decode_packet(packet, b"NVAI", self.limits.max_packet_samples)
-        if sequence != self.packet_count or offset != len(self._pcm) // 2:
+        received = (
+            self._streaming_source.received_samples if self._streaming_source is not None else len(self._pcm) // 2
+        )
+        if sequence != self.packet_count or offset != received:
             raise OfflineProtocolError("input_order", "Input packet sequence and offset must be contiguous")
-        if len(self._pcm) + len(pcm) > self.declared_samples * 2:
+        if received + len(pcm) // 2 > self.declared_samples:
             raise OfflineProtocolError("input_extent", "Input exceeds its declared sample count")
-        self._pcm.extend(pcm)
+        if self._streaming_source is not None:
+            self._streaming_source.append(pcm)
+        else:
+            self._pcm.extend(pcm)
         self._digest.update(pcm)
         self.packet_count += 1
 
@@ -176,15 +191,18 @@ class InputUpload:
             raise OfflineProtocolError("input_sealed", "Input has already been sealed")
         if message.get("type") != "offline.input.complete":
             raise OfflineProtocolError("unexpected_control", "Expected explicit offline.input.complete")
+        received = (
+            self._streaming_source.received_samples if self._streaming_source is not None else len(self._pcm) // 2
+        )
         if (
             integer_field(message, "input_samples") != self.declared_samples
-            or len(self._pcm) != self.declared_samples * 2
+            or received != self.declared_samples
             or integer_field(message, "input_packets") != self.packet_count
         ):
             raise OfflineProtocolError("input_extent", "Input completion extent or packet count is inconsistent")
         if message.get("sha256") != self._digest.hexdigest():
             raise OfflineProtocolError("input_digest", "Input SHA-256 does not match the received PCM")
-        source = AudioSource(bytes(self._pcm))
+        source = self._streaming_source.seal() if self._streaming_source is not None else AudioSource(bytes(self._pcm))
         self._pcm.clear()
         self._sealed = True
         return source

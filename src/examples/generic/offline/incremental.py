@@ -396,15 +396,18 @@ class _Session:
 
     async def run(self):
         flushed = False
+        input_end_scheduled = False
         failure = None
         try:
             await self.engine.responder.start()
             self.actors["vad"] = self.start_detector()
             self.asr_physical_start_ns = time.monotonic_ns() - self.physical_origin
             self.actors["asr"] = self.engine.recognizer.start(self.source, self.changed)
-            self.schedule(self.source.sample_count, "input_end")
             await self.user.feed(ChunkPositionedFrame(0, STTMetadataFrame("NvidiaSTTService", DEFAULT_TTFS_P99)))
             while True:
+                if not input_end_scheduled and getattr(self.source, "sealed", True):
+                    self.schedule(self.source.sample_count, "input_end")
+                    input_end_scheduled = True
                 self.collect()
                 if self.requests:
                     await self.start_response(*self.requests.popleft())
@@ -429,6 +432,9 @@ class _Session:
                     candidates.append(deadline)
                 sources_done = all(key in self.completed for key in ("asr", "vad"))
                 if not candidates and sources_done and self.active is None:
+                    # Declared extent and a producer's completion are not the
+                    # upload coordinator's validated EOF.
+                    await self.source.wait_sealed()
                     if flushed:
                         break
                     flushed = True
@@ -442,6 +448,10 @@ class _Session:
                 if deadline is not None:
                     target = min(target, deadline)
                 bound = min(self.bounds.values(), default=math.inf)
+                if not getattr(self.source, "sealed", True):
+                    # Input starvation cannot advance policy timers into PCM
+                    # that the client has not supplied yet.
+                    bound = min(bound, samples_to_ns(self.source.received_samples))
                 if not math.isinf(bound) and target >= ns_to_samples(bound):
                     await self.wait_for_progress(target, bound)
                     continue
@@ -492,6 +502,10 @@ class _Session:
             failure = error
             raise
         finally:
+            if not getattr(self.source, "sealed", True):
+                # Wake a synchronous ASR iterator before joining its thread.
+                # Aborted upload is deliberately distinct from provider EOF.
+                self.source.abort()
             cleanup_errors = []
 
             async def release(operation):

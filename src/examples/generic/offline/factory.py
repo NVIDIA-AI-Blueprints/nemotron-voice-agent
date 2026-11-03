@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import inspect
 import json
 import time
 from collections.abc import Callable
@@ -84,12 +85,41 @@ class GenericOfflineRuntime:
         self._closed = False
         self._close_lock = asyncio.Lock()
         self._released: set[str] = set()
+        self._prepare_task: asyncio.Task | None = None
+        self._prepare_loop = None
+        self._closing = False
+        self._run_entered = False
+
+    async def prepare(self):
+        """Warm owned native services once on their eventual processing loop."""
+        if self._closed or self._closing:
+            raise RuntimeError("Offline runtime is closing or closed")
+        if self._prepare_task is None and self._run_entered:
+            raise RuntimeError("Offline preparation must begin before execution")
+        loop = asyncio.get_running_loop()
+        if self._prepare_loop is not None and self._prepare_loop is not loop:
+            raise RuntimeError("Offline runtime preparation belongs to another event loop")
+        if self._prepare_task is None:
+            self._prepare_loop = loop
+
+            async def start_services():
+                start = getattr(self._synthesis, "start", None)
+                if start is not None:
+                    result = start()
+                    if inspect.isawaitable(result):
+                        await result
+
+            self._prepare_task = asyncio.create_task(start_services())
+        # One cancelled waiter cannot abandon or cancel another waiter's
+        # preparation. The runtime owner retires the owned task in aclose().
+        await asyncio.shield(self._prepare_task)
 
     async def aclose(self):
         """Attempt every release and retry only operations that did not finish."""
         async with self._close_lock:
             if self._closed:
                 return
+            self._closing = True
             errors = []
 
             async def release(name, operation, *, asynchronous=False):
@@ -105,6 +135,13 @@ class GenericOfflineRuntime:
                 else:
                     self._released.add(name)
 
+            async def stop_preparation():
+                if self._prepare_task is not None:
+                    if not self._prepare_task.done():
+                        self._prepare_task.cancel()
+                    await asyncio.gather(self._prepare_task, return_exceptions=True)
+
+            await release("preparation_stop", stop_preparation, asynchronous=True)
             await release("recognizer_cancel", self._recognizer.cancel)
             # Legacy finite-tape responders expose cancel(); the persistent
             # native session owns cancellation and cleanup through aclose().
@@ -130,10 +167,22 @@ class GenericOfflineRuntime:
 
     async def run(self, source, *, event_sink: Callable[[dict], None] | None = None):
         """Run once and release every provider connection on success or failure."""
+        self._run_entered = True
+        trace_source = None
         if self._evaluation_trace:
-            _observe(self._evaluation_trace, "offline_source", source)
+            if getattr(source, "sealed", True):
+                _observe(self._evaluation_trace, "offline_source", source)
+            else:
+
+                async def observe_sealed_source():
+                    sealed = await source.wait_sealed()
+                    _observe(self._evaluation_trace, "offline_source", sealed)
+
+                trace_source = asyncio.create_task(observe_sealed_source())
         failure = None
         try:
+            if self._prepare_task is not None:
+                await self.prepare()
             result = (
                 await self._engine.run(source)
                 if event_sink is None
@@ -143,6 +192,12 @@ class GenericOfflineRuntime:
             failure = error
             raise
         finally:
+            if not getattr(source, "sealed", True):
+                source.abort()
+            if trace_source is not None:
+                if not getattr(source, "sealed", True) and not trace_source.done():
+                    trace_source.cancel()
+                await asyncio.gather(trace_source, return_exceptions=True)
             try:
                 await self.aclose()
             except BaseException as error:
