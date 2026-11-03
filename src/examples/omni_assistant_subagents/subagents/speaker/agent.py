@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 from openai.types.chat import ChatCompletionChunk
-from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
+from pipecat.adapters.llm.services.open_ai_adapter import OpenAILLMInvocationParams
 from pipecat.bus.messages import BusCancelMessage
 from pipecat.frames.frames import ErrorFrame, LLMServiceMetadataFrame
 from pipecat.pipeline.pipeline import Pipeline

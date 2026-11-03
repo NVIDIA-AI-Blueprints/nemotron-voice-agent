@@ -26,7 +26,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
-from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
+from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
@@ -46,7 +46,7 @@ from examples.multilingual.multilingual_processor import (
     with_reasoning,
 )
 from examples.shared.audio_recorder import create_audio_recorder
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -56,6 +56,7 @@ from examples.shared.pipeline_utils import (
     create_transport,
     latency_metric_group,
     register_session_start_handlers,
+    turn_taking_latency_secs,
     with_realtime_observers,
 )
 from examples.shared.prewarm import (
@@ -89,7 +90,9 @@ DEFAULT_SESSION_LANGUAGE = "de-DE"
 def _is_eval_transport(runner_args: RunnerArguments) -> bool:
     """Return whether the pipeline is running through Pipecat's eval transport."""
     cli_transport = str(getattr(getattr(runner_args, "cli_args", None), "transport", "") or "").strip().lower()
-    return cli_transport == "eval" or isinstance(runner_args, EvalRunnerArguments)
+    return cli_transport == "eval" or (
+        isinstance(runner_args, WebSocketRunnerArguments) and getattr(runner_args, "transport_type", "") == "eval"
+    )
 
 
 def _build_multilingual_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
@@ -143,6 +146,8 @@ async def _prepare_session_language_codes(
         "asr_function_id": asr_function_id,
         "tts_server": tts_server,
         "tts_voice_id": tts_voice,
+        "tts_function_id": tts_function_id,
+        "tts_model": tts_model,
     }
     if llm_supported_languages is not None:
         language_catalog_kwargs["llm_supported_languages"] = llm_supported_languages
@@ -166,7 +171,7 @@ def _resolve_llm_supported_languages(body: dict, default_llm: dict):
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the multilingual NVIDIA cascaded pipeline for a single session."""
-    transport = create_transport(runner_args)
+    transport = await create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
@@ -303,7 +308,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
-        "text_filters": [NemotronSpeechTextFilter()],
+        "text_transforms": [("*", nemotron_speech_text_transform)],
         "custom_dictionary": custom_dictionary,
     }
     if tts_function_id or tts_model:
@@ -321,7 +326,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"lang_codes={lang_codes or '(no voices discovered)'}, "
-        f"text_filters=[NemotronSpeechTextFilter]"
+        f"text_transforms=[nemotron_speech_text_transform]"
     )
 
     prompt_catalog = load_prompt_catalog(__file__)
@@ -420,8 +425,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(
                 data={
                     "type": "latency-breakdown",
-                    "vad_smart_turn": round(breakdown.user_turn_secs, 3)
-                    if breakdown.user_turn_secs is not None
+                    "turn_taking_latency": round(turn_taking_latency, 3)
+                    if (turn_taking_latency := turn_taking_latency_secs(breakdown)) is not None
                     else None,
                     "events": events,
                 }

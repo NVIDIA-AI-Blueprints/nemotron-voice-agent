@@ -16,7 +16,7 @@ import wave
 from pathlib import Path
 
 from loguru import logger
-from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor, TurnAudioData
 
 from utils import PROJECT_ROOT
 
@@ -71,21 +71,21 @@ def create_audio_recorder() -> AudioBufferProcessor | None:
 
     recorder = AudioBufferProcessor(num_channels=1, enable_turn_audio=True)
 
-    @recorder.event_handler("on_user_turn_audio_data")
-    async def on_user_turn(processor, audio: bytes, sample_rate: int, num_channels: int):
-        if not ENABLE_ASR_DUMP or not audio:
+    @recorder.event_handler("on_user_turn_audio")
+    async def on_user_turn(processor, turn: TurnAudioData):
+        if not ENABLE_ASR_DUMP or not turn.audio:
             return
         idx = turn_counter["asr"]
         turn_counter["asr"] = idx + 1
-        _write_wav(AUDIO_DUMP_PATH / f"asr_{stream_id}_{idx:03d}.wav", audio, sample_rate)
+        _write_wav(AUDIO_DUMP_PATH / f"asr_{stream_id}_{idx:03d}.wav", turn.audio, turn.sample_rate)
 
-    @recorder.event_handler("on_bot_turn_audio_data")
-    async def on_bot_turn(processor, audio: bytes, sample_rate: int, num_channels: int):
-        if not ENABLE_TTS_DUMP or not audio:
+    @recorder.event_handler("on_bot_turn_audio")
+    async def on_bot_turn(processor, turn: TurnAudioData):
+        if not ENABLE_TTS_DUMP or not turn.audio:
             return
         idx = turn_counter["tts"]
         turn_counter["tts"] = idx + 1
-        _write_wav(AUDIO_DUMP_PATH / f"tts_{stream_id}_{idx:03d}.wav", audio, sample_rate)
+        _write_wav(AUDIO_DUMP_PATH / f"tts_{stream_id}_{idx:03d}.wav", turn.audio, turn.sample_rate)
 
     logger.info(
         f"Audio recorder enabled (per-turn) — ASR={ENABLE_ASR_DUMP}, TTS={ENABLE_TTS_DUMP}, "

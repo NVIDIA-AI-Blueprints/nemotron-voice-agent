@@ -7,7 +7,7 @@ concurrency: 1
 base_port: 8480
 runs_dir: ../../../eval-runs
 record: true
-spawn: "env APP_RUNTIME=host BOOKING_BACKEND_URL=http://localhost:8001 FRONTEND_BACKEND_AGENT_TODAY=2026-04-30 FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE=true THINKER_FILLER_THRESHOLD_SECONDS=999 THINKER_TOOL_TIMEOUT_SECONDS=90 OMNI_MAX_TOKENS=1024 MEDIA_ANALYZER_MAX_TOKENS=512 MEDIA_ANALYZER_TEMPERATURE=0 TTS_STOP_FRAME_TIMEOUT_S=45 {python} {bot} -t eval --port {port}"
+spawn: "env APP_RUNTIME=host BOOKING_BACKEND_URL=http://localhost:8001 FRONTEND_BACKEND_AGENT_TODAY=2026-04-30 FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE=true THINKER_FILLER_THRESHOLD_SECONDS=999 THINKER_TOOL_TIMEOUT_SECONDS=90 OMNI_MAX_TOKENS=1024 MEDIA_ANALYZER_MAX_TOKENS=512 MEDIA_ANALYZER_TEMPERATURE=0 TTS_STOP_FRAME_TIMEOUT_S=45 {python} {bot} --port {port}"
 
 suite:
   - bot: inference_eval_bot.py
@@ -72,6 +72,7 @@ suite:
     runner_body_key: generic_audio_default
     scenarios:
       - generic_audio_e2e_roundtrip
+      - generic_audio_mid_utterance_pause
   - bot: inference_eval_bot.py
     runner_body: runner_bodies/cloud_tts.yaml
     runner_body_key: multilingual_audio_fixed_english

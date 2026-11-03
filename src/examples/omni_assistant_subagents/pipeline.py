@@ -104,7 +104,7 @@ def _agent_prompt_content(catalog: dict, agent_name: str, prompt_name: str) -> s
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Omni Assistant Subagents pipeline for one session."""
-    transport = _create_transport(runner_args)
+    transport = await _create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     body_session_id = str(body.get("session_id") or "").strip()
     runner_session_id = str(getattr(runner_args, "session_id", "") or "").strip()

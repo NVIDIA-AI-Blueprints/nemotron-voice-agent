@@ -187,7 +187,7 @@ class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(svc._aggregated_frame_sequencer, _MagpieWordCommitSequencer)
 
     async def test_space_insert_between_magpie_tokens(self) -> None:
-        from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
+        from pipecat.frames.frames import AggregatedTextFrame, TextType, TTSTextFrame
 
         from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
@@ -195,7 +195,7 @@ class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
         sentence = "I am Nemotron, created by NVIDIA"
         seq = _MagpieWordCommitSequencer(name="test")
         ctx = "ctx-1"
-        frame = AggregatedTextFrame(sentence, AggregationType.SENTENCE, raw_text=sentence)
+        frame = AggregatedTextFrame(sentence, TextType.SENTENCE, raw_text=sentence)
         await seq.register_spoken(
             frame,
             ctx,
@@ -222,14 +222,14 @@ class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spaced, "I am Nemotron, created by NVIDIA")
 
     async def test_force_complete_skips_unspoken_remainder(self) -> None:
-        from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
+        from pipecat.frames.frames import AggregatedTextFrame, TextType, TTSTextFrame
 
         from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
         text = "Hello world today"
         seq = _MagpieWordCommitSequencer(name="test")
         ctx = "ctx-1"
-        frame = AggregatedTextFrame(text, AggregationType.SENTENCE, raw_text=text)
+        frame = AggregatedTextFrame(text, TextType.SENTENCE, raw_text=text)
         await seq.register_spoken(
             frame,
             ctx,
@@ -251,7 +251,7 @@ class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seq._slots, [])
 
     async def test_force_complete_leaves_other_context_active(self) -> None:
-        from pipecat.frames.frames import AggregatedTextFrame, AggregationType
+        from pipecat.frames.frames import AggregatedTextFrame, TextType
 
         from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
@@ -259,13 +259,13 @@ class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
         first_context = "ctx-1"
         second_context = "ctx-2"
         await seq.register_spoken(
-            AggregatedTextFrame("First", AggregationType.SENTENCE, raw_text="First"),
+            AggregatedTextFrame("First", TextType.SENTENCE, raw_text="First"),
             first_context,
             "First",
             append_to_context=True,
         )
         await seq.register_spoken(
-            AggregatedTextFrame("Second", AggregationType.SENTENCE, raw_text="Second"),
+            AggregatedTextFrame("Second", TextType.SENTENCE, raw_text="Second"),
             second_context,
             "Second",
             append_to_context=True,
@@ -278,6 +278,26 @@ class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(seq._slots), 1)
         self.assertEqual(seq._slots[0].context_id, second_context)
         self.assertFalse(seq._slots[0].complete)
+
+    async def test_force_complete_discards_buffered_words_for_context(self) -> None:
+        from pipecat.frames.frames import AggregatedTextFrame, TextType
+
+        from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
+
+        seq = _MagpieWordCommitSequencer(name="test", streaming=True)
+        context_id = "ctx-1"
+        await seq.register_spoken(
+            AggregatedTextFrame("Hello", TextType.SENTENCE, raw_text="Hello"),
+            context_id,
+            "Hello",
+            append_to_context=True,
+        )
+        seq.process_word("unmatched", pts=0, context_id=context_id)
+        self.assertEqual(len(seq._buffered_words), 1)
+
+        seq.force_complete(context_id, last_word_pts=0)
+
+        self.assertEqual(seq._buffered_words, [])
 
 
 class StreamLifecycleTests(unittest.IsolatedAsyncioTestCase):

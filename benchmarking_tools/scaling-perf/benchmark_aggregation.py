@@ -26,18 +26,23 @@ SUITE_HEADERS = (
     "P95 Latency",
     "Min Latency",
     "Max Latency",
-    "LLM TTFT",
-    "TTS TTFB",
+    "LLM TTFB",
+    "LLM Thinking",
     "LLM TTFAT",
+    "TTS TTFB",
+    "TTS Lead Silence",
+    "TTS TTFA",
     "ASR TTFB",
     "Server E2E",
-    "VAD+Smart Turn",
+    "Turn Taking Latency",
+    "Text Aggregation",
     "LLM Proc Time",
     "LLM Tok/s",
     "Glitches",
 )
 assert len(SUITE_HEADERS) == 9 + len(SERVER_METRIC_KEYS), "SUITE_HEADERS must cover every server metric key"
 CLIENT_HEADERS = ("Client", *SUITE_HEADERS[1:])
+_LEGACY_METRIC_KEYS = {"llm_ttfb": "llm_ttft"}
 
 
 def calculate_p95(values: list[float]) -> float | None:
@@ -73,9 +78,9 @@ def _is_hard_deadline(client: dict) -> bool:
 
 def _has_core_server_metric(client: dict) -> bool:
     counts = (client.get("server_metrics") or {}).get("sample_counts") or {}
-    for key in ("asr_ttfb", "llm_ttft", "tts_ttfb", "llm_ttfat"):
+    for key in ("asr_ttfb", "llm_ttfb", "tts_ttfb", "tts_ttfa", "llm_ttfat"):
         try:
-            if int(counts.get(key, 0) or 0) > 0:
+            if int(_metric_field(counts, key, 0) or 0) > 0:
                 return True
         except (TypeError, ValueError):
             continue
@@ -117,15 +122,31 @@ def _latency_summary(client: dict) -> dict[str, float | None]:
 
 def _average_latency_columns(clients: Iterable[dict]) -> dict[str, float | None]:
     summaries = [_latency_summary(client) for client in clients]
+    minimums = [summary["min_latency"] for summary in summaries if summary["min_latency"] is not None]
+    maximums = [summary["max_latency"] for summary in summaries if summary["max_latency"] is not None]
     return {
-        key: average_or_none([summary[key] for summary in summaries if summary[key] is not None])
-        for key in ("avg_latency", "p95_latency", "min_latency", "max_latency")
+        "avg_latency": average_or_none(
+            [summary["avg_latency"] for summary in summaries if summary["avg_latency"] is not None]
+        ),
+        "p95_latency": average_or_none(
+            [summary["p95_latency"] for summary in summaries if summary["p95_latency"] is not None]
+        ),
+        "min_latency": min(minimums) if minimums else None,
+        "max_latency": max(maximums) if maximums else None,
     }
 
 
 def _server_average(client: dict, key: str) -> float | None:
-    value = ((client.get("server_metrics") or {}).get("average") or {}).get(key)
+    averages = (client.get("server_metrics") or {}).get("average") or {}
+    value = _metric_field(averages, key)
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _metric_field(metrics: dict, key: str, default: Any = None) -> Any:
+    if key in metrics:
+        return metrics[key]
+    legacy_key = _LEGACY_METRIC_KEYS.get(key)
+    return metrics.get(legacy_key, default) if legacy_key else default
 
 
 def _client_sort_key(client: dict) -> tuple[int, str]:
@@ -144,8 +165,8 @@ def _weighted_average(clients: list[dict], key: str) -> tuple[float | None, int]
     total = 0
     for client in clients:
         metrics = client.get("server_metrics") or {}
-        average = (metrics.get("average") or {}).get(key)
-        count = (metrics.get("sample_counts") or {}).get(key, 0)
+        average = _metric_field(metrics.get("average") or {}, key)
+        count = _metric_field(metrics.get("sample_counts") or {}, key, 0)
         if average is not None and count:
             weighted += float(average) * int(count)
             total += int(count)
@@ -268,7 +289,7 @@ def _summary_row(summary: dict[str, Any], num_clients: int) -> dict[str, Any]:
         "p95_latency": results["p95_client_latency"],
         "min_latency": results["min_client_latency"],
         "max_latency": results["max_client_latency"],
-        **{key: server.get(key) for key in SERVER_METRIC_KEYS},
+        **{key: _metric_field(server, key) for key in SERVER_METRIC_KEYS},
         "audio_glitches": results["glitch_detection"]["clients_with_glitches"],
     }
 

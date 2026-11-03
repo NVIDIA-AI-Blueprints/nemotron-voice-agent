@@ -6,7 +6,7 @@
 from pathlib import Path
 
 from loguru import logger
-from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
+from pipecat.adapters.llm.schemas.tools_schema import AdapterType, ToolsSchema
 
 from examples.generic.tool_handlers import TOOL_HANDLERS as TOOL_HANDLERS  # noqa: F401
 from utils import load_tools_catalog

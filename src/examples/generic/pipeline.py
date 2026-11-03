@@ -42,7 +42,7 @@ from examples.generic.silent_reply import AddressedReplyMixin, SilentReplyFilter
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
@@ -52,6 +52,7 @@ from examples.shared.pipeline_utils import (
     create_transport,
     latency_metric_group,
     register_session_start_handlers,
+    turn_taking_latency_secs,
     with_realtime_observers,
 )
 from examples.shared.speaker import (
@@ -106,7 +107,7 @@ def session_intro_prompt(multi_speaker_support: bool) -> str:
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
-    transport = create_transport(runner_args)
+    transport = await create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
@@ -248,7 +249,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
-        "text_filters": [NemotronSpeechTextFilter()],
+        "text_transforms": [("*", nemotron_speech_text_transform)],
         "custom_dictionary": custom_dictionary,
     }
     if tts_function_id or tts_model:
@@ -266,7 +267,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"language={tts_language_code or '(pipecat default)'}, "
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
-        f"text_filters=[NemotronSpeechTextFilter]"
+        f"text_transforms=[nemotron_speech_text_transform]"
     )
 
     messages = build_context_messages(base_system_content, system_prompt)
@@ -379,8 +380,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(
                 data={
                     "type": "latency-breakdown",
-                    "vad_smart_turn": round(breakdown.user_turn_secs, 3)
-                    if breakdown.user_turn_secs is not None
+                    "turn_taking_latency": round(turn_taking_latency, 3)
+                    if (turn_taking_latency := turn_taking_latency_secs(breakdown)) is not None
                     else None,
                     "events": events,
                 }
