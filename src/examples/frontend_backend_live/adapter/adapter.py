@@ -311,7 +311,8 @@ class CascadeAdapter(PipelineHost):
         memory joins them; the provider's own reply format, when it adds one, comes after them, and the runtime data the
         call sends after the conversation (``Talker.runtime_data``) last.
         """
-        base = "session.instructions" if own_instructions(self.config) else f"prompts.yaml: {self.live_config.prompt}"
+        own = own_instructions(self.config)
+        base = "session.instructions" if own else f"prompts/{self.live_config.prompt}/talker.yaml"
         instructions = [PromptPart(base, self.instructions)]
         instructions += [
             PromptPart("session.instructions.append", message_text(m), "\n\n")

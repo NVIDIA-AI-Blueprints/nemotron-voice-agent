@@ -27,7 +27,7 @@ from delegation_core.backend.providers import base as providers
 from delegation_core.config import CoreSettings
 from delegation_core.im.input import compose
 from examples.frontend_backend_live import factory
-from examples.frontend_backend_live.prompts.catalog import catalog_prompt
+from examples.frontend_backend_live.prompts.catalog import get_profile
 from tests.unit.cascade_helpers import MENU_TOOL, tool_call_round
 from tests.unit.core_helpers import FakeChat, chunk
 from tests.unit.frontend_backend_live.root.root_helpers import clear_root_caches
@@ -191,7 +191,7 @@ class RoundTests(ServedRoute):
         first, second = chat.requests
         # The core's defaults: the backend slot's default model and its prompt as written, then the voice note. The
         # console's prefill is the cafe demo's prompt instead, which it sends with the cafe's sample tools.
-        prompt = catalog_prompt(info["backend"]["prompt"])
+        prompt = get_profile(info["backend"]["prompt"]).prompt("thinker")
         self.assertEqual((first["model"], default["sent_request"]["model"]), (info["backend"]["model"],) * 2)
         self.assertEqual(first["messages"][0]["content"], compose(prompt, voice_note()))
         self.assertNotEqual(info["instructions"]["backend"], prompt)

@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The prompt set and the example's prompt catalog, pinned.
+"""The prompt set and the example's prompt profiles, pinned.
 
 Each text a model reads is pinned by its sha256, so an unintended change fails here; update a digest on purpose when a
 text changes.
@@ -14,17 +14,22 @@ import hashlib
 import json
 import re
 import unittest
-from pathlib import Path
 
 import yaml
 
 from examples.frontend_backend_live.cascade.talker.talker import Talker
 from examples.frontend_backend_live.models.decision import TalkerDecision, decision_schema
 from examples.frontend_backend_live.prompts import DEFAULT_PROMPT_SET, PROMPT_SETS, default, get_prompt_set
-from examples.frontend_backend_live.prompts.catalog import LINES_KEY, catalog_line
+from examples.frontend_backend_live.prompts.catalog import (
+    LINES_KEY,
+    LINES_PATH,
+    catalog_line,
+    default_profile,
+    get_profile,
+    profile_names,
+)
 from tests.unit.cascade_helpers import ScriptedFrontend
 
-CATALOG = Path(__file__).resolve().parents[4] / "src/examples/frontend_backend_live/prompts.yaml"
 DEFAULT = default.PROMPT_SET
 
 
@@ -164,17 +169,22 @@ class ExampleTests(unittest.TestCase):
 
 
 class CatalogTests(unittest.TestCase):
-    def setUp(self):
-        self.catalog = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
-
-    def test_the_example_prompt_catalog_has_talker_thinker_and_channel(self):
-        self.assertTrue(self.catalog["talker"]["default"])
-        for key in ("talker", "thinker", "channel"):
-            self.assertTrue(self.catalog[key]["content"].strip(), key)
-        self.assertNotIn("web_search", self.catalog["thinker"]["content"])
+    def test_the_cafe_profile_is_the_listed_default_and_the_generic_one_internal(self):
+        self.assertEqual(profile_names(), ["cafe", "generic"])
+        self.assertEqual(default_profile().name, "cafe")
+        cafe, generic = get_profile("cafe"), get_profile("generic")
+        self.assertFalse(cafe.internal)
+        for role in ("talker", "thinker", "channel"):
+            self.assertTrue(cafe.prompt(role), role)
+        self.assertNotIn("web_search", cafe.prompt("thinker"))
+        self.assertTrue(generic.internal)
+        for role in ("talker", "thinker"):
+            self.assertTrue(generic.prompt(role), role)
+        self.assertNotIn("channel", generic.roles)  # the Live defaults name no domain
 
     def test_every_line_said_word_for_word_is_read_by_name(self):
-        for name, text in self.catalog[LINES_KEY].items():
+        lines = yaml.safe_load(LINES_PATH.read_text(encoding="utf-8"))
+        for name, text in lines[LINES_KEY].items():
             with self.subTest(line=name):
                 self.assertEqual(catalog_line(name), text)
         self.assertEqual(catalog_line("holding"), "One moment, I'm still working on your earlier request.")

@@ -19,7 +19,7 @@ from examples.frontend_backend_live.config_manager.schema import (
     LiveConfig,
     SpeechConfig,
 )
-from examples.frontend_backend_live.prompts.catalog import catalog_prompt, role_instructions
+from examples.frontend_backend_live.prompts.catalog import get_profile
 
 BENCH_PATH = CONFIG_PATH.with_name("config.bench.yaml")
 CASCADE = {"provider": "chat-completions", "slot": "llm"}
@@ -47,7 +47,7 @@ class ShippedFileTests(unittest.TestCase):
         self.assertEqual((config.adapter, list(config.blocks)), ("cascade", ["cascade"]))
         self.assertEqual(config.ui_bot.core_config, "core.ui-bot.yaml")
         cascade = cascade_of(config)
-        self.assertEqual((cascade.provider, cascade.slot, cascade.prompt), ("chat-completions", "llm", "voice"))
+        self.assertEqual((cascade.provider, cascade.slot, cascade.prompt), ("chat-completions", "llm", "generic"))
         self.assertEqual(LiveConfig(provider="p", slot="s").prompt, cascade.prompt)  # the schema's default agrees
         self.assertEqual(cascade.prompt_version, "default")
         delegation = cascade.delegation
@@ -63,7 +63,7 @@ class ShippedFileTests(unittest.TestCase):
         self.assertEqual((cascade.speech.heard_words, cascade.speech.estimate_chars_per_second), ("as_recorded", 15.0))
         self.assertEqual(cascade.reliability.client_timeout_seconds, 45.0)
         self.assertEqual((cascade.tts_preroll_ms, cascade.display_label), (300, "delegation_core"))
-        self.assertTrue(catalog_prompt(cascade.prompt))
+        self.assertTrue(get_profile(cascade.prompt).prompt("talker"))
 
     def test_the_app_wait_line_comes_before_the_cores_deadline_for_the_apps_outputs(self):
         deadline = CoreSettings.load(CONFIG_PATH.with_name("core.yaml")).delegation.client_tool_timeout_seconds
@@ -86,20 +86,23 @@ class ShippedFileTests(unittest.TestCase):
             with patch.dict(os.environ, {"LIVE_CONFIG_PATH": str(other)}):
                 self.assertEqual(cascade_of(load_live_config()).slot, "s")
 
-    def test_a_server_prompt_file_does_not_replace_the_examples_own_prompts(self):
+    def test_a_server_prompt_file_does_not_replace_the_examples_own_prompt_profiles(self):
         with TemporaryDirectory() as tmp:
             other = Path(tmp) / "other.yaml"
             other.write_text("custom:\n  content: not the talker prompt\n")
             with patch.dict(os.environ, {"PROMPT_FILE_PATH": str(other)}):
-                self.assertTrue(catalog_prompt("talker"))
-                self.assertTrue(role_instructions("thinker").startswith(catalog_prompt("thinker")))
+                cafe = get_profile("cafe")
+                self.assertTrue(cafe.prompt("talker"))
+                self.assertTrue(cafe.instructions("thinker").startswith(cafe.prompt("thinker")))
 
-    def test_role_instructions_append_the_channel_context(self):
-        text = role_instructions("thinker")
-        self.assertTrue(text.startswith(catalog_prompt("thinker")))
-        self.assertTrue(text.endswith(catalog_prompt("channel")))
+    def test_a_profiles_instructions_append_its_channel_context(self):
+        cafe, generic = get_profile("cafe"), get_profile("generic")
+        text = cafe.instructions("thinker")
+        self.assertTrue(text.startswith(cafe.prompt("thinker")))
+        self.assertTrue(text.endswith(cafe.prompt("channel")))
+        self.assertEqual(generic.instructions("thinker"), generic.prompt("thinker"))  # no channel: as written
         with self.assertRaises(KeyError):
-            catalog_prompt("no-such-prompt")
+            get_profile("no-such-profile")
 
 
 class DisplayLabelTests(unittest.TestCase):

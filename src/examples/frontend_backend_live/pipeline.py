@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frontend/Backend Live pipeline: STT -> talker/writer processor -> TTS, with a delegation core of its own."""
+"""Frontend/Backend Live pipeline: STT -> talker/writer processor -> TTS, with a delegation core of its own.
+
+Each session runs one prompt profile (``prompts/<profile>/``): its talker, channel, backend prompt and tools switch
+together with the profile the session selects (:func:`resolve_profile`).
+"""
 
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -36,6 +41,7 @@ from examples.frontend_backend_live.factory import (
     frontend_adapters,
     once,
     ui_bot_core,
+    ui_bot_session,
     with_display_label,
 )
 from examples.frontend_backend_live.media.playout import PlayoutTracker, SpeechPlayout
@@ -44,7 +50,13 @@ from examples.frontend_backend_live.media.services import build_stt, build_tts, 
 from examples.frontend_backend_live.media.task_cards import RtviTaskCards
 from examples.frontend_backend_live.media.turns import TURN_ENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts.catalog import CHANNEL_PROMPT_KEY, catalog_line, catalog_prompt
+from examples.frontend_backend_live.prompts.catalog import (
+    PromptProfile,
+    catalog_line,
+    default_profile,
+    get_profile,
+    listed_profile_names,
+)
 from examples.frontend_backend_live.tables import pick
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.pipeline_utils import (
@@ -98,6 +110,34 @@ def bot_root() -> BotRoot:
     return BotRoot(LiveConfig.parse(with_display_label(adapter_block(config), core)), core, ExampleCatalog.read())
 
 
+def resolve_profile(body: dict) -> tuple[str, str, PromptProfile]:
+    """A UI bot session's talker prompt and prompt profile: the prompt's name (for the log), its text and the profile.
+
+    The talker comes first from the session's own prompt text (``prompt_content``), then from a prompt file the server
+    was started with (``PROMPT_FILE_PATH``, through ``utils.resolve_prompt``), and otherwise from the profile that
+    ``prompt_key``, then ``PROMPT_SELECTOR``, names, or the default profile; ``utils.resolve_prompt`` keeps the same
+    order for every example. Only a listed profile can be selected: a name that is internal, unknown or of no profile
+    falls back to the default with a warning. With the session's own text, its ``prompt_key`` selects the profile when
+    it names a listed one; with a prompt file, the profile is the default. The talker text is used as its file holds
+    it, and the profile's channel, backend prompt and tools come from the same read of the profile.
+    """
+    content, key = body.get("prompt_content", ""), body.get("prompt_key", "")
+    prompt_file = os.getenv("PROMPT_FILE_PATH", "").strip()
+    if content or prompt_file:
+        name, talker = resolve_prompt(__file__, content, key)
+        selected = not prompt_file and key in listed_profile_names()
+        return name, talker, get_profile(key) if selected else default_profile()
+    requested = key or os.getenv("PROMPT_SELECTOR", "").strip()
+    profile = default_profile()
+    if requested and requested != profile.name:
+        if requested in listed_profile_names():
+            profile = get_profile(requested)
+        else:
+            logger.warning(f"Prompt '{requested}' not found in the listed prompt profiles; using '{profile.name}'")
+    logger.info(f"Loaded prompt profile [{profile.name}]")
+    return profile.name, profile.content("talker"), profile
+
+
 def backend_overrides(body: dict) -> dict:
     """The session body's settings of the backend's model, without their prefix."""
     return {
@@ -131,17 +171,19 @@ async def bot(runner_args: RunnerArguments) -> None:
     state = await asyncio.to_thread(bot_root)
     cascade, catalog = state.cascade, state.catalog
 
-    prompt_key, talker_prompt = resolve_prompt(__file__, body.get("prompt_content", ""), body.get("prompt_key", ""))
-    channel = catalog_prompt(CHANNEL_PROMPT_KEY)
+    # The session's prompt profile: its talker, channel, backend prompt and tools, from one read of its folder.
+    prompt_key, talker_prompt, profile = resolve_profile(body)
+    channel = profile.prompt("channel")
+    core_settings, backend_instructions = ui_bot_session(state.core, profile)
 
     # The model behind each role comes from its services slot; the session body (UI) can override any field.
     frontend_endpoint = catalog.model(cascade.slot, body)
-    endpoints = endpoint_lookup(catalog, state.core.backend.slot, backend_overrides(body))
+    endpoints = endpoint_lookup(catalog, core_settings.backend.slot, backend_overrides(body))
     logger.info(
         f"Frontend: provider={cascade.provider}, model={frontend_endpoint.model}, prompt={prompt_key}, "
-        f"extra_params={frontend_endpoint.extra_params or '(none)'}"
+        f"profile={profile.name}, extra_params={frontend_endpoint.extra_params or '(none)'}"
     )
-    logger.info(f"Backend: adapter={state.core.backend.adapter}, model={endpoints(None).model}")
+    logger.info(f"Backend: adapter={core_settings.backend.adapter}, model={endpoints(None).model}")
     # The turn end (speech.turn_end) builds the speech-to-text and the turn detection, as in a live session.
     turn_end = pick(TURN_ENDS, cascade.speech.turn_end, "speech.turn_end")(cascade.speech)
     stt = build_stt(body, catalog.service("asr"), turn_end)
@@ -161,10 +203,10 @@ async def bot(runner_args: RunnerArguments) -> None:
     # Only the caller's turns come from Pipecat's aggregator; the cascade writes its own lines (cascade.utterances).
     user_aggregator = LLMContextAggregatorPair(context, user_params=turn_end.user_params(welcome_enabled)).user()
 
-    # The bot's own delegation core runs the tools its profile names (ui_bot.core_config) on the server. Its server
-    # delegation has no Live sink, so each delegation's events go to the cascade only, and the core runs every request
-    # on its defaults.
-    core = build_core(state.core, endpoints=endpoints, defaults=backend_defaults(state.core, endpoints))
+    # The bot's own delegation core runs the tools its prompt profile names on the server. Its server delegation has no
+    # Live sink, so each delegation's events go to the cascade only, and the core runs every request on its defaults.
+    defaults = backend_defaults(core_settings, endpoints, backend_instructions)
+    core = build_core(core_settings, endpoints=endpoints, defaults=defaults)
     delegation = ServerDelegation(core_client(core))
     live = LiveTalkerProcessor()
     audio_recorder = create_audio_recorder()

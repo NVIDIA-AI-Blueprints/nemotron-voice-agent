@@ -12,7 +12,7 @@ data here (the actions a set declares, its labels and frames), so no code asks w
 A new set is one module in this package that builds its ``PROMPT_SET`` from these classes, and one entry in
 ``PROMPT_SETS`` (``__init__.py``); ``prompt_version`` in ``config.yaml`` chooses a set by its name.
 
-The lines the voice says word for word are not model text: they are ``lines`` in the example's ``prompts.yaml``.
+The lines the voice says word for word are not model text: they are ``lines`` in ``prompts/shared/lines.yaml``.
 """
 
 from __future__ import annotations

@@ -31,7 +31,7 @@ export function pendingEntry({ kind, text }) {
 /** Where a prompt part comes from: the client over the session, the server's config, or the server's code. */
 export function promptOrigin(source) {
   if (source.startsWith("session.") || source.startsWith("delegation.")) return "client";
-  if (source.startsWith("prompts.yaml")) return "config";
+  if (source.startsWith("prompts/")) return "config";
   return "server";
 }
 

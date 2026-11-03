@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The lines the voice says word for word: the ``lines:`` mapping of the example's ``prompts.yaml``.
+"""The lines the voice says word for word: the ``lines:`` mapping of the example's ``prompts/shared/lines.yaml``.
 
 An empty line says nothing. A host may hand the cascade its own set; otherwise the catalog's is read once.
 """
@@ -13,7 +13,7 @@ from dataclasses import dataclass, fields
 from functools import cache
 from typing import Any
 
-from examples.frontend_backend_live.prompts.catalog import CATALOG_PATH
+from examples.frontend_backend_live.prompts.catalog import LINES_KEY, LINES_PATH
 from utils import load_yaml_file
 
 
@@ -53,5 +53,5 @@ class FixedLines:
 
 @cache
 def catalog_lines() -> FixedLines:
-    """The example's lines, read once from its ``prompts.yaml``."""
-    return FixedLines.parse(load_yaml_file(CATALOG_PATH, required=True).get("lines", {}))
+    """The example's lines, read once from ``prompts/shared/lines.yaml``."""
+    return FixedLines.parse(load_yaml_file(LINES_PATH, required=True).get(LINES_KEY, {}))

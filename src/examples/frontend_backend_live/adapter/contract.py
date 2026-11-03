@@ -46,7 +46,7 @@ class AdapterSettings(Protocol):
 
 
 class ServiceCatalog(Protocol):
-    """The example's catalog, read once by the root: models by slot, services by slot, prompts by key."""
+    """The example's catalog, read once by the root: models by slot, services by slot, talker prompts by profile."""
 
     def model(self, slot: str, overrides: Mapping[str, Any] | None = None) -> ModelEndpoint:
         """The model endpoint a slot names; an unlisted slot is an error."""
@@ -54,8 +54,8 @@ class ServiceCatalog(Protocol):
     def service(self, slot: str) -> dict:
         """The service entry a slot names (speech-to-text, text-to-speech)."""
 
-    def prompt(self, key: str) -> str:
-        """The prompt a key names in the example's ``prompts.yaml``."""
+    def prompt(self, profile: str) -> str:
+        """The talker prompt of the example's prompt profile ``profile`` (``prompts/<profile>/talker.yaml``)."""
 
 
 class ServiceReadiness(Protocol):

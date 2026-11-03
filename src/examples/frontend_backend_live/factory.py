@@ -11,8 +11,9 @@
 
 The root reads ``config.yaml`` (``LIVE_CONFIG_PATH``), the core's ``core.yaml`` (``CORE_CONFIG_PATH``) and the
 example's catalog once, off the event loop (:func:`root`), and resolves what the core names by reference
-(``backend.slot``, ``backend.prompt``). Nothing of the frontend goes into the core. The repository UI bot
-(``pipeline.py``) builds a core of its own with these functions, from ``ui_bot.core_config``.
+(``backend.slot``, and ``backend.prompt``: a prompt profile). Nothing of the frontend goes into the core. The repository
+UI bot (``pipeline.py``) builds a core of its own with these functions, from ``ui_bot.core_config`` and the prompt
+profile its session selected (:func:`ui_bot_session`).
 """
 
 from __future__ import annotations
@@ -21,9 +22,11 @@ import asyncio
 import os
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from functools import cache, wraps
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 # Starts OpenTelemetry when ENABLE_TRACING is on, as the UI bot's root does: the frontend adapter traces each session's
@@ -40,11 +43,16 @@ from examples.frontend_backend_live.adapter.contract import ServiceStarting
 from examples.frontend_backend_live.config_manager.loader import EXAMPLE_DIR, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ExampleConfig, ModelEndpoint
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts.catalog import CATALOG_PATH, catalog_line, catalog_prompt, role_instructions
+from examples.frontend_backend_live.prompts.catalog import (
+    PROFILE_FILE,
+    PromptProfile,
+    catalog_line,
+    default_profile,
+    get_profile,
+)
 from examples.frontend_backend_live.tables import pick
 from live.ports import SessionParts
 from live.protocol import ProtocolError, SessionConfig
-from utils import default_prompt_key, load_yaml_file
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.adapter.contract import (
@@ -56,12 +64,12 @@ if TYPE_CHECKING:
 # The delegation core's own file, beside config.yaml; CORE_CONFIG_PATH names another.
 CORE_CONFIG = EXAMPLE_DIR / "core.yaml"
 
-# The catalog's lines (prompts.yaml ``lines``) that the console sends: in client mode the silent note that work started
+# The shared lines (prompts/shared/lines.yaml) that the console sends: in client mode the silent note that work started
 # (``app_started``) and a failed delegation's line (``apology``, ``unclear``), the progress line of a slow tool batch
 # (``still_working``), and its append presets (``intro``, ``still_working``).
 CONSOLE_LINES = ("apology", "unclear", "still_working", "intro", "app_started")
-# The catalog's block of the console's other append presets (prompts.yaml ``console_presets``): by append type, a list
-# of [label, text]. It has no content, so the prompt list leaves it out.
+# The default profile's setting that holds the console's other append presets (``prompts/<profile>/profile.yaml``):
+# by append type, a list of [label, text].
 CONSOLE_PRESETS = "console_presets"
 
 # The root's reads and the core's build happen once, also when several sessions start together: a first call waits
@@ -170,15 +178,37 @@ def endpoint_lookup(catalog: ExampleCatalog, slot: str, overrides: dict | None =
     return endpoints
 
 
-def backend_defaults(
-    core: CoreSettings, endpoints: EndpointLookup, instructions: Callable[[str], str] = role_instructions
-) -> BackendTask:
+def backend_defaults(core: CoreSettings, endpoints: EndpointLookup, instructions: Callable[[str], str]) -> BackendTask:
     """What a request leaves out: the default model of ``backend.slot`` and the instructions of ``backend.prompt``.
 
-    ``instructions`` reads the catalog entry that ``backend.prompt`` names: by default the entry and then the channel
-    context, as the UI bot's backend starts.
+    ``instructions`` gives the text of the prompt profile that ``backend.prompt`` names: the Live core's
+    (:func:`live_backend_prompt`), or a UI bot session's (:func:`ui_bot_session`).
     """
     return BackendTask(model=endpoints(None).model, instructions=instructions(core.backend.prompt), tools=[])
+
+
+def live_backend_prompt(profile: str) -> str:
+    """The Live core's default backend instructions: profile ``profile``'s backend prompt as written, no channel.
+
+    The Live core serves every Live client, whatever its tools, so the prompt is used as written.
+    """
+    return get_profile(profile).prompt("thinker")
+
+
+def frozen_tools(tools: Mapping[str, Mapping[str, Any]]) -> Mapping[str, Mapping[str, Any]]:
+    """Tool source blocks by name, frozen as the core's settings freeze ``backend.tools`` (``BackendChoice.parse``)."""
+    return MappingProxyType({str(name): MappingProxyType(deepcopy(dict(block))) for name, block in tools.items()})
+
+
+def ui_bot_session(core: CoreSettings, profile: PromptProfile) -> tuple[CoreSettings, Callable[[str], str]]:
+    """A UI bot session's core settings and backend instructions, for the prompt profile its session selected.
+
+    The selected profile has the highest priority: its name becomes ``backend.prompt`` and its tools ``backend.tools``,
+    over what ``ui_bot.core_config`` sets. The instructions (the backend prompt, then the channel) come from the same
+    read of the profile as the session's talker, so one session never mixes two versions of a profile.
+    """
+    backend = replace(core.backend, prompt=profile.name, tools=frozen_tools(profile.tools))
+    return replace(core, backend=backend), lambda _name: profile.instructions("thinker")
 
 
 def core_client(core: DelegationCore) -> LocalResponsesClient:
@@ -195,12 +225,12 @@ def core_client(core: DelegationCore) -> LocalResponsesClient:
 def delegation_core() -> DelegationCore:
     """The one delegation core of this process, built on first use from the core's own file; it blocks.
 
-    It serves every Live client, whatever its tools, so a request with no instructions gets the entry that
-    ``backend.prompt`` names as written, with no channel context.
+    It serves every Live client, whatever its tools, so a request with no instructions gets the backend prompt of the
+    profile that ``backend.prompt`` names as written, with no channel context.
     """
     state = root()
     endpoints = endpoint_lookup(state.catalog, state.core.backend.slot)
-    defaults = backend_defaults(state.core, endpoints, catalog_prompt)
+    defaults = backend_defaults(state.core, endpoints, live_backend_prompt)
     return build_core(state.core, endpoints=endpoints, defaults=defaults)
 
 
@@ -274,50 +304,52 @@ def _describe() -> dict:
 
 @dataclass(frozen=True)
 class ConsoleSample:
-    """What the console starts with: the default talker, the backend of ``ui_bot.core_config``, lines and presets."""
+    """What the console starts with: the default prompt profile's talker, backend and tools, lines and presets."""
 
-    instructions: str  # the backend instructions of the UI bot's profile, as its backend starts
+    instructions: str  # the default profile's backend instructions, as a UI bot session of it starts its backend
     tools: list[dict]  # the tools of the tool sources that the profile names, built by name
-    lines: dict[str, str]  # the catalog's lines that the console sends, by name (CONSOLE_LINES)
-    presets: dict[str, list[list[str]]]  # the catalog's other append presets, by append type (CONSOLE_PRESETS)
-    talker: str  # the example catalog's default talker prompt, then the channel context
+    lines: dict[str, str]  # the shared lines that the console sends, by name (CONSOLE_LINES)
+    presets: dict[str, list[list[str]]]  # the profile's other append presets, by append type (CONSOLE_PRESETS)
+    talker: str  # the default profile's talker prompt, then the channel context
 
 
 @once
 def console_sample() -> ConsoleSample:
-    """The console's sample: the catalog's default talker, the UI bot's backend, and the catalog's lines and presets.
+    """The console's sample: the default prompt profile's talker, backend and tools, the lines and its presets.
 
-    The console runs in the browser, with its own copy of the tools, the demo that the UI bot's profile
-    (``ui_bot.core_config``) names, so it starts with the example catalog's default talker prompt (the one that
-    ``utils.resolve_prompt`` falls back to), then the channel context, the same backend instructions and the
-    same tools. The Live frontend and core run no demo: they give a session or a request with no instructions their own
-    defaults.
+    The console runs in the browser, with its own copy of the tools, the demo of the default prompt profile (the one a
+    UI bot session gets when it names none), so it starts with that profile's talker prompt, then its channel context,
+    the backend instructions a UI bot session of it starts with, and its tools, from one read of the profile. The Live
+    frontend and core run no demo: they give a session or a request with no instructions their own defaults.
 
     Raises:
-        KeyError: The catalog has no line of a name in ``CONSOLE_LINES``.
-        ValueError: The catalog's ``console_presets`` block is malformed.
+        KeyError: The shared lines have no line of a name in ``CONSOLE_LINES``.
+        ValueError: The profile's ``console_presets`` setting is malformed.
     """
-    backend = ui_bot_core(root().config).backend
-    sources = tool_sources(backend.tools)()
+    profile = default_profile()
+    sources = tool_sources(frozen_tools(profile.tools))()
     tools = [tool for source in sources for tool in source.tools()]
     lines = {name: catalog_line(name) for name in CONSOLE_LINES}
-    talker = role_instructions(default_prompt_key(load_yaml_file(CATALOG_PATH)))
-    return ConsoleSample(role_instructions(backend.prompt), tools, lines, console_presets(), talker)
+    talker = profile.instructions("talker")
+    return ConsoleSample(profile.instructions("thinker"), tools, lines, console_presets(profile), talker)
 
 
-def console_presets() -> dict[str, list[list[str]]]:
-    """The catalog's ``console_presets`` block: by append type, the [label, text] presets the console offers.
+def console_presets(profile: PromptProfile) -> dict[str, list[list[str]]]:
+    """The profile's ``console_presets`` setting: by append type, the [label, text] presets the console offers.
 
-    A catalog without the block offers none.
+    A profile without the setting offers none.
 
     Raises:
-        ValueError: The block is not a mapping of append type to a list of [label, text] pairs of text.
+        ValueError: The setting is not a mapping of append type to a list of [label, text] pairs of text.
     """
-    block = load_yaml_file(CATALOG_PATH).get(CONSOLE_PRESETS) or {}
+    block = profile.console_presets or {}
     if not isinstance(block, dict) or not all(
         isinstance(entries, list) and all(map(_is_preset, entries)) for entries in block.values()
     ):
-        raise ValueError(f"prompts.yaml {CONSOLE_PRESETS} must map each append type to a list of [label, text] pairs")
+        raise ValueError(
+            f"prompts/{profile.name}/{PROFILE_FILE} {CONSOLE_PRESETS} must map each append type to a list of "
+            "[label, text] pairs"
+        )
     return block
 
 

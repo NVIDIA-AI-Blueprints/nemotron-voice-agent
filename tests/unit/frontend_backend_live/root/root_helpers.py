@@ -73,7 +73,7 @@ class StubAdapter:
     def describe(cls, settings, catalog) -> dict:
         endpoint = catalog.model("llm")
         return {
-            "frontend": {"provider": "stub-provider", "slot": "llm", "model": endpoint.model, "prompt": "voice"},
+            "frontend": {"provider": "stub-provider", "slot": "llm", "model": endpoint.model, "prompt": "generic"},
             "prompt_version": "default",
         }
 

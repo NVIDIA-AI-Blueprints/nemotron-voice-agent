@@ -80,7 +80,7 @@ class CascadeSession:
             observe: Optional ``observe(kind, **fields)`` hook for traces.
             display: Where the display part of each delegation goes; nothing is shown by default.
             settings: The cascade's settings; by default read from ``config``.
-            lines: The voice's fixed lines; by default the example's ``prompts.yaml`` lines.
+            lines: The voice's fixed lines; by default the example's shared lines (``prompts/shared/lines.yaml``).
             reports_playout: Whether the host reports each line's playout to :attr:`playout`.
             reports_sentences: Whether that playout reports each sentence's words (per-sentence speech).
             clock: The call's one clock.

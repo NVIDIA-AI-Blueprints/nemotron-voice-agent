@@ -23,7 +23,7 @@ class CoreSettingsFileTests(unittest.TestCase):
     def test_the_file_loads_with_the_documented_defaults(self):
         delegation, backend = self.settings.delegation, self.settings.backend
         self.assertEqual((backend.adapter, backend.one_shot_adapter), ("llm", "llm"))
-        self.assertEqual((backend.slot, backend.prompt), ("thinker-llm", "backend"))
+        self.assertEqual((backend.slot, backend.prompt), ("thinker-llm", "generic"))
         self.assertEqual(sorted(backend.blocks), ["harness", "llm", "llm-agent"])
         self.assertEqual(backend.blocks["llm"]["conductor"], "steer")
         self.assertEqual(

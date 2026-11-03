@@ -7,10 +7,10 @@ Open this file only to change the configuration of a deployed agent. Edit the sm
 | File | Owns |
 | --- | --- |
 | `.env` | Feature flags, tracing, chat history, audio debugging, buffering, supported vLLM memory overrides |
-| `examples_registry.yaml` | `selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `transports`, and per example: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, and `live` (the Live API hooks `factory`, `describe`, and `core`, on `frontend-backend-live` only) |
+| `examples_registry.yaml` | `selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `transports`, and per example: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, `prompt_catalog` (an optional `module.path:callable` that builds the UI's prompt list in place of `prompts.yaml`; `PROMPT_FILE_PATH` still wins), and `live` (the Live API hooks `factory`, `describe`, and `core`, on `frontend-backend-live` only) |
 | `services.yaml` | Built-in LLM, ASR, and TTS entries under `server` (NIM) and `single-gpu` (vLLM and NeMo-Speech.cpp). An entry with `nvcf` is also served by NVIDIA Cloud |
 | `settings.yaml` | Editable LLM setting profiles referenced by `settings: <profile>` in `services.yaml` |
-| `src/examples/<package>/prompts.yaml` | Built-in prompts for that example |
+| `src/examples/<package>/prompts.yaml` | Built-in prompts for that example. `frontend-backend-live` has none: its prompt profiles live in `src/examples/frontend_backend_live/prompts/<profile>/` (`profile.yaml`, `talker.yaml`, `thinker.yaml`, `channel.yaml`), served by its `prompt_catalog` hook |
 | `src/examples/frontend_backend_live/config.yaml` | The Live example's frontend (`frontend.adapter`, `frontend.cascade`, `ui_bot.core_config`). `LIVE_CONFIG_PATH` selects another file, such as `config.bench.yaml` |
 | `src/examples/frontend_backend_live/core.yaml` | The Live example's delegation core and backend adapter (`delegation`, `texts`, `backend`). `CORE_CONFIG_PATH` selects a profile in the same directory by its path: `core.bench.yaml`, `core.agent.yaml`, or `core.harness.yaml` (the harness, which connects to an agent that the operator deploys) |
 

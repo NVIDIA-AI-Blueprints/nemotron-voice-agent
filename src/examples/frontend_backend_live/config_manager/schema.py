@@ -153,15 +153,15 @@ class LiveConfig:
     """The cascade's settings: the ``frontend.cascade`` block of ``config.yaml``.
 
     ``provider`` names the frontend model's implementation (``models/``), ``slot`` the ``examples_registry.yaml``
-    services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the ``prompts.yaml`` entry used,
-    as written, as the talker's instructions when a session supplies none or blank ones. ``display_label`` is not a key
-    of the file: the root hands the cascade the delegation core's ``delegation.display_label`` (the server label of the
-    core's display items), so the label is written once.
+    services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the prompt profile whose
+    ``talker.yaml`` is used, as written, as the talker's instructions when a session supplies none or blank ones.
+    ``display_label`` is not a key of the file: the root hands the cascade the delegation core's
+    ``delegation.display_label`` (the server label of the core's display items), so the label is written once.
     """
 
     provider: str
     slot: str
-    prompt: str = "voice"
+    prompt: str = "generic"
     prompt_version: str = ""  # a name in the prompt-set table; empty: the table's default set
     reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
     delegation: DelegationConfig = field(default_factory=DelegationConfig)
@@ -204,7 +204,7 @@ class LiveConfig:
             values[name] = own[name]
         if "prompt" in own:
             if not isinstance(own["prompt"], str) or not own["prompt"]:
-                raise ConfigError(f"{where}.prompt must be the name of a prompts.yaml entry")
+                raise ConfigError(f"{where}.prompt must be the name of a prompt profile (prompts/<profile>/)")
             values["prompt"] = own["prompt"]
         version = own.get("prompt_version", "")
         if version:
@@ -227,8 +227,8 @@ class LiveConfig:
 class UiBotConfig:
     """The repository UI bot's own settings (``ui_bot``)."""
 
-    # The delegation core profile the bot builds its core from, beside config.yaml (core.ui-bot.yaml: the UI bot's
-    # backend tools, and results with a display part for the task cards).
+    # The delegation core profile the bot builds its core from, beside config.yaml (core.ui-bot.yaml: results with a
+    # display part for the task cards); each session's prompt profile sets its backend prompt and tools.
     core_config: str = "core.ui-bot.yaml"
 
 

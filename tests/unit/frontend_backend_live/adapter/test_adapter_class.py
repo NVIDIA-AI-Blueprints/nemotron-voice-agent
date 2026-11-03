@@ -32,20 +32,20 @@ from examples.frontend_backend_live.media.services import PerSentence, Stitched
 from examples.frontend_backend_live.media.turns import FinalizeAtVerdictUserTurnStopStrategy, Shared, Silence, SmartTurn
 from examples.frontend_backend_live.models import FRONTENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts.catalog import CATALOG_PATH, CHANNEL_PROMPT_KEY, catalog_prompt
+from examples.frontend_backend_live.prompts.catalog import get_profile
 from examples.frontend_backend_live.tables import pick
 from live.ports import EXCHANGE_RATE, FrontendAdapter
 from live.protocol import SessionConfig
 from tests.unit.cascade_helpers import LIVE_CONFIG as CASCADE_TEST_CONFIG
 from tests.unit.frontend_backend_live.adapter.adapter_helpers import RecordingPort
-from utils import NVCF_GRPC_SERVER, NVCF_LLM_BASE_URL, load_yaml_file
+from utils import NVCF_GRPC_SERVER, NVCF_LLM_BASE_URL
 
 # The shipped frontend.cascade block, as the root hands it to the class.
 SHIPPED_BLOCK = dict(load_live_config(CONFIG_PATH).blocks["cascade"])
-# The example's own catalog reader, with one talker model: its prompts are the shipped prompts.yaml.
+# The example's own catalog reader, with one talker model: its talker prompts are the shipped prompt profiles'.
 SHIPPED_CATALOG = ExampleCatalog({"llm": [{"model_id": "org/front", "base_url": "http://front/v1"}]})
 # The end-to-end tests' configuration, with the talker's prompt named as config.yaml names it.
-TALKER_CONFIG = replace(CASCADE_TEST_CONFIG, prompt="voice")
+TALKER_CONFIG = replace(CASCADE_TEST_CONFIG, prompt="generic")
 TALKER_SETTINGS = CascadeAdapterSettings(live=TALKER_CONFIG, turn_end=SmartTurn(TALKER_CONFIG.speech))
 LOCAL = {"asr": "nemotron-asr:50052", "tts": "magpie-tts:50051", "base_url": "http://nvidia-llm:8000/v1"}
 CLOUD = {"asr": NVCF_GRPC_SERVER, "tts": NVCF_GRPC_SERVER, "base_url": NVCF_LLM_BASE_URL}
@@ -56,7 +56,7 @@ def members(protocol) -> set[str]:
 
 
 class FakeCatalog:
-    """The example's catalog as the root reads it once: models by slot, services by slot, prompts by key."""
+    """The example's catalog as the root reads it once: models by slot, services by slot, talker prompts by profile."""
 
     def __init__(self, recipe=LOCAL):
         self.recipe = recipe
@@ -70,8 +70,8 @@ class FakeCatalog:
         self.asked.append(("service", slot))
         return {"server": self.recipe[slot], "voice_id": "Magpie-Multilingual.EN-US.Aria"}
 
-    def prompt(self, key):
-        return f"The {key} prompt."
+    def prompt(self, profile):
+        return f"The {profile} prompt."
 
 
 def session(**changes) -> SessionConfig:
@@ -215,25 +215,25 @@ class FromConfigTests(unittest.TestCase):
         self.assertEqual(tts.call_args.args[0], {"tts_synthesis_mode": "stitched"})
         self.assertIsInstance(adapter.speech, Stitched)
 
-    def test_a_session_without_instructions_or_with_blank_ones_gets_the_catalogs_prompt(self):
+    def test_a_session_without_instructions_or_with_blank_ones_gets_the_profiles_talker(self):
         for blank in (None, "", " ", "\n\t \n"):
             with self.subTest(instructions=blank):
                 adapter, catalog, _, _ = self.build(session(instructions=blank))
-                self.assertEqual(adapter.instructions, catalog.prompt("voice"))
+                self.assertEqual(adapter.instructions, catalog.prompt("generic"))
         adapter, _, _, _ = self.build(session(instructions="  Be brief.\n"))
         self.assertEqual(adapter.instructions, "  Be brief.\n")  # the client's own text, word for word
 
-    def test_the_shipped_default_is_the_domain_free_voice_entry_as_written(self):
+    def test_the_shipped_default_is_the_domain_free_generic_profiles_talker_as_written(self):
         settings = CascadeAdapterSettings.parse(SHIPPED_BLOCK)
         with (
             patch("examples.frontend_backend_live.adapter.adapter.build_stt"),
             patch("examples.frontend_backend_live.adapter.adapter.build_tts"),
         ):
             adapter = CascadeAdapter.from_config(session(), "websocket", None, settings, SHIPPED_CATALOG)
-        entry = load_yaml_file(CATALOG_PATH)[settings.live.prompt]
-        self.assertTrue(entry["internal"])  # the repository UI's prompt list leaves it out
-        self.assertEqual(adapter.instructions, entry["content"].strip())  # as written: no channel context follows
-        for cafe in ("Bluebird", "Remy", catalog_prompt(CHANNEL_PROMPT_KEY)):
+        profile = get_profile(settings.live.prompt)
+        self.assertTrue(profile.internal)  # the repository UI's prompt list leaves it out
+        self.assertEqual(adapter.instructions, profile.prompt("talker"))  # as written: no channel context follows
+        for cafe in ("Bluebird", "Remy", get_profile("cafe").prompt("channel")):
             self.assertNotIn(cafe, adapter.instructions)
 
     def test_describe_is_the_adapters_half_of_info_with_no_key(self):
@@ -246,7 +246,7 @@ class FromConfigTests(unittest.TestCase):
                 "slot": "llm",
                 "model": "model-of-llm",
                 "base_url": LOCAL["base_url"],
-                "prompt": "voice",
+                "prompt": "generic",
             },
         )
         self.assertEqual(
@@ -407,11 +407,11 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
         runtime = {"source": "runtime data, after the conversation", "text": "Runtime:\nDecide."}  # no work line
         self.assertEqual(history["frontend"]["prompt"][-1], runtime)
 
-    async def test_blank_instructions_show_as_the_catalog_entry_that_replaced_them(self):
+    async def test_blank_instructions_show_as_the_profiles_talker_that_replaced_them(self):
         adapter = self.adapter(reports_events=True)
         adapter.config = session(instructions=" \n")
         prompt = (await adapter.history())["frontend"]["prompt"]
-        self.assertEqual(prompt[1], {"source": f"prompts.yaml: {TALKER_CONFIG.prompt}", "text": "Be brief."})
+        self.assertEqual(prompt[1], {"source": f"prompts/{TALKER_CONFIG.prompt}/talker.yaml", "text": "Be brief."})
 
     async def test_nothing_before_the_start(self):
         adapter = self.adapter(reports_events=True)

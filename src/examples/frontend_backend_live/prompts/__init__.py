@@ -6,6 +6,9 @@
 ``PROMPT_SETS`` lists every set by name: one set, ``default`` (``default.py``), which a configuration that names none
 also gets. ``config.yaml`` chooses a set with ``prompt_version``. A new set is one module that builds its
 ``PROMPT_SET`` (see ``promptset.py``) and one entry here.
+
+The example's prompt profiles, one folder each (``cafe/``, ``generic/``), and the shared lines (``shared/``) are YAML
+files beside these modules; ``catalog.py`` reads them.
 """
 
 from . import default

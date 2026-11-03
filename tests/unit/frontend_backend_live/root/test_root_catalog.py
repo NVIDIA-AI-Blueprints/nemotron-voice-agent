@@ -16,7 +16,7 @@ import yaml
 
 import examples_registry
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog, resolve_endpoint
-from examples.frontend_backend_live.prompts.catalog import catalog_prompt
+from examples.frontend_backend_live.prompts.catalog import get_profile
 from utils import NVCF_LLM_BASE_URL, clear_service_context, filter_session_config, set_service_context
 
 REPO = Path(__file__).resolve().parents[4]
@@ -194,8 +194,10 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(LookupError, "'org/z' is not in the catalog"):
             self.CATALOG.named("thinker-llm", "org/z")
 
-    def test_a_prompt_is_the_entry_as_written(self):
-        self.assertEqual(self.CATALOG.prompt("voice"), catalog_prompt("voice"))  # no channel context follows it
+    def test_a_prompt_is_the_profiles_talker_as_written(self):
+        generic = get_profile("generic")
+        self.assertEqual(self.CATALOG.prompt("generic"), generic.prompt("talker"))  # no channel context follows it
+        self.assertEqual(self.CATALOG.prompt("cafe"), get_profile("cafe").prompt("talker"))  # nor the cafe's
 
 
 if __name__ == "__main__":
