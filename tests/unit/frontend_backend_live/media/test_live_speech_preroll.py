@@ -10,6 +10,7 @@ import unittest
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     InterruptionFrame,
+    TextType,
     TTSAudioRawFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
@@ -30,7 +31,7 @@ def audio(ms: int) -> TTSAudioRawFrame:
 
 
 def word(text: str) -> TTSTextFrame:
-    return TTSTextFrame(text=text, aggregated_by="word")
+    return TTSTextFrame(text=text, text_type=TextType.WORD)
 
 
 class SpeechPrerollTests(unittest.IsolatedAsyncioTestCase):
@@ -83,7 +84,7 @@ class SpeechPrerollTests(unittest.IsolatedAsyncioTestCase):
         await self.feed(processor, TTSStartedFrame(), audio(100))
         system = BotStartedSpeakingFrame()
         await self.feed(processor, system)
-        upstream = TTSTextFrame(text="up", aggregated_by="word")
+        upstream = TTSTextFrame(text="up", text_type=TextType.WORD)
         await self.feed(processor, upstream, direction=FrameDirection.UPSTREAM)
         self.assertEqual(sent, [system, upstream])
 

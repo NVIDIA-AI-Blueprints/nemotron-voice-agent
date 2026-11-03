@@ -856,10 +856,13 @@
         "type": "bot-ready",
         "id": "ready",
         "data": {
-          "version": "2.1.0",
+          "version": "<rtvi version>",
           "about": {
             "library": "pipecat-ai",
-            "library_version": "1.12.0"
+            "library_version": "<pipecat version>"
+          },
+          "capabilities": {
+            "metrics": true
           }
         }
       },
@@ -928,6 +931,17 @@
       {
         "label": "rtvi-ai",
         "type": "user-started-speaking"
+      },
+      {
+        "label": "rtvi-ai",
+        "type": "user-input",
+        "data": {
+          "text": "How much is a large latte?",
+          "input_type": "transcription",
+          "timestamp": "<clock>",
+          "final": true,
+          "user_id": "caller"
+        }
       },
       {
         "label": "rtvi-ai",

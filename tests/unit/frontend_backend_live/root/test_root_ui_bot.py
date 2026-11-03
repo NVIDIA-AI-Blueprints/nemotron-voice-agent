@@ -9,7 +9,7 @@ import json
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import yaml
 from pipecat.runner.types import RunnerArguments
@@ -129,7 +129,11 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
                 self.workers.append(worker)
 
             async def run(self):
-                await case.during_run(self.workers[0])
+                worker = self.workers[0]
+                started = worker.handlers.get("on_pipeline_started")  # PipelineWorker fires it once the pipeline runs
+                if started is not None:
+                    await started(worker, "StartFrame")
+                await case.during_run(worker)
 
         def worker(processors, **kwargs):
             built = FakeWorker(processors, **kwargs)
@@ -152,7 +156,7 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
         aggregator = Recorder()
         edges = {
             "bot_root": lambda: root,
-            "create_transport": lambda runner_args: case.transport,
+            "create_transport": AsyncMock(return_value=case.transport),  # a coroutine, as the shared one
             "build_stt": stt,
             "build_tts": lambda body, entry: "tts",
             "LLMContextAggregatorPair": lambda context, user_params: SimpleNamespace(user=lambda: aggregator),

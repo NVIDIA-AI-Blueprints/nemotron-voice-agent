@@ -38,7 +38,7 @@ class TracingTests(unittest.IsolatedAsyncioTestCase):
             return real(*args, **kwargs)
 
         port = RecordingPort(session_id="live_traced")
-        host = SimpleNamespace(session=port, gate=None, task=None, runner_task=None)
+        host = SimpleNamespace(session=port, gate=SimpleNamespace(input_ms=0), task=None, runner_task=None)
         with patch.object(pipeline_host, "PipelineWorker", worker), patch.dict(os.environ):
             os.environ.pop("ENABLE_TRACING", None)
             if setting is not None:

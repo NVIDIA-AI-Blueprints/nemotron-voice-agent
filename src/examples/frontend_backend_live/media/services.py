@@ -19,18 +19,17 @@ already runs in from :func:`speech_mode`.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 from typing import Any, ClassVar, Protocol
 
 from loguru import logger
 from pipecat.frames.frames import CancelFrame, EndFrame, InterruptionFrame, TTSStoppedFrame, TTSTextFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor, FrameProcessorSetup
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.nvidia.stt import NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 
 from examples.frontend_backend_live.media.turns import TurnEnd
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from utils import NVCF_GRPC_SERVER, is_nvcf, load_ipa_dictionary, nvidia_api_key
 
@@ -60,61 +59,6 @@ def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaForceEo
     return turn_end.stt(**kwargs, stop_history=400)
 
 
-class OffLoopSetupTTS(NvidiaTTSService):
-    """The NVIDIA text-to-speech, its client, synthesis config and zero-shot prompt loaded in a worker thread.
-
-    ``NvidiaTTSService.setup`` opens its client and fetches the server's synthesis config with blocking gRPC calls. On
-    the event loop, a slow server holds every session of the process while one starts, so sessions that start together
-    wait in line and can miss their start deadline. In a thread, a slow server delays only its own session.
-
-    A live session loads them before its pipeline starts (:func:`load_speech`), so its audio begins only when it can
-    speak.
-    """
-
-    async def load(self) -> None:
-        """Load the client, the synthesis config and the zero-shot prompt in a worker thread, unless they are loaded.
-
-        A load that fails closes the client it opened. A load given up (its start cancelled or timed out) runs on in its
-        thread, which nothing can stop, and closes what it opened once it ends.
-        """
-        if self._service is not None:
-            return
-        loading = asyncio.ensure_future(asyncio.to_thread(self._load))
-        try:
-            await asyncio.shield(loading)
-        except asyncio.CancelledError:
-            loading.add_done_callback(self._loaded_late)
-            raise
-
-    def _loaded_late(self, loading: asyncio.Future) -> None:
-        """A load given up ended in its thread: close what it opened, and read its failure, if any."""
-        if not loading.cancelled():
-            loading.exception()
-        self._close_client()
-
-    def _load(self) -> None:
-        try:
-            self._initialize_client()
-            self._config = self._create_synthesis_config()
-            self._load_zero_shot_audio_prompt()
-        except Exception:
-            self._close_client()
-            raise
-        logger.debug(f"Initialized NvidiaTTSService with model: {self._settings.model}")
-
-    async def setup(self, setup: FrameProcessorSetup):
-        """The parent's processor setup, then :meth:`load`."""
-        await super(NvidiaTTSService, self).setup(setup)
-        await self.load()
-
-
-async def load_speech(tts: Any) -> None:
-    """Load what a text-to-speech needs before a session starts (:meth:`OffLoopSetupTTS.load`); others need nothing."""
-    load = getattr(tts, "load", None)
-    if load is not None:
-        await load()
-
-
 def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
     """Build the text-to-speech service from the catalog entry and body overrides.
 
@@ -136,7 +80,7 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
         "server": server,
         "settings": NvidiaTTSSettings(**settings_kwargs),
         "use_ssl": is_nvcf(server),
-        "text_filters": [NemotronSpeechTextFilter()],
+        "text_transforms": [("*", nemotron_speech_text_transform)],
         "custom_dictionary": load_ipa_dictionary(),
         # A line with no audio (a rate-limited request, say) is the cascade's to retry or write off
         # (speech.start_timeout_seconds, speech.retry_silent_lines): it costs that line, never the call.
@@ -149,7 +93,7 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
     logger.info(
         f"TTS: server={server}, voice={voice}, model={model or '(default)'}, synthesis_mode={mode or '(default)'}"
     )
-    return OffLoopSetupTTS(**kwargs)
+    return NvidiaTTSService(**kwargs)
 
 
 # ------------------------------------------------------------------------------------------- the TTS modes

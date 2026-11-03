@@ -68,13 +68,13 @@ class ForceEouStreamingRequestTests(unittest.TestCase):
         stt._asr_service = Mock()
         stt._asr_service.streaming_response_generator = Mock()
         original = stt._asr_service.streaming_response_generator
-        iterator = Mock(spec=AudioChunkIterator)
+        iterator, config = Mock(spec=AudioChunkIterator), Mock()
         iterator.closed = True
 
         with patch("examples.shared.nvidia_force_eou_stt.NvidiaSTTService._response_handler") as parent:
-            stt._response_handler(iterator)
+            stt._response_handler(iterator, config)
 
-        parent.assert_called_once()
+        parent.assert_called_once_with(iterator, config)
         self.assertIs(stt._asr_service.streaming_response_generator, original)
         self.assertFalse(stt._force_eou_silences)
 
@@ -85,13 +85,13 @@ class ForceEouStreamingRequestTests(unittest.TestCase):
         stt._asr_service = Mock()
         stt._asr_service.streaming_response_generator = Mock()
         original = stt._asr_service.streaming_response_generator
-        iterator = Mock(spec=AudioChunkIterator)
+        iterator, config = Mock(spec=AudioChunkIterator), Mock()
         iterator.closed = False
 
         with patch("examples.shared.nvidia_force_eou_stt.NvidiaSTTService._response_handler") as parent:
-            stt._response_handler(iterator)
+            stt._response_handler(iterator, config)
 
-        parent.assert_called_once_with(iterator)
+        parent.assert_called_once_with(iterator, config)
         self.assertIs(stt._asr_service.streaming_response_generator, original)
         self.assertEqual(list(stt._force_eou_silences), [marker])
 
@@ -160,6 +160,20 @@ class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
 
         stt.request_force_eou.assert_not_awaited()
         parent.assert_awaited_once()
+
+    async def test_pipecats_stream_thread_runs_the_override(self) -> None:
+        # Pipecat's own entry point, so a change of the parent's call shape fails here.
+        stt = self._service()
+        stt._asr_service = Mock()
+        stt._asr_service.stub.StreamingRecognize.return_value = iter(())
+        stt._audio_iterator = AudioChunkIterator(asyncio.get_running_loop())
+        await stt._audio_iterator.close()  # the stream ends with no reconnect
+        loop = asyncio.get_running_loop()
+        stt.get_event_loop = lambda: loop
+
+        await stt._thread_task_handler()
+
+        stt._asr_service.stub.StreamingRecognize.assert_called_once()
 
     async def test_request_force_eou_is_a_no_op_without_an_active_stream(self) -> None:
         stt = self._service()

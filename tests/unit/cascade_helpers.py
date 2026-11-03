@@ -19,6 +19,7 @@ from pathlib import Path
 from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMTextFrame,
+    TextType,
     TranscriptionFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
@@ -84,7 +85,7 @@ class FakeTTS(FrameProcessor):
             for word in frame.text.split():
                 self.spoken.append(word)
                 await self.push_frame(TTSAudioRawFrame(audio=b"\x10\x10" * 2400, sample_rate=24000, num_channels=1))
-                await self.push_frame(TTSTextFrame(text=word, aggregated_by="word"))
+                await self.push_frame(TTSTextFrame(text=word, text_type=TextType.WORD))
             return
         if isinstance(frame, LLMFullResponseEndFrame) and self._started:
             self._started = False

@@ -44,7 +44,6 @@ from pipecat.frames.frames import (
 from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.stt_latency import DEFAULT_TTFS_P99, NVIDIA_TTFS_P99
-from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy, TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
@@ -107,14 +106,14 @@ class FinalizeAtVerdictUserTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
         self._asked = False  # a final was asked for, and neither it nor the end of its wait has come
         self._final_wait_task: asyncio.Task | None = None
 
-    async def process_frame(self, frame: Frame) -> ProcessFrameResult:
+    async def process_frame(self, frame: Frame):
         """Note whether the speech-to-text holds text it has not finalized, then run Pipecat's strategy."""
         if isinstance(frame, InterimTranscriptionFrame):
             self._unfinalized = True
         elif isinstance(frame, TranscriptionFrame) and frame.finalized:
             self._unfinalized = False
             await self._final_arrived()
-        return await super().process_frame(frame)
+        await super().process_frame(frame)
 
     async def cleanup(self):
         """Stop waiting for a final."""
@@ -135,7 +134,7 @@ class FinalizeAtVerdictUserTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
         finally:
             self._judging_stop = False
 
-    async def _maybe_trigger_user_turn_stopped(self):
+    async def _maybe_report_user_turn_stopped(self):
         """End the turn once it is complete and its speech is final; ask for the final when it is not."""
         if not self._turn_complete:
             return
@@ -147,7 +146,7 @@ class FinalizeAtVerdictUserTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
         if self._timeout_task:
             await self.task_manager.cancel_task(self._timeout_task)
             self._timeout_task = None
-        await self.trigger_user_turn_stopped()
+        await self.report_user_turn_stopped()
 
     async def _ask_for_final(self, why: str):
         self._asked = True
@@ -170,7 +169,7 @@ class FinalizeAtVerdictUserTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
             self._final_wait_task = None  # ending the turn below discards the wait; this task must not cancel itself
         self._asked = False
         self._unfinalized = False  # nothing more is coming for it
-        await self._maybe_trigger_user_turn_stopped()
+        await self._maybe_report_user_turn_stopped()
 
     async def _cancel_final_wait(self):
         if self._final_wait_task:
