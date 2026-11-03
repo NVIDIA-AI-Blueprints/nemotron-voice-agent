@@ -4,21 +4,6 @@
 # The cafe profile: the Bluebird Cafe demo. Its talker, backend prompt and channel are the role files beside this one;
 # this file holds its settings, never text a surface shows (the UI shows talker.yaml's description).
 
-default: true                          # the profile a UI bot session gets when it names none, and the Live Console's
+default: true                          # the profile a UI bot session gets when it names none
 tools:                                 # the backend's server tool sources for this profile's UI bot sessions
   cafe: {}                             # the cafe's menu, cart and order tools (delegation_core/backend/tools/cafe)
-
-# The Live Console's other append presets, by append type: each a [label, text] that the operator may send
-# (factory.py: console_presets, served by GET /v1/live/info).
-console_presets:
-  session.instructions.append:
-    - ["Recording disclosure", "Immediately say the following disclosure exactly and in full before responding to the caller: This call may be recorded for quality and training purposes."]
-    - ["Guardrail redirect", "Stop speaking about that request. Briefly explain that you cannot help with it, then wait for the user."]
-    - ["Slow down", "Speak more slowly and leave a short pause after each item you read back."]
-  session.thinking.append:
-    - ["UI context", "The user is looking at the pastry section of the kiosk screen. 'this one' most likely refers to the butter croissant."]
-    - ["Loyalty status", "This caller is a loyalty member; the counter applies their discount at pickup. Do not quote a discounted price."]
-    - ["Store state", "The espresso machine is busy; drink orders are running about three minutes behind."]
-  session.commentary.append:
-    - ["Taking longer", "This is taking a little longer than usual — I'm still on it."]
-    - ["Pickup counter", "Your order will be at the far end of the counter when it's ready."]

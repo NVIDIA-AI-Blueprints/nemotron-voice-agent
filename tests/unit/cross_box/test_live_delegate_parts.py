@@ -182,19 +182,17 @@ class RoundTests(ServedRoute):
     def test_the_core_fills_what_the_client_left_out_and_sends_what_it_chose(self):
         chat = FakeChat(answer("Hello."), answer("Hello."))
         with self.served(chat) as (http, _):
-            info = http.get("/v1/live/info").json()  # what the console reads (app.js)
+            info = http.get("/v1/live/info").json()
             default = http.post("/v1/live/delegate", json={"input": [USER]}).json()
             model = next(name for name in info["backend_models"] if name != info["backend"]["model"])
             tools = [MENU_TOOL, {"type": "web_search"}]
             body = {"input": [USER], "model": model, "instructions": "Be terse.", "tools": tools}
             chosen = http.post("/v1/live/delegate", json=body).json()
         first, second = chat.requests
-        # The core's defaults: the backend slot's default model and its prompt as written, then the voice note. The
-        # console's prefill is the cafe demo's prompt instead, which it sends with the cafe's sample tools.
+        # The core's defaults: the backend slot's default model and its prompt as written, then the voice note.
         prompt = get_profile(info["backend"]["prompt"]).prompt("thinker")
         self.assertEqual((first["model"], default["sent_request"]["model"]), (info["backend"]["model"],) * 2)
         self.assertEqual(first["messages"][0]["content"], compose(prompt, voice_note()))
-        self.assertNotEqual(info["instructions"]["backend"], prompt)
         self.assertNotIn("tools", first)
         # The client's own: a model the catalog lists for the slot, its instructions and its tools. The reply names a
         # hosted tool by its type; the chat-completions backend gets the function tools only.

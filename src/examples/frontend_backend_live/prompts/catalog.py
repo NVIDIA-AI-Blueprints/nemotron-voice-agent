@@ -3,8 +3,8 @@
 
 """The example's prompt profiles, one folder each in ``prompts/``, and the lines the voice says word for word.
 
-A profile is a folder that holds ``profile.yaml`` (its settings only: ``default``, ``internal``, ``tools`` and, for the
-Live Console's sample, ``console_presets``) and its role files, each a ``description`` and a ``content``:
+A profile is a folder that holds ``profile.yaml`` (its settings only: ``default``, ``internal`` and ``tools``) and its
+role files, each a ``description`` and a ``content``:
 ``talker.yaml`` (the talker's prompt), ``thinker.yaml`` (the backend's) and ``channel.yaml`` (the context that follows
 both). A listed profile, one the UI offers, needs all three; an internal one may leave the channel out.
 ``shared/lines.yaml`` holds the lines every profile's voice says.
@@ -32,7 +32,7 @@ LINES_PATH = PROMPTS_DIR / "shared" / "lines.yaml"
 LINES_KEY = "lines"
 # A profile's settings file; a folder of PROMPTS_DIR that holds one is a profile.
 PROFILE_FILE = "profile.yaml"
-SETTINGS_KEYS = ("default", "internal", "tools", "console_presets")
+SETTINGS_KEYS = ("default", "internal", "tools")
 ROLES = ("talker", "thinker", "channel")
 
 
@@ -41,11 +41,10 @@ class PromptProfile:
     """One profile, as its files read now: its settings and its role files' entries."""
 
     name: str
-    default: bool  # the profile a UI bot session gets when it names none, and the Live Console's sample
+    default: bool  # the profile a UI bot session gets when it names none
     internal: bool  # not listed: the UI leaves it out and a UI bot session cannot select it
     roles: Mapping[str, Mapping[str, Any]]  # role -> its file's entry ({description, content}); {} when absent
     tools: Mapping[str, Mapping[str, Any]]  # the backend's server tool sources by name, for the UI bot's sessions
-    console_presets: Any  # the Live Console's other append presets (factory.console_presets validates them)
 
     def content(self, role: str) -> str:
         """The content of ``role`` as its file holds it.
@@ -119,7 +118,6 @@ def get_profile(name: str) -> PromptProfile:
         internal=internal,
         roles=MappingProxyType(roles),
         tools=MappingProxyType(dict(settings.get("tools", {}))),
-        console_presets=settings.get("console_presets", {}),
     )
 
 
@@ -140,7 +138,7 @@ def default_profile_name() -> str:
 
 
 def default_profile() -> PromptProfile:
-    """The default profile: the one a UI bot session gets when it names none, and the Live Console's sample."""
+    """The default profile: the one a UI bot session gets when it names none."""
     return get_profile(default_profile_name())
 
 

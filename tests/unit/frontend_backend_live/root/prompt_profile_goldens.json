@@ -111,22 +111,6 @@
     "length": 2239,
     "sha256": "8a59c8d063312a5c379867daef53772146933552aae26f8a807171a7e27ed50e"
   },
-  "console.instructions": {
-    "length": 3914,
-    "sha256": "dc58486b24fcde1dff3d34f5f39fb3fb5c555cbb4ff14033e653151ef66ae187"
-  },
-  "console.lines": {
-    "length": 540,
-    "sha256": "c845b912fc55292c340ffc56b4f1d6f9d656ea8f37009ef1d3d4b31ff04078d3"
-  },
-  "console.presets": {
-    "length": 1046,
-    "sha256": "837570126eeecedd5d9c9f6a8422dfe18b7ece759a44bef58cbffbb3120484c1"
-  },
-  "console.sample_tools": {
-    "length": 2239,
-    "sha256": "8a59c8d063312a5c379867daef53772146933552aae26f8a807171a7e27ed50e"
-  },
   "core_file.core.agent.yaml": {
     "length": 9471,
     "sha256": "37d94726e2b89ec489539d5f07ee41e9c45fb1ec5e1b66f19b7436d30e8bee62"
@@ -144,12 +128,12 @@
     "sha256": "936a109fcbc8dfb235942250e0601c3224bc30bdcdef98c94c81b71df4ae65b6"
   },
   "lines.by_name": {
-    "length": 893,
-    "sha256": "ef7b664885988f462b49f3ebb1aae253e0ddd028e2ae05c0e7e821142596c510"
+    "length": 729,
+    "sha256": "4f2d67d0adc5e1a7e24061811806ff471f3cdee981f35c6695743606aea55237"
   },
   "lines.parsed": {
-    "length": 889,
-    "sha256": "870bd532222ebabba01dd4b7a443dc0f521e70e5f8bc8fc99789c187c2883fbf"
+    "length": 727,
+    "sha256": "f34d0214041432a91af52a1ae85ff0898ab5629d8408b3528deac55eb472bf54"
   },
   "live_core.core": {
     "length": 9457,

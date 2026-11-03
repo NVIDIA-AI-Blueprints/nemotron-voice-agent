@@ -18,7 +18,7 @@ The gateway serves the following routes:
 | `WS /v1/live/sessions/{id}/attach` | A sideband connection that observes a session and sends trusted commands |
 | `GET /v1/live/sessions/{id}/history` | What the session's models hold now: the frontend adapter's half and the delegation part's half |
 | `GET /v1/live/info` | The server's voices and session limit, plus what the example's `describe` hook adds |
-| `POST /v1/live/delegate` | One backend round for a client app that does its own delegated work, such as the Live Console in client mode |
+| `POST /v1/live/delegate` | One backend round for a client app that does its own delegated work |
 
 Any other path under `/v1/live` answers 404. Every route requires the bearer token when `LIVE_API_TOKEN` is set.
 

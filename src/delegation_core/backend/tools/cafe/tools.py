@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory cafe tools: menu, cart and checkout, as a server tool source. No external order is ever placed.
-
-The Live Console's browser cafe (``client/public/live/cafe.js``) gives the same results, rule for rule:
-``client/test/live/cafe-parity.json`` holds them, and ``tests/unit/cross_box/test_console_cafe_parity.py`` checks this
-module against it, so a change here goes into both files.
-"""
+"""In-memory cafe tools: menu, cart and checkout, as a server tool source. No external order is ever placed."""
 
 from __future__ import annotations
 

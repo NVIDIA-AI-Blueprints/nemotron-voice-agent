@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 import tracing  # noqa: F401
 from delegation_core.api.local import LocalResponsesClient
 from delegation_core.api.service import ResponsesService
-from delegation_core.app import DelegationCore, build_core, tool_sources
+from delegation_core.app import DelegationCore, build_core
 from delegation_core.backend.port import EndpointLookup
 from delegation_core.config import CoreSettings
 from delegation_core.config import ModelEndpoint as CoreEndpoint
@@ -43,13 +43,7 @@ from examples.frontend_backend_live.adapter.contract import ServiceStarting
 from examples.frontend_backend_live.config_manager.loader import EXAMPLE_DIR, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ExampleConfig, ModelEndpoint
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts.catalog import (
-    PROFILE_FILE,
-    PromptProfile,
-    catalog_line,
-    default_profile,
-    get_profile,
-)
+from examples.frontend_backend_live.prompts.catalog import PromptProfile, get_profile
 from examples.frontend_backend_live.tables import pick
 from live.ports import SessionParts
 from live.protocol import ProtocolError, SessionConfig
@@ -63,14 +57,6 @@ if TYPE_CHECKING:
 
 # The delegation core's own file, beside config.yaml; CORE_CONFIG_PATH names another.
 CORE_CONFIG = EXAMPLE_DIR / "core.yaml"
-
-# The shared lines (prompts/shared/lines.yaml) that the console sends: in client mode the silent note that work started
-# (``app_started``) and a failed delegation's line (``apology``, ``unclear``), the progress line of a slow tool batch
-# (``still_working``), and its append presets (``intro``, ``still_working``).
-CONSOLE_LINES = ("apology", "unclear", "still_working", "intro", "app_started")
-# The default profile's setting that holds the console's other append presets (``prompts/<profile>/profile.yaml``):
-# by append type, a list of [label, text].
-CONSOLE_PRESETS = "console_presets"
 
 # The root's reads and the core's build happen once, also when several sessions start together: a first call waits
 # for the build another thread has begun. Reentrant, because the core's build reads the root's state.
@@ -271,16 +257,13 @@ async def core() -> LocalResponsesClient:
 
 
 async def describe() -> dict:
-    """``live.describe``: the example for the live console, as plain JSON (no credentials)."""
+    """``live.describe``: the example, as plain JSON (no credentials)."""
     return await asyncio.to_thread(_describe)
 
 
 def _describe() -> dict:
-    """The adapter's half, the core's half, the backend's models, and the console's sample.
-
-    The sample is the default talker, the UI bot's backend and its tools, and the lines and presets the console sends.
-    """
-    state, built, sample = root(), delegation_core(), console_sample()
+    """The adapter's half, the core's half and the backend's models."""
+    state, built = root(), delegation_core()
     backend = state.core.backend
     default = endpoint_lookup(state.catalog, backend.slot)(None)
     frontend = state.adapter.describe(state.settings, state.catalog)
@@ -295,64 +278,4 @@ def _describe() -> dict:
             "base_url": default.base_url,
             "prompt": backend.prompt,
         },
-        "instructions": {"frontend": sample.talker, "backend": sample.instructions},
-        "sample_tools": sample.tools,
-        "lines": sample.lines,
-        "presets": sample.presets,
     }
-
-
-@dataclass(frozen=True)
-class ConsoleSample:
-    """What the console starts with: the default prompt profile's talker, backend and tools, lines and presets."""
-
-    instructions: str  # the default profile's backend instructions, as a UI bot session of it starts its backend
-    tools: list[dict]  # the tools of the tool sources that the profile names, built by name
-    lines: dict[str, str]  # the shared lines that the console sends, by name (CONSOLE_LINES)
-    presets: dict[str, list[list[str]]]  # the profile's other append presets, by append type (CONSOLE_PRESETS)
-    talker: str  # the default profile's talker prompt, then the channel context
-
-
-@once
-def console_sample() -> ConsoleSample:
-    """The console's sample: the default prompt profile's talker, backend and tools, the lines and its presets.
-
-    The console runs in the browser, with its own copy of the tools, the demo of the default prompt profile (the one a
-    UI bot session gets when it names none), so it starts with that profile's talker prompt, then its channel context,
-    the backend instructions a UI bot session of it starts with, and its tools, from one read of the profile. The Live
-    frontend and core run no demo: they give a session or a request with no instructions their own defaults.
-
-    Raises:
-        KeyError: The shared lines have no line of a name in ``CONSOLE_LINES``.
-        ValueError: The profile's ``console_presets`` setting is malformed.
-    """
-    profile = default_profile()
-    sources = tool_sources(frozen_tools(profile.tools))()
-    tools = [tool for source in sources for tool in source.tools()]
-    lines = {name: catalog_line(name) for name in CONSOLE_LINES}
-    talker = profile.instructions("talker")
-    return ConsoleSample(profile.instructions("thinker"), tools, lines, console_presets(profile), talker)
-
-
-def console_presets(profile: PromptProfile) -> dict[str, list[list[str]]]:
-    """The profile's ``console_presets`` setting: by append type, the [label, text] presets the console offers.
-
-    A profile without the setting offers none.
-
-    Raises:
-        ValueError: The setting is not a mapping of append type to a list of [label, text] pairs of text.
-    """
-    block = profile.console_presets or {}
-    if not isinstance(block, dict) or not all(
-        isinstance(entries, list) and all(map(_is_preset, entries)) for entries in block.values()
-    ):
-        raise ValueError(
-            f"prompts/{profile.name}/{PROFILE_FILE} {CONSOLE_PRESETS} must map each append type to a list of "
-            "[label, text] pairs"
-        )
-    return block
-
-
-def _is_preset(entry: object) -> bool:
-    """Whether ``entry`` is one append preset: a [label, text] pair of text."""
-    return isinstance(entry, list) and len(entry) == 2 and all(isinstance(text, str) for text in entry)

@@ -238,7 +238,7 @@ class FromConfigTests(unittest.TestCase):
 
     def test_describe_is_the_adapters_half_of_info_with_no_key(self):
         info = CascadeAdapter.describe(TALKER_SETTINGS, FakeCatalog())
-        self.assertEqual(set(info), {"frontend", "prompt_version", "speech"})  # the console's prefills are the root's
+        self.assertEqual(set(info), {"frontend", "prompt_version", "speech"})
         self.assertEqual(
             info["frontend"],
             {

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The cafe profile's talker: the Bluebird Cafe ordering assistant's prompt, which the UI lists and the repository
-# UI bot and the Live Console start from (followed by channel.yaml). The UI shows its description.
+# UI bot starts from (followed by channel.yaml). The UI shows its description.
 
 description: "Talker prompt for the Bluebird Cafe ordering assistant (frontend/backend live cascade)."
 content: |

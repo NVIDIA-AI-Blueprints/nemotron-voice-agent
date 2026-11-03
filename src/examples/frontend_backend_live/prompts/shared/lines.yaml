@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The lines the voice says word for word, by name (prompts/catalog.py: catalog_line), for every profile. The talker
-# says ``holding`` when its decision fails while work is open; the cascade reads the others except ``still_working``
-# and ``app_started``. The Live Console reads ``apology``, ``unclear``, ``still_working``, ``intro`` and
-# ``app_started`` through GET /v1/live/info, and sends ``app_started``, which is never said, as its silent note that a
-# client delegation's work started. An empty line means none is said or sent.
+# says ``holding`` when its decision fails while work is open; the cascade reads the others. An empty line means
+# none is said.
 lines:
   apology: "Sorry, I ran into a problem with that. Could you say it again?"
   unclear: "Something went wrong along the way, so I can't tell whether that went through. Let's check before trying it again."
@@ -13,7 +11,5 @@ lines:
   refusal: "I can't take on another request right now. Please try again in a moment."
   app_wait_line: "I'm still waiting for that to come through."
   holding: "One moment, I'm still working on your earlier request."
-  still_working: "I'm still working on that, thanks for your patience."
   intro: "This is an initial greeting, not an order. Greet the user briefly as Remy from Bluebird Cafe and ask what they would like. Respond directly with spoken text."
   greeting: "Hi, I'm Remy from Bluebird Cafe. What can I get you?"
-  app_started: "Work on the caller's latest request has started; there is no result yet."
