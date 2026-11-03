@@ -201,7 +201,11 @@ class RTVIClient(ProtocolClient):
                 self.server_metric_samples["llm_processing_time"].append(processing_time)
                 if self._pending_llm_completion_tokens and processing_time > 0:
                     completion_tokens = self._pending_llm_completion_tokens.pop(0)
-                    self.server_metric_samples["llm_tokens_per_sec"].append(completion_tokens / processing_time)
+                    try:
+                        tokens_per_sec = completion_tokens / processing_time
+                    except OverflowError:
+                        continue
+                    self.server_metric_samples["llm_tokens_per_sec"].append(tokens_per_sec)
 
     async def recover_turn(
         self,

@@ -154,6 +154,32 @@ class BenchmarkMetricTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.server_metric_samples["llm_processing_time"], [1.0, 2.0])
         self.assertEqual(client.server_metric_samples["llm_tokens_per_sec"], [0.0, 10.0])
 
+    async def test_skips_token_rates_that_overflow_float_conversion(self) -> None:
+        client = RTVIClient(
+            stream_id="client_1",
+            host="localhost",
+            port=7860,
+            logger=types.SimpleNamespace(log=AsyncMock()),
+            connect_timeout=1,
+        )
+        client.set_collecting_metrics(True)
+
+        await client.process_server_message(
+            {
+                "type": "metrics",
+                "data": {
+                    "tokens": [{"completion_tokens": 10**309}, {"completion_tokens": 20}],
+                    "processing": [
+                        {"processor": "NvidiaLLMService#1", "value": 1.0},
+                        {"processor": "NvidiaLLMService#1", "value": 2.0},
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(client.server_metric_samples["llm_processing_time"], [1.0, 2.0])
+        self.assertEqual(client.server_metric_samples["llm_tokens_per_sec"], [10.0])
+
     async def test_rejects_latency_values_too_large_for_float(self) -> None:
         client = RTVIClient(
             stream_id="client_1",

@@ -346,6 +346,50 @@ class SpeakerDiarizationProcessorTest(unittest.IsolatedAsyncioTestCase):
         pushed = [call.args[0].text for call in processor.push_frame.await_args_list]
         self.assertEqual(pushed, [" Speaker 1: Assist", "ant"])
 
+    async def test_native_cut_word_reassigned_across_speakers_is_emitted_separately(self):
+        processor = await self._processor(multi_speaker_support=True)
+        first = TranscriptionFrame(
+            text="col",
+            user_id="1",
+            timestamp="",
+            result=SimpleNamespace(
+                alternatives=[
+                    SimpleNamespace(
+                        transcript="col",
+                        words=[SimpleNamespace(word="col", speaker_tag=1, start_time=0, end_time=400)],
+                    )
+                ]
+            ),
+            finalized=True,
+        )
+        second = TranscriptionFrame(
+            text="ors? Red",
+            user_id="2",
+            timestamp="",
+            result=SimpleNamespace(
+                alternatives=[
+                    SimpleNamespace(
+                        transcript="ors? Red",
+                        words=[
+                            SimpleNamespace(word="ors?", speaker_tag=2, start_time=400, end_time=500),
+                            SimpleNamespace(word="Red", speaker_tag=2, start_time=500, end_time=800),
+                        ],
+                    )
+                ]
+            ),
+            finalized=True,
+        )
+
+        await processor.process_frame(first, FrameDirection.DOWNSTREAM)
+        await processor.process_frame(second, FrameDirection.DOWNSTREAM)
+
+        self.assertEqual(
+            [(fragment.speaker_id, fragment.text) for fragment in processor.turn_fragments],
+            [(0, "colors?"), (1, "Red")],
+        )
+        pushed = [call.args[0].text for call in processor.push_frame.await_args_list]
+        self.assertEqual(pushed, [" Speaker 1: col", "ors?", " Speaker 2: Red"])
+
     async def test_start_frame_resets_primary_speaker_for_new_connection(self):
         processor = await self._processor(multi_speaker_support=False)
         await processor.process_frame(_frame("one", _result(_word("one", 2))), FrameDirection.DOWNSTREAM)

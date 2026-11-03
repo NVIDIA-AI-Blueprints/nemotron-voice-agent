@@ -330,7 +330,7 @@ class SpeakerDiarizationProcessor(FrameProcessor):
                         frame.timestamp,
                     )
 
-            if self.multi_speaker_support and mapped_speaker is None and len(runs) > 1:
+            if self.multi_speaker_support and len(runs) > 1:
                 for run_index, (speaker_id, text) in enumerate(runs):
                     copied = _copy_transcription_frame(frame, text=text)
                     copied.nvidia_speaker_tag = speaker_id
