@@ -111,6 +111,10 @@ Style Guide above.
 - Keep each `src/examples/<example>/README.md` aligned with that example's
   pipeline, prompts, service catalogs, supported transports, and deployment
   profiles.
+- Keep `docs/design/architecture.md` aligned with the Frontend/Backend Live
+  example's ports (`src/live/ports.py`, `src/delegation_core/backend/port.py`),
+  its tables of implementations, and its configuration files, and keep the
+  READMEs of `src/live/` and `src/delegation_core/` aligned with their packages.
 
 ## Documentation Sources and Maintenance
 
@@ -118,7 +122,9 @@ Style Guide above.
   `examples_registry.yaml`.
 - Verify pipeline behavior in `src/examples/<example>/pipeline.py` and shared
   behavior in `src/examples/shared/` and `src/server.py`.
-- Verify prompt configuration in the example-local `prompts.yaml` and service
+- Verify prompt configuration in the example-local `prompts.yaml` (the
+  Frontend/Backend Live example's prompt profiles in its `prompts/<profile>/`
+  folders, served through the registry's `prompt_catalog` key) and service
   configuration in the root `services.yaml` and `settings.yaml`.
 - Verify Compose profiles, service names, ports, image tags, environment
   variables, and hardware placement in `docker-compose.yml`, `docker/`, and
