@@ -1054,3 +1054,30 @@ Validation is limited to local, model-free behavior at this checkpoint. No
 new benchmark or cloud deployment is part of this prototype. The existing
 C6/C3 evaluation jobs retain their original frozen source, cases, providers,
 settings, and failure denominators.
+
+## November 03, 2026: Exclusive-Pool Timing Attribution
+
+The next experimental lane combines early input processing with exclusive
+worker admission for one frozen offline C3 cohort. It uses ten private
+single-worker backends. Existing online clients, model settings, turn policy,
+native text selection, deadlines, and retry semantics remain unchanged.
+This source checkpoint records instrumentation and readiness, not a measured
+throughput or accuracy result.
+
+Passive client stages separate preflight and its ACK-only probe, PCM/tail
+preparation, actual connection and native ACK, source/EOF send, first eligible
+raw token, selected native end, and close. Optional server profiling separates
+VAD executor queueing, body wall time, calling-thread CPU, and loop resumption.
+Pool sidecars connect admission and lifecycle observations through an opaque
+lease digest and server session ID. Missing or interrupted stages remain
+unobserved or explicitly incomplete.
+
+The CI-only inherited process-group option lets the outer job validate and
+reap its front door and ten backends together. Standalone pool startup retains
+its previous separate worker sessions. Neither path reuses a worker before
+authenticated handler-return evidence or replays accepted input after failure.
+
+The legacy `session_returned` metric precedes diagnostics persistence. It is
+distinct from the private worker wrapper's actual handler return. Refer to
+[timing attribution](offline-processing-reference.md#attribute-offline-client-and-server-waits)
+for stage definitions, source-clock limits, and observation overhead.

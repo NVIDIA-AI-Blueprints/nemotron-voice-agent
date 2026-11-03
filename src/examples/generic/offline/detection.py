@@ -17,7 +17,14 @@ from dataclasses import dataclass
 from time import perf_counter_ns
 from typing import Any, Protocol
 
-from .diagnostics import current_diagnostics, duration, record
+from .diagnostics import (
+    ProfiledExecutor,
+    current_diagnostics,
+    duration,
+    observe_vad_model,
+    profile_vad_window,
+    record,
+)
 from .models import RATE, AudioSource, DetectionTrace, SpeechInterval, UserTurn, ns_to_samples, samples_to_ns
 
 
@@ -81,6 +88,8 @@ class SampleTimedSileroMixin:
         self._offline_model_reset_offsets: list[int] = []
         self._offline_diagnostics = current_diagnostics()
         super().__init__(*args, **kwargs)
+        if getattr(self._offline_diagnostics, "profiling_enabled", False) is True:
+            self._executor = ProfiledExecutor(self._executor)
 
     @property
     def model_reset_offsets(self) -> tuple[int, ...]:
@@ -93,6 +102,7 @@ class SampleTimedSileroMixin:
             raise ValueError("Silero source positions must be monotonic")
         self._offline_source_end_sample = end_sample
 
+    @observe_vad_model()
     def voice_confidence(self, buffer: bytes) -> float:
         """Retain native first-window reset and five seconds since each reset."""
         import numpy as np
@@ -114,6 +124,11 @@ class SampleTimedSileroMixin:
         if observed_start is not None:
             duration(self._offline_diagnostics, "vad_model", perf_counter_ns() - observed_start)
         return confidence
+
+    async def analyze_audio(self, buffer):
+        """Observe exact native executor stages without replacing native analysis."""
+        with profile_vad_window(self._offline_diagnostics, self._offline_source_end_sample):
+            return await super().analyze_audio(buffer)
 
     def _run_analyzer(self, buffer):
         """Time the complete native executor body without replacing its work.

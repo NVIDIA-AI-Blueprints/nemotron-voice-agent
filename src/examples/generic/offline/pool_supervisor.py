@@ -52,18 +52,22 @@ class WorkerSupervisor:
         startup_timeout_s=60.0,
         stop_timeout_s=5.0,
         environment=None,
+        inherit_worker_process_group=False,
     ):
         """Bound process count and watchdogs independently of response deadlines."""
         if type(count) is not int or not 1 <= count <= 64:
             raise ValueError("Offline pool size must be an integer from 1 through 64")
         if not isinstance(worker_factory, str) or not worker_factory or ":" not in worker_factory:
             raise ValueError("Worker factory must be a trusted module:attribute")
+        if type(inherit_worker_process_group) is not bool:
+            raise ValueError("Inherited worker process group must be an explicit boolean")
         self.count = count
         self.worker_factory = worker_factory
         self.startup_timeout_s = _seconds(startup_timeout_s, "startup_timeout_s")
         self.stop_timeout_s = _seconds(stop_timeout_s, "stop_timeout_s")
         self.token = secrets.token_urlsafe(32)
         self._environment = dict(os.environ if environment is None else environment)
+        self.inherit_worker_process_group = inherit_worker_process_group
         self._workers: list[_OwnedWorker] = []
         self._lock = asyncio.Lock()
         self._started = False
@@ -86,6 +90,8 @@ class WorkerSupervisor:
                 return [BackendDescriptor(w.worker_id, w.base_url, w.process.pid) for w in self._workers]
             if os.name != "posix":
                 raise PoolStartupError("offline_pool_requires_posix_inherited_sockets")
+            if self.inherit_worker_process_group and os.getpgrp() != os.getpid():
+                raise PoolStartupError("offline_pool_inherited_group_requires_owned_session_leader")
             try:
                 for index in range(self.count):
                     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -108,7 +114,7 @@ class WorkerSupervisor:
                             self.worker_factory,
                             env=environment,
                             pass_fds=(listener.fileno(),),
-                            start_new_session=True,
+                            start_new_session=not self.inherit_worker_process_group,
                             stdin=asyncio.subprocess.DEVNULL,
                             stdout=asyncio.subprocess.DEVNULL,
                             stderr=asyncio.subprocess.DEVNULL,
@@ -227,11 +233,17 @@ def create_managed_pool_app(
     startup_timeout_s=60.0,
     drain_timeout_s=60.0,
     admission_timeout_s=1.0,
+    inherit_worker_process_group=False,
 ):
     """Build an opt-in offline front door without changing server:app_factory."""
     from .pool_proxy import ExclusiveWorkerPool, create_pool_proxy
 
-    supervisor = WorkerSupervisor(count, worker_factory=worker_factory, startup_timeout_s=startup_timeout_s)
+    supervisor = WorkerSupervisor(
+        count,
+        worker_factory=worker_factory,
+        startup_timeout_s=startup_timeout_s,
+        inherit_worker_process_group=inherit_worker_process_group,
+    )
 
     @asynccontextmanager
     async def lifespan(app):
@@ -281,6 +293,11 @@ def main():
     parser.add_argument("--startup-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--drain-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--admission-wait-seconds", type=float, default=1.0)
+    parser.add_argument(
+        "--inherit-worker-process-group",
+        action="store_true",
+        help="Keep children in this session leader's group for explicit CI-owned cleanup",
+    )
     args = parser.parse_args()
     if not 0 < args.port <= 65535:
         parser.error("--port must be from 1 through 65535")
@@ -289,6 +306,7 @@ def main():
         startup_timeout_s=args.startup_timeout_seconds,
         drain_timeout_s=args.drain_timeout_seconds,
         admission_timeout_s=args.admission_wait_seconds,
+        inherit_worker_process_group=args.inherit_worker_process_group,
     )
     uvicorn.run(
         app, host=args.host, port=args.port, workers=1, access_log=False, ws_max_size=8 * 1024 * 1024, ws_max_queue=1

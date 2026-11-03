@@ -153,6 +153,7 @@ The first integration currently lives in `src/examples/generic/offline/`.
 | `pool_supervisor.py` | Optional front-door startup and owned private single-worker processes |
 | `pool_proxy.py` | Exclusive stream admission, bounded forwarding, and authenticated lease draining |
 | `worker.py` | Private request guard, one offline handler per process, and handler-return status |
+| `diagnostics.py` and `pool_telemetry.py` | Optional bounded scalar observations for native execution and exclusive-pool lifecycle |
 | `src/examples/shared/evaluation_trace.py` | Optional passive timing observations for the normal live pipeline, separate from offline scheduling |
 
 These boundaries apply the SOLID principles directly. Each module owns one
@@ -553,8 +554,9 @@ The observer retains server-monotonic event times, numeric duration summaries,
 and allowlisted labels. It excludes transcripts, audio, request messages,
 provider bodies, credentials, and exception messages. Inspect `truncated` and
 `rejected_fields` before interpreting missing measurements. Persistence is
-attempted after the offline handler returns; a missing file is an observability
-gap, not evidence that a provider returned no events.
+attempted inside the offline handler's finalizer, before its enclosing ASGI
+handler returns. A missing file is an observability gap, not evidence that a
+provider returned no events.
 
 The measurements distinguish these boundaries.
 
@@ -578,10 +580,93 @@ provenance when comparing execution times.
 
 Use the client case result and inner outcome events when checking success.
 `session_failed` retains only the exception type. `session_cancelled` distinguishes
-client disconnection from server cancellation. `session_returned` records handler
-return, which can follow a handled failure or cancellation. In text mode, a client
+client disconnection from server cancellation. `session_finalizer_entered` and
+the legacy `session_returned` observation mark entry to finalization before
+persistence. The latter records `boundary=pre_persistence`; it does not attest
+enclosing ASGI handler return. In text mode, a client
 can already have accepted its answer before disconnecting and triggering cleanup.
 None of these observations alone establishes full provider EOF or successful cleanup.
+
+### Attribute Offline Client and Server Waits
+
+The VoiceBench offline adapter adds scalar `offline_client_` timings to each
+attempt. These use client monotonic wall time in seconds. Existing
+`offline_upload_wall_s`, `offline_text_completion_wall_s`, and
+`offline_total_wall_s` retain their earlier boundaries after preflight.
+The new attempt origin begins before deployment and capability preflight, after
+argument validation. These are overlapping observations, not values to sum
+indiscriminately.
+
+`offline_client_attempt_started_monotonic_s` records the configured client's
+monotonic origin. Combine it with relative client points only after verifying
+the client and server use the same host clock domain. Clock overrides used by
+fixtures require their own scope. Host monotonic timestamps are neither UTC
+timestamps nor provider TTFB clocks; logical source samples remain separate.
+
+The client measurements distinguish these stages.
+
+| Stage | Scope |
+| --- | --- |
+| Deployment and capability preflight | Deployment metadata request plus the separate ACK-only probe, with probe connect, start send, ACK wait, and close measured separately. |
+| PCM preparation | Copy already decoded PCM16 and allocate its finite silence tail. Earlier file loading, decoding, and resampling are outside this client stage. |
+| Actual WebSocket connect and native ACK | Connect to the selected endpoint, send the session start, and await the native acknowledgement. These intervals can include proxy admission and backend work. |
+| PCM and EOF send | Send source and tail packets, construct their existing headers, compute the existing digest, and send explicit input completion. |
+| First eligible raw token and native text end | Client receipt under the existing token/deadline and candidate policies. These intervals are not native provider TTFB. An earlier eligible token epoch can later be interrupted. |
+| Close handshake | Await the existing bounded close operation. Socket close does not attest server cleanup. |
+
+Unobserved stages remain absent. Failed, cancelled, or unsuccessful stages use
+`_incomplete_wall_s` for their observed elapsed interval, without inventing a
+completed stage or a zero. Existing failure partials retain these measurements.
+The optional 10-second response-start budget still begins after source and tail
+upload; instrumentation adds no silence, timeout change, or TTS wait.
+
+Set trusted `NVA_OFFLINE_PROFILE=1` together with
+`NVA_OFFLINE_SERVER_METRICS_DIR` to add bounded server profiling under
+`nva.offline.profile.v1`. The profiler observes the existing native executor;
+it does not select a different executor or modify Silero's algorithm.
+`vad_executor_queue` separates native submission from actual callable entry,
+including executor dispatch and OS scheduling. It does not prove that another
+queued task caused the delay.
+`vad_executor_finish_to_loop_resume` measures return to the owning loop.
+`vad_model_thread_cpu` and `vad_executor_thread_cpu` measure calling-thread CPU
+within their respective bodies. They do not isolate ONNX compute or include
+CPU consumed by every internal native thread.
+Use the paired `vad_model_profile_wall` and `vad_executor_profile_wall`
+observations when comparing those CPU intervals. The older wall summaries
+retain their original probe boundaries.
+
+The profile retains at most 16 slow completed VAD windows and two inflight
+windows, with source pointers and stage timestamps. A cancelled await can end
+before its executor callable. Keep missing finish/resume fields unobserved.
+`event_loop_lag` samples loop scheduling, while process CPU and wall intervals
+cover the observed worker process, not VAD alone.
+`asr_callback_to_actor_lock` runs from a callback observation before publication
+to entry of its existing locked callback. ASR dispatch-to-start also includes
+thread dispatch, context propagation, and scheduling. These measurements do not
+isolate ASR inference, remote provider/GPU queues, internal gRPC flow control,
+or source-input starvation.
+ASR thread dispatch, entry, first RPC response, and completion remain separate
+observations. Numeric progress records include blank results and supplied/source
+dependency pointers, without adding transcript text.
+
+For the exclusive worker pool, set trusted `NVA_OFFLINE_POOL_METRICS_DIR` to
+retain bounded `nva.offline.pool-metrics.v1` worker and proxy sidecars. They
+contain admission, identity-check, backend-connect, relay, drain, and handler
+return observations. Join the case's `server_metrics_session_id` to its worker
+sidecar, then use that worker's opaque `lease_sha256` to join the proxy sidecar.
+The proxy does not inspect response bodies to discover the session ID.
+They exclude raw lease credentials,
+transcripts, audio, and provider/request bodies. Missing or dropped sidecars
+remain an observability gap.
+
+`diagnostics_persistence_started` precedes the metrics write. Its completion
+cannot be recorded in the snapshot being written, so the trusted worker holder
+records that later boundary separately. The outer worker's handler return and
+authenticated completed-lease status remain distinct from the inner
+`session_returned` marker. Use matching clock domains and these observed joins
+to attribute waiting; client totals or CPU correlations alone do not identify
+a server bottleneck. Profiling adds observation overhead and establishes no
+throughput, accuracy, or production-readiness claim.
 
 ### Passive Session Traces
 
@@ -839,6 +924,17 @@ Worker children retire if their original supervisor disappears. Stop this
 foreground process to close the pool and its owned children. Ordinary shutdown
 joins owned child cleanup before propagating caller cancellation. Cleanup
 failures remain errors.
+
+The optional `--inherit-worker-process-group` flag is for a CI-owned process
+session. It requires the supervisor to be its own process-group leader and
+keeps backend children in that group. The default retains separate worker
+sessions. Each backend still owns its private socket and one Uvicorn worker.
+The CI launcher records the front door and ten backend identities before
+relying on group cleanup. Its outer cleanup permits 15 seconds for termination
+and 5 seconds for forced stop and verification; it retains the ownership marker
+if the live group cannot be verified or reaped. These bounds do not extend a
+sample's response deadline or provider guards. Child parent-loss monitoring
+continues to stop only the child itself.
 
 The public surface is limited to these routes:
 

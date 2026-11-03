@@ -8,7 +8,9 @@
 import asyncio
 import json
 import os
+import signal
 import socket as socketlib
+import sys
 import tempfile
 import time
 import unittest
@@ -36,6 +38,21 @@ class PoolConfigurationTests(unittest.TestCase):
         for timeout in (0, -1, float("nan"), float("inf"), True):
             with self.subTest(timeout=timeout), self.assertRaises(ValueError):
                 WorkerSupervisor(startup_timeout_s=timeout)
+        for value in ("true", 1, None):
+            with self.subTest(inherit=value), self.assertRaises(ValueError):
+                WorkerSupervisor(inherit_worker_process_group=value)
+
+    def test_frontdoor_cli_inherited_group_is_explicit_and_defaults_to_isolation(self):
+        for arguments, inherited in (([], False), (["--inherit-worker-process-group"], True)):
+            with (
+                self.subTest(inherited=inherited),
+                patch("sys.argv", ["offline-pool", *arguments]),
+                patch.object(supervisor_module, "create_managed_pool_app", return_value=Mock()) as factory,
+                patch("uvicorn.run") as serve,
+            ):
+                supervisor_module.main()
+                self.assertIs(factory.call_args.kwargs["inherit_worker_process_group"], inherited)
+                self.assertEqual(serve.call_args.kwargs["workers"], 1)
 
 
 class _ControlledProcess:
@@ -80,6 +97,37 @@ class SupervisorFailureTests(unittest.IsolatedAsyncioTestCase):
         listener.fileno.return_value = 91
         listener.getsockname.return_value = ("127.0.0.1", 40123)
         return listener
+
+    async def test_spawn_group_inheritance_is_opt_in_and_keeps_one_owned_child(self):
+        for inherited in (False, True):
+            with self.subTest(inherited=inherited):
+                process = _ControlledProcess(12345)
+                supervisor = WorkerSupervisor(1, inherit_worker_process_group=inherited)
+                with (
+                    patch.object(supervisor_module.os, "getpid", return_value=123),
+                    patch.object(supervisor_module.os, "getpgrp", return_value=123),
+                    patch.object(supervisor_module.socket, "socket", return_value=self.listener()),
+                    patch.object(
+                        supervisor_module.asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
+                    ) as spawn,
+                    patch.object(supervisor, "_ready", AsyncMock()),
+                ):
+                    descriptors = await supervisor.start()
+                self.assertIs(spawn.call_args.kwargs["start_new_session"], not inherited)
+                self.assertEqual([item.pid for item in descriptors], [process.pid])
+                await supervisor.aclose()
+                self.assertEqual(process.returncode, 0)
+
+    async def test_inherited_group_requires_frontdoor_to_own_its_process_group(self):
+        supervisor = WorkerSupervisor(1, inherit_worker_process_group=True)
+        with (
+            patch.object(supervisor_module.os, "getpid", return_value=123),
+            patch.object(supervisor_module.os, "getpgrp", return_value=456),
+            patch.object(supervisor_module.asyncio, "create_subprocess_exec", AsyncMock()) as spawn,
+            self.assertRaises(PoolStartupError),
+        ):
+            await supervisor.start()
+        spawn.assert_not_called()
 
     async def test_partial_spawn_failure_closes_listeners_and_reaps_only_owned_process(self):
         process = _ControlledProcess(12345)
@@ -192,6 +240,77 @@ class SupervisorFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("offline_pool_startup_failed:OSError", caught.exception.__notes__)
         self.assertEqual(process.returncode, -9)
         self.assertTrue(supervisor._closed)
+
+
+@unittest.skipUnless(os.name == "posix", "Inherited process groups require POSIX")
+class InheritedGroupProcessTests(unittest.IsolatedAsyncioTestCase):
+    """A real owned session leader contains exactly ten private app workers."""
+
+    async def test_ten_backend_processes_inherit_owned_frontdoor_group_and_are_reaped(self):
+        repo = Path(__file__).resolve().parents[2]
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = os.pathsep.join((str(repo / "src"), str(repo / "tests/unit")))
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            socketlib.socket(socketlib.AF_INET, socketlib.SOCK_STREAM) as listener,
+        ):
+            environment["OFFLINE_POOL_FIXTURE_RELEASE_DIR"] = temporary
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(socketlib.SOMAXCONN)
+            port = listener.getsockname()[1]
+            script = """
+import socket,sys,uvicorn
+from examples.generic.offline.pool_supervisor import create_managed_pool_app
+app=create_managed_pool_app(count=10,worker_factory='offline_pool_fixture_app:create_app',inherit_worker_process_group=True)
+listener=socket.socket(fileno=int(sys.argv[1]))
+uvicorn.Server(uvicorn.Config(app,workers=1,access_log=False,log_level='critical')).run(sockets=[listener])
+"""
+            front = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                script,
+                str(listener.fileno()),
+                pass_fds=(listener.fileno(),),
+                cwd=repo,
+                env=environment,
+                start_new_session=True,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            pids = []
+            try:
+                async with httpx.AsyncClient(trust_env=False, timeout=1) as client, asyncio.timeout(30):
+                    while True:
+                        self.assertIsNone(front.returncode)
+                        try:
+                            response = await client.get(f"http://127.0.0.1:{port}/health")
+                            if response.status_code == 200:
+                                pool = response.json()["worker_pool"]
+                                if pool["idle"] == 10:
+                                    pids = [worker["pid"] for worker in pool["workers"]]
+                                    break
+                        except httpx.HTTPError:
+                            pass
+                        await asyncio.sleep(0.02)
+                self.assertEqual(len(set(pids)), 10)
+                self.assertNotIn(front.pid, pids)
+                self.assertEqual(os.getpgid(front.pid), front.pid)
+                self.assertTrue(all(os.getpgid(pid) == front.pid for pid in pids))
+                front.terminate()
+                # Uvicorn can re-raise the captured shutdown signal after its
+                # lifespan has drained; either normal exit form is valid.
+                self.assertIn(await asyncio.wait_for(front.wait(), 15), (0, -signal.SIGTERM))
+                for pid in pids:
+                    with self.subTest(pid=pid), self.assertRaises(ProcessLookupError):
+                        os.getpgid(pid)
+            finally:
+                if front.returncode is None:
+                    front.terminate()
+                    try:
+                        await asyncio.wait_for(front.wait(), 15)
+                    except TimeoutError:
+                        front.kill()
+                        await asyncio.wait_for(front.wait(), 5)
 
 
 @unittest.skipUnless(os.name == "posix", "Inherited loopback sockets require POSIX")

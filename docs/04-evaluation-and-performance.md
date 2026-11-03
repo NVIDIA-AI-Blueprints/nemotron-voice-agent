@@ -15,6 +15,8 @@ no published benchmark result and preserves the default sealed-input path.
 A separate [offline worker-pool prototype](offline-processing-reference.md#use-the-exclusive-offline-worker-pool-prototype)
 provides exclusive stream admission; it has no validated throughput or accuracy
 claim and does not change the normal online server.
+Optional [client, server, and pool timings](offline-processing-reference.md#attribute-offline-client-and-server-waits)
+separate observed stages without changing native turn or completion policy.
 For commands, recording files, and exact metric scopes, refer to the
 [implementation and evaluation reference](offline-processing-reference.md).
 For dated architecture decisions and validation findings, refer to the

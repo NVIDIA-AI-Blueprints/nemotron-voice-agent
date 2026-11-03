@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import math
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
@@ -157,6 +158,10 @@ class ExclusiveWorkerPool:
         self._peak_reserved = 0
         self._closed = False
         self._cursor = 0
+        from .pool_telemetry import PoolTelemetry
+
+        self._telemetry = PoolTelemetry.from_environment()
+        self._profiles = {}
 
     async def _worker_status(self, backend, *, timeout=None):
         response = await asyncio.wait_for(
@@ -205,7 +210,7 @@ class ExclusiveWorkerPool:
         await asyncio.gather(*(verify(slot) for slot in self._slots.values()))
         return await self.status()
 
-    def _reserve_idle(self):
+    def _reserve_idle(self, admission_started_ns):
         slots = tuple(self._slots.values())
         for offset in range(len(slots)):
             index = (self._cursor + offset) % len(slots)
@@ -217,15 +222,24 @@ class ExclusiveWorkerPool:
                 self._cursor = (index + 1) % len(slots)
                 reserved = sum(item.lease_id is not None for item in slots)
                 self._peak_reserved = max(self._peak_reserved, reserved)
+                if self._telemetry is not None:
+                    self._profiles[slot.lease_id] = {
+                        "worker_id": slot.backend.worker_id,
+                        "worker_pid": slot.backend.pid,
+                        "admission_started_monotonic_ns": admission_started_ns,
+                        "admission_acquired_monotonic_ns": time.monotonic_ns(),
+                        "status_polls": 0,
+                    }
                 return WorkerLease(slot.backend, slot.lease_id)
         return None
 
     async def acquire(self):
         """Fail immediately if active-full; wait at most 1 s only for known drain."""
+        admission_started_ns = time.monotonic_ns()
         async with self._condition:
             if self._closed:
                 return None
-            lease = self._reserve_idle()
+            lease = self._reserve_idle(admission_started_ns)
             if lease is not None:
                 return lease
             if not any(slot.state == "DRAINING" for slot in self._slots.values()) or self._pending_admissions >= len(
@@ -237,7 +251,7 @@ class ExclusiveWorkerPool:
                 async with asyncio.timeout(self._admission_timeout):
                     while not self._closed:
                         await self._condition.wait()
-                        lease = self._reserve_idle()
+                        lease = self._reserve_idle(admission_started_ns)
                         if lease is not None:
                             return lease
                         if not any(slot.state == "DRAINING" for slot in self._slots.values()):
@@ -261,11 +275,14 @@ class ExclusiveWorkerPool:
             ):
                 raise RuntimeError("Offline worker lease is no longer active")
             snapshot = (slot.state, slot.lease_id, slot.total_leases)
+        self._profile(lease, "identity_check_started_monotonic_ns")
         try:
             data = await self._worker_status(lease.backend)
         except Exception:
             await self._quarantine_unchanged_snapshot(slot, snapshot, "admission_identity_or_transport_unverified")
             raise RuntimeError("Offline worker admission identity is unverified") from None
+        finally:
+            self._profile(lease, "identity_check_finished_monotonic_ns")
         async with self._condition:
             if self._closed or (slot.state, slot.lease_id, slot.total_leases) != snapshot:
                 raise RuntimeError("Offline worker lease changed during admission")
@@ -273,15 +290,24 @@ class ExclusiveWorkerPool:
                 slot.state, slot.quarantine_reason = "QUARANTINED", "admission_worker_not_idle"
                 self._condition.notify_all()
                 raise RuntimeError("Offline worker is not idle before admission")
-        return await self._connect(
-            lease.backend.websocket_url,
-            additional_headers=_headers(incoming_headers, self._token, lease.lease_id),
-            open_timeout=self._connect_timeout,
-            close_timeout=self._close_timeout,
-            max_size=self.max_message_bytes,
-            max_queue=1,
-            write_limit=65536,
-        )
+        self._profile(lease, "backend_connect_started_monotonic_ns")
+        try:
+            return await self._connect(
+                lease.backend.websocket_url,
+                additional_headers=_headers(incoming_headers, self._token, lease.lease_id),
+                open_timeout=self._connect_timeout,
+                close_timeout=self._close_timeout,
+                max_size=self.max_message_bytes,
+                max_queue=1,
+                write_limit=65536,
+            )
+        finally:
+            self._profile(lease, "backend_connect_finished_monotonic_ns")
+
+    def _profile(self, lease, name):
+        profile = self._profiles.get(lease.lease_id)
+        if profile is not None:
+            profile[name] = time.monotonic_ns()
 
     async def _quarantine(self, slot, reason):
         async with self._condition:
@@ -303,6 +329,7 @@ class ExclusiveWorkerPool:
 
     async def finish(self, lease, backend_socket=None):
         """Begin tracked background drain; socket close alone never frees a slot."""
+        self._profile(lease, "relay_finished_monotonic_ns")
         close_after_shutdown = False
         async with self._condition:
             slot = self._slots[lease.backend.worker_id]
@@ -325,8 +352,10 @@ class ExclusiveWorkerPool:
         deadline = asyncio.get_running_loop().time() + self._drain_timeout
         try:
             if backend_socket is not None:
+                self._profile(lease, "backend_close_started_monotonic_ns")
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(backend_socket.close(), timeout=self._close_timeout)
+                self._profile(lease, "backend_close_finished_monotonic_ns")
             if slot.state == "QUARANTINED":
                 return
             while not self._closed:
@@ -335,6 +364,9 @@ class ExclusiveWorkerPool:
                     await self._quarantine(slot, "handler_drain_timeout")
                     return
                 try:
+                    profile = self._profiles.get(lease.lease_id)
+                    if profile is not None:
+                        profile["status_polls"] += 1
                     data = await self._worker_status(slot.backend, timeout=min(remaining, self._http_timeout))
                 except Exception:
                     await self._quarantine(slot, "worker_status_or_identity_unverified")
@@ -351,6 +383,7 @@ class ExclusiveWorkerPool:
                     await self._quarantine(slot, "handler_return_not_attested")
                     return
                 else:
+                    self._profile(lease, "handler_return_verified_monotonic_ns")
                     async with self._condition:
                         if slot.state == "DRAINING" and slot.lease_id == lease.lease_id and not self._closed:
                             slot.state, slot.lease_id = "IDLE", None
@@ -362,6 +395,20 @@ class ExclusiveWorkerPool:
             raise
         except Exception:
             await self._quarantine(slot, "handler_drain_unverified")
+        finally:
+            profile = self._profiles.pop(lease.lease_id, None)
+            if profile is not None and self._telemetry is not None:
+                from .pool_telemetry import lease_digest
+
+                with contextlib.suppress(Exception):
+                    self._telemetry.submit(
+                        "proxy",
+                        lease_digest(lease.lease_id),
+                        **profile,
+                        profile_finished_monotonic_ns=time.monotonic_ns(),
+                        outcome=slot.state,
+                        reusable=slot.state == "IDLE",
+                    )
 
     async def stateless_get(self, path, incoming_headers=None):
         """Delegate only native preflight GETs without acquiring a stream lease."""
@@ -439,6 +486,8 @@ class ExclusiveWorkerPool:
         await asyncio.gather(*tasks, return_exceptions=True)
         if self._owns_http:
             await self._http.aclose()
+        if self._telemetry is not None:
+            await self._telemetry.aclose()
 
 
 def _close_code(code):
@@ -450,7 +499,23 @@ def _close_code(code):
     )
 
 
-async def _relay(websocket, backend, max_bytes):
+async def _relay(websocket, backend, max_bytes, observation=None):
+    async def forward(operation, direction):
+        if observation is None:
+            return await operation
+        started = time.monotonic_ns()
+        name = direction + "_send_"
+        observation[name + "attempts"] = observation.get(name + "attempts", 0) + 1
+        try:
+            return await operation
+        except BaseException:
+            observation[name + "failures"] = observation.get(name + "failures", 0) + 1
+            raise
+        finally:
+            elapsed = time.monotonic_ns() - started
+            observation[name + "wall_ns_sum"] = observation.get(name + "wall_ns_sum", 0) + elapsed
+            observation[name + "wall_ns_max"] = max(observation.get(name + "wall_ns_max", 0), elapsed)
+
     async def upstream():
         while True:
             message = await websocket.receive()
@@ -467,7 +532,7 @@ async def _relay(websocket, backend, max_bytes):
                 raise _StreamEnded(1002)
             if size > max_bytes:
                 raise _StreamEnded(1009)
-            await backend.send(value)
+            await forward(backend.send(value), "upstream")
 
     async def downstream():
         while True:
@@ -478,11 +543,11 @@ async def _relay(websocket, backend, max_bytes):
             if isinstance(value, str):
                 if len(value.encode("utf-8")) > max_bytes:
                     raise _StreamEnded(1009)
-                await websocket.send_text(value)
+                await forward(websocket.send_text(value), "downstream")
             elif isinstance(value, bytes):
                 if len(value) > max_bytes:
                     raise _StreamEnded(1009)
-                await websocket.send_bytes(value)
+                await forward(websocket.send_bytes(value), "downstream")
             else:
                 raise _StreamEnded(1002)
 
@@ -547,7 +612,12 @@ def create_pool_proxy(pool=None, *, lifespan=None):
         try:
             await websocket.accept()
             backend = await selected.open_backend(lease, websocket.headers)
-            await _relay(websocket, backend, selected.max_message_bytes)
+            await _relay(
+                websocket,
+                backend,
+                selected.max_message_bytes,
+                getattr(selected, "_profiles", {}).get(getattr(lease, "lease_id", None)),
+            )
         except _StreamEnded as error:
             code = _close_code(error.code)
         except asyncio.CancelledError:

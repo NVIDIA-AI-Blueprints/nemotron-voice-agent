@@ -533,21 +533,57 @@ async def serve_offline_session(
         return await _serve_offline_session(websocket, runtime_factory, record_root, limits=limits, clock=clock)
     token = bind_diagnostics(diagnostics)
     record(diagnostics, "session_started")
+    scope = getattr(websocket, "scope", None)
+    pool = scope.get("nva.offline.pool") if isinstance(scope, dict) else None
+    if not (
+        isinstance(pool, dict)
+        and isinstance(pool.get("lease_sha256"), str)
+        and len(pool["lease_sha256"]) == 64
+        and all(c in "0123456789abcdef" for c in pool["lease_sha256"])
+        and type(pool.get("handler_started_monotonic_ns")) is int
+        and pool["handler_started_monotonic_ns"] > 0
+    ):
+        pool = None
+    if pool is not None:
+        pool["server_metrics_session_id"] = diagnostics.session_id
+        record(
+            diagnostics,
+            "pool_session_bound",
+            lease_sha256=pool["lease_sha256"],
+            handler_started_monotonic_ns=pool["handler_started_monotonic_ns"],
+        )
+    with contextlib.suppress(Exception):
+        diagnostics.start_loop_observer()
     try:
         return await _serve_offline_session(websocket, runtime_factory, record_root, limits=limits, clock=clock)
     except BaseException as error:
         record(diagnostics, "session_error", error_type=type(error).__name__)
         raise
     finally:
-        record(diagnostics, "session_returned")
+        record(diagnostics, "session_finalizer_entered")
+        # Kept for old readers: this has always preceded persistence, and is
+        # not the enclosing ASGI handler's actual return boundary.
+        record(diagnostics, "session_returned", boundary="pre_persistence")
         try:
-            await asyncio.shield(asyncio.to_thread(persist_diagnostics, root, diagnostics))
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            logging.getLogger(__name__).warning("Offline scalar metrics unavailable: %s", type(error).__name__)
+            with contextlib.suppress(Exception):
+                await diagnostics.stop_loop_observer()
         finally:
-            reset_diagnostics(token)
+            record(diagnostics, "diagnostics_persistence_started")
+            if pool is not None:
+                pool["diagnostics_persistence_started_monotonic_ns"] = time.monotonic_ns()
+            try:
+                await asyncio.shield(asyncio.to_thread(persist_diagnostics, root, diagnostics))
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logging.getLogger(__name__).warning("Offline scalar metrics unavailable: %s", type(error).__name__)
+            else:
+                # Completion cannot appear in the snapshot being written.
+                # The trusted worker holder can retain it after native return.
+                if pool is not None:
+                    pool["diagnostics_persistence_completed_monotonic_ns"] = time.monotonic_ns()
+            finally:
+                reset_diagnostics(token)
 
 
 async def _serve_offline_session(

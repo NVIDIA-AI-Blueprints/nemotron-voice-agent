@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .actors import ActorEvent, ActorStream, EventActor
-from .diagnostics import current_diagnostics, record
+from .diagnostics import current_diagnostics, duration, record
 from .models import RATE, AudioSource, ns_to_samples, samples_to_ns
 
 
@@ -121,7 +121,14 @@ class ChunkProgressASR:
 
         async def produce():
             try:
-                trace = await asyncio.to_thread(self._recognize, source, actor=actor, state=state)
+                if getattr(self._diagnostics, "profiling_enabled", False) is True:
+                    dispatched = time.monotonic_ns()
+                    record(self._diagnostics, "asr_thread_dispatched")
+                    trace = await asyncio.to_thread(
+                        self._recognize_observed, source, actor=actor, state=state, dispatched=dispatched
+                    )
+                else:
+                    trace = await asyncio.to_thread(self._recognize, source, actor=actor, state=state)
             except BaseException as exc:
                 actor.finish(error=exc)
             else:
@@ -130,7 +137,26 @@ class ChunkProgressASR:
         actor.bind_worker(asyncio.create_task(produce()))
         return actor
 
-    def _recognize(self, source: AudioSource, *, actor=None, state=None) -> ASREventTrace:
+    def _recognize_observed(self, source, *, actor, state, dispatched):
+        """Observe thread dispatch and CPU without changing the existing ASR call."""
+        entered, cpu = time.monotonic_ns(), time.thread_time_ns()
+        profile = {"started": entered, "responses": 0}
+        record(self._diagnostics, "asr_thread_entered", dispatch_to_start_ms=(entered - dispatched) / 1e6)
+        outcome = "error"
+        try:
+            result = self._recognize(source, actor=actor, state=state, profile=profile)
+            outcome = "returned"
+            return result
+        finally:
+            record(
+                self._diagnostics,
+                "asr_thread_finished",
+                duration_ms=(time.monotonic_ns() - entered) / 1e6,
+                thread_cpu_ms=(time.thread_time_ns() - cpu) / 1e6,
+                outcome=outcome,
+            )
+
+    def _recognize(self, source: AudioSource, *, actor=None, state=None, profile=None) -> ASREventTrace:
         started = self._clock()
         record(self._diagnostics, "asr_started", input_samples=source.sample_count)
         positions: list[int] = []
@@ -211,6 +237,17 @@ class ChunkProgressASR:
                         chunk_end, supplied_at = positions[index], supplied[index]
                     else:
                         chunk_end, supplied_at = 0, started
+                    last_supplied_sample = positions[-1] if positions else 0
+                if profile is not None:
+                    record(
+                        self._diagnostics,
+                        "asr_result_progress",
+                        response_sequence=profile["responses"],
+                        processed_sample=progress,
+                        last_supplied_sample=last_supplied_sample,
+                        dependency_chunk_end=chunk_end,
+                        final=bool(result.is_final),
+                    )
                 # Bulk arrival intervals include provider/transport/queue work,
                 # not isolated GPU inference. Exclude time before the required
                 # source chunk was supplied; charge each interval exactly once.
@@ -260,6 +297,16 @@ class ChunkProgressASR:
             return batch
 
         for response in self._stream(audio()):
+            callback_seen = None
+            if profile is not None:
+                callback_seen = time.monotonic_ns()
+                profile["responses"] += 1
+                if profile["responses"] == 1:
+                    record(
+                        self._diagnostics,
+                        "asr_first_rpc_response_seen",
+                        elapsed_ms=(callback_seen - profile["started"]) / 1e6,
+                    )
             if actor is None:
                 observe(response, self._clock())
             else:
@@ -270,7 +317,12 @@ class ChunkProgressASR:
                     state["available_ns"] = processing_clock.available_ns
                     state["previous_wall"] = previous_arrival
 
-                actor.publish_batch(lambda now, response=response: observe(response, now), update=update_progress)
+                def observe_locked(now, response=response, callback_seen=callback_seen):
+                    if callback_seen is not None:
+                        duration(self._diagnostics, "asr_callback_to_actor_lock", time.monotonic_ns() - callback_seen)
+                    return observe(response, now)
+
+                actor.publish_batch(observe_locked, update=update_progress)
         if not exhausted or (source.sample_count and positions[-1] != source.sample_count):
             raise ValueError("ASR RPC ended before consuming the entire finite source")
         ended = self._clock() - started

@@ -232,8 +232,17 @@ class DiagnosticSessionTests(unittest.IsolatedAsyncioTestCase):
             value = json.loads(paths[0].read_text())
             self.assertEqual(
                 [event["name"] for event in value["events"]],
-                ["session_started", "source_sealed", "session_error", "session_returned"],
+                [
+                    "session_started",
+                    "source_sealed",
+                    "session_error",
+                    "session_finalizer_entered",
+                    "session_returned",
+                    "diagnostics_persistence_started",
+                ],
             )
+            legacy = next(x for x in value["events"] if x["name"] == "session_returned")
+            self.assertEqual(legacy["boundary"], "pre_persistence")
             self.assertEqual(paths[0].stat().st_mode & 0o777, 0o600)
             self.assertFalse(value["full_provider_eof_or_cleanup_attested"])
         self.assertIsNone(current_diagnostics())

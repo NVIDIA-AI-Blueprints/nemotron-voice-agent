@@ -19,6 +19,7 @@ import re
 import signal
 import socket
 import threading
+import time
 from contextlib import suppress
 
 TOKEN_ENV = "NVA_OFFLINE_POOL_TOKEN"
@@ -39,7 +40,7 @@ def _token_bytes(token: str) -> bytes:
 class OfflineWorkerApp:
     """Authenticate private traffic and admit exactly one offline ASGI handler."""
 
-    def __init__(self, app, *, token: str):
+    def __init__(self, app, *, token: str, telemetry=None):
         """Retain the existing native app and an operator-owned private token."""
         self._app = app
         self._token = _token_bytes(token)
@@ -47,6 +48,7 @@ class OfflineWorkerApp:
         self._active_lease: str | None = None
         self._last_completed_lease: str | None = None
         self._outcome = "idle"
+        self._telemetry = telemetry
 
     def status(self) -> dict:
         """Expose scalar handler lifecycle evidence, never provider completion."""
@@ -94,7 +96,11 @@ class OfflineWorkerApp:
         """Delegate authenticated native work while retaining its lease through cleanup."""
         kind = scope.get("type")
         if kind == "lifespan":
-            return await self._app(scope, receive, send)
+            try:
+                return await self._app(scope, receive, send)
+            finally:
+                if self._telemetry is not None:
+                    await self._telemetry.aclose()
         if kind not in {"http", "websocket"}:
             raise ValueError("Unsupported offline worker ASGI scope")
         if not self._authenticated(scope):
@@ -133,18 +139,49 @@ class OfflineWorkerApp:
                 await send({"type": "websocket.close", "code": 1013})
             return
         outcome = "error"
+        from .pool_telemetry import lease_digest
+
+        holder = {
+            "lease_sha256": lease_digest(lease),
+            "handler_started_monotonic_ns": time.monotonic_ns(),
+            "server_metrics_session_id": None,
+        }
+        native_scope = self._native_scope(scope)
+        native_scope["nva.offline.pool"] = holder
         try:
-            await self._app(self._native_scope(scope), receive, send)
+            await self._app(native_scope, receive, send)
         except asyncio.CancelledError:
             outcome = "cancelled"
             raise
         else:
             outcome = "returned"
         finally:
+            exited = time.monotonic_ns()
             with self._lock:
                 self._last_completed_lease = lease
                 self._outcome = outcome
                 self._active_lease = None
+                released = time.monotonic_ns()
+            if self._telemetry is not None:
+                # The native app has returned. The optional writer schedules
+                # bounded I/O without interpreting a socket or provider EOF.
+                with suppress(Exception):
+                    self._telemetry.submit(
+                        "worker",
+                        holder["lease_sha256"],
+                        worker_pid=os.getpid(),
+                        handler_started_monotonic_ns=holder["handler_started_monotonic_ns"],
+                        native_app_exit_monotonic_ns=exited,
+                        lease_released_monotonic_ns=released,
+                        diagnostics_persistence_started_monotonic_ns=holder.get(
+                            "diagnostics_persistence_started_monotonic_ns"
+                        ),
+                        diagnostics_persistence_completed_monotonic_ns=holder.get(
+                            "diagnostics_persistence_completed_monotonic_ns"
+                        ),
+                        server_metrics_session_id=holder["server_metrics_session_id"],
+                        outcome=outcome,
+                    )
 
 
 def build_worker_app(factory_path: str = "server:app_factory") -> OfflineWorkerApp:
@@ -160,7 +197,9 @@ def build_worker_app(factory_path: str = "server:app_factory") -> OfflineWorkerA
     app = factory()
     if not callable(app):
         raise ValueError("Offline worker factory must return an ASGI app")
-    return OfflineWorkerApp(app, token=token)
+    from .pool_telemetry import PoolTelemetry
+
+    return OfflineWorkerApp(app, token=token, telemetry=PoolTelemetry.from_environment())
 
 
 def _watch_parent(parent_pid: int, stop: threading.Event) -> None:
