@@ -15,7 +15,6 @@ It is a React and TypeScript single-page app built with [Vite](https://vite.dev/
 - **Metrics dashboard**: latency charts for time to first byte (TTFB) and time to first answer token (TTFAT), token usage, and connection status.
 - **Conversation transcript**: live ASR and bot-response display.
 - **Webcam vision panel**: live webcam input for the multimodal Omni Subagents example.
-- **Live Console** (`/live.html`): a developer console for the [Frontend/Backend Live](../src/examples/frontend_backend_live/README.md) example that starts live sessions over WebRTC, edits their settings, shows protocol events, delegations, and conversation history, and sends steering commands. It is a static page, `public/live.html` with its scripts and styles in `public/live/`, so it has no build step of its own.
 
 The **TTFAT Metrics** section of the **METRICS** tab shows the latest TTFAT value and a chart of the last 10 values for each large language model (LLM) processor. TTFAT runs from the LLM request to the first answer token, or to the start of a tool call. It equals the LLM TTFB plus the time the model thinks before it answers. With reasoning off, TTFAT is almost the same as TTFB. A turn that calls a tool makes two LLM requests, so it reports two TTFAT values. TTFAT does not include speech synthesis time.
 
@@ -63,8 +62,6 @@ The client reads its configuration from the backend (`src/server.py`) and starts
 | `/api/ice-servers` | STUN/TURN configuration for WebRTC |
 | `/api/webcam-config` | Webcam capture defaults for multimodal examples |
 | `/api/start` | Start a pipeline session |
-
-The Live Console (`/live.html`) reads its STUN/TURN configuration from `/api/ice-servers` and uses the Live routes under `/v1/live` for everything else. The server serves those routes in a Frontend/Backend Live deployment or when `LIVE_ENABLED` is `true`. For each route and the `LIVE_API_TOKEN` bearer token, refer to the [Live gateway README](../src/live/README.md).
 
 ## Learn more
 

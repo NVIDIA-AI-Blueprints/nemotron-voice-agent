@@ -6,24 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.4.0] - TBD
 
-This release adds the Frontend/Backend Live example, built from the Live gateway, a frontend adapter that hosts the cascade, a delegation core, and three backend adapters.
-
 ### Added
 
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
-- **Frontend/Backend Live** example (`frontend-backend-live`): on every caller turn, a talker speaks a reply, delegates the turn to the backend, or waits, and a writer words the backend's results for speech. `config.yaml` configures the frontend and `core.yaml` the delegation core. Cloud, `/server`, and `/single-gpu` recipes are available, with the Bluebird Cafe ordering assistant as the reference.
-- **Live gateway** (`src/live/`), which serves live sessions at `/v1/live`, over WebRTC or WebSocket. In Responses mode, the delegation core does a session's delegated work, and in client mode, the client app does it. The `frontend-backend-live` profiles serve the routes by default, and the `LIVE_` variables in `.env.example` set their bearer token (`LIVE_API_TOKEN`) and limits.
-- **Delegation core** (`src/delegation_core/`), which accepts each delegation through the OpenAI Responses API and streams its events back. Its interaction manager (IM) owns the delegated work: it starts, steers, or cancels work as the backend adapter's conductor decides, so a newer request can join work that already runs.
-- **Backend adapters**, selected by `backend.adapter` in `core.yaml`: `llm`, the backend LLM, directly connected (the default); `llm-agent`, a model conductor that runs LLM workers as parallel tasks (`core.agent.yaml`); and `harness`, an agent that you deploy, such as Hermes, connected over the Agent Client Protocol (ACP) (`core.harness.yaml`). The harness adds the `agent-client-protocol` 0.9.0 dependency.
-- **Live Console** (`/live.html`), a developer console that starts live sessions over WebRTC, shows their events, delegations, and conversation history, and steers them.
-- The `nemotron-ultra` entry in `services.yaml`: Nemotron 3 Ultra 550B A55B on the public NVIDIA API, the default backend model of the Frontend/Backend Live Cloud and Server profiles.
-- The Frontend/Backend Live Architecture page (`docs/design/architecture.md`), which describes each part, its configuration and extension points, and how to connect your own harness.
-- **Frontend/Backend Live prompt profiles.** Each profile is a folder under `src/examples/frontend_backend_live/prompts/` with its talker, backend, and channel prompts and its server tools. The repository UI lists `cafe`, the default, and selecting a profile switches the UI bot's talker, backend prompt, and tools together. The internal `generic` profile supplies the Live defaults.
-- The optional `prompt_catalog` key of an `examples_registry.yaml` entry names a `module.path:callable` that builds the example's UI prompt list in place of its `prompts.yaml`. `PROMPT_FILE_PATH` still takes precedence.
-
-### Changed
-
-- When a repository UI or Realtime gateway session starts, the server checks the readiness of every local LLM that the example uses, including the Frontend/Backend Agent's Thinker LLM.
 
 ### Changed
 
@@ -49,7 +34,6 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 
 ### Added
 
-- **Frontend/Backend Live** example (`frontend-backend-live`): a talker that speaks or delegates each turn, a tool-using backend, and a commentary step, with frontend and backend models selected in `config.yaml`. It also serves live sessions at `/v1/live/sessions`. Cloud, `/server`, and `/single-gpu` recipes are available.
 - **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the **Streaming Input** toggle on the Lightning service card streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
 - One root `services.yaml` for every example, selected by `SERVICE_RECIPE`, and editable LLM parameters such as reasoning and temperature in the Services tab.
 - Services tab controls for TTS and ASR: **Synthesis Mode** on Magpie TTS entries and **Punctuation** on the single-GPU NeMo-Speech.cpp ASR entries.

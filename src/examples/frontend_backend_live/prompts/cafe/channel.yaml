@@ -1,8 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
-# The cafe profile's channel context, added after its talker and its backend prompt.
-
-description: "Channel context shared by the talker and the backend."
-content: |
-  Channel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.

@@ -24,9 +24,6 @@ Every app service sets `SERVICE_RECIPE`. `server` and `single-gpu` pick that sec
 | `frontend-backend-agent` | `frontend-backend-agent` | `booking-server` |
 | `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning-frontend-backend`, `nemo-speech-frontend-backend` (ASR + TTS, network alias `nemo-speech`) |
-| `frontend-backend-live` | `frontend-backend-live` | None |
-| `frontend-backend-live/server` | `frontend-backend-live-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
-| `frontend-backend-live/single-gpu` | `frontend-backend-live-single-gpu` | `nvidia-llm-vllm-lightning-frontend-backend`, `nemo-speech-frontend-backend` (ASR + TTS, network alias `nemo-speech`) |
 
 `NVIDIA_API_KEY` is required for cloud-only, `*/server`, and `generic-assistant/server-perf`. `HF_TOKEN` is required for `*/single-gpu`. NVIDIA Cloud entries appear only when `NVIDIA_API_KEY` is set. Host-native `uv run` leaves `SERVICE_RECIPE` unset and picks the section whose sidecars are reachable.
 
@@ -48,7 +45,5 @@ Do not treat these as extra preflights.
   - Webcam uploads fail silently → page is not HTTPS (`PIPELINE_TLS=true`) and not `http://localhost`.
   - Media analyzer never runs after upload → speaker did not set `selected_input_source=uploaded_attachment`. Look for `Speaker Omni queued media analysis trigger`. If absent, `src/examples/omni_assistant_subagents/prompts.yaml` was overridden.
   - `ModuleNotFoundError: pipecat_subagents` → rebuild: `docker compose --profile omni-assistant-subagents build`.
-- **Frontend/Backend Agent:** every `frontend-backend-agent` recipe includes `booking-server`. Also check `docker compose logs --tail 200 booking-server`.
-- **Frontend/Backend Live:** no `booking-server`. The recipes serve the Live API at `/v1/live` (`LIVE_ENABLED` defaults to `true`). Check it with `curl -fk https://<host>:7860/v1/live/info`, adding `-H "Authorization: Bearer <LIVE_API_TOKEN>"` when a token is set. The backend adapter comes from `src/examples/frontend_backend_live/core.yaml`. To select another profile, set `CORE_CONFIG_PATH` in `.env`, for example to `src/examples/frontend_backend_live/core.agent.yaml`.
-  - `frontend-backend-live/server`: the talker runs on the Lightning NIM that the recipe starts, and the backend defaults to Nemotron 3 Ultra on the public NVIDIA API with `NVIDIA_API_KEY`. For a local Nemotron 3 Super backend, on a host with GPUs `1` and `2` free (2 × 80 GB), also pass the sidecar profile `nemotron-3-super` (not a recipe) to `up` and `down`, and choose Super for the backend in the Services tab.
+- **Frontend/Backend:** every recipe includes `booking-server`. Also check `docker compose logs --tail 200 booking-server`.
 - **`generic-assistant/server-perf`:** four-GPU Blackwell layout, pinned NVFP4 TP2 LLM profile, 200 Uvicorn workers, not a browser UI session. On older hardware, select a compatible TP2 profile first. See `benchmarking_tools/scaling-perf/README.md`.
