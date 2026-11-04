@@ -3,8 +3,8 @@
 
 """Load and validate ``config.yaml``. Unknown keys are errors, so a typo cannot silently do nothing.
 
-A profile is a file that names the file it builds on (``extends: config.yaml``) and sets only what differs, as
-``config.bench.yaml`` does: a mapping is merged key by key into the one it extends, and any other value replaces it
+A profile is a file that names the file it builds on (``extends: config.yaml``) and sets only what differs: a mapping
+is merged key by key into the one it extends, and any other value replaces it
 (``null`` included, so a profile can turn a setting off). The delegation core's own files (``core.yaml`` and its
 profiles) follow the same rule.
 """

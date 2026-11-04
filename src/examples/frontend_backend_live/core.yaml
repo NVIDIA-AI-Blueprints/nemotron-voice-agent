@@ -8,7 +8,6 @@
 # Profiles are separate files that name the file they build on (`extends: core.yaml`) and set only what differs:
 #   core.ui-bot.yaml           delegation.result_format: speak_display (each UI bot session's prompt profile sets its
 #                              backend.prompt and backend.tools)
-#   core.bench.yaml            one task at a time; client_tool_timeout_seconds: null; progress_note_seconds: 0
 #   core.agent.yaml            backend.adapter: llm-agent; delegation.result_format: speak_display (its conductor
 #                              reads core.yaml's texts.conductor_prompt)
 #   core.harness.yaml          extends core.agent.yaml: backend.adapter: harness, connected to the operator's Hermes
@@ -223,8 +222,7 @@ backend:
     idle_timeout_seconds: 30
     server_tool_timeout_seconds: 60
     # A requested model the catalog does not list: report answers with the official nonfatal
-    # responses_validation_failed and keeps the setting; fallback runs it on the configured endpoint and logs
-    # it, which only the benchmark's profile does (core.bench.yaml), because its model is not listed.
+    # responses_validation_failed and keeps the setting; fallback runs it on the configured endpoint and logs it.
     unlisted_models: report            # report | fallback
   llm-agent:
     # Tasks running at once. Above 1, the conductor places each request that comes while a Work is open (and the others

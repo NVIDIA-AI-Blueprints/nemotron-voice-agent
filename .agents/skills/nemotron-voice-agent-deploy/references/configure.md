@@ -11,8 +11,8 @@ Open this file only to change the configuration of a deployed agent. Edit the sm
 | `services.yaml` | Built-in LLM, ASR, and TTS entries under `server` (NIM) and `single-gpu` (vLLM and NeMo-Speech.cpp). An entry with `nvcf` is also served by NVIDIA Cloud |
 | `settings.yaml` | Editable LLM setting profiles referenced by `settings: <profile>` in `services.yaml` |
 | `src/examples/<package>/prompts.yaml` | Built-in prompts for that example. `frontend-backend-live` has none: its prompt profiles live in `src/examples/frontend_backend_live/prompts/<profile>/` (`profile.yaml`, `talker.yaml`, `thinker.yaml`, `channel.yaml`), served by its `prompt_catalog` hook |
-| `src/examples/frontend_backend_live/config.yaml` | The Live example's frontend (`frontend.adapter`, `frontend.cascade`, `ui_bot.core_config`). `LIVE_CONFIG_PATH` selects another file, such as `config.bench.yaml` |
-| `src/examples/frontend_backend_live/core.yaml` | The Live example's delegation core and backend adapter (`delegation`, `texts`, `backend`). `CORE_CONFIG_PATH` selects a profile in the same directory by its path: `core.bench.yaml`, `core.agent.yaml`, or `core.harness.yaml` (the harness, which connects to an agent that the operator deploys) |
+| `src/examples/frontend_backend_live/config.yaml` | The Live example's frontend (`frontend.adapter`, `frontend.cascade`, `ui_bot.core_config`). `LIVE_CONFIG_PATH` selects another file |
+| `src/examples/frontend_backend_live/core.yaml` | The Live example's delegation core and backend adapter (`delegation`, `texts`, `backend`). `CORE_CONFIG_PATH` selects a profile in the same directory by its path: `core.agent.yaml` or `core.harness.yaml` (the harness, which connects to an agent that the operator deploys) |
 
 Example ids map to packages under `src/examples/`: `generic-assistant` → `generic`, `multilingual-assistant` → `multilingual`, `omni-assistant` → `omni_assistant`, `omni-assistant-subagents` → `omni_assistant_subagents`, `frontend-backend-agent` → `frontend_backend_agent`, `frontend-backend-live` → `frontend_backend_live`.
 

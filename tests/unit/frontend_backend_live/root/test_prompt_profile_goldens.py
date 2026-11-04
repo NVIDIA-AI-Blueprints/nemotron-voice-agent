@@ -57,7 +57,7 @@ FALLBACKS = {
     "unknown_key": ({"prompt_key": "no_such_profile"}, {}),
 }
 # The delegation core's own files, each loaded as its own CORE_CONFIG_PATH would load it.
-CORE_FILES = ("core.yaml", "core.agent.yaml", "core.bench.yaml", "core.harness.yaml")
+CORE_FILES = ("core.yaml", "core.agent.yaml", "core.harness.yaml")
 
 
 def digest(value) -> dict:

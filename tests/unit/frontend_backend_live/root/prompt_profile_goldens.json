@@ -115,10 +115,6 @@
     "length": 9471,
     "sha256": "37d94726e2b89ec489539d5f07ee41e9c45fb1ec5e1b66f19b7436d30e8bee62"
   },
-  "core_file.core.bench.yaml": {
-    "length": 9459,
-    "sha256": "a657c70ebf2ba15c9d751ab55e6dd226efbe6d13de6d0f753e10e54ebd56f78c"
-  },
   "core_file.core.harness.yaml": {
     "length": 9469,
     "sha256": "541d22006a3a645b2eef7c04fd8edf0744d5ccedcbbbf644715973dbc58d8dd8"

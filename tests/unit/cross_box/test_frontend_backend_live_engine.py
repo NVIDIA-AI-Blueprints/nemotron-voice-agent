@@ -8,6 +8,8 @@ import base64
 import json
 import unittest
 from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import httpx
@@ -74,8 +76,6 @@ BENCHMARK_SESSION = {
         },
     },
 }
-# The benchmark's core profile (unlisted_models: fallback).
-CORE_BENCH_YAML = CORE_YAML.with_name("core.bench.yaml")
 
 SILENCE_100MS = base64.b64encode(bytes(4800)).decode()
 
@@ -346,18 +346,20 @@ class ClientToolsEndToEndTests(EngineHarness):
         )
         self.assertEqual(self.live_session.status, "active")
 
-    async def test_the_benchmark_profile_starts_the_benchmark_clients_session_with_no_error_and_runs_its_model(self):
-        # The second real-core case of the background check: core.bench.yaml's unlisted_models: fallback runs a model
+    async def test_a_fallback_profile_starts_the_benchmark_clients_session_with_no_error_and_runs_its_model(self):
+        # The second real-core case of the background check: a core profile's unlisted_models: fallback runs a model
         # the catalog does not list on the slot's endpoint. So the benchmark client's session, which names its own agent
         # model, starts with no error (core.yaml reports the model, as above), and its typed run goes to that endpoint
         # as that model.
+        profile = Path(self.enterContext(TemporaryDirectory())) / "core.custom.yaml"
+        profile.write_text(f"extends: {CORE_YAML}\nbackend: {{llm: {{unlisted_models: fallback}}}}\n", encoding="utf-8")
         await self.serve(
             BENCHMARK_SESSION,
             [
                 [chunk("Your order is on its way.", finish="stop")],  # the backend: the typed run's round
                 _decision_chunks('{"action":"speak","speech":"Your order is on its way."}'),  # the writer
             ],
-            core=CORE_BENCH_YAML,
+            core=profile,
         )
         await asyncio.gather(*self.live_session.delegation.checks)  # the start's settings check
         typed = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Where is my order?"}]}

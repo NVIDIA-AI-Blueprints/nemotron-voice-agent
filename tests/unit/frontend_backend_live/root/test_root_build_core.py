@@ -11,6 +11,7 @@ import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import ModuleType
 from unittest.mock import patch
 
@@ -372,8 +373,15 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(ui_bot.texts, SHIPPED.texts)
         self.assertEqual(ui_bot.backend.blocks, SHIPPED.backend.blocks)
 
-    def test_the_benchmark_profile_waits_for_the_app_writes_no_notes_and_runs_unlisted_models(self):
-        bench = CoreSettings.load(FBL / "core.bench.yaml")
+    def test_a_profile_waits_for_the_app_writes_no_notes_and_runs_unlisted_models(self):
+        changes = (
+            "delegation: {client_tool_timeout_seconds: null, progress_note_seconds: 0, result_format: plain}\n"
+            "backend: {llm: {conductor: steer, unlisted_models: fallback}}\n"
+        )
+        with TemporaryDirectory() as folder:
+            profile = Path(folder) / "core.custom.yaml"
+            profile.write_text(f"extends: {FBL / 'core.yaml'}\n{changes}", encoding="utf-8")
+            bench = CoreSettings.load(profile)
         delegation = bench.delegation
         self.assertIsNone(delegation.client_tool_timeout_seconds)
         self.assertEqual((delegation.progress_note_seconds, delegation.result_format), (0.0, "plain"))
