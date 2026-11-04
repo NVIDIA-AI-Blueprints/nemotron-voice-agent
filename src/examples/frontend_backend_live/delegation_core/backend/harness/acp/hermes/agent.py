@@ -3,9 +3,9 @@
 
 """Hermes over ACP (``backend.harness.agent: hermes``): the connection facts specific to Hermes.
 
-These facts hold for ``hermes acp`` over stdio at the tested Hermes commit that ``docs/design/architecture.md`` names
-(Deploy Hermes); a ``hermes acp`` that connects to Hermes's gateway daemon may differ. The paths name files of Hermes's
-source.
+These facts hold for ``hermes acp`` over stdio at the tested Hermes commit that
+``docs/how-to/connect-an-agent-harness.md`` names (Deploy Hermes); a ``hermes acp`` that connects to Hermes's gateway
+daemon may differ. The paths name files of Hermes's source.
 
 * **Instructions.** ``session/new`` has no instructions field. Hermes builds the system prompt once from ``SOUL.md`` and
   the project context of the session's ``cwd``: the nearest ``.hermes.md``, else an ``AGENTS.md`` chain from the git

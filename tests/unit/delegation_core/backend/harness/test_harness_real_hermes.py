@@ -77,9 +77,9 @@ GET_TIME = {
 }
 # A worker model's private reasoning, which must never reach the caller.
 REASONING = "I should check the account balance first, then answer."
-# The operator's Hermes configuration for the scripted model, as the architecture page's "Deploy Hermes" gives it: only
-# the session's MCP server reaches a session, nothing of the host's logins, no background model calls, and an MCP tool
-# timeout above the IM's client-tool deadline.
+# The operator's Hermes configuration for the scripted model, as "Deploy Hermes" in
+# docs/how-to/connect-an-agent-harness.md gives it: only the session's MCP server reaches a session, nothing of the
+# host's logins, no background model calls, and an MCP tool timeout above the IM's client-tool deadline.
 HERMES_CONFIG = """\
 model:
   provider: nvidia
