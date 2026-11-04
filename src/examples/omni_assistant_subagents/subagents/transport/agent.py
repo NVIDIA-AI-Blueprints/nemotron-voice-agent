@@ -129,6 +129,7 @@ class OmniTransportAgent(PipelineWorker):
         self._capture_task: asyncio.Task[None] | None = None
         self._assistant_speaking = False
         self._user_speaking = False
+        self._user_turn_open = False
         self._user_turn_started_at: str | None = None
 
         tts_settings_kwargs: dict[str, Any] = {"voice": tts_voice}
@@ -177,6 +178,8 @@ class OmniTransportAgent(PipelineWorker):
             request_job=self.request_job,
             queue_frame=self.queue_frame,
             followup_delay_secs=_ANALYZER_FOLLOWUP_TURN_DELAY_SECS,
+            cancel_job=self.cancel_job_group,
+            user_turn_open=lambda: self._user_turn_open,
         )
         self._webcam_controller = WebcamController(
             session_id=self._session_id,
@@ -497,11 +500,18 @@ class OmniTransportAgent(PipelineWorker):
     async def on_user_voice_turn_started(self) -> None:
         """Track whether the user is currently speaking."""
         self._user_speaking = True
+        self._user_turn_open = True
         self._user_turn_started_at = time_now_iso8601()
 
     async def on_user_voice_turn_stopped(self) -> None:
         """Track when the user turn reaches EOU."""
         self._user_speaking = False
+
+    async def on_user_turn_heard(self, transcript: str) -> None:
+        """Cancel in-flight thinking once the Speaker hears a new user turn."""
+        self._user_turn_open = False
+        if transcript.strip():
+            await self._thinking.cancel_active("new user turn")
 
     async def on_user_interrupted_assistant(self) -> None:
         """Cancel pending post-ack media/thinking work when the ack was interrupted by speech.
@@ -516,6 +526,7 @@ class OmniTransportAgent(PipelineWorker):
     async def on_assistant_speaking_started(self) -> None:
         """Track active assistant speech for gesture context (barge-in only while speaking)."""
         self._assistant_speaking = True
+        self._user_turn_open = False
 
     async def on_assistant_speaking_stopped(self) -> None:
         """Track when assistant speech has stopped."""

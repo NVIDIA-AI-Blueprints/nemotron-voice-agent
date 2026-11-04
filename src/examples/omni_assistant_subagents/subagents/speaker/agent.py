@@ -17,12 +17,8 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import LLMService
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService, NvidiaOmniLLMSettings
 
-from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniLLMService,
-    NvidiaOmniSettings,
-    text_message_part,
-)
 from examples.omni_assistant_subagents.subagents.speaker.action_envelope import (
     ACTION_FALLBACK_RESPONSE,
     TURN_ACTIONS,
@@ -68,6 +64,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         thinking_handler: Callable[[str, str], Awaitable[None]] | None = None,
         highres_capture_handler: Callable[[str], Awaitable[None]] | None = None,
         visual_status_provider: Callable[[], str] | None = None,
+        user_turn_handler: Callable[[str], Awaitable[None]] | None = None,
         **kwargs,
     ) -> None:
         """Configure the wrapper with the per-turn JSON contract from ``prompts.yaml``."""
@@ -76,6 +73,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         self._uploaded_attachment_available = uploaded_attachment_available
         self._attachment_pending = attachment_pending
         self._thinking_handler = thinking_handler
+        self._user_turn_handler = user_turn_handler
         self._highres_capture_handler = highres_capture_handler
         self._visual_status_provider = visual_status_provider
         self._repeat = RepeatGuard()
@@ -153,7 +151,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         if self._active_turn_parts:
             return params
         messages = list(params.get("messages") or [])
-        messages.append({"role": "user", "content": [text_message_part(self._audio_response_instruction())]})
+        messages.append({"role": "user", "content": [{"type": "text", "text": self._audio_response_instruction()}]})
         params["messages"] = messages
         return params
 
@@ -298,6 +296,11 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         if self._context is not None:
             self._context.add_message({"role": "user", "content": transcript})
         await super()._emit_user_transcript(transcript)
+        if self._user_turn_handler is not None:
+            try:
+                await self._user_turn_handler(transcript)
+            except Exception as exc:
+                logger.warning(f"Speaker Omni user-turn handler failed: {exc}")
 
     def _parse_turn_result(self, raw_content: str) -> SpeakerTurnResult:
         raw_payload = extract_json_object(raw_content)
@@ -527,6 +530,7 @@ class SpeakerOmniAgent(PipelineWorker):
         thinking_handler: Callable[[str, str], Awaitable[None]] | None = None,
         highres_capture_handler: Callable[[str], Awaitable[None]] | None = None,
         visual_status_provider: Callable[[], str] | None = None,
+        user_turn_handler: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         """Initialize the bridged Speaker Omni agent.
 
@@ -537,13 +541,12 @@ class SpeakerOmniAgent(PipelineWorker):
             api_key=api_key,
             base_url=base_url,
             context=context,
-            extra={"response_format": {"type": "json_object"}, **dict(extra_params or {})},
-            settings=NvidiaOmniSettings(
+            settings=NvidiaOmniLLMSettings(
                 model=model_id,
                 max_tokens=parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
                 temperature=parse_env_float("OMNI_TEMPERATURE", 0.7, min_value=0.0),
                 top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
-                emit_transcriptions=False,
+                extra={"response_format": {"type": "json_object"}, **dict(extra_params or {})},
                 min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
             ),
             media_analysis_prompt_handler=media_analysis_prompt_handler,
@@ -552,6 +555,7 @@ class SpeakerOmniAgent(PipelineWorker):
             thinking_handler=thinking_handler,
             highres_capture_handler=highres_capture_handler,
             visual_status_provider=visual_status_provider,
+            user_turn_handler=user_turn_handler,
             audio_response_instruction=audio_response_instruction,
         )
         super().__init__(

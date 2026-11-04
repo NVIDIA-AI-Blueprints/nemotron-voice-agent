@@ -23,7 +23,8 @@ from examples.omni_assistant_subagents.subagents.media_analyzer import (
 from examples.omni_assistant_subagents.subagents.transport.speaker_context import SpeakerContextManager
 from examples.omni_assistant_subagents.subagents.transport.subagent_state_board import SubagentStateBoard
 
-_PENDING_ANALYSIS = "PENDING — a freshly uploaded attachment is waiting and has not been analyzed yet"
+_PENDING_ANALYSIS = "PENDING — the user just uploaded {kind} file that has not been analyzed yet"
+_KIND_WITH_ARTICLE = {"image": "an image", "audio": "an audio", "video": "a video"}
 
 
 class MediaAnalysisController:
@@ -80,7 +81,8 @@ class MediaAnalysisController:
         attachment = latest_user_attachment(self._session_id)
         if attachment is None or attachment.id == self._analyzed_attachment_id:
             return
-        self._board.set_findings(MediaAnalyzerWorker.AGENT_NAME, _PENDING_ANALYSIS, trusted=True)
+        kind = _KIND_WITH_ARTICLE.get(attachment.kind, "a")
+        self._board.set_findings(MediaAnalyzerWorker.AGENT_NAME, _PENDING_ANALYSIS.format(kind=kind), trusted=True)
         logger.info("Marked uploaded attachment as pending analysis on the subagents board")
 
     def _clear_pending(self) -> None:

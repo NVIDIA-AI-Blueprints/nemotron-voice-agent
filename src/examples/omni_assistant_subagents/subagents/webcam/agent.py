@@ -17,6 +17,7 @@ continue / down); video makes the wave-vs-still judgement more reliable.
 from __future__ import annotations
 
 import asyncio
+import base64
 import math
 import subprocess
 import tempfile
@@ -28,14 +29,9 @@ from loguru import logger
 from pipecat.bus.messages import BusJobRequestMessage
 from pipecat.pipeline.job_decorator import job
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService, NvidiaOmniLLMSettings
 from pipecat.workers.base_worker import BaseWorker
 
-from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniLLMService,
-    NvidiaOmniSettings,
-    text_message_part,
-    video_message_part,
-)
 from examples.omni_assistant_subagents.subagents.gestures import normalize_visual_control
 from examples.shared.json_parsing import extract_json_object
 from webcam_frame_store import WebcamFrame, recent_webcam_frames
@@ -141,11 +137,12 @@ class WebcamAgent(BaseWorker):
         self._omni = NvidiaOmniLLMService(
             api_key=api_key,
             base_url=base_url,
-            extra=omni_extra,
-            settings=NvidiaOmniSettings(
+            settings=NvidiaOmniLLMSettings(
                 model=model_id,
+                system_instruction=self._system_prompt,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                extra=omni_extra,
             ),
         )
 
@@ -244,13 +241,13 @@ class WebcamAgent(BaseWorker):
         """
         steering = _steering_preamble(conversation, previous_observation)
         prompt = f"{steering}\n{self._prompt}" if steering else self._prompt
-        content = [video_message_part(mp4), text_message_part(prompt)]
-        context = LLMContext(
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {"role": "user", "content": content},
-            ]
+        video_message = await LLMContext.create_file_message(
+            type="bytes",
+            format="video/mp4",
+            file=f"data:video/mp4;base64,{base64.b64encode(mp4).decode('ascii')}",
         )
+        video_message["content"].append({"type": "text", "text": prompt})
+        context = LLMContext(messages=[video_message])
         logger.debug(
             f"Webcam video Omni request: base_url={self._base_url}, model={self._model_id}, "
             f"mp4_bytes={len(mp4)}, frames={n_frames}, window_s={window_seconds}, "

@@ -31,10 +31,11 @@ subagents:
       plain-text description of what it contains. It only reports what is in the media — it
       does not reason, plan, summarize beyond the media, or write code.
     routing_rules: >-
-      Route here ONLY when the current request is explicitly about the uploaded file's
-      contents (the image, video, or audio the user shared). Something the user
-      holds up, points at, or shows on the live camera is NOT an uploaded file — that is the
-      live webcam, never this. For anything else —
+      Route here ONLY when the current request is about the uploaded file's contents (the
+      image, video, or audio the user shared). While its analysis below reads PENDING, a
+      short reference to it such as "this diagram", "the picture", or "this video" is
+      about the file. Something the user holds up, points at, or shows on the live camera
+      is NOT an uploaded file — that is the live webcam, never this. For anything else —
       continuing an earlier topic, planning, drafting, or a vague "it" that does not clearly
       refer to the file — use selected_input_source "none" and answer yourself. When a prior
       analysis of the attachment is already in context, answer follow-ups from it with

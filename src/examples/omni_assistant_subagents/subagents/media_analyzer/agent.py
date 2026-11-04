@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from loguru import logger
@@ -13,15 +14,10 @@ from pipecat.pipeline.job_decorator import job
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService, NvidiaOmniLLMSettings
 from pipecat.workers.base_worker import BaseWorker
 
 from attachment_store import Attachment, get_attachment
-from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniLLMService,
-    NvidiaOmniSettings,
-    media_message_part,
-    text_message_part,
-)
 from examples.shared.json_parsing import extract_json_object
 from utils import parse_env_float, parse_env_int
 
@@ -29,6 +25,8 @@ MEDIA_ANALYSIS_TASK_NAME = "analyze_media"
 
 MEDIA_ANALYSIS_RUNNING_PREFIX = "An uploaded media analysis task is running asynchronously."
 SPEAKER_STATE_PREFIXES: tuple[str, ...] = (MEDIA_ANALYSIS_RUNNING_PREFIX,)
+
+_DEFAULT_SUBTYPES = {"image": "png", "audio": "wav", "video": "mp4"}
 
 _SYSTEM_PROMPT = (
     "You are a careful uploaded-media analysis worker. Reply with ONE JSON object and nothing else. "
@@ -83,11 +81,11 @@ class MediaAnalyzerWorker(BaseWorker):
         self._omni = NvidiaOmniLLMService(
             api_key=api_key,
             base_url=base_url,
-            extra=omni_extra,
-            settings=NvidiaOmniSettings(
+            settings=NvidiaOmniLLMSettings(
                 model=model_id,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                extra=omni_extra,
             ),
         )
 
@@ -158,9 +156,15 @@ class MediaAnalyzerWorker(BaseWorker):
         attachment_metadata: dict,
     ) -> tuple[str, str]:
         """Call the multimodal Omni endpoint for one attachment; return (raw_text, reasoning)."""
-        media_part = media_message_part(attachment.data, modality=attachment.kind, mime_type=attachment.content_type)
         instructions = f"{self._system_prompt}\n\n{_build_user_prompt(prompt, prior_analysis)}"
-        user_message = {"role": "user", "content": [text_message_part(instructions), media_part]}
+        mime_type = _attachment_mime_type(attachment)
+        user_message = await LLMContext.create_file_message(
+            type="bytes",
+            format=mime_type,
+            file=f"data:{mime_type};base64,{base64.b64encode(attachment.data).decode('ascii')}",
+            name=attachment.name,
+            text=instructions,
+        )
         context = LLMContext(messages=[user_message])
         logger.info(
             "Media analyzer Omni request: "
@@ -233,6 +237,19 @@ class MediaAnalyzerWorker(BaseWorker):
                 ),
             )
         )
+
+
+def _attachment_mime_type(attachment: Attachment) -> str:
+    """Return the attachment's MIME type, under the top-level type of its uploaded kind.
+
+    Omni's adapter routes a file by MIME type, while an upload's kind is what the
+    user chose, so an audio upload recorded as ``video/webm`` still goes as audio.
+    """
+    prefix = f"{attachment.kind}/"
+    if attachment.content_type.startswith(prefix):
+        return attachment.content_type
+    subtype = attachment.content_type.partition("/")[2] or _DEFAULT_SUBTYPES.get(attachment.kind, "octet-stream")
+    return prefix + subtype
 
 
 def _build_user_prompt(question: str, prior_analysis: str) -> str:

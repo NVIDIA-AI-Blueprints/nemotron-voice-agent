@@ -32,6 +32,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService, NvidiaOmniLLMSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
@@ -39,10 +40,6 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniLLMService,
-    NvidiaOmniSettings,
-)
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.pipeline_utils import (
@@ -62,7 +59,6 @@ from utils import (
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
-    parse_env_bool,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
@@ -126,22 +122,20 @@ async def bot(runner_args: RunnerArguments) -> None:
     system_content = base_system_content
     if system_prompt_override:
         system_content = f"{base_system_content}\n\n{system_prompt_override}".strip()
-    context = LLMContext([{"role": "system", "content": system_content}])
+    context = LLMContext()
 
-    emit_transcriptions = parse_env_bool("OMNI_EMIT_TRANSCRIPTIONS", default=True)
     omni = NvidiaOmniLLMService(
         name="NemotronOmniLLM",
         api_key=nvidia_api_key(),
         base_url=base_url,
         context=context,
-        extra=extra_params,
-        settings=NvidiaOmniSettings(
+        settings=NvidiaOmniLLMSettings(
             model=model_id,
+            system_instruction=system_content,
             max_tokens=parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
             temperature=parse_env_float("OMNI_TEMPERATURE", 0.6, min_value=0.0),
             top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
-            input_modalities=("text", "audio"),
-            emit_transcriptions=emit_transcriptions,
+            extra=extra_params,
             min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
         ),
     )

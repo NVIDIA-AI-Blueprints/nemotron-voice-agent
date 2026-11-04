@@ -194,6 +194,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         thinking_handler=transport_agent.queue_thinking,
         highres_capture_handler=transport_agent.queue_highres_capture,
         visual_status_provider=transport_agent.current_visual_status,
+        user_turn_handler=transport_agent.on_user_turn_heard,
     )
     media_analyzer_agent = MediaAnalyzerWorker(
         api_key=api_key,

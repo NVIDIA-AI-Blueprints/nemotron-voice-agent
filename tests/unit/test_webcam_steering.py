@@ -8,7 +8,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from examples.omni_assistant.nvidia_omni_multimodal_service import NvidiaOmniInferenceResult
+from pipecat.adapters.llm.services.nvidia_omni_adapter import NvidiaOmniLLMAdapter
+from pipecat.services.nvidia.omni.llm import NvidiaOmniInferenceResult
+
 from examples.omni_assistant_subagents.subagents.transport.agent import OmniTransportAgent
 from examples.omni_assistant_subagents.subagents.transport.webcam_controller import WebcamController
 from examples.omni_assistant_subagents.subagents.webcam.agent import WebcamAgent, _steering_preamble
@@ -199,10 +201,33 @@ class WebcamOutputValidationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         context = worker._omni.run_multimodal_inference.await_args.args[0]
-        user_text = context.messages[1]["content"][1]["text"]
+        user_text = context.messages[0]["content"][1]["text"]
         self.assertIn("LAST NOTE", user_text)
         self.assertIn("white bottle", user_text)
         self.assertIn("it is GONE", user_text)
+
+    async def test_clip_reaches_omni_as_a_video_url_before_the_prompt(self) -> None:
+        worker = object.__new__(WebcamAgent)
+        worker._base_url = "http://localhost:8002/v1"
+        worker._model_id = "test-model"
+        worker._system_prompt = "Return JSON."
+        worker._prompt = "Describe the video."
+        worker._max_tokens = 128
+        worker._temperature = 0.2
+        worker._omni = AsyncMock()
+        worker._omni.run_multimodal_inference.return_value = NvidiaOmniInferenceResult(text="not json")
+
+        await worker._describe(b"mp4", 2, 2.0)
+
+        context = worker._omni.run_multimodal_inference.await_args.args[0]
+        params = await NvidiaOmniLLMAdapter().get_llm_invocation_params(
+            context, system_instruction=worker._system_prompt, convert_developer_to_user=True
+        )
+        self.assertEqual(params["messages"][0], {"role": "system", "content": "Return JSON."})
+        video, prompt = params["messages"][1]["content"]
+        self.assertEqual(video["type"], "video_url")
+        self.assertTrue(video["video_url"]["url"].startswith("data:video/mp4;base64,"))
+        self.assertIn("Describe the video.", prompt["text"])
 
     def test_non_finite_frame_window_does_not_raise(self) -> None:
         store_webcam_frame(
