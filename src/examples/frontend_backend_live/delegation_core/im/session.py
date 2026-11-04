@@ -47,6 +47,7 @@ from examples.frontend_backend_live.delegation_core.im.input import (
     with_parts,
 )
 from examples.frontend_backend_live.delegation_core.im.notes import ProgressNotes
+from examples.frontend_backend_live.delegation_core.im.recovery import ShapeHints
 from examples.frontend_backend_live.delegation_core.im.results import CallReports, ResultFormat
 from examples.frontend_backend_live.delegation_core.im.run import Parked, TaskRun, WorkRun, brief_message
 from examples.frontend_backend_live.delegation_core.im.stop import AtClose, ForNewerRequest
@@ -157,7 +158,11 @@ class IMSession:
         self.result_format = result_format if result_format is not None else ResultFormat()
         self.call_reports = call_reports if call_reports is not None else CallReports()
         self.observe = observe
+        self.caller_note = texts.caller_notes[settings.caller_note]
         self.voice_note = texts.voice_notes[settings.voice_note]
+        self.shape_hints = (
+            ShapeHints(settings.not_found_pattern, texts.shape_hint, observe) if settings.shape_hints else None
+        )
         self.ledger = WorkLedger(uid("conv"))
         self.book = ResponseBook(self.ledger)
         self.notes = ProgressNotes(self.book, settings.progress_note_seconds)
@@ -503,8 +508,8 @@ class IMSession:
         return view
 
     def instruction_notes(self) -> tuple[str, ...]:
-        """What the IM adds to every task's instructions, in order: the voice note, then the result format's note."""
-        return (self.voice_note, self.result_format.note)
+        """What the IM adds to every task's instructions, in order: the caller note, the voice note, the format note."""
+        return (self.caller_note, self.voice_note, self.result_format.note)
 
     def response_settings(self, settings: dict | None) -> tuple[str, str | None]:
         """What a request's response reports: its model, and its instructions as the IM composes them.
@@ -696,6 +701,9 @@ class IMSession:
         self.book.open(waiting.delegation_id, stream, *self.response_settings(brings))
         for call_id, output in outputs.items():
             self.call_ended(call_id, output.get("output"), "done")
+        if self.shape_hints is not None:  # the ledger keeps the app's outputs; the tasks read them with any hint
+            calls = [(call, outputs[call_id]) for call_id, (_task, call) in waiting.calls.items()]
+            outputs = self.shape_hints.outputs(calls, settings_for(brings, self.defaults).tools)
         if messages:  # the caller's typed messages with the outputs ask anew
             self.admitted += 1
         waiting.work.continue_with(waiting, outputs, messages, brings)

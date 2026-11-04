@@ -390,6 +390,42 @@ class AppCallRound(ScriptStep):
         self.ends = run.routes[-1] == "app"
 
 
+class ShapeHintTests(IMCase):
+    """After the app finds nothing, the task reads the failed id in the shape the tool shows; the ledger keeps it."""
+
+    USER = {
+        **USER,
+        "name": "get_member",
+        "parameters": {
+            "type": "object",
+            "properties": {"user_id": {"type": "string", "description": "The user id, such as 'lee_park_42'."}},
+        },
+    }
+    FAILED = "Error: User Maya_Ross_3817 not found"
+
+    async def lookup(self, **settings):
+        adapter = ScriptedAdapter([AppCallRound("get_member", {"user_id": "Maya_Ross_3817"}, "call_1"), answer()])
+        im = self.session(adapter, **settings)
+        app = {"tools": [self.USER]}
+        first = await read_all(im.admit(ask("Find my account."), delegation_id="D1", settings=app).stream)
+        await read_all(
+            im.admit_client_request(app_outputs(first, self.FAILED), delegation_id="D1", settings=app).stream
+        )
+        read = [item for item in adapter.runs[0].histories[-1] if item["type"] == "function_call_output"]
+        return im, read[0]["output"]
+
+    async def test_the_task_reads_the_hint_and_the_ledger_keeps_the_apps_output(self):
+        im, read = await self.lookup()
+        self.assertEqual(read, f"{self.FAILED}\n{TEXTS.shape_hint.format(value='maya_ross_3817')}")
+        self.assertEqual(im.ledger.actions["call_1"].output, self.FAILED)
+        self.assertIn("tools.shape_hint", [kind for kind, _ in self.traces])
+
+    async def test_switched_off_the_task_reads_the_apps_output_as_it_is(self):
+        im, read = await self.lookup(shape_hints=False)
+        self.assertEqual(read, self.FAILED)
+        self.assertNotIn("tools.shape_hint", [kind for kind, _ in self.traces])
+
+
 class RepeatedCallTests(IMCase):
     async def answered(self, im, events, output, delegation_id="D1"):
         """The app's ``output`` for the call ``events`` ended with: the continuation's events."""

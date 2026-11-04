@@ -30,12 +30,46 @@ delegation:
   records_max_works: 5                 # the recently ended Works the work records list, after the open ones
   context_tokens: 24000                # the backend history's budget (fits a 32,768-token local window)
   tool_output_chars: 8000              # a longer tool output enters the backend history cut to its head and tail
+  caller_note: default                 # the texts.caller_notes entry on how to work with the caller; none: no note
   voice_note: default                  # the texts.voice_notes entry that describes the voice channel to the backend
+  shape_hints: true                    # after an app lookup finds nothing, suggest the failed id in the shape the
+                                       # app's ids take (learned from the tool's description and the session), once
+  not_found_pattern: '(?i)\b(not found|does not exist|no such)\b'  # an app output that names nothing
 
 # The lines the IM and the backend write or add to a model's input. Two kinds of text come from elsewhere: a harness's
 # own block words its prompt templates (backend.harness.prompts) and its agent class's values (backend.harness.agents),
 # and an error's message (an exception's, a timed-out call's) comes from the code that reports it.
 texts:
+  # How the backend works with the caller, added to every task's instructions before the voice note. A note holds only
+  # rules that hold for any business and do nothing where they do not apply. Short examples from several kinds of
+  # business may illustrate a rule; no task, tool or product names (those belong in the client's instructions). none
+  # adds nothing.
+  caller_notes:
+    default: |
+
+      ## Working with the caller
+      - When a likely cause of the caller's problem depends on their situation and no tool shows it, ask
+        about it in one short question right after you have identified the caller and before any checks,
+        unless they have already said; ask only once. For example (match the pattern, not the topic):
+        - a phone, internet or streaming service that stopped working: whether they are at home, at work or
+          travelling right now;
+        - a card or online account that stopped working: whether they are using it abroad or on a new device;
+        - a delivery that never arrived: whether the building was locked or no one could get to the door;
+        - a device that will not turn on: whether it was dropped or got wet;
+        - a car that will not start: whether it was left out in freezing weather;
+        - no heating or hot water: whether it affects the whole home or only one room.
+        Do not hand the caller off or give up while such a question is unasked, unless your instructions
+        require the hand-off right away.
+      - Before you hand the caller off, check the steps your instructions give for this problem, including
+        what the records show, and do the remaining ones that apply and that you are allowed to take, with
+        the caller's agreement where your instructions require it. Skip this when your instructions require
+        the hand-off right away. A refusal your instructions require is not a problem to work around.
+      - Before any change the caller cannot easily undo, describe the exact change, including any amount and
+        how it is paid or refunded, and ask whether to go ahead. Act only on a clear yes the caller gave after
+        hearing that whole description; a yes to something else, or the request itself, is not that yes. A yes
+        already given to the same description still counts after small talk or "are you there?".
+    none: ""
+  # How the voice channel works, added to every task's instructions after the caller note.
   voice_notes:
     default: |
 
@@ -70,8 +104,11 @@ texts:
   not_run_output: "Not run: the caller said something new."
   stopped_output: "Not run: this work was stopped."
   clash_output: "Not run: the app and a work tool both have a function by this name, so neither runs."
-  # The error outputs of a call to a name no tool offers, and of a call that raised ({error}: its type and message).
-  unknown_tool_output: "Unknown tool: {name}. The tools offered: {offered}"
+  # The error outputs of a call to a name no tool offers (which also says how to ask the caller to do a step that is
+  # theirs, such as one on their own device), and of a call that raised ({error}: its type and message).
+  unknown_tool_output: >-
+    Unknown tool: {name}. The tools offered: {offered}. If this is something the caller does, ask them in plain
+    words to do it and tell you what they see; never say a tool's name to them.
   failed_output: "{name} failed: {error}"
   # The error output of an app function the IM routes to a harness's agent instead of the app (it never should).
   misrouted_output: "{name} is the app's function; the harness cannot run it"
@@ -79,6 +116,9 @@ texts:
   # its task made and the app answered, with no request since ({output}: that answer): the IM gives it instead of
   # sending the call again.
   repeated_call_output: "{output}\n(not sent again: the same call just returned this)"
+  # Added to an app output that found nothing ({value}: the failed value in the shape the app's ids take, a form the
+  # session has not tried).
+  shape_hint: "(Not tried yet in this call, and matches the usual form: {value}.)"
   # What stands between the head and the tail of a tool output cut to delegation.tool_output_chars ({chars}: how many
   # characters it leaves out).
   cut_output: "\n[... {chars} characters cut ...]\n"

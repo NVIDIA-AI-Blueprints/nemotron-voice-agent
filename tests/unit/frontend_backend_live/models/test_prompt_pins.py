@@ -40,8 +40,8 @@ class PromptTextTests(unittest.TestCase):
     # delegation's input, the writer's notes, the schema hints and the normalizer's prompt.
     DIGESTS = {
         "frame_before": "04cc4b783a0d3e808443a0e2b2afceab6f676c8839670590131c4d6fe1b299ef",
-        "frame_after": "a77da78e0549fa2f0d1af6e4e860994f715eb0f2ab0b55ec17bb3cd280be3e9e",
-        "routing": "43fa57dd0502b5f427b043597c8a31e1308b70df2dec8db2f1dfef71e813fbce",
+        "frame_after": "f22ef20bf758d65c42891d0499ad63ebffd3076651ee094dad4dd13391dfeafb",
+        "routing": "5d7370e680037c37eaa3d4e148bfc97ed31bd0cbed285b4d232001776ae08fb1",
         "commentary": "146751021894e1c4fe0087a48c765134e5845b5f0ecc9beb8eedf3b0d220716a",
         "answer": "af7ebcc6e7569591135df28b5ce7be26d88a5cfa050aa4fbd9b6db0f5ba9e364",
         "progress": "502d51902e0db2546702c47fc78cb60bf4f1ab4fbf195d3c51058f29deb3b6cc",
@@ -49,7 +49,7 @@ class PromptTextTests(unittest.TestCase):
         "writer_frame_after": "e26efe4b9939af11b8c172fcdca27d889062044d4605be26a5f1c11663af913f",
         "work_in_progress": "1e25d42ff394424d13d2998eba4933fd06251d7dace71ddd0831aaaa35d787a3",
         "no_work_in_progress": "3f24d1a22ca78b922fc3532e3078e0c76961a8d5d60b9c609ce43b1a80a6dc27",
-        "answer_ready_label": "b9f74dbe050460e447c8125ee599991fb6c40c18fa0b72886c7894b29c331d57",
+        "answer_ready_label": "91239fef9e29afc1843dd42285a023d2681115d0d9fece3309a63ad043c2ca01",
         "typed_request_label": "d627e456ba2045be399c0b24fab0477a3dc4bb083a4b5a9efe344e39439e659a",
         "work_texts.item": "b51d1fd1c2d176204e95abfd041bc590561f27ff2ef019f687d808b8ace28659",
         "work_texts.running": "dfba91d1f5e7a6e1221ae8d3b7b3020024672394110ea6b3a1a1ad7887aeda78",
@@ -73,7 +73,7 @@ class PromptTextTests(unittest.TestCase):
         "transcript.unheard": "b2175e0a06996e03b87589c32fa1de8395d5f012b0bf785af0ede0455ae6fd70",
         "writer_notes.told": "ee6fad0e114c43a91e4e5f22cfe201320c4b7d73ccdfe30d2b6d33ca1651105b",
         "writer_notes.newer": "29a2291222b78f4f9a06efa65e90a834e0073da9df63ec50246062417a30638b",
-        "call_hints.talker": "cf8cff9d45974d3fc5e4a9a9ab11c32c942a115209ff1a0914580214ef80c790",
+        "call_hints.talker": "582d119f7e7d2f138fbf2144634b69dc119412c19d8f565324f6a022c773c139",
         "call_hints.answer": "67aa75610fa6ccf2e908f271b04abe30ac4a3338e1c136c5e2de9566ae659fda",
         "call_hints.normalizer": "98cd8284427cee7816dcb4732c12bb6a1c2cadcb4fdcf5ce3eb53a72c4d5557b",
         "call_hints.progress": "69df152fbd4e8e5fa457d37eb6ebf9bbef3447bafb9a00b842b70fbb9a51872a",
@@ -83,7 +83,7 @@ class PromptTextTests(unittest.TestCase):
         # The routing decision's runtime data, after the conversation: its label, then the work line, the newest turn
         # and the cue.
         "runtime_label": "0bc1ff415b7cb0d73d1ffeec3d1676480e33fe1d61c2749cd7ebd961e0cfd41a",
-        "decision_cue": "556ccc32a84e84ee0cbeb4cbf0191db2d4568db1324fdbbaab0d19703e68bdb7",
+        "decision_cue": "fcbc38c2edc8e5e57d3fbb8d9ad5f60d84b3572d0b9ff6b428789d27dfd303c4",
         "newest_turn": "10553a9d1f8dbc67a1a3046ffa6ebd130dec0a409185960cb45c803f42510acf",
     }
 
@@ -98,6 +98,29 @@ class PromptTextTests(unittest.TestCase):
         for path, expected in self.DIGESTS.items():
             with self.subTest(field=path):
                 self.assertEqual(digest(self.field(DEFAULT, path)), expected)
+
+
+class PromptShapeTests(unittest.TestCase):
+    # The talker runs on a small model: its rules stay short, and the cue it reads last restates them.
+    RULES_WORD_BUDGET = 1000  # frame_after and routing together
+    CUE_WORD_BUDGET = 225
+
+    def test_the_talkers_rules_stay_within_their_word_budgets(self):
+        self.assertLessEqual(len((DEFAULT.frame_after + DEFAULT.routing).split()), self.RULES_WORD_BUDGET)
+        self.assertLessEqual(len(DEFAULT.decision_cue.split()), self.CUE_WORD_BUDGET)
+
+    def test_the_cue_names_every_move_and_the_answered_state(self):
+        cue = DEFAULT.decision_cue
+        for word in ("Wait", "Speak", "delegate", "answered"):
+            with self.subTest(word=word):
+                self.assertIn(word, cue)
+        self.assertTrue(DEFAULT.answer_ready_label.startswith("answered"))
+
+    def test_the_speak_hint_still_allows_a_clarifying_question(self):
+        # Rule 7 lets the talker ask a clarifying question its instructions allow; the hint bans only these requests.
+        hint = " ".join(DEFAULT.call_hints.talker.split())
+        self.assertNotIn("request for details", hint)
+        self.assertIn("a request for ids, account details or a confirmation", hint)
 
 
 class FrameTests(unittest.TestCase):

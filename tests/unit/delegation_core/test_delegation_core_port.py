@@ -160,6 +160,7 @@ class ControlVocabularyTests(unittest.TestCase):
 # ------------------------------------------------------------------------------------------------ the core's settings
 def texts():
     return {
+        "caller_notes": {"default": "\n## Working with the caller\n"},
         "voice_notes": {"default": "\n## Voice channel\n"},
         "result_formats": {"plain": "", "speak_display": "Two parts."},
         "handover_line": "Handled together ({delegation}).",
@@ -173,6 +174,7 @@ def texts():
         "failed_output": "{name}: {error}",
         "misrouted_output": "{name} is the app's.",
         "repeated_call_output": "{output} (again)",
+        "shape_hint": "(try {value})",
         "cut_output": "[{chars} cut]",
         "none": "none",
         "records_block": "Work so far:\n{records}",
@@ -238,6 +240,9 @@ class CoreSettingsTests(unittest.TestCase):
             "a boolean count": {"delegation": {"context_tokens": True}},
             "no room for a tool output": {"delegation": {"tool_output_chars": 0}},
             "a negative wait": {"delegation": {"stop_timeout_seconds": -1}},
+            "an unknown caller note": {"delegation": {"caller_note": "c9"}},
+            "a pattern that does not compile": {"delegation": {"not_found_pattern": "(not found"}},
+            "a shape-hint switch that is not a flag": {"delegation": {"shape_hints": "yes"}},
             "an unknown voice note": {"delegation": {"voice_note": "v9"}},
             "an unknown format": {"delegation": {"result_format": "html"}},
             "an unknown work tool": {"delegation": {"work_tools": ["run_shell"]}},
@@ -264,6 +269,7 @@ class CoreSettingsTests(unittest.TestCase):
             "a failure naming a field it is not given": ("failed_output", "{name}: {error} {why}", "not given"),
             "a misrouted call with no name": ("misrouted_output", "The app's.", "must hold {name}"),
             "a repeated call with no output": ("repeated_call_output", "Again.", "must hold {output}"),
+            "a shape hint with no value": ("shape_hint", "Try another form.", "must hold {value}"),
             "a conductor prompt with no limit": ("conductor_prompt", "Place them.", "must hold {max_running}"),
             "a cut with no count": ("cut_output", "[cut]", "must hold {chars}"),
             "a refusal with no reason": (

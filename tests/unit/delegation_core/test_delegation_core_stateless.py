@@ -130,14 +130,15 @@ class StatelessRequestTests(StatelessCase):
         # Never read as a continuation: the function output is part of the context, and the model is asked.
         self.assertEqual(model.payloads[0]["input"], [USER, CALL, OUTPUT])
         settings = (model.payloads[0]["model"], model.payloads[0]["instructions"])
-        expected = ("org/default-model", compose("Default.", self.texts.voice_notes["default"]))
-        self.assertEqual(settings, expected)  # the IM's defaults fill what it left out; the voice note joins them
+        notes = (self.texts.caller_notes["default"], self.texts.voice_notes["default"])
+        expected = ("org/default-model", compose("Default.", *notes))
+        self.assertEqual(settings, expected)  # the IM's defaults fill what it left out; the notes join them
         # The response's end ended the session: the model is released, and no conversation was opened.
         self.assertEqual(model.closes, 1)
         self.assertEqual(session.ledger.session.state, "ended")
         self.assertEqual(self.service.sessions, {})
 
-    async def test_what_the_client_set_and_the_voice_note_reach_the_model(self):
+    async def test_what_the_client_set_and_the_notes_reach_the_model(self):
         model = Model(answer_round("Hello."))
         self.core(model)
         request = {
@@ -150,7 +151,8 @@ class StatelessRequestTests(StatelessCase):
         events = await self.ask(request)
         payload = model.payloads[0]
         self.assertEqual((payload["model"], payload["tools"], payload["tool_choice"]), ("org/other", [MENU], "auto"))
-        self.assertEqual(payload["instructions"], compose("Be terse.", self.texts.voice_notes["default"]))
+        notes = (self.texts.caller_notes["default"], self.texts.voice_notes["default"])
+        self.assertEqual(payload["instructions"], compose("Be terse.", *notes))
         self.assertEqual(events[-1]["response"]["model"], "org/other")
 
     async def test_function_calls_end_the_response_and_nothing_waits_for_their_outputs(self):

@@ -50,7 +50,7 @@ class SetShapeTests(unittest.TestCase):
         self.assertIn("never mention a backend", DEFAULT.writer_frame_before)
 
     def test_the_rule_on_details_delegates_a_correction_or_an_addition(self):
-        self.assertIn("corrects or adds to details given earlier", DEFAULT.routing)
+        self.assertIn("any correction or addition to details", " ".join(DEFAULT.routing.split()))
 
 
 class HistoryTests(unittest.TestCase):

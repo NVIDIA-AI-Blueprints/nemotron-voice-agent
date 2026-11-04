@@ -159,9 +159,9 @@ class TaskContext(Protocol):
 
         They come from the request whose response the task is writing into. An explicit request (the Work's start, a
         continuation with the app's outputs, a typed run) brings its own; an automatic successor (a steering join)
-        keeps the Work's. The IM composes ``instructions``: the request's or the default, then the voice note, then
-        the result format's note. Every adapter puts it where its backend takes a system prompt: every round for an
-        LLM, each worker session's system prompt for a harness.
+        keeps the Work's. The IM composes ``instructions``: the request's or the default, then the caller note, the
+        voice note, and the result format's note. Every adapter puts it where its backend takes a system prompt: every
+        round for an LLM, each worker session's system prompt for a harness.
         """
 
     def history(self) -> list[dict]:

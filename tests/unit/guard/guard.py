@@ -54,6 +54,7 @@ KIND_ATTRIBUTES = frozenset(
         "agent",
         "result_format",
         "result_wording",
+        "caller_note",
         "voice_note",
         "kind",
         "tts_mode",
