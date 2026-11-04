@@ -139,7 +139,7 @@ pins and extras, every `from pipecat*` import, and custom subclasses of
 `FrameProcessor`/`BaseUserMuteStrategy`/`BaseTextFilter`/`PipelineWorker`/`BaseWorker`.
 Always inspect custom service subclasses against their new parent implementations, especially
 `src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and
-`src/examples/omni_assistant/nvidia_omni_multimodal_service.py`.
+`SubagentsSpeakerOmniService` in `src/examples/omni_assistant_subagents/subagents/speaker/agent.py`.
 Client: `client/package.json` `@pipecat-ai/*` deps, every `@pipecat-ai/*` import in `client/src/**`, and where
 RTVI is used (client init/transport setup, RTVI event/message handlers, providers/hooks). Note files for the
 change matrix.

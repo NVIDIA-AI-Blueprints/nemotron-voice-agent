@@ -55,7 +55,7 @@ anything it changes downstream.
 - TTS or language change: restart TTS when required, then query its voice-discovery API
   again.
 - Cascaded to Omni:
-  - copy current `nvidia_omni_multimodal_service.py`
+  - import Pipecat's `NvidiaOmniLLMService` from `pipecat.services.nvidia.omni.llm`
   - remove ASR from agent wiring, add `TurnAnalyzerUserTurnStopStrategy` with
     `wait_for_transcript=False`, and add the initial-mute strategy
   - replace local `llm` + `asr` Compose services with `omni`, retaining `tts`

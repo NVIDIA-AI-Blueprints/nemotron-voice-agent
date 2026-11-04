@@ -13,10 +13,9 @@ from collections.abc import AsyncGenerator
 import httpx
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.nvidia.llm import NvidiaLLMService
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
-
-from examples.omni_assistant.nvidia_omni_multimodal_service import NvidiaOmniLLMService
 
 MAGPIE_TTS_ENDPOINT = "https://inference-api.nvidia.com/v1/audio/nvidia/magpie-tts-multilingual-357m/synthesize"
 

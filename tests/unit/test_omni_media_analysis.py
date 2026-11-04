@@ -25,7 +25,7 @@ class _FakeResult:
     finish_reason: str = "stop"
 
 
-def _analyze_and_capture() -> list[dict]:
+def _analyze_and_capture(*, content_type: str = "audio/wav", provider_shape: bool = False) -> list[dict]:
     worker = MediaAnalyzerWorker(
         api_key="test",
         base_url="http://localhost:8002/v1",
@@ -34,7 +34,13 @@ def _analyze_and_capture() -> list[dict]:
     captured: list[dict] = []
 
     async def fake_inference(context, **kwargs):
-        captured.extend(context.get_messages())
+        if provider_shape:
+            params = await worker._omni.get_llm_adapter().get_llm_invocation_params(
+                context, convert_developer_to_user=True
+            )
+            captured.extend(params["messages"])
+        else:
+            captured.extend(context.get_messages())
         return _FakeResult()
 
     worker._omni.run_multimodal_inference = fake_inference
@@ -44,7 +50,7 @@ def _analyze_and_capture() -> list[dict]:
         sequence=1,
         kind="audio",
         name="clip.wav",
-        content_type="audio/wav",
+        content_type=content_type,
         data=b"RIFF0000WAVEfmt ",
         created_at="2026-01-01T00:00:00Z",
     )
@@ -76,6 +82,20 @@ def test_instructions_and_media_share_one_user_turn_with_text_first():
     assert parts[0]["type"] == "text"
     assert _SYSTEM_PROMPT in parts[0]["text"]
     assert parts[1]["type"] != "text"
+
+
+def test_uploaded_audio_reaches_omni_as_an_audio_url():
+    part = _analyze_and_capture(provider_shape=True)[0]["content"][1]
+
+    assert part["type"] == "audio_url"
+    assert part["audio_url"]["url"].startswith("data:audio/wav;base64,")
+
+
+def test_audio_upload_recorded_in_a_video_container_still_goes_as_audio():
+    part = _analyze_and_capture(content_type="video/webm", provider_shape=True)[0]["content"][1]
+
+    assert part["type"] == "audio_url"
+    assert part["audio_url"]["url"].startswith("data:audio/webm;base64,")
 
 
 def _subagent_extra_body(profile: str, key: str) -> dict:

@@ -17,12 +17,8 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import LLMService
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService, NvidiaOmniLLMSettings
 
-from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniLLMService,
-    NvidiaOmniSettings,
-    text_message_part,
-)
 from examples.omni_assistant_subagents.subagents.speaker.action_envelope import (
     ACTION_FALLBACK_RESPONSE,
     TURN_ACTIONS,
@@ -153,7 +149,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         if self._active_turn_parts:
             return params
         messages = list(params.get("messages") or [])
-        messages.append({"role": "user", "content": [text_message_part(self._audio_response_instruction())]})
+        messages.append({"role": "user", "content": [{"type": "text", "text": self._audio_response_instruction()}]})
         params["messages"] = messages
         return params
 
@@ -537,13 +533,12 @@ class SpeakerOmniAgent(PipelineWorker):
             api_key=api_key,
             base_url=base_url,
             context=context,
-            extra={"response_format": {"type": "json_object"}, **dict(extra_params or {})},
-            settings=NvidiaOmniSettings(
+            settings=NvidiaOmniLLMSettings(
                 model=model_id,
                 max_tokens=parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
                 temperature=parse_env_float("OMNI_TEMPERATURE", 0.7, min_value=0.0),
                 top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
-                emit_transcriptions=False,
+                extra={"response_format": {"type": "json_object"}, **dict(extra_params or {})},
                 min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
             ),
             media_analysis_prompt_handler=media_analysis_prompt_handler,

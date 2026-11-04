@@ -6,17 +6,15 @@
 import json
 import re
 import unittest
+from contextvars import ContextVar
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import yaml
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.services.nvidia.omni.llm import NvidiaOmniInferenceResult, NvidiaOmniLLMService
 
-from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniInferenceResult,
-    NvidiaOmniLLMService,
-)
 from examples.omni_assistant_subagents.pipeline import _agent_prompt_content, _expand_fragments
 from examples.omni_assistant_subagents.subagents.speaker.action_envelope import (
     MEDIA_FIELD_PREFIXES,
@@ -36,6 +34,10 @@ AUDIO_TURN_PARTS = [
     {"type": "input_audio", "input_audio": {"data": "AA==", "format": "wav"}},
     {"type": "text", "text": "contract"},
 ]
+
+
+def _set_turn_parts(service, parts) -> None:
+    service._turn_parts_var = ContextVar("omni_turn_parts", default=parts)
 
 
 class ActionNormalizationTests(unittest.TestCase):
@@ -190,7 +192,7 @@ class PromptAndStreamingContractTests(unittest.TestCase):
 
     def test_late_contradiction_is_not_a_successful_direct_result(self) -> None:
         service = object.__new__(SubagentsSpeakerOmniService)
-        service._active_turn_parts = AUDIO_TURN_PARTS
+        _set_turn_parts(service, AUDIO_TURN_PARTS)
         result = service._parse_turn_result(
             json.dumps(
                 {
@@ -251,7 +253,7 @@ class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
         service._repeat = RepeatGuard()
         service._capture_cooldown = 0
         service._context = None
-        service._active_turn_parts = AUDIO_TURN_PARTS
+        _set_turn_parts(service, AUDIO_TURN_PARTS)
         service.run_inference = AsyncMock()
         service.push_frame = AsyncMock()
         self.transcripts: list[str] = []
@@ -405,7 +407,7 @@ class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_transcript_claimed_without_user_audio_never_enters_the_conversation(self) -> None:
         """A text turn has no speech, so a reported transcript is an echo, not something said."""
         service = self._service()
-        service._active_turn_parts = None
+        _set_turn_parts(service, None)
         visible = await self._drain(
             service,
             {
@@ -458,7 +460,7 @@ class EnvelopeContractDeliveryTests(unittest.TestCase):
 
     def test_turn_without_audio_carries_the_contract(self) -> None:
         service = self._service()
-        service._active_turn_parts = None
+        _set_turn_parts(service, None)
 
         messages = self._messages(service)
 
@@ -467,7 +469,7 @@ class EnvelopeContractDeliveryTests(unittest.TestCase):
 
     def test_audio_turn_is_left_alone(self) -> None:
         service = self._service()
-        service._active_turn_parts = AUDIO_TURN_PARTS
+        _set_turn_parts(service, AUDIO_TURN_PARTS)
 
         self.assertEqual(len(self._messages(service)), 1)
 
@@ -522,10 +524,11 @@ class SpeakerHistoryOwnershipTests(unittest.IsolatedAsyncioTestCase):
     """The Speaker worker runs without an aggregator, so it owns its own history."""
 
     def _service(self) -> SubagentsSpeakerOmniService:
-        service = object.__new__(SubagentsSpeakerOmniService)
-        service._name = "SpeakerOmni"
-        service._context = LLMContext([{"role": "system", "content": "identity"}])
-        service._answered_transcript = ""
+        service = SubagentsSpeakerOmniService(
+            api_key="test",
+            context=LLMContext([{"role": "system", "content": "identity"}]),
+            audio_response_instruction="contract",
+        )
         service.push_frame = AsyncMock()
         return service
 
@@ -558,7 +561,7 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
         service._repeat = RepeatGuard()
         service._capture_cooldown = 0
         service._context = None
-        service._active_turn_parts = AUDIO_TURN_PARTS
+        _set_turn_parts(service, AUDIO_TURN_PARTS)
         service.run_inference = AsyncMock()
         service.push_frame = AsyncMock()
         return service
@@ -753,6 +756,7 @@ class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker._max_tokens, 16384)
         settings = omni_service.call_args.kwargs["settings"]
         self.assertEqual(settings.max_tokens, 16384)
+        self.assertEqual(settings.system_instruction, worker._system_prompt)
 
     async def test_think_uses_total_generation_ceiling_without_per_call_budget(self) -> None:
         worker = object.__new__(ThinkerWorker)
@@ -779,6 +783,8 @@ class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "One, two, three, four, five.")
         self.assertEqual(reasoning, "Counted the requested sequence.")
         worker._omni.run_multimodal_inference.assert_awaited_once()
+        context = worker._omni.run_multimodal_inference.await_args.args[0]
+        self.assertEqual([message["role"] for message in context.messages], ["user"])
         kwargs = worker._omni.run_multimodal_inference.await_args.kwargs
         self.assertEqual(kwargs["max_tokens"], 16384)
         self.assertNotIn("reasoning_budget", kwargs)
