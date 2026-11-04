@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
-import asyncio
+from dataclasses import replace
 from typing import Any
 
+import httpx
 from loguru import logger
 
 from examples.frontend_backend_agent.airline.backend import BookingBackend
@@ -34,6 +35,18 @@ class BookingTool:
 
     async def continue_booking(self, slots: dict[str, Any]) -> dict[str, Any]:
         """Advance the current booking flow from planned slots."""
+        attempt = self._state.booking_attempt
+        if attempt is not None:
+            selected = slot(slots, "flight_selected")
+            if selected and extract_selected_flight(selected, self._state.search_results) != attempt.flight:
+                return booking_outcome_unknown()
+            for key in ("passenger_name", "seat_pref", "meal_pref"):
+                value = slot(slots, key)
+                if value and value != getattr(attempt, key):
+                    return booking_outcome_unknown()
+            if bool_slot(slots, "confirmed") is True:
+                return await self._finalize_booking()
+            return booking_outcome_unknown()
         if not self._state.search_results:
             return response_hint(
                 reason="missing_search_context",
@@ -161,7 +174,8 @@ class BookingTool:
         )
 
     async def _finalize_booking(self) -> dict[str, Any]:
-        draft = self._state.booking_draft
+        """Submit the confirmed booking once, reusing the attempt's idempotency key on retries."""
+        draft = self._state.booking_attempt or self._state.booking_draft
         if draft is None:
             return response_hint(
                 reason="params_missing",
@@ -170,26 +184,32 @@ class BookingTool:
                 response_text="Which flight should I book?",
                 context="booking",
             )
+        if self._state.booking_attempt is None:
+            self._state.booking_attempt = replace(draft, flight=dict(draft.flight))
+        draft = self._state.booking_attempt
         try:
             record = await self._backend.create_booking(
                 passenger_name=draft.passenger_name,
                 flight=draft.flight,
                 seat_pref=draft.seat_pref,
                 meal_pref=draft.meal_pref,
+                idempotency_key=draft.idempotency_key,
             )
-        except asyncio.CancelledError:
-            self._state.reset_booking()
-            raise
-        except Exception as exc:
-            logger.warning(f"booking backend failed while creating PNR: {exc}")
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            logger.warning(f"booking backend unreachable while creating PNR: {exc}")
+            self._state.booking_attempt = None
             return response_hint(
                 reason="tool_error",
                 action="retry",
                 error=str(exc),
-                response_text="I could not complete that booking right now. Please try again.",
+                response_text="I could not reach the booking system, so nothing was booked. Please try again shortly.",
                 context="booking",
             )
+        except Exception as exc:
+            logger.warning(f"booking backend failed while creating PNR: {exc}")
+            return booking_unverified(str(exc))
         if record is None:
+            self._state.booking_attempt = None
             return response_hint(
                 reason="tool_error",
                 action="req_params",
@@ -198,6 +218,10 @@ class BookingTool:
                 response_text="I could not complete that booking. Please choose another flight.",
                 context="booking",
             )
+        if not record.get("pnr"):
+            logger.warning("booking backend returned a record without a PNR; keeping the attempt for retry")
+            return booking_unverified("Booking backend returned no PNR.")
+        self._state.booking_attempt = None
         self._state.reset_booking()
         return tool_result(
             tool="booking",
@@ -208,6 +232,7 @@ class BookingTool:
         )
 
     def _merge_preferences(self, slots: dict[str, Any]) -> None:
+        """Copy seat, meal, and passenger slots into the editable draft."""
         draft = self._state.booking_draft
         if draft is None:
             return
@@ -220,3 +245,40 @@ class BookingTool:
             draft.meal_pref = meal
         if passenger:
             draft.passenger_name = passenger
+
+
+def booking_outcome_unknown() -> dict[str, Any]:
+    """Ask for reconfirmation when a submitted booking has no receipt."""
+    return response_hint(
+        reason="booking_outcome_unknown",
+        action="confirm_booking",
+        response_text=(
+            "That booking might have completed. Stopping here does not cancel a booked ticket. "
+            "Confirm the same booking again to check the result."
+        ),
+        context="booking",
+    )
+
+
+def booking_unverified(error: str) -> dict[str, Any]:
+    """Ask for reconfirmation when a sent booking request has no usable receipt."""
+    return response_hint(
+        reason="tool_error",
+        action="retry",
+        error=error,
+        response_text="I could not verify whether that booking completed. Confirm again to check the same booking.",
+        context="booking",
+    )
+
+
+def booking_dropped_unverified() -> dict[str, Any]:
+    """Tell the caller that stopping dropped a booking whose outcome is unknown."""
+    return response_hint(
+        reason="cancelled",
+        action="cancelled",
+        response_text=(
+            "Okay, I stopped that. I could not confirm whether the last booking went through, "
+            "and stopping does not cancel a ticket that was already booked."
+        ),
+        context="booking",
+    )

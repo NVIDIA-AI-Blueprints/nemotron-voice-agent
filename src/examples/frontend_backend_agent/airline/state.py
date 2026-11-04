@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +23,7 @@ class BookingDraft:
     seat_pref: str | None = None
     meal_pref: str | None = None
     passenger_name: str | None = None
+    idempotency_key: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 @dataclass(slots=True)
@@ -34,11 +36,12 @@ class ThinkerSessionState:
     search_context: dict[str, Any] = field(default_factory=dict)
     search_results: list[dict[str, Any]] = field(default_factory=list)
     booking_draft: BookingDraft | None = None
+    booking_attempt: BookingDraft | None = None
     waiting_for_preferences: bool = False
     waiting_for_confirmation: bool = False
 
     def reset_booking(self) -> None:
-        """Clear booking-scoped state while preserving completed PNR records."""
+        """Clear the editable draft without discarding a submitted attempt."""
         self.booking_draft = None
         self.waiting_for_preferences = False
         self.waiting_for_confirmation = False

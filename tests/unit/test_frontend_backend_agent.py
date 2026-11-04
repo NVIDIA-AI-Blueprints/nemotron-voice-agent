@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 from unittest.mock import patch
 
+import httpx
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.services.llm_service import FunctionCallParams
 
@@ -178,6 +179,7 @@ class _TestBookingBackend:
         flight: dict[str, Any],
         seat_pref: str | None = None,
         meal_pref: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any] | None:
         pnr = f"TTK{self._next_pnr_index:03d}"
         self._next_pnr_index += 1
@@ -243,6 +245,48 @@ class _BlockingCreateBackend(_TestBookingBackend):
         return await super().create_booking(**kwargs)
 
 
+class _LostBookingResponseBackend(_TestBookingBackend):
+    def __init__(self, *, block_after_commit=False) -> None:
+        super().__init__()
+        self.receipts = {}
+        self.attempts = []
+        self.committed = asyncio.Event()
+        self.block_after_commit = block_after_commit
+
+    async def create_booking(self, **kwargs):
+        self.attempts.append(kwargs)
+        key = kwargs["idempotency_key"]
+        if key in self.receipts:
+            return self.receipts[key]
+        self.receipts[key] = await super().create_booking(**kwargs)
+        self.committed.set()
+        if self.block_after_commit:
+            await asyncio.Event().wait()
+        raise TimeoutError("response lost after commit")
+
+
+class _UnreachableBookingBackend(_TestBookingBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def create_booking(self, **kwargs):
+        self.attempts += 1
+        raise httpx.ConnectError("connection refused")
+
+
+class _NoPnrBookingBackend(_TestBookingBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.keys = []
+
+    async def create_booking(self, **kwargs):
+        self.keys.append(kwargs["idempotency_key"])
+        if len(self.keys) == 1:
+            return {"pnr": "", "flight_id": "AA311"}
+        return await super().create_booking(**kwargs)
+
+
 class _RaisingThinker:
     async def call(self, query: str, slots: dict[str, Any] | None = None, *, on_started=None) -> dict[str, Any]:
         raise RuntimeError("thinker exploded")
@@ -273,6 +317,12 @@ class _PlannerErrorThinker:
 
     def cancel_pending_booking(self) -> bool:
         return False
+
+    def cancellation_warning(self) -> dict[str, Any] | None:
+        return None
+
+    def acknowledge_cancellation_warning(self) -> None:
+        pass
 
 
 class _PlannerErrorWithTerminalPathsThinker(_PlannerErrorThinker):
@@ -1494,7 +1544,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["type"], "response_hint")
         self.assertEqual(payload["reason"], "tool_error")
-        self.assertIn("could not complete", payload["response_text"].lower())
+        self.assertIn("could not verify", payload["response_text"].lower())
 
     async def test_flight_search_accepts_city_names_when_planner_omits_iata_codes(self) -> None:
         thinker = _make_thinker()
@@ -1668,7 +1718,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         with suppress(asyncio.CancelledError):
             await previous_task
 
-    async def test_booking_finalization_cancellation_clears_pending_draft(self) -> None:
+    async def test_booking_finalization_cancellation_preserves_attempt_for_safe_retry(self) -> None:
         backend = _BlockingCreateBackend()
         thinker = _make_thinker(backend=backend)
 
@@ -1687,9 +1737,185 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(asyncio.CancelledError):
             await confirm_task
-        self.assertIsNone(thinker.state.booking_draft)
-        self.assertFalse(thinker.state.waiting_for_preferences)
-        self.assertFalse(thinker.state.waiting_for_confirmation)
+        self.assertIsNotNone(thinker.state.booking_attempt)
+        self.assertEqual(thinker.state.booking_attempt.idempotency_key, thinker.state.booking_draft.idempotency_key)
+
+    async def test_lost_booking_response_retries_original_key_and_parameters(self) -> None:
+        backend = _LostBookingResponseBackend()
+        thinker = _make_thinker(backend=backend)
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        failed = await thinker.call("Confirm", slots={"confirmed": True})
+        self.assertEqual(failed["reason"], "tool_error")
+        original_key = thinker.state.booking_attempt.idempotency_key
+        blocked = await thinker.call(
+            "Search a different route",
+            slots={"origin_airport": "SFO", "dest_airport": "LAX", "date": "2026-05-26"},
+        )
+        self.assertEqual(blocked["reason"], "booking_outcome_unknown")
+        changed = await thinker.call(
+            "Confirm for another passenger", slots={"confirmed": True, "passenger_name": "Someone Else"}
+        )
+        self.assertEqual(changed["reason"], "booking_outcome_unknown")
+        self.assertEqual(len(backend.attempts), 1)
+        retry = await thinker.call("Confirm original booking again", slots={"confirmed": True, "flight_selected": "1"})
+        self.assertEqual(retry["data"]["pnr"], "TTK001")
+        self.assertEqual(backend.attempts[0], backend.attempts[1])
+        self.assertIsNone(thinker.state.booking_attempt)
+        await thinker.call("Book second flight", slots={"flight_selected": "2", "use_defaults": True})
+        await thinker.call("Confirm", slots={"confirmed": True})
+        self.assertNotEqual(thinker.state.booking_attempt.idempotency_key, original_key)
+
+    async def test_cancel_racing_committed_booking_warns_and_releases_session(self) -> None:
+        backend = _LostBookingResponseBackend(block_after_commit=True)
+        thinker = _make_thinker(backend=backend)
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        confirmation = asyncio.create_task(thinker.call("Confirm", slots={"confirmed": True}))
+        await backend.committed.wait()
+        results = []
+
+        async def result_callback(result, *, properties=None):
+            results.append(result)
+
+        params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_committed",
+            arguments={},
+            llm=_FrameCapturingLLM(),
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+        await build_handlers(thinker)["cancel_backend"](params)
+        with self.assertRaises(asyncio.CancelledError):
+            await confirmation
+        self.assertEqual(results[-1]["reason"], "cancelled")
+        self.assertEqual(results[-1]["context"], "cancel_backend")
+        self.assertIn("could not confirm whether the last booking went through", results[-1]["response_text"])
+        self.assertIsNone(thinker.state.booking_attempt)
+        self.assertEqual(len(backend.attempts), 1)
+        await build_handlers(thinker)["cancel_backend"](params)
+        self.assertEqual(results[-1]["response_text"], "There is nothing pending right now.")
+        searched = await thinker.call(
+            "Search again",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        self.assertEqual(searched["tool"], "flight_search")
+
+    async def test_unreachable_booking_server_releases_attempt(self) -> None:
+        backend = _UnreachableBookingBackend()
+        thinker = _make_thinker(backend=backend)
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        failed = await thinker.call("Confirm", slots={"confirmed": True})
+        self.assertEqual(failed["reason"], "tool_error")
+        self.assertIn("nothing was booked", failed["response_text"])
+        self.assertIsNone(thinker.state.booking_attempt)
+        self.assertIsNone(thinker.cancellation_warning())
+        searched = await thinker.call(
+            "Search a different route",
+            slots={"origin_airport": "SFO", "dest_airport": "LAX", "date": "2026-05-26"},
+        )
+        self.assertEqual(searched["tool"], "flight_search")
+
+    async def test_cancel_after_failed_booking_call_unsticks_session(self) -> None:
+        thinker = _make_thinker(backend=_FailingBookingBackend())
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        failed = await thinker.call("Confirm", slots={"confirmed": True})
+        self.assertIn("could not verify", failed["response_text"].lower())
+        self.assertIsNotNone(thinker.state.booking_attempt)
+        results = []
+
+        async def result_callback(result, *, properties=None):
+            results.append(result)
+
+        params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_failed",
+            arguments={},
+            llm=_FrameCapturingLLM(),
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+        await build_handlers(thinker)["cancel_backend"](params)
+        self.assertEqual(results[-1]["reason"], "cancelled")
+        self.assertIn("could not confirm", results[-1]["response_text"])
+        self.assertIsNone(thinker.state.booking_attempt)
+        self.assertFalse(thinker.state.search_results)
+        searched = await thinker.call(
+            "Search a different route",
+            slots={"origin_airport": "SFO", "dest_airport": "LAX", "date": "2026-05-26"},
+        )
+        self.assertEqual(searched["tool"], "flight_search")
+
+    async def test_receipt_without_pnr_keeps_attempt_for_retry(self) -> None:
+        backend = _NoPnrBookingBackend()
+        thinker = _make_thinker(backend=backend)
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        unverified = await thinker.call("Confirm", slots={"confirmed": True})
+        self.assertEqual(unverified["reason"], "tool_error")
+        self.assertIn("could not verify", unverified["response_text"].lower())
+        self.assertNotIn("Your PNR is", unverified["response_text"])
+        self.assertIsNotNone(thinker.state.booking_attempt)
+        retry = await thinker.call("Confirm again", slots={"confirmed": True})
+        self.assertEqual(retry["data"]["pnr"], "TTK001")
+        self.assertEqual(backend.keys[0], backend.keys[1])
+        self.assertIsNone(thinker.state.booking_attempt)
+
+    async def test_cancel_warning_survives_interrupted_delivery(self) -> None:
+        thinker = _make_thinker(backend=_FailingBookingBackend())
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        await thinker.call("Confirm", slots={"confirmed": True})
+        results = []
+        deliveries = 0
+
+        async def result_callback(result, *, properties=None):
+            nonlocal deliveries
+            deliveries += 1
+            if deliveries == 1:
+                raise asyncio.CancelledError  # caller barges in during the first delivery
+            results.append(result)
+
+        params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_interrupted",
+            arguments={},
+            llm=_FrameCapturingLLM(),
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+        handler = build_handlers(thinker)["cancel_backend"]
+        with self.assertRaises(asyncio.CancelledError):
+            await handler(params)
+        self.assertIsNone(thinker.state.booking_attempt)
+        await handler(params)
+        self.assertIn("could not confirm", results[-1]["response_text"])
+        await handler(params)
+        self.assertEqual(results[-1]["response_text"], "There is nothing pending right now.")
 
 
 if __name__ == "__main__":
