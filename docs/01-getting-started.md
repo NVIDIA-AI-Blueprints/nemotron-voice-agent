@@ -90,7 +90,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile frontend-backend-live/server up -d     # Frontend/Backend Live Cafe Assistant
     ```
 
-    The `frontend-backend-live/server` recipe runs its talker on the Nemotron 3.5 Lightning NIM it starts and its backend on Nemotron 3 Ultra over the public NVIDIA API, with the same `NVIDIA_API_KEY`. Refer to the example's [Default Models](../src/examples/frontend_backend_live/README.md#default-models).
+    The `frontend-backend-live/server` recipe runs its talker on the Nemotron 3.5 Lightning NIM it starts and its backend on Nemotron 3.5 Super VL with reasoning enabled, on the public NVIDIA API, with the same `NVIDIA_API_KEY`. Refer to the example's [Default Models](../src/examples/frontend_backend_live/README.md#default-models).
 
     **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve those weights as W4A16 through Marlin. Blackwell workstations enable DFlash speculative decoding automatically. DGX Spark does not load a DSpark draft model due to a known issue with vLLM streaming prefill. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
 

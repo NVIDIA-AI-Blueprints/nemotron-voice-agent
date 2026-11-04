@@ -935,8 +935,8 @@ the same settings:
 
 | Recipe | ASR | Talker LLM | Backend LLM | TTS |
 | --- | --- | --- | --- | --- |
-| `frontend-backend-live` | NVIDIA cloud endpoints | Nemotron 3.5 Lightning, NVIDIA cloud endpoint | Nemotron 3 Ultra, public NVIDIA API | NVIDIA cloud endpoints |
-| `frontend-backend-live/server` | Nemotron ASR NIM | Nemotron 3.5 Lightning NIM | Nemotron 3 Ultra, public NVIDIA API | Magpie TTS NIM |
+| `frontend-backend-live` | NVIDIA cloud endpoints | Nemotron 3.5 Lightning, NVIDIA cloud endpoint | Nemotron 3.5 Super VL, public NVIDIA API | NVIDIA cloud endpoints |
+| `frontend-backend-live/server` | Nemotron ASR NIM | Nemotron 3.5 Lightning NIM | Nemotron 3.5 Super VL, public NVIDIA API | Magpie TTS NIM |
 | `frontend-backend-live/single-gpu` | NeMo-Speech.cpp | Nemotron 3.5 Lightning through vLLM | Nemotron 3.5 Lightning through vLLM | NeMo-Speech.cpp |
 
 For the slot order and the sampling settings, refer to the example's
