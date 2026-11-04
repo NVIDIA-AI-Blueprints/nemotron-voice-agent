@@ -56,6 +56,9 @@ class ThinkerBackend(Protocol):
     def cancellation_warning(self) -> dict[str, Any] | None:
         """Return a warning for side effects that local cancellation cannot undo."""
 
+    def acknowledge_cancellation_warning(self) -> None:
+        """Mark the cancellation warning as delivered."""
+
 
 def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float = 0.8) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent."""
@@ -200,8 +203,12 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
         if _direct_tool_response_enabled():
             await _emit_talker_response(params.llm, str(payload["response_text"]))
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
-            return
-        await params.result_callback(payload)
+        else:
+            await params.result_callback(payload)
+        # Clear only after delivery: a barge-in that cancels this handler keeps the
+        # warning for the next cancel_backend call.
+        if warning is not None:
+            getattr(thinker, "acknowledge_cancellation_warning", lambda: None)()
 
     return {"call_backend": handle_call_backend, "cancel_backend": handle_cancel_backend}
 

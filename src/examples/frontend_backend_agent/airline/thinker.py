@@ -143,9 +143,12 @@ class ThinkerBackend:
         return has_pending_work
 
     def cancellation_warning(self) -> dict[str, Any] | None:
-        """Return, once, the warning for a booking dropped without a receipt."""
-        warning, self._cancel_warning = self._cancel_warning, None
-        return warning
+        """Return the pending warning for a booking dropped without a receipt."""
+        return self._cancel_warning
+
+    def acknowledge_cancellation_warning(self) -> None:
+        """Clear the warning after the caller has received it."""
+        self._cancel_warning = None
 
     async def _run_call(self, call_id: str, query: str, slots: dict[str, Any]) -> dict[str, Any]:
         """Dispatch the query to internal Thinker tools."""

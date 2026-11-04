@@ -1875,6 +1875,42 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(backend.keys[0], backend.keys[1])
         self.assertIsNone(thinker.state.booking_attempt)
 
+    async def test_cancel_warning_survives_interrupted_delivery(self) -> None:
+        thinker = _make_thinker(backend=_FailingBookingBackend())
+        await thinker.call(
+            "Search flights",
+            slots={"origin_airport": "JFK", "dest_airport": "SEA", "date": "2026-05-26"},
+        )
+        await thinker.call("Book first flight", slots={"flight_selected": "1", "use_defaults": True})
+        await thinker.call("Confirm", slots={"confirmed": True})
+        results = []
+        deliveries = 0
+
+        async def result_callback(result, *, properties=None):
+            nonlocal deliveries
+            deliveries += 1
+            if deliveries == 1:
+                raise asyncio.CancelledError  # caller barges in during the first delivery
+            results.append(result)
+
+        params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_interrupted",
+            arguments={},
+            llm=_FrameCapturingLLM(),
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+        handler = build_handlers(thinker)["cancel_backend"]
+        with self.assertRaises(asyncio.CancelledError):
+            await handler(params)
+        self.assertIsNone(thinker.state.booking_attempt)
+        await handler(params)
+        self.assertIn("could not confirm", results[-1]["response_text"])
+        await handler(params)
+        self.assertEqual(results[-1]["response_text"], "There is nothing pending right now.")
+
 
 if __name__ == "__main__":
     unittest.main()
