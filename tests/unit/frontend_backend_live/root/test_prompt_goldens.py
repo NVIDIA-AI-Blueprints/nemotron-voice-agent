@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D101, D102, D103, D107
-"""What a model or the caller reads from the example's prompts, observed through the code paths that read them.
+"""What a model, the caller or the Live Console reads from the example's prompts, observed through the code paths.
 
 ``prompt_goldens.json`` holds a SHA-256 and a length for every observation below. Each observation comes from the real
 code path: the UI bot's ``bot()`` (its talker seed, and the settings and defaults it builds its core from), the Live
-core's build, the Live sessions' default talker, the lines and the UI's prompt list. A prompt edited on purpose changes
-its hashes: rerun the observations and update the file in the same change.
+core's build, the Live sessions' default talker, the lines, the Live Console's sample and the UI's prompt list. A
+prompt edited on purpose changes its hashes: rerun the observations and update the file in the same change.
 """
 
 import asyncio
@@ -138,6 +138,18 @@ class PromptGoldenCase(BotCase):
         name = LiveConfig.parse(factory.with_display_label(factory.adapter_block(config), core)).prompt
         return load_prompts().text("Talker", name)
 
+    def console(self) -> dict:
+        """The Live Console's sample in ``GET /v1/live/info``: its prefills, tools, lines and presets."""
+        for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):
+            os.environ.pop(name, None)
+        clear_root_caches(self)
+        with (
+            patch.object(factory, "root", return_value=stub_root()),
+            patch.object(factory, "delegation_core", return_value=SimpleNamespace(describe=dict)),
+        ):
+            info = asyncio.run(asyncio.to_thread(factory._describe))
+        return {key: info[key] for key in ("instructions", "sample_tools", "lines", "presets")}
+
     def prompt_list(self) -> dict:
         """The UI's prompt list for the example (``/api/prompts``) and its registry default, without the keys."""
         for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):
@@ -165,6 +177,8 @@ class PromptGoldenCase(BotCase):
         lines = load_prompts().lines
         observed["lines.parsed"] = repr(lines)
         observed["lines.by_name"] = {field.name: getattr(lines, field.name) for field in fields(FixedLines)}
+        for part, value in (await asyncio.to_thread(self.console)).items():
+            observed[f"console.{part}"] = value
         for part, value in self.prompt_list().items():
             observed[f"prompt_list.{part}"] = value
         for name in CORE_FILES:

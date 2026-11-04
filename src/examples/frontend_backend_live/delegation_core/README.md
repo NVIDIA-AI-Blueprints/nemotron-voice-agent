@@ -34,9 +34,9 @@ and keeps nothing.
 In the [Frontend/Backend Live example](../README.md), the composition root builds one
 core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the
 gateway's [server delegation](../../../../docs/how-to/use-live-gateway.md#server-delegation), in a conversation of its
-own. A client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one
-stateless request. The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml`,
-which sets the cafe's `backend.prompt` and `backend.tools`.
+own. A client-mode app, such as the Live Console, can send each backend round to `POST /v1/live/delegate`, which
+reaches the core as one stateless request. The repository UI bot builds a core of its own for each bot session,
+from `core.ui-bot.yaml`, which sets the cafe's `backend.prompt` and `backend.tools`.
 
 ## Build and Configure the Core
 

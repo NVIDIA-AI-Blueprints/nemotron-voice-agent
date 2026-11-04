@@ -416,7 +416,7 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.assertEqual(history["frontend"]["model"], ENDPOINT.model)
         self.assertTrue(any("What teas do you have?" in text for text in frontend))
         self.assertTrue(any("The caller is a regular." in text for text in frontend))
-        # Each message carries its kind.
+        # Each message carries its kind, which the console styles it by.
         kinds = {m["content"]: m["kind"] for m in history["frontend"]["messages"]}
         self.assertEqual(kinds[PROMPTS.context_label + "The caller is a regular."], "app_context")
         self.assertEqual(kinds[PROMPTS.result_label + "We have Earl Grey."], "result")
@@ -470,7 +470,7 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.assertEqual((await self.history())["backend"]["prompt"][0]["text"], "Use the tools.")
 
     async def test_history_shows_the_backend_busy_while_a_delegation_waits_for_the_app(self):
-        # The backend's busy flag comes from the adapter's work note.
+        # The console's "working" flag comes from the adapter's work note.
         # At the core's client-tool deadline (0.2 s here, core.yaml client_tool_timeout_seconds) the core's work ends
         # and nothing runs there any more, but the delegation still waits for the app in the work note: when the
         # voice's app wait (0.4 s here) runs out, it says the app-wait line once and keeps the delegation watched, so a

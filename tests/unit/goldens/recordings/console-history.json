@@ -1,6 +1,6 @@
 {
-  "name": "history-reads",
-  "scenario": "history-reads: what a history panel reads from /history at four moments of one call. The real route serves each read. The moments are the start; after a thinking append and a direct reply; while the backend waits for the client's tool output; and after the answer. Each moment is a channel, and each line one value the panel reads.",
+  "name": "console-history",
+  "scenario": "console-history: what the console's history panel reads from /history at four moments of one call. The real route serves each read. The moments are the start; after a thinking append and a direct reply; while the backend waits for the client's tool output; and after the answer. Each moment is a channel, and each line one value the panel reads (``historyView``).",
   "channels": {
     "at_start": [
       {

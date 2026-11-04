@@ -24,7 +24,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
-| [Use the Live Gateway](how-to/use-live-gateway.md) | Live sessions at `/v1/live` for Pipecat apps and other clients of the Frontend/Backend Live example |
+| [Use the Live Gateway](how-to/use-live-gateway.md) | Live sessions at `/v1/live` for the Live Console, Pipecat apps, and other clients of the Frontend/Backend Live example |
 | [Frontend/Backend Live](../src/examples/frontend_backend_live/README.md#configuration) | The Frontend/Backend Live example's `config.yaml`, `core.yaml`, and profiles, selected by `LIVE_CONFIG_PATH` and `CORE_CONFIG_PATH` |
 | [Connect an Agent Harness](how-to/connect-an-agent-harness.md) | Deploy Hermes or another Agent Client Protocol (ACP) agent for the Frontend/Backend Live example's harness backend |
 

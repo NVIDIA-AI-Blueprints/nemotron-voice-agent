@@ -163,7 +163,7 @@ class FileTests(unittest.TestCase):
         self.assertEqual(list(self.FILE), ["cafe", "agent_prompts"])
         self.assertNotIn("default", self.FILE["cafe"])  # the registry's defaults.prompt names the default
         groups = self.FILE["agent_prompts"]
-        self.assertEqual(list(groups), ["Talker", "Backend", "Channel", "Cascade", "Lines"])
+        self.assertEqual(list(groups), ["Talker", "Backend", "Channel", "Cascade", "Lines", "ConsolePresets"])
         self.assertEqual(list(groups["Talker"]), ["generic"])  # the Live default names no domain
         self.assertEqual(list(groups["Backend"]), ["cafe", "generic"])
         self.assertEqual(list(groups["Channel"]), ["cafe"])

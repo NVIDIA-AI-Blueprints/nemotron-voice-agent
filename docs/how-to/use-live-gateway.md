@@ -2,7 +2,7 @@
 
 ## Goals
 
-`/v1/live` lets live session clients, such as Pipecat apps and benchmark clients, talk to the [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply.
+`/v1/live` lets live session clients, such as the Live Console, Pipecat apps, and benchmark clients, talk to the [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply.
 
 The Live gateway serves the live session protocol at `/v1/live`. It owns each session: the order of its commands and of its close, the wire schema, and the relay of each delegation's events. It knows nothing about Pipecat or the cascade, and it reaches the frontend adapter and the delegation core only through the ports in [`ports.py`](../../src/gateways/live/ports.py). The Frontend/Backend Live example plugs its own parts into it. For the design, refer to the [Frontend/Backend Live Architecture](../design/architecture.md) page.
 
@@ -17,7 +17,7 @@ The gateway serves the following routes:
 | `WS /v1/live/sessions/{id}/attach` | A sideband connection that observes a session and sends trusted commands |
 | `GET /v1/live/sessions/{id}/history` | What the session's models hold now: the frontend adapter's half and the delegation part's half |
 | `GET /v1/live/info` | The server's voices and session limit, plus what the example's `describe` hook adds |
-| `POST /v1/live/delegate` | One backend round for a client app that does its own delegated work |
+| `POST /v1/live/delegate` | One backend round for a client app that does its own delegated work, such as the Live Console in client mode |
 
 Any other path under `/v1/live` answers 404.
 
@@ -31,7 +31,7 @@ Set `LIVE_API_TOKEN` to require a bearer token on every Live route. Without one,
 
 ### Client-Mode Rounds
 
-`POST /v1/live/delegate` runs one stateless backend round for a client app that does its own delegated work. At most `LIVE_MAX_DELEGATE_ROUNDS` (2) rounds run at once. With no token, the route answers only a `Host` that is an IP address, `localhost`, or a name in `LIVE_ALLOWED_HOSTS`.
+`POST /v1/live/delegate` runs one stateless backend round for a client app that does its own delegated work, such as the Live Console in client mode. At most `LIVE_MAX_DELEGATE_ROUNDS` (2) rounds run at once. With no token, the route answers only a `Host` that is an IP address, `localhost`, or a name in `LIVE_ALLOWED_HOSTS`.
 
 ## Connect a Pipecat App
 
@@ -49,6 +49,16 @@ llm = OpenAILiveLLMService(
     ),
 )
 ```
+
+## Use the Live Console
+
+The Live Console (`/live.html`) is a developer page for live sessions. It starts a session over WebRTC, edits its settings, shows each protocol event, each delegation, and the conversation history, and sends steering commands while the call runs.
+
+To open it, start a Frontend/Backend Live deployment, or another server that serves the Live routes as [When the Routes Are Served](#when-the-routes-are-served) describes. Open `https://localhost:7860/live.html`, press **Start conversation**, allow the microphone, and ask what teas the cafe has.
+
+The console fills its settings from `GET /v1/live/info` with the cafe demo that the repository UI bot runs, and its browser runs the cafe's tools. The server reads the demo once, at the first `GET /v1/live/info`, so restart the server after you edit its texts in `prompts.yaml`. The console's **Delegation** setting starts each session in Responses mode or in client mode, which [Delegation Modes](#delegation-modes) describes. In client mode, the console does the delegated work itself and sends each backend round to `POST /v1/live/delegate`.
+
+The console must come from the server that serves the Live routes, because the routes refuse a browser page from another origin. When `LIVE_API_TOKEN` is set, the console asks for the token, or takes it from the page link as `live.html#token=<token>`.
 
 ## Delegation Modes
 
@@ -83,7 +93,7 @@ During the call, the client can steer the cascade with three appends. Each one c
 
 The following routes report on the server and on a session:
 
-- **Server information.** `GET /v1/live/info` returns the voices, the backend's default model (`backend.model`) and the models it serves (`backend_models`), the names of the default prompts (`frontend.prompt` and `backend.prompt`), and a `warnings` list. A frontend adapter can report configuration problems there, and the cascade adapter reports none.
+- **Server information.** `GET /v1/live/info` returns the voices, the backend's default model (`backend.model`) and the models it serves (`backend_models`), the names of the default prompts (`frontend.prompt` and `backend.prompt`), and a `warnings` list. A frontend adapter can report configuration problems there, and the cascade adapter reports none. For the Live Console, it also returns the talker prompt that the repository UI selects by default, followed by the UI bot's channel context (`instructions.frontend`). It returns the backend instructions and tools that a UI bot session starts with (`instructions.backend` and `sample_tools`). It also returns the lines and the append presets that the console sends (`lines` and `presets`).
 - **Conversation history.** `GET /v1/live/sessions/{id}/history` returns what the talker and the backend hold now, with each system prompt split into parts named by source. The talker's last part is the runtime data its next call sends after the conversation: the open work and a one-line decision cue. A call that decides caller turns also quotes their words before the cue, as the caller's newest turn, and the history leaves that line out. Each talker message (`frontend.messages`) has a `kind`, and each line that the next delegation carries (`backend.pending`) is `{kind, text}`. In client mode, `backend` is `null`.
 
 ## Settings

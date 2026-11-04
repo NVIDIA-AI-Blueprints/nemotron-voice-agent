@@ -27,7 +27,7 @@ Packages, one per responsibility:
 * ``models``: the ``Frontend`` base class and its providers, the decision parser, the example's catalog and endpoint
   resolution, and retries with backoff.
 * ``prompts.py``: the reader of the example's ``prompts.yaml``, which holds the talker prompts, the backend prompts,
-  the channel context, the prompt set and the lines.
+  the channel context, the prompt set, the lines and the Live Console's append presets.
 * ``config_manager``: ``config.yaml`` loading and validation.
 * ``delegation_core``: the delegation core, a package of its own that only the two composition roots build; it has its
   own settings file (``core.yaml``), tests and ``README.md``.

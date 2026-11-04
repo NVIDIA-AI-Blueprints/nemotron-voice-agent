@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Frontend/Backend Live prompts. The top-level entries are the talker prompts that the UI lists and a UI bot session
-# selects (defaults.prompt in examples_registry.yaml names the default). agent_prompts holds the example's other prompts
-# and texts, which the UI shows read-only. A prompt file that the server is started with (PROMPT_FILE_PATH) replaces
-# this whole file, so it holds these entries too.
+# selects (defaults.prompt in examples_registry.yaml names the default, which the Live Console also starts from).
+# agent_prompts holds the example's other prompts and texts, which the UI shows read-only. A prompt file that the
+# server is started with (PROMPT_FILE_PATH) replaces this whole file, so it holds these entries too.
 #
 # The Cascade texts are used exactly as written, leading and trailing spaces and newlines included, so keep them quoted
 # or in |2 blocks where those matter. tests/unit/frontend_backend_live/models/test_prompt_pins.py pins each one.
@@ -494,7 +494,10 @@ agent_prompts:
       description: "The last line while an answer the backend gave waits to be heard."
       content: '(The caller has not heard your latest answer yet, nor any question in it; it is said to them next. Their words above came before it: do not act on them as a reply to it.)'
 
-  # The lines that the voice says word for word; an empty line says nothing.
+  # The lines that the voice says word for word; an empty line says nothing. The cascade never says still_working or
+  # app_started: the Live Console reads apology, unclear, still_working, intro and app_started through
+  # GET /v1/live/info, and sends app_started, which is never said, as its silent note that a client delegation's work
+  # started.
   Lines:
     apology:
       description: "Said when a delegation failed and no tool ran."
@@ -514,9 +517,51 @@ agent_prompts:
     holding:
       description: "Said when the talker's decision failed while work is open."
       content: One moment, I'm still working on your earlier request.
+    still_working:
+      description: "The Live Console's progress line for a slow function batch; the cascade never says it."
+      content: I'm still working on that, thanks for your patience.
     intro:
-      description: "The greeting the writer words at the start of a UI bot session."
+      description: "The greeting the writer words at the start of a UI bot session, and the Live Console's Greet first preset."
       content: This is an initial greeting, not an order. Greet the user briefly as Remy from Bluebird Cafe and ask what they would like. Respond directly with spoken text.
     greeting:
       description: "Said when the greeting cannot be worded."
       content: Hi, I'm Remy from Bluebird Cafe. What can I get you?
+    app_started:
+      description: "The Live Console's silent note that a client delegation's work started; never said."
+      content: Work on the caller's latest request has started; there is no result yet.
+
+  # The Live Console's other append presets (GET /v1/live/info: presets): texts that the console's operator can send.
+  # Each one is offered for the append type that its append names, and listed by its description.
+  ConsolePresets:
+    recording_disclosure:
+      description: "Recording disclosure"
+      append: session.instructions.append
+      content: "Immediately say the following disclosure exactly and in full before responding to the caller: This call may be recorded for quality and training purposes."
+    guardrail_redirect:
+      description: "Guardrail redirect"
+      append: session.instructions.append
+      content: Stop speaking about that request. Briefly explain that you cannot help with it, then wait for the user.
+    slow_down:
+      description: "Slow down"
+      append: session.instructions.append
+      content: Speak more slowly and leave a short pause after each item you read back.
+    ui_context:
+      description: "UI context"
+      append: session.thinking.append
+      content: The user is looking at the pastry section of the kiosk screen. 'this one' most likely refers to the butter croissant.
+    loyalty_status:
+      description: "Loyalty status"
+      append: session.thinking.append
+      content: This caller is a loyalty member; the counter applies their discount at pickup. Do not quote a discounted price.
+    store_state:
+      description: "Store state"
+      append: session.thinking.append
+      content: The espresso machine is busy; drink orders are running about three minutes behind.
+    taking_longer:
+      description: "Taking longer"
+      append: session.commentary.append
+      content: This is taking a little longer than usual — I'm still on it.
+    pickup_counter:
+      description: "Pickup counter"
+      append: session.commentary.append
+      content: Your order will be at the far end of the counter when it's ready.

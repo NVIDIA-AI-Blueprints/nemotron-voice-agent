@@ -4,7 +4,7 @@ This example is a cascaded voice agent that puts a routing talker in front of ba
 
 The example has two ways in:
 
-- **Live session clients**, such as Pipecat apps and benchmark clients, connect through `POST /v1/live/sessions` or `WS /v1/live/sessions` and supply the prompts. For details, refer to [Live Sessions](#live-sessions).
+- **Live session clients**, such as the **Live Console** (`/live.html`), Pipecat apps, and benchmark clients, connect through `POST /v1/live/sessions` or `WS /v1/live/sessions` and supply the prompts. For details, refer to [Live Sessions](#live-sessions).
 - **The repository UI** (`/`) runs a bot whose backend runs the cafe tools on the server and shows each delegation as a task card. The Realtime gateway (`WS /v1/realtime`) drives the same bot.
 
 Four parts serve a live session, and the [Frontend/Backend Live Architecture](../../../docs/design/architecture.md) page describes what each one owns and how they meet:
@@ -64,7 +64,7 @@ This example runs with the **Cloud**, **Server**, and **Single GPU** profiles. S
    | `frontend-backend-live/server` | `frontend-backend-live-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
    | `frontend-backend-live/single-gpu` | `frontend-backend-live-single-gpu` | `nvidia-llm-vllm-lightning-frontend-backend`, `nemo-speech` |
 
-4. Open the UI at `https://localhost:7860/` and ask what teas the cafe has. Keep TLS enabled for browser testing, because browsers allow the microphone only on `localhost` or over HTTPS. `PIPELINE_TLS=false` serves plain HTTP. For plain-HTTP browser testing, refer to [browser access](../../../docs/06-troubleshooting.md#browser-access).
+4. Open the UI at `https://localhost:7860/` and ask what teas the cafe has. To start a live session instead, open the **Live Console** at `https://localhost:7860/live.html`, as [Use the Live Console](../../../docs/how-to/use-live-gateway.md#use-the-live-console) describes. Keep TLS enabled for browser testing, because browsers allow the microphone only on `localhost` or over HTTPS. `PIPELINE_TLS=false` serves plain HTTP. For plain-HTTP browser testing, refer to [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
 5. Clean up when you are done by tearing down with the same profile that you started, for example `docker compose --profile frontend-backend-live down`.
 

@@ -17,7 +17,7 @@ The following terms have a fixed meaning on this page and in the code:
 
 | Term | Meaning |
 | --- | --- |
-| The app | The client application on the Live wire: a benchmark client or your own app. It declares function tools and runs the calls that the backend routes to it. |
+| The app | The client application on the Live wire: the Live Console, a benchmark client, or your own app. It declares function tools and runs the calls that the backend routes to it. |
 | Client mode, Responses mode | The resolved `delegation.type` of a session. In client mode, the gateway only announces each delegation, and the app does the work. An omitted, `null`, or `{}` delegation is client mode. In Responses mode, the delegation core does the work. |
 | Backend LLM | The backend large language model (LLM), directly connected: the default backend adapter, `llm`. |
 | Talker | The frontend model call that decides each caller turn: speak a reply, delegate, or wait. |
@@ -31,7 +31,7 @@ The following terms have a fixed meaning on this page and in the code:
 | Carrier, taker | The carrier is the delegation whose open response carries a Work's output. When a join lands, the newer delegation, the taker, becomes the carrier. |
 | Envelope | The speak and display shape of a result: a `show` item for the screen, then the `final_answer` message to speak. |
 | Voice note | Text the IM adds to the backend's instructions about the voice channel: the `texts.voice_notes` entry that `delegation.voice_note` names. The `default` note asks for plain spoken sentences that start with the substance, says how speech recognition writes spelled letters, numbers, and IDs, and says how to recover when a lookup by ID fails. It also says that a cut-off reply was heard only up to the cut, so the backend repeats any question or request for confirmation after the cut before acting on what the caller said. An empty note adds nothing. |
-| One-shot session | A request with no conversation, the official stateless use. The client-mode rounds of `POST /v1/live/delegate` use it. |
+| One-shot session | A request with no conversation, the official stateless use. The client-mode rounds of `POST /v1/live/delegate`, such as the Live Console's, use it. |
 
 ## The Four Boxes
 
@@ -872,7 +872,9 @@ instructions or blank ones, and the `agent_prompts.Backend` entry that `backend.
 sets none. The `generic` prompts name no domain, and the talker follows the Live API's Live prompt template.
 `agent_prompts.Cascade` holds the prompt set: the text of the cascade's own model calls, the labels and the cut mark in
 the talker's memory, and each delegation's input, each used exactly as written. `agent_prompts.Lines` holds the lines
-that the voice says word for word, except `intro`, from which the writer words the UI bot's greeting. The UI bot takes
+that the voice says word for word, except `intro`, from which the writer words the UI bot's greeting, and
+`still_working` and `app_started`, which only the Live Console sends. `agent_prompts.ConsolePresets` holds the Live
+Console's other append presets, each offered for the append type that its `append` names. The UI bot takes
 its talker from the top-level entry that the UI selects, `cafe` by default, and its backend prompt and tools from
 `core.ui-bot.yaml`; it adds the `agent_prompts.Channel` context that `ui_bot.channel` names after each prompt. Each
 session reads `prompts.yaml` when it starts, and the Live core reads its default backend prompt when it is built. When
@@ -928,7 +930,7 @@ The server has three ways in for this example:
 - The Realtime gateway (`WS /v1/realtime`) hands its socket to the same UI bot. Refer to
   [Use the Realtime Gateway](../how-to/use-realtime-gateway.md).
 - The Live API (`/v1/live/...`) serves live sessions through the Live gateway, and the client-mode rounds of
-  `POST /v1/live/delegate`.
+  `POST /v1/live/delegate`, for clients such as the Live Console.
 
 The following table lists where each recipe's default models run. The talker and the writer use the same model with
 the same settings:
@@ -1012,10 +1014,12 @@ The tests run offline with scripted models. The following table lists the comman
 | One box | `uv run pytest tests/unit/delegation_core -q`, and the same for the box's own folder |
 | Re-record a golden after an intended behavior change | `LIVE_GOLDEN_RECORD=1 uv run pytest tests/unit/goldens/<test file> -q -p no:cacheprovider` |
 | The whole suite, as CI runs it | `uv run pytest tests/unit -v` |
+| The Live Console's JavaScript modules, with Node.js 20 or later, as CI runs them | `npm --prefix client run test:live` |
 
 Each box has its own test folder: `tests/unit/live/` for the gateway, `tests/unit/frontend_backend_live/` for the
 frontend adapter, the cascade, and the composition roots, and `tests/unit/delegation_core/` for the core, with each
-backend adapter under `backend/`. Tests that join boxes sit in `tests/unit/cross_box/`.
+backend adapter under `backend/`. Tests that join boxes sit in `tests/unit/cross_box/`, and the Live Console's tests
+sit in `client/test/live/`.
 
 Each port has one contract suite in [`tests/unit/contracts/`](../../tests/unit/contracts/), which the tests of every
 implementation bind. The goldens play whole calls through the real gateway, the cascade, and the core, and compare

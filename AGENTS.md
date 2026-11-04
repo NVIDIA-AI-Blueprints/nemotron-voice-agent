@@ -63,6 +63,7 @@ uv run pytest tests/ -v
 npm --prefix client ci
 npm --prefix client run lint
 npm --prefix client run build
+npm --prefix client run test:live
 ```
 
 For documentation-only changes, run the configured pre-commit hooks on the

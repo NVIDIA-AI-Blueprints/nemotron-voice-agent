@@ -27,6 +27,8 @@ from functools import cache, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import examples_registry
+
 # Starts OpenTelemetry when ENABLE_TRACING is on, as the UI bot's root does: the frontend adapter traces each session's
 # pipeline but may not import the setup itself.
 import tracing  # noqa: F401
@@ -35,7 +37,7 @@ from examples.frontend_backend_live.config_manager.loader import EXAMPLE_DIR, lo
 from examples.frontend_backend_live.config_manager.schema import ExampleConfig, ModelEndpoint
 from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
 from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
-from examples.frontend_backend_live.delegation_core.app import DelegationCore, build_core
+from examples.frontend_backend_live.delegation_core.app import DelegationCore, build_core, tool_sources
 from examples.frontend_backend_live.delegation_core.backend.port import EndpointLookup
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.config import ModelEndpoint as CoreEndpoint
@@ -45,6 +47,7 @@ from examples.frontend_backend_live.prompts import Prompts, load_prompts
 from examples.frontend_backend_live.tables import pick
 from gateways.live.ports import SessionParts
 from gateways.live.protocol import ProtocolError, SessionConfig
+from utils import resolve_prompt
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.adapter.contract import (
@@ -55,6 +58,11 @@ if TYPE_CHECKING:
 
 # The delegation core's own file, beside config.yaml; CORE_CONFIG_PATH names another.
 CORE_CONFIG = EXAMPLE_DIR / "core.yaml"
+
+# The lines of prompts.yaml (agent_prompts.Lines) that the console sends: in client mode the silent note that work
+# started (``app_started``) and a failed delegation's line (``apology``, ``unclear``), the progress line of a slow tool
+# batch (``still_working``), and its append presets (``intro``, ``still_working``).
+CONSOLE_LINES = ("apology", "unclear", "still_working", "intro", "app_started")
 
 # The root's reads and the core's build happen once, also when several sessions start together: a first call waits
 # for the build another thread has begun. Reentrant, because the core's build reads the root's state.
@@ -254,8 +262,11 @@ async def describe() -> dict:
 
 
 def _describe() -> dict:
-    """The adapter's half, the core's half and the backend's models."""
-    state, built = root(), delegation_core()
+    """The adapter's half, the core's half, the backend's models, and the console's sample.
+
+    The sample is the default talker, the UI bot's backend and its tools, and the lines and presets the console sends.
+    """
+    state, built, sample = root(), delegation_core(), console_sample()
     backend = state.core.backend
     default = endpoint_lookup(state.catalog, backend.slot)(None)
     frontend = state.adapter.describe(state.settings, state.catalog)
@@ -270,4 +281,54 @@ def _describe() -> dict:
             "base_url": default.base_url,
             "prompt": backend.prompt,
         },
+        "instructions": {"frontend": sample.talker, "backend": sample.instructions},
+        "sample_tools": sample.tools,
+        "lines": sample.lines,
+        "presets": sample.presets,
     }
+
+
+@dataclass(frozen=True)
+class ConsoleSample:
+    """What the console starts with: the UI's default talker, the UI bot's backend and tools, lines and presets."""
+
+    instructions: str  # the backend instructions a UI bot session starts its backend with
+    tools: list[dict]  # the tools of the tool sources that the UI bot's core profile names, built by name
+    lines: dict[str, str]  # the lines that the console sends, by name (CONSOLE_LINES)
+    presets: dict[str, list[list[str]]]  # the console's other append presets, by append type
+    talker: str  # the UI's default talker prompt, then the channel context
+
+
+@once
+def console_sample() -> ConsoleSample:
+    """The console's sample: the UI's default talker, the UI bot's backend and tools, the lines and the presets.
+
+    The console runs in the browser, with its own copy of the tools, the cafe demo that the repository UI bot runs by
+    default. So it starts as a UI bot session with the UI's default talker prompt starts: with that prompt and the
+    channel context after it, the backend instructions, and the tools of the UI bot's core profile. One read of the
+    prompt file gives all but the talker prompt, which is read as the UI bot reads it. The Live frontend and core run
+    no demo: they give a session or a request with no instructions their own defaults.
+
+    Raises:
+        KeyError: The prompt file has no talker prompt, or no channel context or backend prompt that the UI bot names.
+        ValueError: The UI bot's core profile or an ``agent_prompts.ConsolePresets`` entry is malformed.
+    """
+    config, prompts = root().config, load_prompts()
+    core = ui_bot_core(config)
+    channel = prompts.text("Channel", config.ui_bot.channel)
+    sources = tool_sources(core.backend.tools)()
+    tools = [tool for source in sources for tool in source.tools()]
+    lines = {name: getattr(prompts.lines, name) for name in CONSOLE_LINES}
+    instructions = ui_bot_instructions(prompts, channel)(core.backend.prompt)
+    talker = f"{ui_default_talker()}\n\n{channel}"
+    return ConsoleSample(instructions, tools, lines, prompts.console_presets(), talker)
+
+
+def ui_default_talker() -> str:
+    """The talker prompt that the repository UI selects by default, stripped.
+
+    It is the top-level ``prompts.yaml`` entry that the registry's ``defaults.prompt`` names for the example that serves
+    the Live API, read as a UI bot session reads its talker prompt (``utils.resolve_prompt``).
+    """
+    key = examples_registry.prompt_default_key(examples_registry.live_example()["key"], ignore_lock=True)
+    return resolve_prompt(__file__, "", key or "")[1].strip()

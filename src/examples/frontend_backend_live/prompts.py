@@ -5,7 +5,7 @@
 
 The file's top-level entries are the talker prompts a UI bot session selects with ``prompt_key``, through
 ``utils.resolve_prompt`` as in every example. ``agent_prompts`` holds the other texts, which the UI shows read-only and
-no session selects, in five groups:
+no session selects, in six groups:
 
 * ``Talker``: the talker prompt of a live session that sets no instructions or blank ones, by the name that
   ``frontend.cascade.prompt`` gives;
@@ -14,7 +14,8 @@ no session selects, in five groups:
 * ``Channel``: the context that the UI bot adds after its talker prompt and its backend prompt (``ui_bot.channel``);
 * ``Cascade``: the prompt set, the text of the cascade's own model calls and of each delegation's input
   (:class:`PromptSet`), each entry named by its field (``work_texts.item``);
-* ``Lines``: the lines that the voice says word for word (:class:`FixedLines`).
+* ``Lines``: the lines that the voice says word for word, and those that the Live Console sends (:class:`FixedLines`);
+* ``ConsolePresets``: the Live Console's other append presets (:meth:`Prompts.console_presets`).
 
 A prompt file the server was started with (``PROMPT_FILE_PATH``) replaces this whole file, as for every example, so it
 holds these entries too. Each session reads the file once when it starts, so an edit takes effect at the next session.
@@ -153,6 +154,30 @@ class Prompts:
         if not content.strip():
             raise KeyError(f"agent_prompts.{group}.{name} in {self.path} has no text")
         return content.strip()
+
+    def console_presets(self) -> dict[str, list[list[str]]]:
+        """``agent_prompts.ConsolePresets``: by append type, the [label, text] presets that the Live Console offers.
+
+        Each entry is one preset, in the file's order: its ``content`` is the text, as written, its ``description`` the
+        label, and its ``append`` the append type it is offered for. A file without the group offers none.
+
+        Raises:
+            ValueError: The group is not a mapping of entries, or an entry's ``append``, ``description`` or
+                ``content`` is not text; the message names the file.
+        """
+        entries = self.agent_prompts.get("ConsolePresets") or {}
+        if not isinstance(entries, Mapping):
+            raise ValueError(f"agent_prompts.ConsolePresets in {self.path} must map each preset's name to its entry")
+        presets: dict[str, list[list[str]]] = {}
+        for name, entry in entries.items():
+            given = entry if isinstance(entry, Mapping) else {}
+            append, label, text = (given.get(key) for key in ("append", "description", "content"))
+            if not all(isinstance(value, str) for value in (append, label, text)):
+                raise ValueError(
+                    f"agent_prompts.ConsolePresets.{name} in {self.path} needs an append, a description and a content"
+                )
+            presets.setdefault(append, []).append([label, text])
+        return presets
 
 
 def _paths(cls: type, prefix: str = "") -> list[str]:

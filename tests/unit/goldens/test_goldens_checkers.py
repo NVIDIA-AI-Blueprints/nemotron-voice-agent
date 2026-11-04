@@ -3,22 +3,23 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Three checks beside the goldens: a strict client, a client's reads and the close order.
+"""Three checks beside the goldens: a strict client, the console's reads and the close order.
 
 * The strict client copies the rules by which the benchmark's Live client ends or stalls a benchmark run (its event
   reader and its continuation rules), with no import of it. It reads the event channels of every recorded golden: each
   golden passes it, or each violation is one the golden causes on purpose, a refusal of a command the benchmark client
   never sends (``PROVOKED_REFUSALS``) or an ending it scripts (``SCRIPTED_ENDINGS``). A whole call answered with the
   benchmark client's own timing passes it too.
-* The client contract reads ``GET /v1/live/sessions/{id}/history``, ``GET /v1/live/info``, the WebRTC ``201`` answer
-  and the usage report as a client does, from the real gateway and its HTTP routes with the cascade adapter.
-  What a history panel reads through one whole call is pinned in ``recordings/history-reads.json``.
+* The console contract reads ``GET /v1/live/sessions/{id}/history``, ``GET /v1/live/info``, the WebRTC ``201`` answer
+  and the usage report as the browser console does (``client/public/live/app.js``), from the real gateway and its
+  HTTP routes with the cascade adapter. What the history panel reads through one whole call is pinned in
+  ``recordings/console-history.json``.
 * The close-order pin: on every close path, the session's own tasks end first; then the parts close in a fixed order
   (the pipeline stops, the talker's model client closes, then the conversation's IM session, which closes the
   backend's model client once a backend round ran); then ``session.closed`` comes once and last, before the socket or
   the data channel closes.
 
-``history-reads`` is recorded like a golden: ``LIVE_GOLDEN_RECORD=1`` writes it, and a normal run only compares.
+``console-history`` is recorded like a golden: ``LIVE_GOLDEN_RECORD=1`` writes it, and a normal run only compares.
 """
 
 from __future__ import annotations
@@ -612,18 +613,19 @@ class StrictClientCallTests(GoldenCase):
         self.assertEqual(violations, [], [str(violation) for violation in violations])
 
 
-# ------------------------------------------------------------------------------------------ a client's reads
-# A client's history panel reads GET /v1/live/sessions/{id}/history to show what the talker and the backend hold,
-# and styles each talker message and each line the next delegation carries by its kind.
+# ---------------------------------------------------------------------------------------- the console's reads
+# The browser console polls GET /v1/live/sessions/{id}/history every second for its history panel (``refreshHistory`` in
+# app.js), which shows what the talker and the backend hold (``historyView`` in history.js). The panel styles each
+# talker message and each line the next delegation carries by its kind.
 
 
 class HistoryPanel:
-    """Reads a /history snapshot as a client's history panel does.
+    """Reads a /history snapshot as the console's history panel does (``historyView`` in history.js).
 
     ``lines`` holds each value the panel reads, in the panel's order: the talker's model, prompt parts and messages,
     then the backend's model, busy flag, prompt parts, items and pending entries. A content is kept as the panel shows
-    it: a text, or each part's text, a part without text whole. An item is kept by what the panel reads for
-    its type; an item with no type shows as a message.
+    it (``contentText``): a text, or each part's text, a part without text whole. An item is kept by what
+    the panel reads for its type (``backendEntry``); an item with no type shows as a message.
     ``problems`` names each field the panel reads that is missing or of a type it cannot show.
     """
 
@@ -660,7 +662,7 @@ class HistoryPanel:
                 self.read("frontend.messages", {"role": message["role"], "kind": message["kind"], "content": content})
 
     def backend(self, backend):
-        # A session with no server backend has none.
+        # No backend shows "No server backend in this session." (``historyView``).
         if backend is None:
             self.read("backend", None)
             return
@@ -675,7 +677,7 @@ class HistoryPanel:
         if self.expect("backend.items", items, list):
             for number, item in enumerate(items):
                 self.item(f"backend.items[{number}]", item)
-        # The lines the next delegation carries: each its kind and its labeled text.
+        # The lines the next delegation carries (``pendingEntry`` in history.js): each its kind and its labeled text.
         pending = backend.get("pending")
         if not self.expect("backend.pending", pending, list):
             return
@@ -968,7 +970,7 @@ class CheckedCall(GoldenCase):
         response = await self.get_history()
         self.assertEqual(response.status_code, 200, response.text)
         panel = HistoryPanel(response.json())
-        self.assertEqual(panel.problems, [], "a client cannot read /history")
+        self.assertEqual(panel.problems, [], "the console cannot read /history")
         return panel.lines
 
     def assert_recorded(self, name, channels):
@@ -996,13 +998,13 @@ class CheckedCall(GoldenCase):
                 )
 
 
-class HistoryReadTests(CheckedCall):
+class ConsoleHistoryTests(CheckedCall):
     async def test_the_history_panel_through_a_reply_a_client_tool_round_and_the_answer(self):
-        """history-reads: what a history panel reads from /history at four moments of one call.
+        """console-history: what the console's history panel reads from /history at four moments of one call.
 
         The real route serves each read. The moments are the start; after a thinking append and a direct reply; while
         the backend waits for the client's tool output; and after the answer. Each moment is a channel, and each line
-        one value the panel reads.
+        one value the panel reads (``historyView``).
         """
         await self.serve_checked(
             frontend=[
@@ -1030,7 +1032,7 @@ class HistoryReadTests(CheckedCall):
         await self.wait_quiet()
         moments["after_the_answer"] = await self.panel()
         await self.close()
-        # The session is gone once it closed.
+        # The panel stops polling once the session is gone (``refreshHistory``).
         self.assertEqual((await self.get_history()).status_code, 404)
         self.check_scripts_used()
 
@@ -1055,14 +1057,14 @@ class HistoryReadTests(CheckedCall):
             [item["type"] for item in values(moments["after_the_answer"], "backend.items")],
             ["message", "function_call", "function_call_output", "message"],
         )
-        self.assert_recorded("history-reads", moments)
+        self.assert_recorded("console-history", moments)
 
 
-class WebRTCTests(unittest.IsolatedAsyncioTestCase):
-    """A WebRTC session with the cascade over loopback, through the real HTTP routes.
+class ConsoleWebRTCTests(unittest.IsolatedAsyncioTestCase):
+    """The console's own transport: a WebRTC session with the cascade over loopback, through the real HTTP routes.
 
-    A WebRTC client, such as the benchmark client, opens a session this way: it posts an SDP offer with the
-    session config, reads the 201 answer, then exchanges events on the data channel.
+    The console (``connect`` in app.js) and the benchmark client open a session the same way: they post an SDP offer
+    with the session config, read the 201 answer, then exchange events on the data channel.
     """
 
     async def asyncSetUp(self):
@@ -1111,7 +1113,7 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
                 self.arrived.clear()
                 await self.arrived.wait()
 
-    async def test_the_answer_the_history_and_the_close_as_a_webrtc_client_reads_them(self):
+    async def test_the_answer_the_history_and_the_close_as_the_console_and_the_benchmark_client_read_them(self):
         app = FastAPI()
         gateway = self.mount(app)
         http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
@@ -1119,7 +1121,7 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
         client = RTCPeerConnection()
         self.addAsyncCleanup(client.close)
         client.addTrack(AudioStreamTrack())
-        channel = client.createDataChannel("oai-events")
+        channel = client.createDataChannel("oai-events")  # the console's label (``connect``)
         final_state, channel_closed = {}, asyncio.Event()
 
         @channel.on("message")
@@ -1139,18 +1141,19 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
         await client.setLocalDescription(await client.createOffer())
         offer = {"type": "webrtc", "sdp": client.localDescription.sdp}
         response = await http.post("/v1/live/sessions", json={"session": RESPONSES_SESSION, "transport": offer})
-        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.status_code, 201, response.text)  # response.ok (``connect``)
         answer = response.json()
         session = answer["session"]
-        self.assertIsInstance(session["id"], str)  # the benchmark client keeps it
-        # The answer is the official one, the session's id and the SDP answer, which the client sets as the remote
-        # answer. The resolved configuration comes on session.started.
+        self.assertIsInstance(session["id"], str)  # logged by the console, kept by the benchmark client
+        # The answer is the official one, the session's id and the SDP answer, which the console and
+        # the benchmark client set as the remote answer. The resolved configuration comes on session.started.
         sdp = answer["transport"]["sdp"]
         self.assertIsInstance(sdp, str)
         self.assertEqual(answer, {"session": {"id": session["id"]}, "transport": {"type": "webrtc", "sdp": sdp}})
         await client.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="answer"))
 
-        # session.started carries the session id for /history and the config the server started with.
+        # The console takes the session id for /history from session.started, and keeps its session as the config the
+        # server started with: the delegation cards show its backend model.
         started = await self.wait_for("session.started")
         self.assertEqual(started["session"]["id"], session["id"])
         sent_model = RESPONSES_SESSION["delegation"]["responses"]["model"]
@@ -1178,15 +1181,16 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((kinds.count("session.closed"), kinds[-1]), (1, "session.closed"))
         self.assertEqual((closed["reason"], closed["client_event_id"]), ("close_requested", "bye"))
         self.assertEqual(final_state, {key: AT_THE_FINAL_EVENT[key] for key in ENGINE_CLOSE})
-        # The session left the registry before its channel closed, so /history answers 404.
+        # The session left the registry before its channel closed, so the history panel gets its 404
+        # (``refreshHistory``).
         self.assertEqual(gateway.sessions, {})
         self.assertEqual((await http.get(history)).status_code, 404)
         self.assertEqual((self.frontend.script, self.frontend.overrun, self.backend.requests), ([], [], []))
         violations = StrictClient.read(self.events, asked_to_close_at=asked)
         self.assertEqual(violations, [], [str(violation) for violation in violations])
 
-    async def test_a_refused_offer_says_why(self):
-        # The reason is in error.message or in detail. Nothing is negotiated here.
+    async def test_a_refused_offer_says_why_in_a_field_the_console_shows(self):
+        # The console shows result.error?.message || result.detail (``connect``). Nothing is negotiated here.
         app = FastAPI()
         gateway = self.mount(app)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
@@ -1205,8 +1209,8 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
 class InfoTests(unittest.IsolatedAsyncioTestCase):
     """``GET /v1/live/info`` through the server, with the registry's hooks.
 
-    The route is ``live/extras.py``'s. The values come from the deployment's config, so only the documented
-    fields are pinned.
+    The route is ``gateways.live.extras``'s. The values come from the deployment's config, so only the documented
+    fields are pinned, among them what the console reads to fill its form (``applyInfo``, ``updateBackendBadge``).
     """
 
     async def test_info_has_every_documented_field(self):
@@ -1232,19 +1236,36 @@ class InfoTests(unittest.IsolatedAsyncioTestCase):
         def strings(value):
             return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
-        # At least one voice, and the session limit.
+        # At least one voice, and the session limit. The voice list fills a select and must hold at least one voice
+        # (.includes and [0], ``applyInfo``).
         self.assertTrue(strings(info.get("voices")) and info["voices"], info.get("voices"))
         self.assertIsInstance(info.get("max_sessions"), int)
-        # The backend models and the warnings, as text.
+        # The backend models offered as choices (``applyInfo``); each warning is logged as text.
         self.assertTrue(strings(info.get("backend_models")), info.get("backend_models"))
         self.assertTrue(strings(info.get("warnings")), info.get("warnings"))
-        # The backend's default model and the names of the default prompts.
-        for path in (("backend", "model"), ("frontend", "prompt"), ("backend", "prompt")):
+        # The backend's default model, the names of the default prompts, and the texts the form and the badges show
+        # (``applyInfo``, ``updateBackendBadge``).
+        for path in (
+            ("backend", "model"),
+            ("frontend", "prompt"),
+            ("backend", "prompt"),
+            ("backend", "provider"),
+            ("frontend", "model"),
+            ("frontend", "provider"),
+            ("instructions", "frontend"),
+            ("instructions", "backend"),
+        ):
             value = info
             for key in path:
                 value = value.get(key) if isinstance(value, dict) else None
             with self.subTest(field=".".join(path)):
                 self.assertIsInstance(value, str)
+        # The sample tools fill the tools box as JSON (``applyInfo``), which the console sends back as the session's
+        # tools.
+        tools = info.get("sample_tools")
+        self.assertTrue(isinstance(tools, list) and tools, tools)
+        for tool in tools:
+            self.assertIsInstance(tool.get("name") if isinstance(tool, dict) else None, str, tool)
 
 
 class CloseOrderTests(CheckedCall):
@@ -1346,7 +1367,7 @@ class CloseOrderTests(CheckedCall):
         # The benchmark client stops on a close it did not ask for, by its own rule. The task that asked for the close,
         # which the usage report spawned (live/session/lifecycle.py), is the one session task still running then.
         await self.assert_close_order("expired", benchmark_stops_on=["unexpected_close"], still_running=["expiry"])
-        # The usage report as a client reads it: usage.seconds, and context_window.usage_ratio, which
+        # The usage report as the console reads it (app.js): usage.seconds, and context_window.usage_ratio, which
         # comes from the adapter's own count of the talker's context out of the talker's own window (the ContextMeter),
         # not from the fallbacks, the size of the session's config out of the protocol's window
         # (lifecycle.context_ratio). The call has no turns, so the count does not move.
