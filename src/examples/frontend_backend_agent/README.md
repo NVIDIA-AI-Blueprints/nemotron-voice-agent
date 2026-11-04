@@ -125,6 +125,7 @@ If you call `cancel_backend` after the booking is sent, the agent drops the pend
 Prompt edits can silently break the architecture contract. After changing the frontend or backend prompts, test both routing layers:
 
 - Frontend LLM calls `call_backend` for flight search, booking continuation, flight selection, passenger details, seat or meal preferences, confirmations, corrections, and PNR-status requests.
+- Frontend LLM treats `P N R` followed by three separate letters and three digits or number words as a complete code. It calls `call_backend` without asking the user to repeat it.
 - Frontend LLM calls `cancel_backend` for stop, cancel, never-mind requests, and topic switches while flight work is pending.
 - Frontend LLM does not call tools for greetings, thanks, or small talk when no flight task is pending.
 - The initial greeting does not call `call_backend` or `cancel_backend`.

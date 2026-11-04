@@ -11,7 +11,7 @@ turns:
   - expect:
       - event: response
         within_ms: 90000
-  - user: "Check the status of PNR ABC123."
+  - user: "Check the status of P N R A B C one two three."
     expect:
       - event: function_call
         calls:
