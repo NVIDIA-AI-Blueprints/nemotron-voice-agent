@@ -14,10 +14,10 @@ from typing import Any, ClassVar
 
 from openai.types.chat import ChatCompletionChunk
 
-from delegation_core.backend.llm import LlmAdapter, LlmSettings, LlmSource
-from delegation_core.backend.port import TERMINALS, BoundaryInput
-from delegation_core.backend.providers import Backend, ProviderLimits
-from delegation_core.config import ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmAdapter, LlmSettings, LlmSource
+from examples.frontend_backend_live.delegation_core.backend.port import TERMINALS, BoundaryInput
+from examples.frontend_backend_live.delegation_core.backend.providers import Backend, ProviderLimits
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
 from tests.unit.contracts.backend import MENU_FUNCTION, FakeTaskContext
 
 ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")

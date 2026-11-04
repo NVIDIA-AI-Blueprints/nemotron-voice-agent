@@ -10,10 +10,14 @@ import unittest
 import httpx
 from openai import APIConnectionError, BadRequestError, RateLimitError
 
-from delegation_core.backend.llm import LlmSettings
-from delegation_core.backend.providers import BrokenStreamError, ChatCompletionsBackend, ProviderLimits
-from delegation_core.backend.tools import CafeTools
-from delegation_core.config import ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.providers import (
+    BrokenStreamError,
+    ChatCompletionsBackend,
+    ProviderLimits,
+)
+from examples.frontend_backend_live.delegation_core.backend.tools import CafeTools
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
 from tests.unit.contracts.backend import a_round, call_events, check_events, message_events, text_round
 from tests.unit.contracts.base import collect
 from tests.unit.delegation_core.backend.llm.doubles import (

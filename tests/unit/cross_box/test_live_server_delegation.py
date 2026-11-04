@@ -12,7 +12,7 @@ its backend LLM on a scripted provider. The part's own rules run on fake cores i
 import asyncio
 import unittest
 
-from delegation_core.im.input import BackendTask, settings_for
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask, settings_for
 from live.protocol import SessionConfig
 from live.server_delegation.passthrough import ServerDelegation, client_settings
 from tests.unit.cascade_helpers import MENU_TOOL, _delegation, core_session

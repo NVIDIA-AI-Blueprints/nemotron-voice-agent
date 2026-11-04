@@ -29,4 +29,6 @@ Packages, one per responsibility:
 * ``prompts.py``: the reader of the example's ``prompts.yaml``, which holds the talker prompts, the backend prompts,
   the channel context, the prompt set and the lines.
 * ``config_manager``: ``config.yaml`` loading and validation.
+* ``delegation_core``: the delegation core, a package of its own that only the two composition roots build; it has its
+  own settings file (``core.yaml``), tests and ``README.md``.
 """

@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from delegation_core.backend.port import (
+from examples.frontend_backend_live.delegation_core.backend.port import (
     TERMINALS,
     Answer,
     BackendAdapter,
@@ -47,8 +47,8 @@ from delegation_core.backend.port import (
     WorkSummary,
     message_phase,
 )
-from delegation_core.backend.providers import Backend, ProviderLimits
-from delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.providers import Backend, ProviderLimits
+from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
 from tests.unit.contracts.base import ContractCase, collect
 
 # The core's texts as core.yaml words them (TaskContext.texts): a run's error outputs, not-run outputs and notes.

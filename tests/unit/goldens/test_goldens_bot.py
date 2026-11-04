@@ -91,13 +91,13 @@ from pipecat.turns.user_start import ExternalUserTurnStartStrategy
 from pipecat.turns.user_stop import ExternalUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from delegation_core.app import build_core
-from delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
-from delegation_core.backend.tools.cafe.tools import CafeTools
-from delegation_core.im.session import IMSession
 from examples.frontend_backend_live import pipeline
 from examples.frontend_backend_live.cascade.agent import build_agent
 from examples.frontend_backend_live.cascade.session import CascadeSession
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
+from examples.frontend_backend_live.delegation_core.backend.tools.cafe.tools import CafeTools
+from examples.frontend_backend_live.delegation_core.im.session import IMSession
 from examples.frontend_backend_live.media.playout import PlayoutTracker
 from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog

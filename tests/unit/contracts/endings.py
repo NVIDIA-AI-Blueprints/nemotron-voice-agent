@@ -21,7 +21,7 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-from delegation_core.backend.port import message_phase
+from examples.frontend_backend_live.delegation_core.backend.port import message_phase
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "delegation_endings.json"
 # How a delegation ends, as the reader names it (the frontend's ``cascade.ports.Ending``).

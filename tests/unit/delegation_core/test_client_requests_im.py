@@ -7,8 +7,8 @@
 
 import asyncio
 
-from delegation_core.im.session import FUNCTION_CALL_OUTPUTS_REQUIRED, DelegationError
-from delegation_core.im.stop import AtDeadline
+from examples.frontend_backend_live.delegation_core.im.session import FUNCTION_CALL_OUTPUTS_REQUIRED, DelegationError
+from examples.frontend_backend_live.delegation_core.im.stop import AtDeadline
 from tests.unit.delegation_core.helpers import (
     MENU,
     IMCase,

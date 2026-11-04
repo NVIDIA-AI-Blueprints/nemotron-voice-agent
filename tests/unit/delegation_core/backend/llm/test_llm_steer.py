@@ -11,7 +11,7 @@ import unittest
 import httpx
 from openai import APIConnectionError
 
-from delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from tests.unit.contracts.backend import call_round, check_events, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     IMTask,

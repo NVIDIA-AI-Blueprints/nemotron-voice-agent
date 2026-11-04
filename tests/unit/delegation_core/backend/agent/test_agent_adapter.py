@@ -10,15 +10,24 @@ import json
 import unittest
 from dataclasses import replace
 
-from delegation_core.app import build_core
-from delegation_core.backend.agent import AgentAdapter, AgentSettings, AgentSource, ConductorSettings, LlmConductor
-from delegation_core.backend.conductors import SteerOpenWork
-from delegation_core.backend.llm import LlmSettings
-from delegation_core.backend.port import ConductorInput, OneShotSource
-from delegation_core.backend.providers import ChatCompletionsBackend, OpenAIResponsesBackend
-from delegation_core.backend.tools import CafeTools
-from delegation_core.config import BackendChoice, ModelEndpoint
-from delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.agent import (
+    AgentAdapter,
+    AgentSettings,
+    AgentSource,
+    ConductorSettings,
+    LlmConductor,
+)
+from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.port import ConductorInput, OneShotSource
+from examples.frontend_backend_live.delegation_core.backend.providers import (
+    ChatCompletionsBackend,
+    OpenAIResponsesBackend,
+)
+from examples.frontend_backend_live.delegation_core.backend.tools import CafeTools
+from examples.frontend_backend_live.delegation_core.config import BackendChoice, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from tests.unit.contracts.backend import (
     MENU_FUNCTION,
     BackendAdapterContract,

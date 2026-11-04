@@ -13,9 +13,9 @@ import asyncio
 import re
 import unittest
 
-from delegation_core.backend.conductors import SteerOpenWork
-from delegation_core.backend.port import Answer, Cancel, Start, Steer
-from delegation_core.config import DelegationSettings
+from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
+from examples.frontend_backend_live.delegation_core.backend.port import Answer, Cancel, Start, Steer
+from examples.frontend_backend_live.delegation_core.config import DelegationSettings
 from tests.unit.contracts.endings import load
 from tests.unit.delegation_core.helpers import (
     CORE_SETTINGS,

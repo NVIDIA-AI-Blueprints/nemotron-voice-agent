@@ -34,10 +34,10 @@ class BotRootTests(unittest.TestCase):
 
 class CafeOrderTests(ContractCase, unittest.IsolatedAsyncioTestCase):
     async def test_a_cafe_order_flows_through_the_bots_core_and_the_real_tools(self):
-        from delegation_core.app import build_core
-        from delegation_core.backend.providers import base as providers
         from examples.frontend_backend_live.cascade.agent import build_agent
         from examples.frontend_backend_live.cascade.session import CascadeSession
+        from examples.frontend_backend_live.delegation_core.app import build_core
+        from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
         from live.server_delegation import ServerDelegation
         from tests.unit.cascade_helpers import CASCADE_ENDPOINT, ListConversation, _decision_chunks, _messages
         from tests.unit.core_helpers import FakeChat, chunk, tool_fragment

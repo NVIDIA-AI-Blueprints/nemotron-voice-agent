@@ -11,7 +11,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from delegation_core.config import CoreSettings
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, ConfigError, load_live_config
 from examples.frontend_backend_live.config_manager.schema import (
     DelegationConfig,
@@ -19,6 +18,7 @@ from examples.frontend_backend_live.config_manager.schema import (
     LiveConfig,
     SpeechConfig,
 )
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.prompts import load_prompts
 
 CASCADE = {"provider": "chat-completions", "slot": "llm"}

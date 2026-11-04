@@ -15,9 +15,9 @@ import httpx
 from openai import APITimeoutError
 from openai.types.chat import ChatCompletionChunk
 
-from delegation_core.backend.providers import ProviderLimits
-from delegation_core.config import ModelEndpoint
-from delegation_core.im.stream import message_text
+from examples.frontend_backend_live.delegation_core.backend.providers import ProviderLimits
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.stream import message_text
 
 
 def answer_text(event: dict) -> str | None:

@@ -31,7 +31,8 @@ A session's `delegation.type` selects the part that handles its delegations:
   client app does the work and answers with appends that name the delegation. The server builds no delegation core for
   the session, which refuses `response.item.create` and `response.create`.
 - **Responses mode** (`responses`). The server delegation ([`server_delegation/`](server_delegation/)) passes each
-  delegation to the [delegation core](../delegation_core/README.md), as the next section describes.
+  delegation to the [delegation core](../examples/frontend_backend_live/delegation_core/README.md), as the next section
+  describes.
 
 ## Server Delegation
 

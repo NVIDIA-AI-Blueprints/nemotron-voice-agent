@@ -7,7 +7,7 @@
 
 import unittest
 
-from delegation_core.ledger.records import (
+from examples.frontend_backend_live.delegation_core.ledger.records import (
     MAX_KEPT_CLOSED,
     Action,
     Delegation,

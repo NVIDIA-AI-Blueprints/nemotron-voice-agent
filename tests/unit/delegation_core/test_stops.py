@@ -7,8 +7,8 @@
 
 import asyncio
 
-from delegation_core.backend.port import Cancel, Start, Steer
-from delegation_core.im.stop import ForNewerRequest
+from examples.frontend_backend_live.delegation_core.backend.port import Cancel, Start, Steer
+from examples.frontend_backend_live.delegation_core.im.stop import ForNewerRequest
 from tests.unit.delegation_core.helpers import (
     MENU,
     TEXTS,

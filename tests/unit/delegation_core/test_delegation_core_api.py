@@ -11,14 +11,14 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import NotFound, ResponsesService
-from delegation_core.app import build_core
-from delegation_core.backend.adapters import ADAPTERS
-from delegation_core.backend.llm import LlmSettings, LlmSource
-from delegation_core.config import CoreSettings, ModelEndpoint
-from delegation_core.im.input import BackendTask
-from delegation_core.im.stream import ResponseStream
+from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+from examples.frontend_backend_live.delegation_core.api.service import NotFound, ResponsesService
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.adapters import ADAPTERS
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
+from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
 from tests.unit.contracts.backend import ScriptedBackend, text_round
 from tests.unit.core_helpers import answer_text
 

@@ -10,8 +10,8 @@ The example has two ways in:
 Four parts serve a live session, and the [Frontend/Backend Live Architecture](../../../docs/design/architecture.md) page describes what each one owns and how they meet:
 
 - The **Live gateway** ([`src/live/`](../../live/)) serves the live session protocol.
-- The **frontend adapter** is this example. It turns each live session into a Pipecat cascade of automatic speech recognition (ASR), the talker, the writer, and text-to-speech (TTS).
-- The **delegation core** ([`src/delegation_core/`](../../delegation_core/)) takes each delegation through the OpenAI Responses API. Its interaction manager (IM) owns the delegated work from then on.
+- The **frontend adapter** is the example's `adapter/`, `cascade/`, `media/`, `models/`, `config_manager/`, `prompts.py`, and `tables.py`. It turns each live session into a Pipecat cascade of automatic speech recognition (ASR), the talker, the writer, and text-to-speech (TTS).
+- The **delegation core** ([`delegation_core/`](delegation_core/)), a package of its own with its own README, takes each delegation through the OpenAI Responses API. `factory.py` and `pipeline.py` build it in process, from `core.yaml` or one of its profiles. Its interaction manager (IM) owns the delegated work from then on.
 - The **backend adapter** runs the work: the backend LLM, directly connected (the default); the backend LLM agent, a model conductor with LLM workers; or the harness, an external agent that you deploy, such as Hermes.
 
 Compared to the [Frontend/Backend Agent](../frontend_backend_agent/README.md), the talker returns a structured decision on every turn instead of calling a `call_backend` tool, and the writer words the backend's results for speech. Each part is a class that you select by name in the configuration, so adding one does not change the pipeline.
@@ -126,7 +126,7 @@ When a delegation still waits for the app's function outputs after `frontend.cas
 
 After `progress_after_seconds` (8) of quiet while work runs, the writer can word a short progress line, up to `progress_max_per_delegation` (3) for one delegation. The writer reads the session's `instructions`, so a client that asks for silence while the backend works, such as the cafe's "then wait," gets no line. With `as_written`, no progress line is said. For the details, refer to [Spoken Progress](../../../docs/design/architecture.md#spoken-progress).
 
-In `core.yaml`, `backend.adapter` selects the backend adapter, and `delegation` sets the IM's limits, which [Build and Configure the Core](../../delegation_core/README.md#build-and-configure-the-core) describes. The following excerpt shows the keys that you are most likely to change:
+In `core.yaml`, `backend.adapter` selects the backend adapter, and `delegation` sets the IM's limits, which [Build and Configure the Core](delegation_core/README.md#build-and-configure-the-core) describes. The following excerpt shows the keys that you are most likely to change:
 
 ```yaml
 delegation:

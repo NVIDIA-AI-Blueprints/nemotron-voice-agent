@@ -8,8 +8,8 @@
 import json
 import unittest
 
-from delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
-from delegation_core.backend.tools.cafe.tools import CafeTools
+from examples.frontend_backend_live.delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
+from examples.frontend_backend_live.delegation_core.backend.tools.cafe.tools import CafeTools
 
 
 # ------------------------------------------------------------------------------- cafe tools

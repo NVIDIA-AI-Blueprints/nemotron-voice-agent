@@ -8,9 +8,9 @@
 import json
 import unittest
 
-from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
-from delegation_core.backend.providers.openai_responses import OpenAIResponsesBackend
-from delegation_core.config import ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
+from examples.frontend_backend_live.delegation_core.backend.providers.openai_responses import OpenAIResponsesBackend
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
 from tests.unit.contracts.backend import call_round, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     LIMITS,

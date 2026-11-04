@@ -7,7 +7,7 @@
 
 import asyncio
 
-from delegation_core.im.session import DelegationError
+from examples.frontend_backend_live.delegation_core.im.session import DelegationError
 from tests.unit.delegation_core.helpers import (
     IMCase,
     ScriptedAdapter,

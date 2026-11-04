@@ -30,16 +30,16 @@ from typing import TYPE_CHECKING, Any
 # Starts OpenTelemetry when ENABLE_TRACING is on, as the UI bot's root does: the frontend adapter traces each session's
 # pipeline but may not import the setup itself.
 import tracing  # noqa: F401
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import ResponsesService
-from delegation_core.app import DelegationCore, build_core
-from delegation_core.backend.port import EndpointLookup
-from delegation_core.config import CoreSettings
-from delegation_core.config import ModelEndpoint as CoreEndpoint
-from delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.adapter.contract import ServiceStarting
 from examples.frontend_backend_live.config_manager.loader import EXAMPLE_DIR, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ExampleConfig, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
+from examples.frontend_backend_live.delegation_core.app import DelegationCore, build_core
+from examples.frontend_backend_live.delegation_core.backend.port import EndpointLookup
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint as CoreEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import Prompts, load_prompts
 from examples.frontend_backend_live.tables import pick

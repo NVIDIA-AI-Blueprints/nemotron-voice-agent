@@ -14,10 +14,10 @@ import socket
 import unittest
 from unittest import mock
 
-from delegation_core.backend.harness.acp import AcpAgent, AcpClient, SessionUpdates
-from delegation_core.backend.harness.acp.hermes import HermesAgent
-from delegation_core.backend.harness.permissions import Reject
-from delegation_core.backend.harness.protocol import (
+from examples.frontend_backend_live.delegation_core.backend.harness.acp import AcpAgent, AcpClient, SessionUpdates
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.hermes import HermesAgent
+from examples.frontend_backend_live.delegation_core.backend.harness.permissions import Reject
+from examples.frontend_backend_live.delegation_core.backend.harness.protocol import (
     McpServer,
     MessageChunk,
     PlanUpdate,
@@ -412,7 +412,10 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             "a line over the stream's limit": (b"x" * (2 << 20) + b"\n", "ValueError"),  # the prompts fail with it
         }
         for name, (line, cause) in cases.items():
-            with self.subTest(name), mock.patch("delegation_core.backend.harness.acp.client.logger") as log:
+            with (
+                self.subTest(name),
+                mock.patch("examples.frontend_backend_live.delegation_core.backend.harness.acp.client.logger") as log,
+            ):
                 replay = Replay("cancel_then_prompt")
                 client = client_on(replay)
                 await client.open()

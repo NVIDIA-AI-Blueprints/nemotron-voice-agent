@@ -9,10 +9,10 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from delegation_core.backend.agent import AgentSettings
-from delegation_core.backend.harness import HarnessSettings
-from delegation_core.backend.llm import LlmSettings
-from delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.backend.agent import AgentSettings
+from examples.frontend_backend_live.delegation_core.backend.harness import HarnessSettings
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
 
 CORE_YAML = Path(__file__).resolve().parents[3] / "src/examples/frontend_backend_live/core.yaml"
 

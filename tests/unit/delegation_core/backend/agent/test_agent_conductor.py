@@ -10,11 +10,18 @@ import json
 import unittest
 from unittest.mock import patch
 
-from delegation_core.backend.agent.memory import ConductorMemory, DecisionRound
-from delegation_core.backend.agent.render import round_input
-from delegation_core.backend.agent.settings import WHEN_IDLE
-from delegation_core.backend.port import Answer, Cancel, ConductorInput, Request, Start, Steer
-from delegation_core.backend.providers import ChatCompletionsBackend
+from examples.frontend_backend_live.delegation_core.backend.agent.memory import ConductorMemory, DecisionRound
+from examples.frontend_backend_live.delegation_core.backend.agent.render import round_input
+from examples.frontend_backend_live.delegation_core.backend.agent.settings import WHEN_IDLE
+from examples.frontend_backend_live.delegation_core.backend.port import (
+    Answer,
+    Cancel,
+    ConductorInput,
+    Request,
+    Start,
+    Steer,
+)
+from examples.frontend_backend_live.delegation_core.backend.providers import ChatCompletionsBackend
 from tests.unit.contracts.backend import ConductorContract, FakeDecisionTarget, a_round, message_events, text_round
 from tests.unit.delegation_core.backend.agent.doubles import (
     ENDPOINT,
@@ -146,7 +153,7 @@ class RoundTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_each_round_logs_its_request_and_its_reply_in_full(self):
         model = Model(decisions(start("D1")))
-        with patch("delegation_core.backend.agent.conductor.logger") as log:
+        with patch("examples.frontend_backend_live.delegation_core.backend.agent.conductor.logger") as log:
             await decide(conductor_on(model), given(a_request("D1", "Teas?")))
         lines = [call.args[0] for call in log.debug.call_args_list]
         [request] = [line.split(": ", 1)[1] for line in lines if line.startswith("conductor request: ")]

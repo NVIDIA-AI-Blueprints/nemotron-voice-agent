@@ -7,8 +7,8 @@
 
 import unittest
 
-from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
-from delegation_core.config import ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
 from tests.unit.contracts.base import collect
 from tests.unit.delegation_core.backend.llm.doubles import LIMITS, FakeChat, Sleep, chunk, tool_fragment
 

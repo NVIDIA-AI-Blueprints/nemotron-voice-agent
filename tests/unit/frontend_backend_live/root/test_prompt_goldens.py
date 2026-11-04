@@ -25,12 +25,12 @@ import yaml
 from fastapi.testclient import TestClient
 
 import examples_registry
-from delegation_core.app import tool_sources
-from delegation_core.config import CoreSettings
 from examples.frontend_backend_live import factory, pipeline
 from examples.frontend_backend_live.cascade.lines import FixedLines
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, EXAMPLE_DIR, load_live_config
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
+from examples.frontend_backend_live.delegation_core.app import tool_sources
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.prompts import load_prompts
 from server import create_app
 from tests.unit.frontend_backend_live.root.root_helpers import clear_root_caches, stub_root

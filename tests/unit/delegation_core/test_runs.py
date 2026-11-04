@@ -8,7 +8,7 @@
 import asyncio
 import unittest
 
-from delegation_core.backend.port import Answer, Cancel, Start, Steer
+from examples.frontend_backend_live.delegation_core.backend.port import Answer, Cancel, Start, Steer
 from tests.unit.contracts.backend import ConductorContract
 from tests.unit.delegation_core.helpers import (
     MENU,

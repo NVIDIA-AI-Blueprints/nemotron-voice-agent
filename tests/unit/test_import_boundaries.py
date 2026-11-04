@@ -24,12 +24,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 # What the rules cover, relative to src.
-WALKED = ("live", "examples/frontend_backend_live", "delegation_core", "server.py")
+WALKED = ("live", "examples/frontend_backend_live", "server.py")
 
 # ----------------------------------------------------------------------------------------------------- groups
 ADAPTER = "adapter"
 ROOT = "composition root"
 FBL = "examples.frontend_backend_live"
+# The delegation core's package, inside the example's folder; its groups keep the core's own names.
+CORE = f"{FBL}.delegation_core"
 
 GROUPS = {
     # The gateway. "live" alone is the package's docstring, and any module no other row places.
@@ -45,27 +47,27 @@ GROUPS = {
     "live.extras": "live.extras",
     "live.mount": "live.mount",
     # The example package is the frontend adapter (adapter/, cascade/, media/, models/, prompts.py, config_manager/),
-    # except its two composition roots.
+    # except its two composition roots and its delegation core.
     FBL: ADAPTER,
     f"{FBL}.factory": ROOT,
     f"{FBL}.pipeline": ROOT,
     # The delegation core.
-    "delegation_core": "delegation_core",
-    "delegation_core.api": "delegation_core.api",
-    "delegation_core.app": "delegation_core.app",
-    "delegation_core.im": "delegation_core.im",
-    "delegation_core.backend": "delegation_core.backend",
-    "delegation_core.backend.port": "delegation_core.backend.port",
+    CORE: "delegation_core",
+    f"{CORE}.api": "delegation_core.api",
+    f"{CORE}.app": "delegation_core.app",
+    f"{CORE}.im": "delegation_core.im",
+    f"{CORE}.backend": "delegation_core.backend",
+    f"{CORE}.backend.port": "delegation_core.backend.port",
     # The three backend adapters, each in its own package: the backend LLM, directly connected,
     # the backend LLM agent and the harness. The rest of the backend (providers, tools, conductors, the
     # control tools and the adapter table) stays in "delegation_core.backend".
-    "delegation_core.backend.llm": "delegation_core.backend.llm",
-    "delegation_core.backend.agent": "delegation_core.backend.agent",
-    "delegation_core.backend.harness": "delegation_core.backend.harness",
-    "delegation_core.tables": "delegation_core.tables",
-    "delegation_core.ledger": "delegation_core.ledger",
-    "delegation_core.config": "delegation_core.config",
-    "delegation_core.ids": "delegation_core.ids",
+    f"{CORE}.backend.llm": "delegation_core.backend.llm",
+    f"{CORE}.backend.agent": "delegation_core.backend.agent",
+    f"{CORE}.backend.harness": "delegation_core.backend.harness",
+    f"{CORE}.tables": "delegation_core.tables",
+    f"{CORE}.ledger": "delegation_core.ledger",
+    f"{CORE}.config": "delegation_core.config",
+    f"{CORE}.ids": "delegation_core.ids",
     # The server's composition root, which mounts the gateway.
     "server": ROOT,
 }
@@ -172,7 +174,7 @@ MAY_IMPORT = {
     "delegation_core.ids": frozenset(),
 }
 
-WEB_EDGES = ("live.gateway", "live.mount", "live.extras", "delegation_core.api.http")
+WEB_EDGES = ("live.gateway", "live.mount", "live.extras")
 CODEC = ("live.media.audio", "live.gateway.websocket")
 # Where each outside package may be imported. Composition roots are not checked.
 PACKAGE_RULES = {
@@ -185,29 +187,29 @@ PACKAGE_RULES = {
         "live.media.connection",
     ),
     # The core's providers and the adapter's talker models.
-    "openai": ("delegation_core.backend.providers", "examples.frontend_backend_live.models"),
+    "openai": (f"{CORE}.backend.providers", f"{FBL}.models"),
     # The HTTP edges.
     "fastapi": WEB_EDGES,
     "starlette": WEB_EDGES,
     # The wire codec, and the WebSocket edge that builds it.
     "av": CODEC,
     "numpy": CODEC,
-    "yaml": ("examples.frontend_backend_live.config_manager", "delegation_core.config"),
+    "yaml": (f"{FBL}.config_manager", f"{CORE}.config"),
     # The harness's protocol packages: only the harness adapter imports them.
-    "mcp": ("delegation_core.backend.harness",),
-    "websockets": ("delegation_core.backend.harness",),
-    "acp": ("delegation_core.backend.harness",),
+    "mcp": (f"{CORE}.backend.harness",),
+    "websockets": (f"{CORE}.backend.harness",),
+    "acp": (f"{CORE}.backend.harness",),
 }
 
 # The backend adapter owns model rounds: only its modules reach a model provider's stream(). The
 # example's POST /v1/live/delegate rounds reach the delegation core through its Responses API too, so every
 # other stream is one that is no model provider's, listed here by module and receiver with the reason.
-ROUND_OWNER = "delegation_core.backend"
+ROUND_OWNER = f"{CORE}.backend"
 NOT_MODEL_STREAMS = {
     ("live.gateway.security", "request"): "Starlette's Request.stream(): the HTTP request's body, read in chunks",
-    ("delegation_core.api.service", "admission"): "Admission.stream: the response stream the IM gives a request",
-    ("delegation_core.api.service", "self"): "StatelessStream.stream: the response stream of a stateless request",
-    ("delegation_core.im.stream", "self"): "ResponseWriter.stream: the response stream the writer writes into",
+    (f"{CORE}.api.service", "admission"): "Admission.stream: the response stream the IM gives a request",
+    (f"{CORE}.api.service", "self"): "StatelessStream.stream: the response stream of a stateless request",
+    (f"{CORE}.im.stream", "self"): "ResponseWriter.stream: the response stream the writer writes into",
 }
 
 # The tests are no group of the tables. No walked module may import them, roots included.
@@ -217,7 +219,7 @@ TESTS = "tests"
 CORE_TESTS = ("tests/unit/delegation_core", "tests/unit/core_helpers.py", "tests/unit/contracts")
 # ``tests.unit.delegation_core``: the core's own test modules (the emulator adapter) for the core's other tests.
 CORE_TESTS_MAY_IMPORT = (
-    "delegation_core",
+    CORE,
     "tests.unit.core_helpers",
     "tests.unit.contracts",
     "tests.unit.delegation_core",
@@ -226,8 +228,8 @@ CORE_TESTS_PACKAGES = ("openai", "httpx")
 
 # The harness's ACP client: each agent class with ways of its own is a package in its folder, and only the agents
 # table loads one.
-ACP_CLIENT = "delegation_core.backend.harness.acp"
-ACP_CLIENT_DIR = SRC / "delegation_core" / "backend" / "harness" / "acp"
+ACP_CLIENT = f"{CORE}.backend.harness.acp"
+ACP_CLIENT_DIR = SRC.joinpath(*ACP_CLIENT.split("."))
 AGENTS_TABLE = f"{ACP_CLIENT}.agents"
 
 
@@ -416,7 +418,7 @@ def internal_tops() -> frozenset[str]:
     """The repository's own top-level modules and packages under src; every other import is an outside package."""
     names = {path.stem for path in SRC.glob("*.py")}
     names |= {path.name for path in SRC.iterdir() if path.is_dir() and path.name.isidentifier()}
-    return frozenset((names - {"__pycache__"}) | {"delegation_core"})
+    return frozenset(names - {"__pycache__"})
 
 
 def repo_module_name(path: Path) -> str:
@@ -561,7 +563,7 @@ class ModelRoundTests(RuleCase):
         # of the backend may run model rounds: the backend LLM's runs, and the LLM agent's conductor.
         owners = {ref.module for ref in stream_references() if within(ref.module, ROUND_OWNER)}
         self.assertTrue(owners)
-        self.assertIn("delegation_core.backend.llm.run", owners)
+        self.assertIn(f"{CORE}.backend.llm.run", owners)
 
     def test_each_listed_stream_is_still_there(self):
         found = {(ref.module, ref.receiver) for ref in stream_references()}
@@ -625,7 +627,7 @@ class LayoutTests(RuleCase):
                 continue
             source = path.read_text(encoding="utf-8")
             for line, imported in imports_in(source, module, path.name == "__init__.py", walked_modules()):
-                if within(imported, "live") or within(imported, "delegation_core"):
+                if within(imported, "live") or within(imported, CORE):
                     problems.append(f"{path.relative_to(REPO)}:{line} imports {imported}")
         self.assert_no_problems("Modules outside the boxes that import the gateway or the core:", problems)
 
@@ -751,10 +753,12 @@ class RuleTests(unittest.TestCase):
     def test_a_module_belongs_to_the_group_of_its_longest_prefix(self):
         cases = {
             "live.server_delegation.passthrough": "live.server_delegation",
-            "delegation_core.backend.port": "delegation_core.backend.port",
-            "delegation_core.backend.providers.chat_completions": "delegation_core.backend",
-            "delegation_core.backend.harness.acp.codec": "delegation_core.backend.harness",
-            "delegation_core.backend.control": "delegation_core.backend",
+            f"{CORE}.backend.port": "delegation_core.backend.port",
+            f"{CORE}.backend.providers.chat_completions": "delegation_core.backend",
+            f"{CORE}.backend.harness.acp.codec": "delegation_core.backend.harness",
+            f"{CORE}.backend.control": "delegation_core.backend",
+            f"{CORE}.im.session": "delegation_core.im",
+            CORE: "delegation_core",
             f"{FBL}.factory": ROOT,
             f"{FBL}.cascade.turns": ADAPTER,
             f"{FBL}.media.playout": ADAPTER,
@@ -835,8 +839,8 @@ class RuleTests(unittest.TestCase):
     def test_the_core_tests_may_import_only_the_core_their_helpers_the_standard_library_openai_and_httpx(self):
         importer = "tests.unit.delegation_core.test_delegation_core_im"
         allowed_modules = (
-            "delegation_core",
-            "delegation_core.im.session",
+            CORE,
+            f"{CORE}.im.session",
             "tests.unit.core_helpers",
             "__future__",
             "asyncio",
@@ -864,7 +868,7 @@ class RuleTests(unittest.TestCase):
             self.assertIsNotNone(core_test_violation(Import(path, 1, importer, module)), module)
         self.assertEqual(
             str(core_test_violation(Import(path, 9, importer, "live.protocol"))),
-            f"{path}:9 imports live.protocol: the delegation core's tests may import only delegation_core, "
+            f"{path}:9 imports live.protocol: the delegation core's tests may import only {CORE}, "
             "tests.unit.core_helpers, tests.unit.contracts, tests.unit.delegation_core, the standard library, openai "
             "and httpx",
         )

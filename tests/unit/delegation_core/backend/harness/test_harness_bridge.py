@@ -15,9 +15,9 @@ import unittest
 
 import httpx
 
-from delegation_core.backend.harness.bridge import ConductorDoor, McpBridge, WorkerDoor
-from delegation_core.backend.harness.protocol import AppCall, CallRunning, CallSettled
-from delegation_core.backend.harness.settings import Bridge
+from examples.frontend_backend_live.delegation_core.backend.harness.bridge import ConductorDoor, McpBridge, WorkerDoor
+from examples.frontend_backend_live.delegation_core.backend.harness.protocol import AppCall, CallRunning, CallSettled
+from examples.frontend_backend_live.delegation_core.backend.harness.settings import Bridge
 from tests.unit.contracts.backend import MENU_FUNCTION, TEXTS, FakeTaskContext
 from tests.unit.delegation_core.backend.harness.doubles import until, vocabulary
 

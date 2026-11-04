@@ -12,8 +12,8 @@ from dataclasses import replace
 import httpx
 from openai import APIError, APITimeoutError, BadRequestError
 
-from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
-from delegation_core.backend.providers.translation import (
+from examples.frontend_backend_live.delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
+from examples.frontend_backend_live.delegation_core.backend.providers.translation import (
     ChatResponseTranslator,
     responses_items_to_messages,
     split_reasoning,
@@ -22,7 +22,7 @@ from delegation_core.backend.providers.translation import (
     to_chat_tool_choice,
     to_chat_tools,
 )
-from delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
+from examples.frontend_backend_live.delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
 from tests.unit.core_helpers import ENDPOINT, LIMITS, FakeChat, _timeout, chunk, tool_fragment
 
 

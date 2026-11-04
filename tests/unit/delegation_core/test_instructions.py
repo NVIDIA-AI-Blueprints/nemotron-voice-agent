@@ -8,8 +8,8 @@
 import unittest
 from dataclasses import replace
 
-from delegation_core.im.input import compose
-from delegation_core.im.results import SpeakDisplay
+from examples.frontend_backend_live.delegation_core.im.input import compose
+from examples.frontend_backend_live.delegation_core.im.results import SpeakDisplay
 from tests.unit.delegation_core.helpers import (
     DEFAULTS,
     TEXTS,

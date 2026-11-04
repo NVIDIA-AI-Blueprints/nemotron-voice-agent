@@ -9,7 +9,7 @@ import asyncio
 import time
 import unittest
 
-from delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from tests.unit.contracts.backend import call_round, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     FAST,

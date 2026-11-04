@@ -19,7 +19,7 @@ import asyncio
 from dataclasses import replace
 from unittest.mock import patch
 
-from delegation_core.backend.providers.translation import thinking_enabled
+from examples.frontend_backend_live.delegation_core.backend.providers.translation import thinking_enabled
 from tests.unit.core_helpers import FakeStream
 from tests.unit.goldens.harness import (
     ENDPOINT,

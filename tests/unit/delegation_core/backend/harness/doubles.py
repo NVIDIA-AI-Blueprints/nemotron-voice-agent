@@ -19,14 +19,20 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from delegation_core.backend.control import ControlVocabulary
-from delegation_core.backend.harness.acp.hermes import HermesAgent
-from delegation_core.backend.harness.acp.updates import SessionUpdates
-from delegation_core.backend.harness.bridge import Door
-from delegation_core.backend.harness.protocol import McpServer, MessageChunk, PromptEnded, Role, ThoughtChunk
-from delegation_core.backend.harness.render import Renderer
-from delegation_core.backend.harness.settings import HarnessSettings
-from delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.hermes import HermesAgent
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.updates import SessionUpdates
+from examples.frontend_backend_live.delegation_core.backend.harness.bridge import Door
+from examples.frontend_backend_live.delegation_core.backend.harness.protocol import (
+    McpServer,
+    MessageChunk,
+    PromptEnded,
+    Role,
+    ThoughtChunk,
+)
+from examples.frontend_backend_live.delegation_core.backend.harness.render import Renderer
+from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessSettings
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SHIPPED = CoreSettings.load(Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live/core.yaml")

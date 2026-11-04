@@ -5,7 +5,7 @@
 
 The gateway holds one client, built on first use by the composition root's ``core`` hook
 (``live.gateway.gateway.CoreClient``); the in-process core passes every request, result and event through a JSON round
-trip (``delegation_core/api/local.py``). Every client meets the contract in ``tests/unit/contracts/responses.py``:
+trip (the delegation core's ``api/local.py``). Every client meets the contract in ``tests/unit/contracts/responses.py``:
 
 * a refusal comes before any event. ``create_response`` returns once the core accepts the request and raises on a
   refusal, with the refusal's message and a ``code`` attribute: the official code for a refused request the client

@@ -10,8 +10,13 @@ import unittest
 from itertools import count
 from types import SimpleNamespace
 
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import MAX_REQUEST_DEPTH, InvalidRequest, NotFound, ResponsesService
+from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+from examples.frontend_backend_live.delegation_core.api.service import (
+    MAX_REQUEST_DEPTH,
+    InvalidRequest,
+    NotFound,
+    ResponsesService,
+)
 from tests.unit.delegation_core.emulator import emulator_source
 
 CONVERSATIONS = count(1)

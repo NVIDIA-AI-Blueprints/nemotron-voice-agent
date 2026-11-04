@@ -100,8 +100,8 @@ def clear_root_caches(case: unittest.TestCase) -> None:
 
 def stub_root(**changes) -> factory.Root:
     """A root state with the stub adapter class, the shipped files and :data:`CATALOG`."""
-    from delegation_core.config import CoreSettings
     from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
+    from examples.frontend_backend_live.delegation_core.config import CoreSettings
 
     core = CoreSettings.load(CONFIG_PATH.with_name("core.yaml"))
     values = {

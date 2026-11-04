@@ -20,9 +20,9 @@ from pipecat.frames.frames import InputAudioRawFrame, LLMTextFrame
 from pipecat.observers.base_observer import BaseObserver
 from pipecat.processors.frame_processor import FrameProcessor
 
-from delegation_core.im.input import BackendTask, compose, settings_for
 from examples.frontend_backend_live.adapter.adapter import LIVE_AUDIO_IN_RATE, CascadeAdapter
 from examples.frontend_backend_live.cascade.heard_log import Heard
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask, compose, settings_for
 from examples.frontend_backend_live.prompts import load_prompts
 from live.gateway import LiveGateway, LiveSettings, create_live_router
 from live.gateway.websocket import run_primary_websocket

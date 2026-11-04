@@ -115,10 +115,10 @@ from unittest.mock import patch
 
 from pipecat.frames.frames import LLMTextFrame
 
-from delegation_core.im.run import TaskRun
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
 from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.cascade.worknote import WorkNote
+from examples.frontend_backend_live.delegation_core.im.run import TaskRun
 from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.prompts import load_prompts
 from live.gateway import LiveGateway, LiveSettings

@@ -3,7 +3,7 @@
 
 # The delegation core's own settings (CORE_CONFIG_PATH overrides this file). The composition root reads the file once,
 # when it builds the core, so an edit takes effect at the next restart. Unknown keys are errors.
-# delegation_core.config.CoreSettings defines every key below.
+# examples.frontend_backend_live.delegation_core.config.CoreSettings defines every key below.
 #
 # Profiles are separate files that name the file they build on (`extends: core.yaml`) and set only what differs:
 #   core.ui-bot.yaml           delegation.result_format: speak_display; backend.prompt and backend.tools: the cafe's

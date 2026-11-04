@@ -7,8 +7,8 @@
 
 import asyncio
 
-from delegation_core.im.results import CallNotes, SpeakDisplay
-from delegation_core.im.stream import message_text
+from examples.frontend_backend_live.delegation_core.im.results import CallNotes, SpeakDisplay
+from examples.frontend_backend_live.delegation_core.im.stream import message_text
 from tests.unit.delegation_core.helpers import (
     MENU,
     IMCase,

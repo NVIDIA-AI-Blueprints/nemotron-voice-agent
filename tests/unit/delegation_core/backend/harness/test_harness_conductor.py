@@ -12,8 +12,8 @@ import asyncio
 import json
 import unittest
 
-from delegation_core.backend.harness.conductor import HarnessConductor
-from delegation_core.backend.port import ConductorInput, Start, Steer
+from examples.frontend_backend_live.delegation_core.backend.harness.conductor import HarnessConductor
+from examples.frontend_backend_live.delegation_core.backend.port import ConductorInput, Start, Steer
 from tests.unit.contracts.backend import FakeDecisionTarget, a_request, an_open_work
 from tests.unit.delegation_core.backend.harness.doubles import FakeHost, plain, settings, until
 from tests.unit.delegation_core.helpers import IMCase, ScriptedAdapter, answer, ask, finished_items, read_all, wait

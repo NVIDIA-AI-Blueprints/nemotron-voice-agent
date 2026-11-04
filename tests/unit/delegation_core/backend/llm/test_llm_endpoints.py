@@ -8,8 +8,8 @@
 import unittest
 from unittest.mock import patch
 
-from delegation_core.backend.llm import LlmSettings, LlmSource
-from delegation_core.config import ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
 from tests.unit.contracts.backend import call_round, text_round
 from tests.unit.delegation_core.backend.llm.doubles import IMTask, ScriptedProvider, drive
 
@@ -67,7 +67,7 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(made, [])
 
     async def test_an_unlisted_model_falls_back_under_the_benchmark_setting(self):
-        with patch("delegation_core.backend.llm.settings.logger") as logger:
+        with patch("examples.frontend_backend_live.delegation_core.backend.llm.settings.logger") as logger:
             source, made = built("fallback")
             await source.check_model("nvidia/unlisted")
             task = ModelTask("nvidia/unlisted")
