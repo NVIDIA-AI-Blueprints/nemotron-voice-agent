@@ -1,20 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The lines the voice says word for word: the ``lines:`` mapping of the example's ``prompts/shared/lines.yaml``.
+"""The lines the voice says word for word: ``agent_prompts.Lines`` of the example's ``prompts.yaml``.
 
-An empty line says nothing. A host may hand the cascade its own set; otherwise the catalog's is read once.
+An empty line says nothing. Each host hands the cascade the lines of its session's read of the file.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
-from functools import cache
 from typing import Any
-
-from examples.frontend_backend_live.prompts.catalog import LINES_KEY, LINES_PATH
-from utils import load_yaml_file
 
 
 @dataclass(frozen=True)
@@ -39,17 +35,11 @@ class FixedLines:
         """
         names = {field.name for field in fields(cls)}
         if not isinstance(block, Mapping):
-            raise ValueError("lines must be a mapping of name to text")
+            raise ValueError("agent_prompts.Lines must be a mapping of name to text")
         unknown, missing = set(block) - names, names - set(block)
         if unknown or missing:
-            raise ValueError(f"lines: unknown {sorted(unknown)}, missing {sorted(missing)}")
+            raise ValueError(f"agent_prompts.Lines: unknown {sorted(unknown)}, missing {sorted(missing)}")
         wrong = sorted(name for name, text in block.items() if not isinstance(text, str))
         if wrong:
-            raise ValueError(f"lines: {', '.join(wrong)} must be text")
+            raise ValueError(f"agent_prompts.Lines: {', '.join(wrong)} must be text")
         return cls(**block)
-
-
-@cache
-def catalog_lines() -> FixedLines:
-    """The example's lines, read once from ``prompts/shared/lines.yaml``."""
-    return FixedLines.parse(load_yaml_file(LINES_PATH, required=True).get(LINES_KEY, {}))

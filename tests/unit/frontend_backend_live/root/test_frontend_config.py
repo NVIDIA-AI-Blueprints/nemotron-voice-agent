@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D100, D101, D102, D103, D105, D107
-"""The frontend's ``config.yaml``: the frontend adapter, its block, the UI bot's profile."""
+"""The frontend's ``config.yaml``: the frontend adapter, its block, the UI bot's core profile and channel."""
 
 import os
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from delegation_core.config import CoreSettings
-from examples.frontend_backend_live.config_manager import schema
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, ConfigError, load_live_config
 from examples.frontend_backend_live.config_manager.schema import (
     DelegationConfig,
@@ -19,7 +19,7 @@ from examples.frontend_backend_live.config_manager.schema import (
     LiveConfig,
     SpeechConfig,
 )
-from examples.frontend_backend_live.prompts.catalog import get_profile
+from examples.frontend_backend_live.prompts import load_prompts
 
 CASCADE = {"provider": "chat-completions", "slot": "llm"}
 
@@ -44,11 +44,10 @@ class ShippedFileTests(unittest.TestCase):
     def test_the_shipped_file_names_the_cascade_and_its_settings(self):
         config = load_live_config(CONFIG_PATH)
         self.assertEqual((config.adapter, list(config.blocks)), ("cascade", ["cascade"]))
-        self.assertEqual(config.ui_bot.core_config, "core.ui-bot.yaml")
+        self.assertEqual((config.ui_bot.core_config, config.ui_bot.channel), ("core.ui-bot.yaml", "cafe"))
         cascade = cascade_of(config)
         self.assertEqual((cascade.provider, cascade.slot, cascade.prompt), ("chat-completions", "llm", "generic"))
         self.assertEqual(LiveConfig(provider="p", slot="s").prompt, cascade.prompt)  # the schema's default agrees
-        self.assertEqual(cascade.prompt_version, "default")
         delegation = cascade.delegation
         self.assertEqual((delegation.app_wait_seconds, delegation.result_wording), (50.0, "writer"))
         self.assertEqual((delegation.progress_after_seconds, delegation.progress_max_per_delegation), (8.0, 3))
@@ -62,7 +61,9 @@ class ShippedFileTests(unittest.TestCase):
         self.assertEqual((cascade.speech.heard_words, cascade.speech.estimate_chars_per_second), ("as_recorded", 15.0))
         self.assertEqual(cascade.reliability.client_timeout_seconds, 45.0)
         self.assertEqual((cascade.tts_preroll_ms, cascade.display_label), (300, "delegation_core"))
-        self.assertTrue(get_profile(cascade.prompt).prompt("talker"))
+        prompts = load_prompts()  # the entries the file names are the prompt file's
+        self.assertTrue(prompts.text("Talker", cascade.prompt))
+        self.assertTrue(prompts.text("Channel", config.ui_bot.channel))
 
     def test_the_app_wait_line_comes_before_the_cores_deadline_for_the_apps_outputs(self):
         deadline = CoreSettings.load(CONFIG_PATH.with_name("core.yaml")).delegation.client_tool_timeout_seconds
@@ -78,9 +79,7 @@ class ShippedFileTests(unittest.TestCase):
         self.assertIsNone(bench.delegation.app_wait_seconds)
         self.assertIsNone(bench.delegation.progress_after_seconds)
         self.assertEqual(bench.delegation.result_wording, shipped.delegation.result_wording)
-        self.assertEqual(
-            (bench.provider, bench.prompt_version, bench.memory), (shipped.provider, "default", shipped.memory)
-        )
+        self.assertEqual((bench.provider, bench.prompt, bench.memory), (shipped.provider, "generic", shipped.memory))
 
     def test_live_config_path_points_the_server_at_another_file(self):
         with TemporaryDirectory() as folder:
@@ -88,23 +87,12 @@ class ShippedFileTests(unittest.TestCase):
             with patch.dict(os.environ, {"LIVE_CONFIG_PATH": str(other)}):
                 self.assertEqual(cascade_of(load_live_config()).slot, "s")
 
-    def test_a_server_prompt_file_does_not_replace_the_examples_own_prompt_profiles(self):
-        with TemporaryDirectory() as tmp:
-            other = Path(tmp) / "other.yaml"
-            other.write_text("custom:\n  content: not the talker prompt\n")
-            with patch.dict(os.environ, {"PROMPT_FILE_PATH": str(other)}):
-                cafe = get_profile("cafe")
-                self.assertTrue(cafe.prompt("talker"))
-                self.assertTrue(cafe.instructions("thinker").startswith(cafe.prompt("thinker")))
-
-    def test_a_profiles_instructions_append_its_channel_context(self):
-        cafe, generic = get_profile("cafe"), get_profile("generic")
-        text = cafe.instructions("thinker")
-        self.assertTrue(text.startswith(cafe.prompt("thinker")))
-        self.assertTrue(text.endswith(cafe.prompt("channel")))
-        self.assertEqual(generic.instructions("thinker"), generic.prompt("thinker"))  # no channel: as written
-        with self.assertRaises(KeyError):
-            get_profile("no-such-profile")
+    def test_a_server_prompt_file_replaces_the_examples_whole_prompt_file(self):
+        with TemporaryDirectory() as folder:
+            other = write(folder, "other.yaml", "custom:\n  content: not the talker prompt\n")
+            lacks = f"agent_prompts.Cascade was not found in {re.escape(str(other))}"
+            with patch.dict(os.environ, {"PROMPT_FILE_PATH": str(other)}), self.assertRaisesRegex(KeyError, lacks):
+                load_prompts()
 
 
 class DisplayLabelTests(unittest.TestCase):
@@ -131,8 +119,7 @@ class CheckTests(unittest.TestCase):
         for cascade, message in (
             ({"oops": 1}, "frontend.cascade has unknown keys: oops"),
             ({"provider": ""}, "frontend.cascade.provider must name"),
-            ({"prompt": ""}, "frontend.cascade.prompt must be the name"),
-            ({"prompt_version": "v9"}, "prompt_version: Unknown prompt set 'v9'"),
+            ({"prompt": ""}, "frontend.cascade.prompt must name a talker prompt"),
             ({"reliability": {"provider_retries": "two"}}, "must be a non-negative whole number"),
             ({"reliability": {"nope": 1}}, "frontend.cascade.reliability has unknown keys: nope"),
             ({"normalizer": {"enabled": "yes"}}, "true or false"),
@@ -157,12 +144,6 @@ class CheckTests(unittest.TestCase):
         for field in ("talker_attempt_timeout_seconds", "client_timeout_seconds"):
             with self.subTest(field=field), self.assertRaisesRegex(ConfigError, "positive"):
                 cascade_of(ExampleConfig.parse(example(reliability={field: 0})))
-
-    def test_a_prompt_set_the_table_registers_loads_by_its_name(self):
-        with patch.dict(schema.PROMPT_SETS, {"custom": object()}):
-            self.assertEqual(cascade_of(ExampleConfig.parse(example(prompt_version="custom"))).prompt_version, "custom")
-        # Left out, the prompt sets' own default applies.
-        self.assertEqual(cascade_of(ExampleConfig.parse(example())).prompt_version, "")
 
     def test_values_override_the_defaults(self):
         config = ExampleConfig.parse(

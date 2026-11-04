@@ -10,10 +10,10 @@ from dataclasses import replace
 
 from examples.frontend_backend_live.cascade.memory import EntryKind, TalkerMemory, split_messages
 from examples.frontend_backend_live.models.decision import TalkerDecision
-from examples.frontend_backend_live.prompts import get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.frontend_backend_live.cascade.doubles import Call, conversation
 
-PROMPTS = get_prompt_set("default")
+PROMPTS = load_prompts().cascade
 RESULT, CONTEXT, CUT = PROMPTS.result_label, PROMPTS.context_label, PROMPTS.cut_mark
 
 BOT_PROMPT = [

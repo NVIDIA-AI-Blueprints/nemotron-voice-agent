@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The talker as the prompt set shapes it: the floor, the set's actions and rules, and the history it sends."""
+"""The talker as the prompt set shapes it: the floor, its actions and the set's rules, and the history it sends."""
 
 import asyncio
 import unittest
@@ -11,10 +11,10 @@ import unittest
 from examples.frontend_backend_live.cascade.talker.talker import Talker
 from examples.frontend_backend_live.models.chat_completions import chat_messages
 from examples.frontend_backend_live.models.decision import TalkerDecision, decision_schema
-from examples.frontend_backend_live.prompts import get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import ScriptedFrontend
 
-DEFAULT = get_prompt_set("default")
+DEFAULT = load_prompts().cascade
 
 
 def talker(prompts, script=()):
@@ -37,8 +37,8 @@ class FloorTests(unittest.TestCase):
 
 
 class SetShapeTests(unittest.TestCase):
-    def test_the_set_declares_wait_in_its_actions_its_schema_and_its_hint(self):
-        self.assertEqual(DEFAULT.actions, ("speak", "delegate", "wait"))
+    def test_wait_is_in_the_talkers_actions_and_schema_and_in_the_sets_hint(self):
+        self.assertEqual(talker(DEFAULT).spec.actions, ("speak", "delegate", "wait"))
         schema = decision_schema(talker(DEFAULT).spec)
         self.assertEqual(schema["properties"]["action"]["enum"], ["speak", "delegate", "wait"])
         self.assertIn("For wait: empty.", schema["properties"]["speech"]["description"])

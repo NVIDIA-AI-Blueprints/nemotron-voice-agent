@@ -46,6 +46,7 @@ from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
 from examples.frontend_backend_live.cascade.session import log_observation
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint, ReliabilityConfig
 from examples.frontend_backend_live.models import Frontend
+from examples.frontend_backend_live.prompts import load_prompts
 from live.ports import SessionParts
 from live.server_delegation import ServerDelegation
 from tests.unit.core_helpers import chunk, tool_fragment
@@ -250,6 +251,7 @@ def cascade_parts(
         live_config=live_config,
         frontend_endpoint=ENDPOINT,
         instructions=config.instructions or instructions,
+        prompts=load_prompts(),
         stt=stt,
         tts=tts,
         user_params=transcript_turns(),

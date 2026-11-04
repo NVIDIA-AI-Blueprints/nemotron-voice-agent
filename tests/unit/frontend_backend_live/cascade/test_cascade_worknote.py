@@ -27,7 +27,6 @@ from tests.unit.frontend_backend_live.cascade.doubles import (
     in_progress,
     message,
     progress_update,
-    prompt_set,
     queued,
     running_state,
     runtime_data,
@@ -45,7 +44,7 @@ class Clock:
 
 
 def note(tracks=True, clock=None):
-    return WorkNote(prompt_set(), tracks=tracks, clock=clock or Clock(), observe=lambda kind, **fields: None)
+    return WorkNote(PROMPTS, tracks=tracks, clock=clock or Clock(), observe=lambda kind, **fields: None)
 
 
 class EntryTests(unittest.TestCase):

@@ -22,14 +22,15 @@ from examples.frontend_backend_live.factory import adapter_block, ui_bot_core, w
 from examples.frontend_backend_live.media import playout
 from examples.frontend_backend_live.media.services import LineTextHold
 from examples.frontend_backend_live.media.task_cards import RtviTaskCards
-from examples.frontend_backend_live.prompts import get_prompt_set
-from examples.frontend_backend_live.prompts.catalog import LINES_PATH, PROMPTS_DIR, get_profile
+from examples.frontend_backend_live.prompts import load_prompts
 from examples.shared.pipeline_utils import register_session_start_handlers
 from realtime.lifecycle import announce_response, finish_response
 from realtime.serializer import RealtimeFrameSerializer
 from tests.unit.frontend_backend_live.root.root_helpers import CATALOG
 
-INTRO = yaml.safe_load(LINES_PATH.read_text(encoding="utf-8"))["lines"]["intro"]  # the greeting the lines hold
+# The example's prompts.yaml as written, and the greeting its lines hold.
+PROMPTS_FILE = yaml.safe_load(CONFIG_PATH.with_name("prompts.yaml").read_text(encoding="utf-8"))
+INTRO = PROMPTS_FILE["agent_prompts"]["Lines"]["intro"]["content"]
 # What a Realtime client sends to type a line, and to ask for a response.
 TYPED = {
     "type": "conversation.item.create",
@@ -104,7 +105,8 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
         self.body = {"pipeline_mode": "frontend-backend-live"}
         config = load_live_config(CONFIG_PATH)
         core = ui_bot_core(config)
-        root = pipeline.BotRoot(LiveConfig.parse(with_display_label(adapter_block(config), core)), core, CATALOG)
+        cascade = LiveConfig.parse(with_display_label(adapter_block(config), core))
+        root = pipeline.BotRoot(cascade, core, config.ui_bot.channel, CATALOG)
         self.root, case = root, self
 
         class Delegation:
@@ -172,7 +174,7 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
             "PipelineWorker": worker,
             "WorkerRunner": Runner,
             "register_session_start_handlers": lambda **kwargs: case.started_with.update(kwargs),
-            "build_agent": lambda config, endpoint: "agent",
+            "build_agent": lambda config, endpoint, prompts: "agent",
         }
         for name, value in edges.items():
             self.enterContext(patch.object(pipeline, name, value))
@@ -229,7 +231,7 @@ class SeedTests(BotCase):
     def setUp(self):
         super().setUp()
         self.enterContext(patch.dict(os.environ))
-        for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):  # the bot's talker is the default profile's
+        for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):  # the bot's talker is the registry default's
             os.environ.pop(name, None)
 
     async def seed(self) -> list[dict]:
@@ -237,8 +239,8 @@ class SeedTests(BotCase):
         return cascade.conversation.messages()
 
     async def test_the_bot_keeps_the_cafe_talker_and_its_channel_as_one_system_message(self):
-        talker = yaml.safe_load((PROMPTS_DIR / "cafe" / "talker.yaml").read_text(encoding="utf-8"))["content"]
-        channel = get_profile("cafe").prompt("channel")
+        talker = PROMPTS_FILE["cafe"]["content"]
+        channel = PROMPTS_FILE["agent_prompts"]["Channel"]["cafe"]["content"].strip()
         self.assertEqual(await self.seed(), [{"role": "system", "content": f"{talker}\n\n{channel}"}])
 
     async def test_with_a_system_prompt_the_talkers_prompt_stays_through_compaction(self):
@@ -246,7 +248,7 @@ class SeedTests(BotCase):
         seed = await self.seed()
         self.assertEqual([message["role"] for message in seed], ["system", "system"])
         self.assertEqual(seed[0]["content"], "detailed thinking off")
-        memory = TalkerMemory.seeded(get_prompt_set(""), seed, context_tokens=2000, compact_at=0.8)
+        memory = TalkerMemory.seeded(load_prompts().cascade, seed, context_tokens=2000, compact_at=0.8)
         turns = 40
         for turn in range(turns):
             memory.caller(f"Turn {turn}: " + "a large latte with oat milk, please. " * 4)

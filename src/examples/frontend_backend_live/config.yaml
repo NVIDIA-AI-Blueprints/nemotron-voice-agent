@@ -21,18 +21,12 @@ frontend:
     #             openai-responses (the OpenAI Responses API)
     #   slot      the examples_registry.yaml services slot whose selected services.yaml entry is the model (endpoint,
     #             model id, sampling and reasoning settings are set there, not here)
-    #   prompt    the prompt profile (prompts/<profile>/) whose talker.yaml is used, as written, as the talker's
+    #   prompt    the talker prompt of prompts.yaml (agent_prompts.Talker) used, as written, as the talker's
     #             instructions when a live session supplies none or blank ones (generic names no domain; the
-    #             repository UI bot uses the profile its session selected, the cafe's by default)
+    #             repository UI bot uses the prompt its session selected, the cafe's by default)
     provider: chat-completions
     slot: llm
     prompt: generic
-
-    # The prompt set added on top of the example's prompt profiles: every text the talker, the writer and the normalizer
-    # read (prompts/default.py, the one set). It frames the supplied instructions for the talker (its role first, the
-    # instructions word for word, every step they describe as the backend's work) and for the writer. Left out: the
-    # prompt sets' default.
-    prompt_version: default
 
     reliability:
       provider_retries: 2                  # transient provider failures (timeout, 429, 5xx), with backoff
@@ -84,6 +78,8 @@ frontend:
 
     tts_preroll_ms: 300        # reply audio held before playback starts, absorbing uneven TTS chunks (0: off)
 
-# The repository UI bot: the delegation core profile it builds its own core from, under each session's prompt profile.
+# The repository UI bot: the delegation core profile it builds its own core from (its backend prompt and server tools),
+# and the channel context of prompts.yaml (agent_prompts.Channel) that follows its talker and backend prompts.
 ui_bot:
   core_config: core.ui-bot.yaml
+  channel: cafe

@@ -5,10 +5,9 @@
 
 :class:`ExampleCatalog` is the catalog a composition root reads once (the ``ServiceCatalog`` a frontend adapter class
 is built with, ``adapter/contract.py``): the entries the bound example offers for each services slot, the default
-first, and the talker prompts of the example's prompt profiles. :func:`resolve_endpoint` turns an entry and the
-session body into an endpoint. The delegation core names its default model by reference (``backend.slot``) and never
-reads the catalog: the root builds its ``EndpointLookup`` from :meth:`ExampleCatalog.model` and
-:meth:`ExampleCatalog.named`.
+first. :func:`resolve_endpoint` turns an entry and the session body into an endpoint. The delegation core names its
+default model by reference (``backend.slot``) and never reads the catalog: the root builds its ``EndpointLookup`` from
+:meth:`ExampleCatalog.model` and :meth:`ExampleCatalog.named`.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
-from examples.frontend_backend_live.prompts.catalog import get_profile
 from utils import NVCF_LLM_BASE_URL, build_services_api_response, nvidia_api_key, parse_json_dict
 
 
@@ -89,7 +87,7 @@ def _api_key(entry: dict, slot: str) -> str:
 
 
 class ExampleCatalog:
-    """The bound example's catalog, read once: the entries of each services slot, the default first, and its prompts.
+    """The bound example's catalog, read once: the entries of each services slot, the default first.
 
     It is the ``ServiceCatalog`` of ``adapter/contract.py``, and the root's source of the core's ``EndpointLookup``.
     """
@@ -122,14 +120,6 @@ class ExampleCatalog:
     def service(self, slot: str) -> dict:
         """The service entry a slot names (speech-to-text, text-to-speech)."""
         return self.entry(slot)
-
-    def prompt(self, profile: str) -> str:
-        """The talker prompt of prompt profile ``profile``, as written (``prompts/<profile>/talker.yaml``), read now.
-
-        It is what the talker starts from when a live session supplies no or blank instructions. A Live client's own
-        instructions and tools carry its domain, so no channel context follows it.
-        """
-        return get_profile(profile).prompt("talker")
 
     def models(self, slot: str) -> list[str]:
         """The model ids the catalog offers for a slot, the default first."""

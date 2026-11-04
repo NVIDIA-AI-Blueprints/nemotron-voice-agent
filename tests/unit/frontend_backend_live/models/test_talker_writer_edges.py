@@ -13,13 +13,13 @@ from examples.frontend_backend_live.cascade.talker.talker import Talker
 from examples.frontend_backend_live.cascade.writer.plain_speech import plain_speech
 from examples.frontend_backend_live.models.chat_completions import ChatCompletionsFrontend
 from examples.frontend_backend_live.models.decision import TalkerDecision, decision_from_output_text
-from examples.frontend_backend_live.prompts import get_prompt_set
-from examples.frontend_backend_live.prompts.catalog import catalog_line
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import CASCADE_ENDPOINT as ENDPOINT
 from tests.unit.cascade_helpers import FAST, ScriptedFrontend, _config, _decision_chunks
 from tests.unit.core_helpers import FakeChat
 
-DEFAULT = get_prompt_set("default")
+LOADED = load_prompts()
+DEFAULT = LOADED.cascade
 HOLDING = "One moment, I'm still working on your earlier request."
 
 
@@ -82,11 +82,11 @@ class HoldingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((held.action, held.speech, held.diagnostics["failed"]), ("speak", HOLDING, "talker_failed"))
         self.assertEqual(talker.after_failure({"recovery": "talker_failed"}, work_open=False).action, "delegate")
 
-    def test_the_agent_gives_the_talker_the_catalogs_holding_line(self):
+    def test_the_agent_gives_the_talker_the_files_holding_line(self):
         config = replace(_config(), provider="chat-completions")
-        agent = build_agent(config, ENDPOINT, frontend_client=FakeChat())
-        self.assertEqual(agent.talker.holding, catalog_line("holding"))
-        self.assertEqual(catalog_line("holding"), HOLDING)
+        agent = build_agent(config, ENDPOINT, LOADED, frontend_client=FakeChat())
+        self.assertEqual(agent.talker.holding, LOADED.lines.holding)
+        self.assertEqual(LOADED.lines.holding, HOLDING)
 
 
 class JsonReplyTests(unittest.IsolatedAsyncioTestCase):

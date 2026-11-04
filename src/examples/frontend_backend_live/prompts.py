@@ -1,23 +1,34 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The prompt set: every text the cascade's own model calls read, and the words of each delegation's input.
+"""The example's ``prompts.yaml``: the talker prompt the UI lists, and every other text a model reads.
 
-A set holds the talker's routing rules and the frame around the client's instructions, the writer's frame, commentary,
-answer and progress rules, the work note the talker reads, the labels and notes around an update, the marks of
-reference data and of a cut line in the talker's memory, the speech hint of each call's JSON schema, the normalizer's
-prompt, and the words of the transcript each delegation carries to the backend. Behavior that differs between sets is
-data here (the actions a set declares, its labels and frames), so no code asks which set it runs.
+The file's top-level entries are the talker prompts a UI bot session selects with ``prompt_key``, through
+``utils.resolve_prompt`` as in every example. ``agent_prompts`` holds the other texts, which the UI shows read-only and
+no session selects, in five groups:
 
-A new set is one module in this package that builds its ``PROMPT_SET`` from these classes, and one entry in
-``PROMPT_SETS`` (``__init__.py``); ``prompt_version`` in ``config.yaml`` chooses a set by its name.
+* ``Talker``: the talker prompt of a live session that sets no instructions or blank ones, by the name that
+  ``frontend.cascade.prompt`` gives;
+* ``Backend``: the backend prompt of a request that sets no instructions, by the name that the core's ``backend.prompt``
+  gives;
+* ``Channel``: the context that the UI bot adds after its talker prompt and its backend prompt (``ui_bot.channel``);
+* ``Cascade``: the prompt set, the text of the cascade's own model calls and of each delegation's input
+  (:class:`PromptSet`), each entry named by its field (``work_texts.item``);
+* ``Lines``: the lines that the voice says word for word (:class:`FixedLines`).
 
-The lines the voice says word for word are not model text: they are ``lines`` in ``prompts/shared/lines.yaml``.
+A prompt file the server was started with (``PROMPT_FILE_PATH``) replaces this whole file, as for every example, so it
+holds these entries too. Each session reads the file once when it starts, so an edit takes effect at the next session.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass
+from pathlib import Path
+from typing import Any, get_type_hints
+
+from examples.frontend_backend_live.cascade.lines import FixedLines
+from utils import load_yaml_file, resolve_prompt_catalog_path
 
 
 @dataclass(frozen=True)
@@ -81,8 +92,6 @@ class PromptSet:
     from here; the talker, the writer and the normalizer read the rest.
     """
 
-    name: str
-    actions: tuple[str, ...]  # the routing actions the talker may take: speak, delegate and wait
     routing: str  # appended to the client's instructions for the routing decision
     commentary: str  # appended for commentary phrasing
     answer: str  # appended after the commentary text in every writer call but a progress line's
@@ -116,3 +125,92 @@ class PromptSet:
     def writer_framed(self, instructions: str) -> str:
         """The client's instructions as the writer reads them: word for word, inside the set's writer frame."""
         return self.writer_frame_before + instructions + self.writer_frame_after
+
+
+@dataclass(frozen=True)
+class Prompts:
+    """One read of the example's prompt file: the prompt set and the lines, built at once, and the named prompts."""
+
+    path: Path  # the file read: PROMPT_FILE_PATH, or the prompts.yaml beside this module
+    agent_prompts: Mapping[str, Any]  # the file's agent_prompts, as read
+    cascade: PromptSet
+    lines: FixedLines
+
+    def text(self, group: str, name: str) -> str:
+        """Entry ``name`` of ``agent_prompts.<group>`` (``Talker``, ``Backend`` or ``Channel``), stripped.
+
+        Raises:
+            KeyError: The file has no such entry, or its text is blank; the message names the file, and the group's
+                entries when the entry is missing.
+        """
+        entries = self.agent_prompts.get(group)
+        entries = entries if isinstance(entries, Mapping) else {}
+        entry = entries.get(name)
+        content = entry.get("content") if isinstance(entry, Mapping) else None
+        if not isinstance(content, str):
+            known = ", ".join(map(str, entries)) or "none"
+            raise KeyError(f"agent_prompts.{group}.{name} was not found in {self.path}; known: {known}")
+        if not content.strip():
+            raise KeyError(f"agent_prompts.{group}.{name} in {self.path} has no text")
+        return content.strip()
+
+
+def _paths(cls: type, prefix: str = "") -> list[str]:
+    """Every text field of ``cls`` by its dotted path, a nested one's under its field (``work_texts.item``)."""
+    hints = get_type_hints(cls)
+    paths = []
+    for field in fields(cls):
+        kind, path = hints[field.name], f"{prefix}{field.name}"
+        paths += _paths(kind, f"{path}.") if is_dataclass(kind) else [path]
+    return paths
+
+
+def _built(cls: type, texts: Mapping[str, str], prefix: str = ""):
+    """``cls`` built from the texts named by its fields' dotted paths."""
+    hints = get_type_hints(cls)
+    values = {}
+    for field in fields(cls):
+        kind, path = hints[field.name], f"{prefix}{field.name}"
+        values[field.name] = _built(kind, texts, f"{path}.") if is_dataclass(kind) else texts[path]
+    return cls(**values)
+
+
+def _texts(agent_prompts: Mapping[str, Any], group: str, path: Path) -> dict[str, str]:
+    """Each entry's ``content`` in ``agent_prompts.<group>``, by its name, as written.
+
+    Raises:
+        KeyError: The file has no such group.
+        ValueError: An entry has no text.
+    """
+    entries = agent_prompts.get(group)
+    if not isinstance(entries, Mapping):
+        raise KeyError(f"agent_prompts.{group} was not found in {path}")
+    texts = {}
+    for name, entry in entries.items():
+        content = entry.get("content") if isinstance(entry, Mapping) else None
+        if not isinstance(content, str):
+            raise ValueError(f"agent_prompts.{group}.{name} in {path} needs a content")
+        texts[str(name)] = content
+    return texts
+
+
+def load_prompts() -> Prompts:
+    """Read the example's prompt file once: ``PROMPT_FILE_PATH``, or the ``prompts.yaml`` beside this module.
+
+    The prompt set and the lines are built at once, since every session uses them; the named prompts are read when used
+    (:meth:`Prompts.text`).
+
+    Raises:
+        RuntimeError: The file is missing or malformed.
+        KeyError: ``agent_prompts.Cascade`` or ``agent_prompts.Lines`` is missing, or a text of the prompt set; the
+            message names it and the file.
+        ValueError: An entry of those groups has no text, or a line is missing or unknown.
+    """
+    path = resolve_prompt_catalog_path(__file__)
+    groups = load_yaml_file(path, required=True).get("agent_prompts")
+    groups = groups if isinstance(groups, Mapping) else {}
+    cascade = _texts(groups, "Cascade", path)
+    missing = [name for name in _paths(PromptSet) if name not in cascade]
+    if missing:
+        raise KeyError(f"agent_prompts.Cascade in {path} has no {', '.join(missing)}")
+    return Prompts(path, groups, _built(PromptSet, cascade), FixedLines.parse(_texts(groups, "Lines", path)))

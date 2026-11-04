@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The prompt set and the example's prompt profiles, pinned.
+"""The example's ``prompts.yaml`` and its prompt set, pinned.
 
 Each text a model reads is pinned by its sha256, so an unintended change fails here; update a digest on purpose when a
 text changes.
@@ -14,23 +14,20 @@ import hashlib
 import json
 import re
 import unittest
+from dataclasses import replace
 
 import yaml
 
 from examples.frontend_backend_live.cascade.talker.talker import Talker
-from examples.frontend_backend_live.models.decision import TalkerDecision, decision_schema
-from examples.frontend_backend_live.prompts import DEFAULT_PROMPT_SET, PROMPT_SETS, default, get_prompt_set
-from examples.frontend_backend_live.prompts.catalog import (
-    LINES_KEY,
-    LINES_PATH,
-    catalog_line,
-    default_profile,
-    get_profile,
-    profile_names,
-)
+from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH
+from examples.frontend_backend_live.models.decision import ACTIONS, TalkerDecision, decision_schema
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import ScriptedFrontend
 
-DEFAULT = default.PROMPT_SET
+# The shipped file, as written and as read.
+PROMPTS_PATH = CONFIG_PATH.with_name("prompts.yaml")
+LOADED = load_prompts()
+DEFAULT = LOADED.cascade
 
 
 def digest(text: str) -> str:
@@ -103,17 +100,6 @@ class PromptTextTests(unittest.TestCase):
                 self.assertEqual(digest(self.field(DEFAULT, path)), expected)
 
 
-class PromptSetTableTests(unittest.TestCase):
-    def test_the_table_names_the_one_set_and_it_is_the_default(self):
-        self.assertEqual(PROMPT_SETS, {"default": DEFAULT})
-        self.assertEqual((DEFAULT.name, DEFAULT_PROMPT_SET), ("default", "default"))
-        self.assertIs(get_prompt_set(""), DEFAULT)
-
-    def test_an_unknown_set_names_the_known_ones(self):
-        with self.assertRaisesRegex(ValueError, r"Unknown prompt version 'v9'; known: default$"):
-            get_prompt_set("v9")
-
-
 class FrameTests(unittest.TestCase):
     CLIENT = "You are Sam.\nNever read out a full card number."
     MARKERS = f"<application_instructions>\n{CLIENT}\n</application_instructions>"
@@ -125,9 +111,9 @@ class FrameTests(unittest.TestCase):
         asyncio.run(Talker(frontend, DEFAULT).decide(self.CLIENT, [{"role": "user", "content": "Yes."}], "WORK"))
         call = frontend.calls[0]
         self.assertEqual(
-            call["instructions"], default.FRAME_BEFORE + self.CLIENT + default.FRAME_AFTER + "\n" + DEFAULT.routing
+            call["instructions"], DEFAULT.frame_before + self.CLIENT + DEFAULT.frame_after + "\n" + DEFAULT.routing
         )
-        runtime = "\n" + default.RUNTIME_LABEL + "\nWORK\n\n" + default.DECISION_CUE
+        runtime = "\n" + DEFAULT.runtime_label + "\nWORK\n\n" + DEFAULT.decision_cue
         self.assertEqual(call["history"][-1], {"role": "user", "content": runtime})
         self.assertIn(self.MARKERS, DEFAULT.framed(self.CLIENT))
 
@@ -158,7 +144,7 @@ class ExampleTests(unittest.TestCase):
             with self.subTest(caller=caller):
                 self.assertTrue(caller.startswith("Caller: "))
                 self.assertIsNone(self.DEMO_WORDS.search(caller + decision["speech"]))
-        self.assertEqual({decision["action"] for _, decision in examples}, set(DEFAULT.actions))
+        self.assertEqual({decision["action"] for _, decision in examples}, set(ACTIONS))
 
     def test_the_examples_are_decisions_the_floor_keeps(self):
         talker = Talker(ScriptedFrontend([]), DEFAULT)
@@ -168,28 +154,40 @@ class ExampleTests(unittest.TestCase):
                 self.assertEqual(talker.floored(decision), decision)
 
 
-class CatalogTests(unittest.TestCase):
-    def test_the_cafe_profile_is_the_listed_default_and_the_generic_one_internal(self):
-        self.assertEqual(profile_names(), ["cafe", "generic"])
-        self.assertEqual(default_profile().name, "cafe")
-        cafe, generic = get_profile("cafe"), get_profile("generic")
-        self.assertFalse(cafe.internal)
-        for role in ("talker", "thinker", "channel"):
-            self.assertTrue(cafe.prompt(role), role)
-        self.assertNotIn("web_search", cafe.prompt("thinker"))
-        self.assertTrue(generic.internal)
-        for role in ("talker", "thinker"):
-            self.assertTrue(generic.prompt(role), role)
-        self.assertNotIn("channel", generic.roles)  # the Live defaults name no domain
+class FileTests(unittest.TestCase):
+    """The file as written: the talker the UI lists, the agent prompts by group, and the lines."""
+
+    FILE = yaml.safe_load(PROMPTS_PATH.read_text(encoding="utf-8"))
+
+    def test_the_ui_lists_the_cafe_talker_and_every_other_text_is_an_agent_prompt(self):
+        self.assertEqual(list(self.FILE), ["cafe", "agent_prompts"])
+        self.assertNotIn("default", self.FILE["cafe"])  # the registry's defaults.prompt names the default
+        groups = self.FILE["agent_prompts"]
+        self.assertEqual(list(groups), ["Talker", "Backend", "Channel", "Cascade", "Lines"])
+        self.assertEqual(list(groups["Talker"]), ["generic"])  # the Live default names no domain
+        self.assertEqual(list(groups["Backend"]), ["cafe", "generic"])
+        self.assertEqual(list(groups["Channel"]), ["cafe"])
+        self.assertEqual(set(groups["Cascade"]), set(PromptTextTests.DIGESTS))  # every text of the set, pinned above
+        self.assertNotIn("web_search", groups["Backend"]["cafe"]["content"])
 
     def test_every_line_said_word_for_word_is_read_by_name(self):
-        lines = yaml.safe_load(LINES_PATH.read_text(encoding="utf-8"))
-        for name, text in lines[LINES_KEY].items():
+        for name, entry in self.FILE["agent_prompts"]["Lines"].items():
             with self.subTest(line=name):
-                self.assertEqual(catalog_line(name), text)
-        self.assertEqual(catalog_line("holding"), "One moment, I'm still working on your earlier request.")
-        with self.assertRaisesRegex(KeyError, "no_such_line"):
-            catalog_line("no_such_line")
+                self.assertEqual(getattr(LOADED.lines, name), entry["content"])
+        self.assertEqual(LOADED.lines.holding, "One moment, I'm still working on your earlier request.")
+
+    def test_a_named_prompt_is_read_stripped_and_an_unknown_one_names_the_file_and_the_known_ones(self):
+        channel = self.FILE["agent_prompts"]["Channel"]["cafe"]["content"]
+        self.assertEqual(LOADED.text("Channel", "cafe"), channel.strip())
+        known = f"was not found in {re.escape(str(PROMPTS_PATH))}; known: cafe, generic"
+        with self.assertRaisesRegex(KeyError, rf"agent_prompts\.Backend\.kiosk {known}"):
+            LOADED.text("Backend", "kiosk")
+
+    def test_a_blank_named_prompt_is_refused_and_names_the_file(self):
+        blank = replace(LOADED, agent_prompts={"Channel": {"cafe": {"content": " \n"}}})
+        where = re.escape(str(PROMPTS_PATH))
+        with self.assertRaisesRegex(KeyError, rf"agent_prompts\.Channel\.cafe in {where} has no text"):
+            blank.text("Channel", "cafe")
 
 
 if __name__ == "__main__":

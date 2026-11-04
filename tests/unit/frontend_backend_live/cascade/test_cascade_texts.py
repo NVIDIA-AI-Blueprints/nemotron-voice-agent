@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The cascade reads its texts from the prompt set and its fixed lines from ``prompts/shared/lines.yaml``."""
+"""The cascade reads its texts from the prompt set and its fixed lines from ``agent_prompts.Lines``."""
 
 import unittest
 from dataclasses import replace
@@ -11,7 +11,7 @@ from dataclasses import replace
 from examples.frontend_backend_live.cascade.lines import FixedLines
 from examples.frontend_backend_live.cascade.worknote import WorkNote
 from examples.frontend_backend_live.prompts import WorkTexts
-from tests.unit.frontend_backend_live.cascade.doubles import prompt_set
+from tests.unit.frontend_backend_live.cascade.doubles import PROMPTS
 
 
 def note(prompts):
@@ -36,7 +36,7 @@ def rendered(prompts) -> tuple[str, str]:
 class PromptSetTextTests(unittest.TestCase):
     def test_the_work_note_reads_every_text_from_the_prompt_set(self):
         marked = replace(
-            prompt_set(),
+            PROMPTS,
             work_in_progress="NOTE<{items}>",
             no_work_in_progress="NOTHING",
             answer_ready_label="READY",

@@ -40,6 +40,7 @@ from examples.frontend_backend_live.media.services import (
     build_tts,
     speech_mode,
 )
+from examples.frontend_backend_live.prompts import load_prompts
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_OUT_SAMPLE_RATE, build_pipeline_params
 from live.ports import EXCHANGE_RATE
 from live.protocol import SessionConfig
@@ -363,6 +364,7 @@ class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
             live_config=CASCADE_TEST_CONFIG,
             frontend_endpoint=ModelEndpoint(model="talker", base_url="http://talker"),
             instructions="",
+            prompts=load_prompts(),
             stt=None,
             tts=tts,
         )

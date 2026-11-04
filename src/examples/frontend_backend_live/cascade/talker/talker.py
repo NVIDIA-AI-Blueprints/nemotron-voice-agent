@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from examples.frontend_backend_live.models.base import CallSpec, Frontend
-from examples.frontend_backend_live.models.decision import UNUSABLE, TalkerDecision
+from examples.frontend_backend_live.models.decision import ACTIONS, UNUSABLE, TalkerDecision
 from examples.frontend_backend_live.prompts import PromptSet
 
 
@@ -33,16 +33,16 @@ class Talker:
     """Routes each caller turn to a spoken reply, a delegation, or a silent wait."""
 
     def __init__(self, frontend: Frontend, prompts: PromptSet, *, holding: str = ""):
-        """Bind the frontend model and the prompt set; the call's spec comes from the set.
+        """Bind the frontend model and the prompt set; the call's spec takes the set's hint.
 
         Args:
             frontend: The model that decides.
-            prompts: The prompt set: the call's texts, its actions and its hint.
-            holding: The line said word for word when a decision fails while work is open (``lines.holding`` in
-                ``prompts/shared/lines.yaml``); empty: such a turn is delegated, as when no work is open.
+            prompts: The prompt set: the call's texts and its hint.
+            holding: The line said word for word when a decision fails while work is open (``holding`` in
+                ``agent_prompts.Lines``); empty: such a turn is delegated, as when no work is open.
         """
         self.frontend, self.prompts, self.holding = frontend, prompts, holding
-        self.spec = CallSpec("talker", prompts.actions, prompts.call_hints.talker)
+        self.spec = CallSpec("talker", ACTIONS, prompts.call_hints.talker)
 
     def routing_parts(self, instructions: Sequence[PromptPart]) -> list[PromptPart]:
         """The routing call's instructions, part by part in the order they are sent, each with its source.
@@ -50,11 +50,11 @@ class Talker:
         Joining each part's ``sep`` and ``text`` gives exactly what :meth:`decide` sends, so a view of the request
         (``/history``) shows what is sent; the provider adds its ``reply_format`` itself.
         """
-        prompts, name = self.prompts, self.prompts.name
-        parts = [PromptPart(f"prompt set {name}: the voice's role", prompts.frame_before)]
+        prompts = self.prompts
+        parts = [PromptPart("agent_prompts.Cascade.frame_before", prompts.frame_before)]
         parts += instructions
-        parts.append(PromptPart(f"prompt set {name}: how the instructions apply", prompts.frame_after))
-        parts.append(PromptPart(f"prompt set {name}: routing rules", prompts.routing, "\n"))
+        parts.append(PromptPart("agent_prompts.Cascade.frame_after", prompts.frame_after))
+        parts.append(PromptPart("agent_prompts.Cascade.routing", prompts.routing, "\n"))
         return parts
 
     def runtime_data(self, work_line: str = "", turn: str = "") -> str:

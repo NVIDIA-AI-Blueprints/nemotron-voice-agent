@@ -54,9 +54,6 @@ class ExampleEntry(TypedDict):
     welcome_message: bool
     bot: str
     live: LiveHooks | None
-    # A lazily imported ``module.path:callable`` that returns the example's prompt catalog, in place of the
-    # ``prompts.yaml`` beside its bot module; ``None``: that file.
-    prompt_catalog: str | None
 
 
 class EnrichedExample(ExampleEntry):
@@ -110,19 +107,6 @@ def resolve_hook(spec: str, what: str = "Example bot") -> Callable[..., Any]:
 def resolve_bot(example: EnrichedExample) -> Callable[..., Any]:
     """Return the lazily imported bot callable for an example."""
     return resolve_hook(example["bot"])
-
-
-def prompt_catalog(example: EnrichedExample) -> dict:
-    """Return the example's prompt catalog: the UI's prompt list and the entries a session's ``prompt_key`` names.
-
-    A prompt file the server was started with (``PROMPT_FILE_PATH``) wins, as for every example; otherwise the
-    example's ``prompt_catalog`` hook builds it when the example names one; otherwise it is the ``prompts.yaml`` beside
-    the example's bot module.
-    """
-    spec = example.get("prompt_catalog")
-    if spec and not os.getenv("PROMPT_FILE_PATH", "").strip():
-        return resolve_hook(spec, f"Example {example.get('id', '')!r} prompt_catalog")()
-    return load_prompt_catalog(example_module_file(example))
 
 
 def example_module_file(example: EnrichedExample) -> Path:
@@ -182,7 +166,7 @@ def _resolve_prompt_defaults(example: EnrichedExample) -> list[PromptDefault]:
     prompt_keys = example["defaults"].get("prompt", [])
     if not prompt_keys:
         return []
-    catalog = prompt_catalog(example)
+    catalog = load_prompt_catalog(example_module_file(example))
     return [_resolve_prompt_default(example, catalog, prompt_key) for prompt_key in prompt_keys]
 
 
@@ -311,16 +295,6 @@ def _parse_live(example_id: str, entry: dict) -> LiveHooks | None:
     return hooks
 
 
-def _parse_prompt_catalog(example_id: str, entry: dict) -> str | None:
-    """The example's ``prompt_catalog`` hook as ``module.path:callable``; ``None`` without one."""
-    spec = entry.get("prompt_catalog")
-    if spec is None:
-        return None
-    spec = str(spec).strip()
-    _split_spec(spec, f"Example {example_id!r} prompt_catalog")
-    return spec
-
-
 def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
     if not isinstance(entry, dict):
         raise RuntimeError(f"Example {example_id!r} must be a mapping")
@@ -344,7 +318,6 @@ def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
         "welcome_message": welcome_message,
         "bot": bot_spec,
         "live": _parse_live(example_id, entry),
-        "prompt_catalog": _parse_prompt_catalog(example_id, entry),
     }
 
 

@@ -10,12 +10,13 @@ import unittest
 from collections import Counter
 
 from examples.frontend_backend_live.cascade.delegations import DelegationReader
-from examples.frontend_backend_live.cascade.lines import catalog_lines
 from examples.frontend_backend_live.cascade.ports import Ending
 from examples.frontend_backend_live.cascade.worknote import WorkNote
 from tests.unit.contracts.endings import load, official_events
 from tests.unit.frontend_backend_live.cascade.doubles import (
     ANSWER_READY_LABEL,
+    LINES,
+    PROMPTS,
     WORK,
     RecordingDisplay,
     RecordingResults,
@@ -29,7 +30,6 @@ from tests.unit.frontend_backend_live.cascade.doubles import (
     mcp_started,
     message,
     progress_update,
-    prompt_set,
     queued,
     running_state,
     work_item,
@@ -50,8 +50,8 @@ class Reading:
     def __init__(self, *, app_wait_seconds=None):
         self.events: list[tuple[str, dict]] = []
         self.results, self.display = RecordingResults(), RecordingDisplay()
-        self.note = WorkNote(prompt_set(), tracks=True, clock=lambda: 0.0, observe=self.observe)
-        self.lines = catalog_lines()
+        self.note = WorkNote(PROMPTS, tracks=True, clock=lambda: 0.0, observe=self.observe)
+        self.lines = LINES
         self.arrived: list[str] = []
         self.reader = DelegationReader(
             self.note,
@@ -124,7 +124,7 @@ class EndingLineTests(unittest.IsolatedAsyncioTestCase):
         return [call[2] for call in reading.results.calls if call[0] == "notice"]
 
     async def test_a_failure_says_the_apology_or_unclear_when_a_tool_ran(self):
-        lines = catalog_lines()
+        lines = LINES
         for events, line in (
             ([created("r1"), in_progress("r1"), failed("r1")], lines.apology),
             ([created("r1"), in_progress("r1"), mcp_call("cafe", "manage_cart"), failed("r1")], lines.unclear),
@@ -144,7 +144,7 @@ class EndingLineTests(unittest.IsolatedAsyncioTestCase):
         reading.hand("D1", created("r1"), in_progress("r1"), function_call("get_menu"), completed("r1"))
         reading.hand("D1", created("r2"), queued("r2"), completed("r2"))
         reading.hand("D2", created("r3"), in_progress("r3"), incomplete("r3"))
-        self.assertEqual(self.notices(reading), [catalog_lines().unclear])
+        self.assertEqual(self.notices(reading), [LINES.unclear])
         endings = {call[1]: call[2] for call in reading.display.calls if call[0] == "ended"}
         self.assertEqual(endings, {"D1": "late", "D2": "cancelled"})
 
@@ -154,7 +154,7 @@ class EndingLineTests(unittest.IsolatedAsyncioTestCase):
         reading.hand("D1", created("r1"), in_progress("r1"))
         reading.reader.on_delegation_lost("D1")
         reading.reader.on_delegation_lost("D1")
-        self.assertEqual(self.notices(reading), [catalog_lines().lost])
+        self.assertEqual(self.notices(reading), [LINES.lost])
         self.assertEqual(reading.display.calls[-1], ("ended", "D1", "lost"))
         reading.hand("D1", message("Too late."), completed("r1"))  # an ended delegation's events are ignored
         self.assertEqual([call for call in reading.results.calls if call[0] == "ready"], [])
@@ -350,7 +350,7 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
         # IM names D2 the taker before D1's handover line and end, but on D2's own stream. Whichever stream the
         # reader gets first, D1's answer is a result, D2 carries the words, the told and that a tool ran, and D1 ends
         # answered.
-        lines = catalog_lines()
+        lines = LINES
         for older_first in (False, True):
             with self.subTest(older_first=older_first):
                 reading = Reading()
@@ -426,7 +426,7 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
         reading.hand("D2", in_progress("r2", previous="r3"))
         reading.hand("D1", message(TEXTS["handover_line"], phase="commentary"), completed("r3"))
         reading.hand("D2", failed("r2"))
-        self.assertEqual(self.notices(reading), [catalog_lines().unclear])
+        self.assertEqual(self.notices(reading), [LINES.unclear])
 
     async def test_an_end_with_no_answer_came_too_late_once_no_delegation_can_name_its_taker(self):
         reading = Reading()
@@ -435,7 +435,7 @@ class ReaderPartTests(unittest.IsolatedAsyncioTestCase):
         reading.hand("D1", created("r1"), in_progress("r1"), completed("r1"))
         self.assertEqual(self.notices(reading), [])  # D2 may still name it
         reading.hand("D2", in_progress("r2"))  # D2 started without naming it: no taker can come now
-        self.assertEqual(self.notices(reading), [catalog_lines().unclear])
+        self.assertEqual(self.notices(reading), [LINES.unclear])
         self.assertIn(("ended", "D1", "late"), reading.display.calls)
 
     async def test_a_typed_run_is_a_delegation_the_frontend_did_not_start(self):

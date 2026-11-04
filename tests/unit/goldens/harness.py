@@ -120,7 +120,7 @@ from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
 from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.cascade.worknote import WorkNote
 from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
-from examples.frontend_backend_live.prompts import get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from live.gateway import LiveGateway, LiveSettings
 from live.gateway.websocket import run_primary_websocket
 from live.ports import SessionParts
@@ -175,10 +175,9 @@ QUIET_PROGRESS_SECONDS = 3600.0
 # The gateway reports session.usage.updated every 5 s (live.session.lifecycle.USAGE_INTERVAL_SECONDS); the harness
 # patches the interval to an hour for the length of each test.
 USAGE_INTERVAL_SECONDS = 3600
-# The talker's prompt set the goldens run on: the shipped one, so a change to its texts shows in every golden's frontend
-# requests.
-GOLDEN_PROMPT_SET = "default"
-GOLDEN_PROMPTS = get_prompt_set(GOLDEN_PROMPT_SET)
+# The prompt set the goldens run on: the shipped prompts.yaml's, so a change to its texts shows in every golden's
+# frontend requests.
+GOLDEN_PROMPTS = load_prompts().cascade
 # The core's voice note the goldens run on: the shipped one, which every golden's backend requests carry.
 GOLDEN_CORE = {"voice_note": "default"}
 # The models the core's catalog lists besides the session's: a session.update may choose them (core.yaml reports an
@@ -186,7 +185,6 @@ GOLDEN_CORE = {"voice_note": "default"}
 GOLDEN_MODELS = ("org/other-model",)
 GOLDEN_LIVE_CONFIG = replace(
     LIVE_CONFIG,
-    prompt_version=GOLDEN_PROMPT_SET,
     delegation=replace(LIVE_CONFIG.delegation, progress_after_seconds=QUIET_PROGRESS_SECONDS),
 )
 

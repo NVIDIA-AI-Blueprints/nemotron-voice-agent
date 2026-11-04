@@ -5,7 +5,7 @@
 
 ``config.yaml`` holds the frontend's settings only. It names the frontend adapter that serves live sessions
 (``frontend.adapter``), holds each adapter's own block (``frontend.<name>``), and names the UI bot's core profile
-(``ui_bot.core_config``): :class:`ExampleConfig`. The cascade's block is :class:`LiveConfig`, which the cascade
+and channel context (``ui_bot``): :class:`ExampleConfig`. The cascade's block is :class:`LiveConfig`, which the cascade
 adapter's class parses (``LiveConfig.parse``). The delegation core reads its own file (``core.yaml``,
 ``delegation_core.config``).
 """
@@ -16,9 +16,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from types import MappingProxyType
 from typing import Any
-
-from examples.frontend_backend_live.prompts import PROMPT_SETS
-from examples.frontend_backend_live.tables import pick
 
 # Every other number is a timeout, a limit or a count, where 0 would disable or break the feature.
 ZERO_ALLOWED = frozenset({"provider_retries"})
@@ -152,8 +149,9 @@ class LiveConfig:
     """The cascade's settings: the ``frontend.cascade`` block of ``config.yaml``.
 
     ``provider`` names the frontend model's implementation (``models/``), ``slot`` the ``examples_registry.yaml``
-    services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the prompt profile whose
-    ``talker.yaml`` is used, as written, as the talker's instructions when a session supplies none or blank ones.
+    services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the talker prompt of
+    ``prompts.yaml`` (``agent_prompts.Talker``) used, as written, as the talker's instructions when a session supplies
+    none or blank ones.
     ``display_label`` is not a key of the file: the root hands the cascade the delegation core's
     ``delegation.display_label`` (the server label of the core's display items), so the label is written once.
     """
@@ -161,7 +159,6 @@ class LiveConfig:
     provider: str
     slot: str
     prompt: str = "generic"
-    prompt_version: str = ""  # a name in the prompt-set table; empty: the table's default set
     reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
     delegation: DelegationConfig = field(default_factory=DelegationConfig)
     normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)
@@ -176,8 +173,7 @@ class LiveConfig:
         """Validate the cascade's block (with the ``display_label`` the root put in).
 
         Raises:
-            ConfigError: A key is unknown, a value has the wrong kind, the model is not named, or ``prompt_version``
-                names no prompt set.
+            ConfigError: A key is unknown, a value has the wrong kind, or the model is not named.
         """
         where = "frontend.cascade"
         if not isinstance(block, Mapping):
@@ -190,7 +186,7 @@ class LiveConfig:
             "memory": MemoryConfig,
             "speech": SpeechConfig,
         }
-        plain = {"provider", "slot", "prompt", "prompt_version", "tts_preroll_ms"}
+        plain = {"provider", "slot", "prompt", "tts_preroll_ms"}
         unknown = set(own) - set(parts) - plain
         if unknown:
             raise ConfigError(f"{where} has unknown keys: {', '.join(sorted(map(str, unknown)))}")
@@ -203,15 +199,8 @@ class LiveConfig:
             values[name] = own[name]
         if "prompt" in own:
             if not isinstance(own["prompt"], str) or not own["prompt"]:
-                raise ConfigError(f"{where}.prompt must be the name of a prompt profile (prompts/<profile>/)")
+                raise ConfigError(f"{where}.prompt must name a talker prompt of prompts.yaml (agent_prompts.Talker)")
             values["prompt"] = own["prompt"]
-        version = own.get("prompt_version", "")
-        if version:
-            try:
-                pick(PROMPT_SETS, version, "prompt set")
-            except ValueError as exc:
-                raise ConfigError(f"{where}.prompt_version: {exc}") from None
-            values["prompt_version"] = version
         if "tts_preroll_ms" in own:
             preroll = own["tts_preroll_ms"]
             if isinstance(preroll, bool) or not isinstance(preroll, int) or not 0 <= preroll <= 2000:
@@ -227,8 +216,9 @@ class UiBotConfig:
     """The repository UI bot's own settings (``ui_bot``)."""
 
     # The delegation core profile the bot builds its core from, beside config.yaml (core.ui-bot.yaml: results with a
-    # display part for the task cards); each session's prompt profile sets its backend prompt and tools.
+    # display part for the task cards); its backend.prompt and backend.tools are the bot's backend prompt and tools.
     core_config: str = "core.ui-bot.yaml"
+    channel: str = ""  # agent_prompts.Channel: the context after the bot's talker and backend prompts
 
 
 @dataclass(frozen=True)

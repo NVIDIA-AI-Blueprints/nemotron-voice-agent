@@ -33,15 +33,15 @@ In the [Frontend/Backend Live example](../examples/frontend_backend_live/README.
 core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the
 gateway's [server delegation](../live/README.md#server-delegation), in a conversation of its own. A client-mode app
 can send each backend round to `POST /v1/live/delegate`, which reaches the core as one
-stateless request. The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml`
-plus the session's prompt profile, which sets `backend.prompt` and `backend.tools`.
+stateless request. The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml`,
+which sets the cafe's `backend.prompt` and `backend.tools`.
 
 ## Build and Configure the Core
 
 `build_core(settings, *, endpoints, defaults)` in [`app.py`](app.py) builds one `DelegationCore`, choosing every
 implementation by name. The example's composition root, [`factory.py`](../examples/frontend_backend_live/factory.py),
 loads the settings with `CoreSettings.load`, resolves the default model of `backend.slot` and the instructions of
-`backend.prompt` from the example's prompt profiles, and hands the core to the gateway through `LocalResponsesClient`.
+`backend.prompt` from the example's `prompts.yaml`, and hands the core to the gateway through `LocalResponsesClient`.
 
 The core's settings are their own file, [`core.yaml`](../examples/frontend_backend_live/core.yaml) in the example's
 folder. Set `CORE_CONFIG_PATH` to use another file, such as one of the profiles that

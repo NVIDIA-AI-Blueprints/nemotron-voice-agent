@@ -33,7 +33,7 @@ from examples.frontend_backend_live.media.services import PerSentence, Stitched
 from examples.frontend_backend_live.media.turns import Shared, Silence, SmartTurn
 from examples.frontend_backend_live.models import FRONTENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts.catalog import get_profile
+from examples.frontend_backend_live.prompts import load_prompts
 from examples.frontend_backend_live.tables import pick
 from live.ports import EXCHANGE_RATE, FrontendAdapter
 from live.protocol import SessionConfig
@@ -43,7 +43,7 @@ from utils import NVCF_GRPC_SERVER, NVCF_LLM_BASE_URL
 
 # The shipped frontend.cascade block, as the root hands it to the class.
 SHIPPED_BLOCK = dict(load_live_config(CONFIG_PATH).blocks["cascade"])
-# The example's own catalog reader, with one talker model: its talker prompts are the shipped prompt profiles'.
+# The example's own catalog reader, with one talker model.
 SHIPPED_CATALOG = ExampleCatalog({"llm": [{"model_id": "org/front", "base_url": "http://front/v1"}]})
 # The end-to-end tests' configuration, with the talker's prompt named as config.yaml names it.
 TALKER_CONFIG = replace(CASCADE_TEST_CONFIG, prompt="generic")
@@ -57,7 +57,7 @@ def members(protocol) -> set[str]:
 
 
 class FakeCatalog:
-    """The example's catalog as the root reads it once: models by slot, services by slot, talker prompts by profile."""
+    """The example's catalog as the root reads it once: models by slot and services by slot."""
 
     def __init__(self, recipe=LOCAL):
         self.recipe = recipe
@@ -70,9 +70,6 @@ class FakeCatalog:
     def service(self, slot):
         self.asked.append(("service", slot))
         return {"server": self.recipe[slot], "voice_id": "Magpie-Multilingual.EN-US.Aria"}
-
-    def prompt(self, profile):
-        return f"The {profile} prompt."
 
 
 def session(**changes) -> SessionConfig:
@@ -216,30 +213,30 @@ class FromConfigTests(unittest.TestCase):
         self.assertEqual(tts.call_args.args[0], {"tts_synthesis_mode": "stitched"})
         self.assertIsInstance(adapter.speech, Stitched)
 
-    def test_a_session_without_instructions_or_with_blank_ones_gets_the_profiles_talker(self):
+    def test_a_session_without_instructions_or_with_blank_ones_gets_the_configured_talker_entry(self):
         for blank in (None, "", " ", "\n\t \n"):
             with self.subTest(instructions=blank):
-                adapter, catalog, _, _ = self.build(session(instructions=blank))
-                self.assertEqual(adapter.instructions, catalog.prompt("generic"))
+                adapter, _, _, _ = self.build(session(instructions=blank))
+                self.assertEqual(adapter.instructions, adapter.prompts.text("Talker", "generic"))
         adapter, _, _, _ = self.build(session(instructions="  Be brief.\n"))
         self.assertEqual(adapter.instructions, "  Be brief.\n")  # the client's own text, word for word
 
-    def test_the_shipped_default_is_the_domain_free_generic_profiles_talker_as_written(self):
+    def test_the_shipped_default_is_the_domain_free_generic_talker_as_written(self):
         settings = CascadeAdapterSettings.parse(SHIPPED_BLOCK)
         with (
             patch("examples.frontend_backend_live.adapter.adapter.build_stt"),
             patch("examples.frontend_backend_live.adapter.adapter.build_tts"),
         ):
             adapter = CascadeAdapter.from_config(session(), "websocket", None, settings, SHIPPED_CATALOG)
-        profile = get_profile(settings.live.prompt)
-        self.assertTrue(profile.internal)  # the repository UI's prompt list leaves it out
-        self.assertEqual(adapter.instructions, profile.prompt("talker"))  # as written: no channel context follows
-        for cafe in ("Bluebird", "Remy", get_profile("cafe").prompt("channel")):
+        prompts = adapter.prompts
+        self.assertIn(settings.live.prompt, prompts.agent_prompts["Talker"])  # read-only in the UI, never selected
+        self.assertEqual(adapter.instructions, prompts.text("Talker", "generic"))  # as written: no channel context
+        for cafe in ("Bluebird", "Remy", prompts.text("Channel", "cafe")):
             self.assertNotIn(cafe, adapter.instructions)
 
     def test_describe_is_the_adapters_half_of_info_with_no_key(self):
         info = CascadeAdapter.describe(TALKER_SETTINGS, FakeCatalog())
-        self.assertEqual(set(info), {"frontend", "prompt_version", "speech"})
+        self.assertEqual(set(info), {"frontend", "speech"})
         self.assertEqual(
             info["frontend"],
             {
@@ -358,17 +355,16 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
             live_config=TALKER_CONFIG,
             frontend_endpoint=ModelEndpoint(model="talker-model", base_url="http://talker"),
             instructions="Be brief.",
+            prompts=load_prompts(),
             stt=None,
             tts=None,
         )
         adapter.delegation = SimpleNamespace(reports_events=reports_events)
         frontend = SimpleNamespace(name="chat-completions", reply_format="Reply in JSON.")
         prompts = SimpleNamespace(
-            name="default",
             frame_before="Before.",
             frame_after="After.",
             routing="Route.",
-            actions=("speak", "delegate"),
             call_hints=SimpleNamespace(talker=""),
             runtime_label="Runtime:",
             decision_cue="Decide.",
@@ -390,10 +386,10 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             history["frontend"]["prompt"],
             [
-                {"source": "prompt set default: the voice's role", "text": "Before."},
+                {"source": "agent_prompts.Cascade.frame_before", "text": "Before."},
                 {"source": "session.instructions", "text": "Be brief."},
-                {"source": "prompt set default: how the instructions apply", "text": "After."},
-                {"source": "prompt set default: routing rules", "text": "Route."},
+                {"source": "agent_prompts.Cascade.frame_after", "text": "After."},
+                {"source": "agent_prompts.Cascade.routing", "text": "Route."},
                 {"source": "reply format (chat-completions frontend)", "text": "Reply in JSON."},
                 {"source": "runtime data, after the conversation", "text": "Runtime:\nWork.\n\nDecide."},
             ],
@@ -408,11 +404,11 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
         runtime = {"source": "runtime data, after the conversation", "text": "Runtime:\nDecide."}  # no work line
         self.assertEqual(history["frontend"]["prompt"][-1], runtime)
 
-    async def test_blank_instructions_show_as_the_profiles_talker_that_replaced_them(self):
+    async def test_blank_instructions_show_as_the_talker_entry_that_replaced_them(self):
         adapter = self.adapter(reports_events=True)
         adapter.config = session(instructions=" \n")
         prompt = (await adapter.history())["frontend"]["prompt"]
-        self.assertEqual(prompt[1], {"source": f"prompts/{TALKER_CONFIG.prompt}/talker.yaml", "text": "Be brief."})
+        self.assertEqual(prompt[1], {"source": f"agent_prompts.Talker.{TALKER_CONFIG.prompt}", "text": "Be brief."})
 
     async def test_nothing_before_the_start(self):
         adapter = self.adapter(reports_events=True)

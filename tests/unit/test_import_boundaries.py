@@ -44,7 +44,7 @@ GROUPS = {
     "live.media": "live.media",
     "live.extras": "live.extras",
     "live.mount": "live.mount",
-    # The example package is the frontend adapter (adapter/, cascade/, media/, models/, prompts/, config_manager/),
+    # The example package is the frontend adapter (adapter/, cascade/, media/, models/, prompts.py, config_manager/),
     # except its two composition roots.
     FBL: ADAPTER,
     f"{FBL}.factory": ROOT,

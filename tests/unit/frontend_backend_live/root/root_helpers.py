@@ -72,10 +72,7 @@ class StubAdapter:
     @classmethod
     def describe(cls, settings, catalog) -> dict:
         endpoint = catalog.model("llm")
-        return {
-            "frontend": {"provider": "stub-provider", "slot": "llm", "model": endpoint.model, "prompt": "generic"},
-            "prompt_version": "default",
-        }
+        return {"frontend": {"provider": "stub-provider", "slot": "llm", "model": endpoint.model, "prompt": "generic"}}
 
     @classmethod
     def readiness(cls, settings, catalog) -> StubReadiness:

@@ -24,7 +24,7 @@ from examples.frontend_backend_live.cascade.delegations import DelegationReader
 from examples.frontend_backend_live.cascade.display import NullDisplay
 from examples.frontend_backend_live.cascade.floor import Floor
 from examples.frontend_backend_live.cascade.heard_log import HeardLog
-from examples.frontend_backend_live.cascade.lines import FixedLines, catalog_lines
+from examples.frontend_backend_live.cascade.lines import FixedLines
 from examples.frontend_backend_live.cascade.memory import TalkerMemory, TurnBuffer
 from examples.frontend_backend_live.cascade.ports import DisplaySink
 from examples.frontend_backend_live.cascade.presenter import Presenter
@@ -62,7 +62,7 @@ class CascadeSession:
         observe: Observe = log_observation,
         display: DisplaySink | None = None,
         settings: CascadeSettings | None = None,
-        lines: FixedLines | None = None,
+        lines: FixedLines,
         reports_playout: bool = False,
         reports_sentences: bool = False,
         clock: Callable[[], float] = time.monotonic,
@@ -80,14 +80,14 @@ class CascadeSession:
             observe: Optional ``observe(kind, **fields)`` hook for traces.
             display: Where the display part of each delegation goes; nothing is shown by default.
             settings: The cascade's settings; by default read from ``config``.
-            lines: The voice's fixed lines; by default the example's shared lines (``prompts/shared/lines.yaml``).
+            lines: The voice's fixed lines, from the session's read of the example's prompt file.
             reports_playout: Whether the host reports each line's playout to :attr:`playout`.
             reports_sentences: Whether that playout reports each sentence's words (per-sentence speech).
             clock: The call's one clock.
         """
         self.agent, self.config, self.observe, self.delegation = agent, config, observe, delegation
         self.settings = settings or CascadeSettings.from_live_config(config)
-        self.lines = lines or catalog_lines()
+        self.lines = lines
         self.display = display or NullDisplay()
         self.buffer = conversation
         settings = self.settings
