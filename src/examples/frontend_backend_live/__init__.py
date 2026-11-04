@@ -31,4 +31,5 @@ Packages, one per responsibility:
 * ``config_manager``: ``config.yaml`` loading and validation.
 * ``delegation_core``: the delegation core, a package of its own that only the two composition roots build; it has its
   own settings file (``core.yaml``), tests and ``README.md``.
+* ``parked``: code that nothing imports, runs or tests.
 """

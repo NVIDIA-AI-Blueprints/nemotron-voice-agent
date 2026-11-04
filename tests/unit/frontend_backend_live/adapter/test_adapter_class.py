@@ -154,7 +154,7 @@ class SettingsTests(unittest.TestCase):
             CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "delegation": {"result_wording": "poetic"}})
 
     def test_a_provider_the_table_does_not_name_is_refused_when_the_settings_are_read(self):
-        # No table names a realtime frontend, so the read refuses it as it refuses a typo.
+        # The parked Realtime frontend is in no table, so the read refuses it as it refuses a typo.
         with self.assertRaises(ValueError) as refused:
             CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "provider": "realtime"})
         known = ", ".join(sorted(FRONTENDS))
