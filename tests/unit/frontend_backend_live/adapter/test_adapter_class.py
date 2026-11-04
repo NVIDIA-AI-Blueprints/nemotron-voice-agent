@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 
 from examples.frontend_backend_live.adapter import readiness as readiness_module
 from examples.frontend_backend_live.adapter.adapter import (
@@ -29,7 +30,7 @@ from examples.frontend_backend_live.cascade.talker.talker import Talker
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, ConfigError, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
 from examples.frontend_backend_live.media.services import PerSentence, Stitched
-from examples.frontend_backend_live.media.turns import FinalizeAtVerdictUserTurnStopStrategy, Shared, Silence, SmartTurn
+from examples.frontend_backend_live.media.turns import Shared, Silence, SmartTurn
 from examples.frontend_backend_live.models import FRONTENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts.catalog import get_profile
@@ -189,7 +190,7 @@ class FromConfigTests(unittest.TestCase):
         self.assertEqual(adapter.instructions, "Be brief.")
         stt.assert_called_once_with(voice, catalog.service("asr"), TALKER_SETTINGS.turn_end)
         (stop,) = adapter.user_params.user_turn_strategies.stop  # the same turn end's turn detection
-        self.assertIsInstance(stop, FinalizeAtVerdictUserTurnStopStrategy)
+        self.assertIsInstance(stop, TurnAnalyzerUserTurnStopStrategy)
         self.assertEqual(adapter.user_params.user_mute_strategies, [])  # a live session has no welcome to wait for
         tts.assert_called_once_with({**voice, "tts_synthesis_mode": "per_sentence"}, catalog.service("tts"))
         self.assertIsInstance(adapter.speech, PerSentence)

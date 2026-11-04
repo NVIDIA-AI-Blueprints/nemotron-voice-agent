@@ -10,7 +10,7 @@ between the Live protocol and the voice agent, and the repository UI bot (``pipe
 * ``processor``: ``LiveTalkerProcessor``, which takes the LLM service's place and binds the cascade to the pipeline.
 * ``services``: building speech-to-text and text-to-speech, and the TTS modes, which keep each line's text behind its
   audio.
-* ``turns``: the turn ends, which say how the caller's turn ends and when the speech-to-text finalizes what it heard.
+* ``turns``: the turn ends, which say how the caller's turn ends.
 * ``playout``: the playout tracker, which reports what each line really played, and ``SpeechPlayout``, which wires it
   to the cascade of each host.
 * ``preroll``: the reply-audio pre-roll, which the cascade adapter places before a live session's audio output.

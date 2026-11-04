@@ -163,7 +163,7 @@ class CascadeAdapter(PipelineHost):
 
         The session's voice reaches the text-to-speech, and the TTS mode its synthesis mode, through the services'
         body overrides. The turn end (``speech.turn_end``) builds the speech-to-text and the user aggregator's
-        settings, which must agree on when the speech-to-text finalizes. Nothing connects until :meth:`start`.
+        settings, which share its VAD stop. Nothing connects until :meth:`start`.
         """
         live = settings.live
         voice = session.audio.output.voice

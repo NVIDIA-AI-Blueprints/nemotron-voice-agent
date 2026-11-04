@@ -219,7 +219,7 @@ class TurnEndTests(BotCase):
         await self.run_bot(self.client_ready)
         (turn_end,) = self.turn_ends
         self.assertIs(turn_end.speech, self.root.cascade.speech)
-        self.assertIs(self.stt_turn_end, turn_end)  # the speech-to-text finalizes as the turn detection needs
+        self.assertIs(self.stt_turn_end, turn_end)  # one turn end builds both
         self.assertEqual(self.aggregator_welcome, [True])
 
 
