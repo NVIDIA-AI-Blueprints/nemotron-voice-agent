@@ -41,7 +41,7 @@ class PromptTextTests(unittest.TestCase):
     DIGESTS = {
         "frame_before": "04cc4b783a0d3e808443a0e2b2afceab6f676c8839670590131c4d6fe1b299ef",
         "frame_after": "f22ef20bf758d65c42891d0499ad63ebffd3076651ee094dad4dd13391dfeafb",
-        "routing": "f0a878c10eb5fd751f1c12d44834b22bb6ca0fd45db48cccbe5ec41d034128f7",
+        "routing": "5d7370e680037c37eaa3d4e148bfc97ed31bd0cbed285b4d232001776ae08fb1",
         "commentary": "146751021894e1c4fe0087a48c765134e5845b5f0ecc9beb8eedf3b0d220716a",
         "answer": "af7ebcc6e7569591135df28b5ce7be26d88a5cfa050aa4fbd9b6db0f5ba9e364",
         "progress": "502d51902e0db2546702c47fc78cb60bf4f1ab4fbf195d3c51058f29deb3b6cc",
@@ -73,7 +73,7 @@ class PromptTextTests(unittest.TestCase):
         "transcript.unheard": "b2175e0a06996e03b87589c32fa1de8395d5f012b0bf785af0ede0455ae6fd70",
         "writer_notes.told": "ee6fad0e114c43a91e4e5f22cfe201320c4b7d73ccdfe30d2b6d33ca1651105b",
         "writer_notes.newer": "29a2291222b78f4f9a06efa65e90a834e0073da9df63ec50246062417a30638b",
-        "call_hints.talker": "074d56d95d3cde0a0bc7f690f438343d98f4c4c303b3dcb22692631931116d19",
+        "call_hints.talker": "582d119f7e7d2f138fbf2144634b69dc119412c19d8f565324f6a022c773c139",
         "call_hints.answer": "67aa75610fa6ccf2e908f271b04abe30ac4a3338e1c136c5e2de9566ae659fda",
         "call_hints.normalizer": "98cd8284427cee7816dcb4732c12bb6a1c2cadcb4fdcf5ce3eb53a72c4d5557b",
         "call_hints.progress": "69df152fbd4e8e5fa457d37eb6ebf9bbef3447bafb9a00b842b70fbb9a51872a",
@@ -83,7 +83,7 @@ class PromptTextTests(unittest.TestCase):
         # The routing decision's runtime data, after the conversation: its label, then the work line, the newest turn
         # and the cue.
         "runtime_label": "0bc1ff415b7cb0d73d1ffeec3d1676480e33fe1d61c2749cd7ebd961e0cfd41a",
-        "decision_cue": "b0b4d530de884f277e65448ce86b4004729bec9706501afed6cec521c76d2ccb",
+        "decision_cue": "fcbc38c2edc8e5e57d3fbb8d9ad5f60d84b3572d0b9ff6b428789d27dfd303c4",
         "newest_turn": "10553a9d1f8dbc67a1a3046ffa6ebd130dec0a409185960cb45c803f42510acf",
     }
 

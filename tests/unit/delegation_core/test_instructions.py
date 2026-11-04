@@ -67,9 +67,10 @@ class CallerNoteTests(unittest.TestCase):
         note = " ".join(TEXTS.caller_notes["default"].split())
         for line in (
             "## Working with the caller",
-            "a fact about the caller's situation that no tool shows",
-            "ask for it in one short question early",
-            "Do not hand the caller off or give up while that question is unasked",
+            "Some causes of a problem depend on the caller's situation, which no tool shows.",
+            "right after you have identified the caller and before any checks",
+            "whether they are at home or travelling right now",
+            "Do not hand the caller off or give up while such a question is unasked.",
             "Before you hand the caller off, check the steps your instructions give for this problem",
             "A refusal your instructions require is not a problem to work around.",
             "Before any change the caller cannot easily undo, describe the exact change",
