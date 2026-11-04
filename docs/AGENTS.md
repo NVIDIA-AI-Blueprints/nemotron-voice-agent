@@ -114,10 +114,9 @@ Style Guide above.
 - Keep `docs/design/architecture.md` aligned with the Frontend/Backend Live
   example's ports (`src/gateways/live/ports.py`,
   `src/examples/frontend_backend_live/delegation_core/backend/port.py`), its
-  tables of implementations, and its configuration files, and keep the READMEs
-  of `src/gateways/live/` and
-  `src/examples/frontend_backend_live/delegation_core/` aligned with their
-  packages.
+  tables of implementations, and its configuration files, and keep the README
+  of `src/examples/frontend_backend_live/delegation_core/` aligned with its
+  package.
 
 ## Documentation Sources and Maintenance
 

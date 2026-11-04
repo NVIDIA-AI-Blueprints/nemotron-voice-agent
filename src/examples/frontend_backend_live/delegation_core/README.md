@@ -33,8 +33,8 @@ and keeps nothing.
 
 In the [Frontend/Backend Live example](../README.md), the composition root builds one
 core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the
-gateway's [server delegation](../../../gateways/live/README.md#server-delegation), in a conversation of its own. A
-client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one
+gateway's [server delegation](../../../../docs/how-to/use-live-gateway.md#server-delegation), in a conversation of its
+own. A client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one
 stateless request. The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml`,
 which sets the cafe's `backend.prompt` and `backend.tools`.
 
@@ -92,7 +92,7 @@ adapter's package only when a core is built with it. The following table lists t
 | `harness` | [`backend/harness/`](backend/harness/) | An external agent that its operator deploys, such as Hermes, over the Agent Client Protocol (ACP). | `core.harness.yaml` |
 
 To deploy Hermes or connect another ACP agent, refer to
-[Connect Your Own Harness](../../../../docs/design/architecture.md#connect-your-own-harness). To add a backend adapter,
+[Connect an Agent Harness](../../../../docs/how-to/connect-an-agent-harness.md). To add a backend adapter,
 a model provider, or a tool source, refer to
 [Extension Recipes](../../../../docs/design/architecture.md#extension-recipes).
 
