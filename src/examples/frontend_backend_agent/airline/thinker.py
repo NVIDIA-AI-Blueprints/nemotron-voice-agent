@@ -14,7 +14,11 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_agent.airline.backend import BookingBackend
-from examples.frontend_backend_agent.airline.booking_tool import BookingTool, booking_outcome_unknown
+from examples.frontend_backend_agent.airline.booking_tool import (
+    BookingTool,
+    booking_dropped_unverified,
+    booking_outcome_unknown,
+)
 from examples.frontend_backend_agent.airline.flight_search import flight_search
 from examples.frontend_backend_agent.airline.plan_parsing import (
     combine_parallel_payloads,
@@ -61,6 +65,7 @@ class ThinkerBackend:
         self._planner = planner
         self._tool_delay_seconds = tool_delay_seconds
         self._tool_delay_min_seconds = tool_delay_min_seconds
+        self._cancel_warning: dict[str, Any] | None = None
 
     async def call(
         self,
@@ -116,24 +121,31 @@ class ThinkerBackend:
         return True
 
     def cancel_pending_booking(self) -> bool:
-        """Clear pending search/booking context if one exists."""
+        """Clear pending search/booking context if one exists.
+
+        An unverified booking attempt is dropped too, so the caller is not stuck
+        reconfirming a booking that may never have reached the server. The next
+        ``cancellation_warning`` call reports that the outcome is unknown.
+        """
         has_pending_work = (
             bool(self.state.search_context)
             or bool(self.state.search_results)
             or self.state.booking_draft is not None
+            or self.state.booking_attempt is not None
             or self.state.waiting_for_preferences
             or self.state.waiting_for_confirmation
         )
+        if self.state.booking_attempt is not None:
+            self._cancel_warning = booking_dropped_unverified()
+            self.state.booking_attempt = None
         if has_pending_work:
-            if self.state.booking_attempt is not None:
-                self.state.reset_booking()
-            else:
-                self.state.reset_search_and_booking()
+            self.state.reset_search_and_booking()
         return has_pending_work
 
     def cancellation_warning(self) -> dict[str, Any] | None:
-        """Warn when stopping local work cannot undo a submitted booking."""
-        return booking_outcome_unknown() if self.state.booking_attempt is not None else None
+        """Return, once, the warning for a booking dropped without a receipt."""
+        warning, self._cancel_warning = self._cancel_warning, None
+        return warning
 
     async def _run_call(self, call_id: str, query: str, slots: dict[str, Any]) -> dict[str, Any]:
         """Dispatch the query to internal Thinker tools."""
@@ -239,6 +251,7 @@ class ThinkerBackend:
             return _tool_exception_hint(tool_call, exc)
 
     async def _dispatch_tool_call(self, slots: dict[str, Any], tool_call: dict[str, Any]) -> dict[str, Any]:
+        """Run one planned tool; block new searches while a submitted booking is unverified."""
         tool_name = str(tool_call.get("tool", "") or "").strip()
         planned_params = tool_call.get("params") if isinstance(tool_call.get("params"), dict) else {}
         planned_slots = {**slots, **planned_params}
@@ -260,6 +273,7 @@ class ThinkerBackend:
         )
 
     def _planner_state(self) -> dict[str, Any]:
+        """Summarize session state for the planner, exposing an unverified attempt as pending confirmation."""
         draft = self.state.booking_attempt or self.state.booking_draft
         return {
             "search_context": self.state.search_context,

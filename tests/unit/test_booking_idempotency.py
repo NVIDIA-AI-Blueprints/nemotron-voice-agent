@@ -3,6 +3,7 @@
 
 # ruff: noqa: D100, D101, D102
 
+import socket
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -194,3 +195,12 @@ class HTTPBookingBackendIdempotencyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["pnr"], "ABC123")
         self.assertEqual([request.headers["Idempotency-Key"] for request in requests], ["same-key", "same-key"])
         self.assertEqual(requests[0].content, requests[1].content)
+
+    async def test_closed_port_raises_connect_error(self):
+        # BookingTool treats ConnectError as "never reached the server"; keep that contract true.
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        backend = HTTPBookingBackend(f"http://127.0.0.1:{port}")
+        with self.assertRaises(httpx.ConnectError):
+            await backend.create_booking(passenger_name="Ada", flight=_FLIGHT, idempotency_key="unreachable")

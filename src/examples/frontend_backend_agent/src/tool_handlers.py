@@ -181,6 +181,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
         await params.result_callback(payload)
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
+        """Stop local Thinker work and say whether a submitted booking may already exist."""
         nonlocal consecutive_planner_errors
         consecutive_planner_errors = 0
         cancelled = thinker.cancel_active("user_cancelled")
