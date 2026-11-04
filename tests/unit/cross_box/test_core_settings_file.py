@@ -7,6 +7,7 @@
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from delegation_core.backend.agent import AgentSettings
 from delegation_core.backend.harness import HarnessSettings
@@ -41,11 +42,15 @@ class CoreSettingsFileTests(unittest.TestCase):
             with self.subTest(profile=path.name):
                 self.assertIn("cancel_work", CoreSettings.load(path).delegation.work_tools)
 
-    def test_the_benchmark_profile_runs_one_task_and_one_harness_session_at_a_time(self):
+    def test_a_profile_runs_one_task_and_one_harness_session_at_a_time(self):
         # An eval task is one call: the agent's and the harness's tasks run one at a time, placed by the steer rule, and
         # the harness hands each answered task's session to the next task.
         shipped = self.settings.backend.blocks
-        bench = CoreSettings.load(CORE_YAML.with_name("core.bench.yaml")).backend.blocks
+        blocks = "{llm-agent: {max_running: 1}, harness: {max_running: 1, session: call}}"
+        with TemporaryDirectory() as folder:
+            profile = Path(folder) / "core.custom.yaml"
+            profile.write_text(f"extends: {CORE_YAML}\nbackend: {blocks}\n", encoding="utf-8")
+            bench = CoreSettings.load(profile).backend.blocks
         self.assertEqual(dict(bench["llm-agent"]), {**shipped["llm-agent"], "max_running": 1})
         self.assertEqual(dict(bench["harness"]), {**shipped["harness"], "max_running": 1, "session": "call"})
         self.assertEqual(AgentSettings.parse(bench["llm-agent"]).max_running, 1)

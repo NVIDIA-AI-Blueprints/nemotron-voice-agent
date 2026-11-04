@@ -21,7 +21,6 @@ from examples.frontend_backend_live.config_manager.schema import (
 )
 from examples.frontend_backend_live.prompts.catalog import get_profile
 
-BENCH_PATH = CONFIG_PATH.with_name("config.bench.yaml")
 CASCADE = {"provider": "chat-completions", "slot": "llm"}
 
 
@@ -71,8 +70,11 @@ class ShippedFileTests(unittest.TestCase):
         self.assertLess(shipped, deadline)
         self.assertEqual(DelegationConfig().app_wait_seconds, shipped)  # the schema's default is the shipped value
 
-    def test_the_bench_profile_extends_the_file_without_the_app_wait_line_or_progress_lines(self):
-        shipped, bench = cascade_of(load_live_config(CONFIG_PATH)), cascade_of(load_live_config(BENCH_PATH))
+    def test_a_profile_extends_the_file_without_the_app_wait_line_or_progress_lines(self):
+        quiet = "{cascade: {delegation: {app_wait_seconds: null, progress_after_seconds: null}}}"
+        with TemporaryDirectory() as folder:
+            profile = write(folder, "config.custom.yaml", f"extends: {CONFIG_PATH}\nfrontend: {quiet}\n")
+            shipped, bench = cascade_of(load_live_config(CONFIG_PATH)), cascade_of(load_live_config(profile))
         self.assertIsNone(bench.delegation.app_wait_seconds)
         self.assertIsNone(bench.delegation.progress_after_seconds)
         self.assertEqual(bench.delegation.result_wording, shipped.delegation.result_wording)

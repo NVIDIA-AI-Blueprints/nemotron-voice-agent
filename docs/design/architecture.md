@@ -554,7 +554,7 @@ session gets an `LlmAdapter` with one model provider per model. `LlmRun` runs on
 
 A model that the catalog does not list follows `backend.llm.unlisted_models`. With `report`, the default, the core
 refuses the model, and the gateway's settings check reports it to the client as the official nonfatal
-`responses_validation_failed`. With `fallback`, which only the benchmark profile sets, it runs on the configured
+`responses_validation_failed`. With `fallback`, it runs on the configured
 endpoint under its own name, and the server logs it.
 
 ### The Backend LLM Agent
@@ -839,10 +839,8 @@ The following table lists the files in the example's folder:
 | File | Holds | Selected by |
 | --- | --- | --- |
 | [`config.yaml`](../../src/examples/frontend_backend_live/config.yaml) | The frontend only: `frontend.adapter`, each adapter's block (`frontend.cascade`), and `ui_bot.core_config` | The default; `LIVE_CONFIG_PATH` names another file |
-| [`config.bench.yaml`](../../src/examples/frontend_backend_live/config.bench.yaml) | `config.yaml` with no app-wait line and no spoken progress lines, for a benchmark client | `LIVE_CONFIG_PATH` |
 | [`core.yaml`](../../src/examples/frontend_backend_live/core.yaml) | The delegation core: `delegation` (the IM's settings), `texts` (the lines that the IM and the backend write or add to a model's input; a harness words its own prompts in `backend.harness.prompts`), and `backend` (the adapter, the default model's slot and prompt, the tool sources, and each adapter's block) | The default; `CORE_CONFIG_PATH` names another file |
 | [`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) | `core.yaml` with the envelope, for the repository UI bot; each bot session's prompt profile sets `backend.prompt` and `backend.tools` over it | `ui_bot.core_config` in `config.yaml` |
-| [`core.bench.yaml`](../../src/examples/frontend_backend_live/core.bench.yaml) | `core.yaml` with no client-tool deadline, no progress notes, plain results, `unlisted_models: fallback`, and one task at a time (`max_running: 1`) for the backend LLM agent and the harness, the harness carrying one session through the call (`session: call`), for a benchmark client | `CORE_CONFIG_PATH` |
 | [`core.agent.yaml`](../../src/examples/frontend_backend_live/core.agent.yaml) | `core.yaml` with `backend.adapter: llm-agent` and the envelope | `CORE_CONFIG_PATH` |
 | [`core.harness.yaml`](../../src/examples/frontend_backend_live/core.harness.yaml) | `core.agent.yaml` with `backend.adapter: harness`. The `backend.harness` block of `core.yaml` names the Hermes agent class, starts `hermes acp` over stdio, and binds the bridge on `127.0.0.1:8791` | `CORE_CONFIG_PATH` |
 

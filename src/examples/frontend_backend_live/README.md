@@ -96,7 +96,6 @@ A profile is a file that names the file it builds on (`extends: core.yaml`) and 
 | [`core.agent.yaml`](core.agent.yaml) | The backend LLM agent (`backend.adapter: llm-agent`). |
 | [`core.harness.yaml`](core.harness.yaml) | The harness (`backend.adapter: harness`), connected to an agent that you deploy. |
 | [`core.ui-bot.yaml`](core.ui-bot.yaml) | The repository UI bot: a display part for the task cards. Each bot session's prompt profile sets its backend prompt and server tools over this file's. `ui_bot.core_config` in `config.yaml` names it. |
-| [`config.bench.yaml`](config.bench.yaml), [`core.bench.yaml`](core.bench.yaml) | A benchmark client: no app-wait or progress lines, no client-tool deadline, plain results, and one backend task and session at a time for each call. |
 
 In `config.yaml`, `frontend.cascade` sets the talker's and the writer's model and prompt, and the cascade's behavior. The following excerpt shows the keys that you are most likely to change:
 
