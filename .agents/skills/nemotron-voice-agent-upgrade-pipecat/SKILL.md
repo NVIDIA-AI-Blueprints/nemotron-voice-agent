@@ -69,9 +69,9 @@ signatures, trust the actual installed or new source. Use the MCP for intent and
 - **Discovery-first**: never assume module paths, frame names, service constructors, or processor APIs. Scan
   the installed package and new source. Pipecat reorganizes its module tree between versions.
 - **Generic**: works for any transition. Discover changes and hardcode nothing.
-- **Examples are the unit of work**: 5 examples (`generic`, `multilingual`, `omni_assistant`,
-  `omni_assistant_subagents`, `frontend_backend_agent`), each with its own `pipeline.py`. One agent per example + one
-  cross-cutting agent for `src/examples/shared/` and `src/server.py`.
+- **Examples are the unit of work**: 6 examples (`generic`, `multilingual`, `omni_assistant`,
+  `omni_assistant_subagents`, `frontend_backend_agent`, `frontend_backend_live`), each with its own `pipeline.py`. One
+  agent per example + one cross-cutting agent for `src/examples/shared/` and `src/server.py`.
 - **Custom service subclasses require parent-API review**: explicitly inspect
   `src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and
   `src/examples/omni_assistant/nvidia_omni_multimodal_service.py`, plus the downstream
