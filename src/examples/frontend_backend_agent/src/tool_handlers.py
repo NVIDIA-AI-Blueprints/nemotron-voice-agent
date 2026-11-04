@@ -197,7 +197,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
             "context": "cancel_backend",
         }
-        warning = getattr(thinker, "cancellation_warning", lambda: None)()
+        warning = thinker.cancellation_warning()
         if warning is not None:
             payload = {**warning, "context": "cancel_backend"}
         if _direct_tool_response_enabled():
@@ -205,10 +205,8 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
         else:
             await params.result_callback(payload)
-        # Clear only after delivery: a barge-in that cancels this handler keeps the
-        # warning for the next cancel_backend call.
         if warning is not None:
-            getattr(thinker, "acknowledge_cancellation_warning", lambda: None)()
+            thinker.acknowledge_cancellation_warning()
 
     return {"call_backend": handle_call_backend, "cancel_backend": handle_cancel_backend}
 

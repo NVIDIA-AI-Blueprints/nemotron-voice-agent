@@ -196,7 +196,6 @@ class BookingTool:
                 idempotency_key=draft.idempotency_key,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            # The request never reached the booking server, so no PNR exists.
             logger.warning(f"booking backend unreachable while creating PNR: {exc}")
             self._state.booking_attempt = None
             return response_hint(

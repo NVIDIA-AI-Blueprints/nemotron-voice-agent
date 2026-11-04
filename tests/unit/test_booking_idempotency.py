@@ -197,7 +197,6 @@ class HTTPBookingBackendIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests[0].content, requests[1].content)
 
     async def test_closed_port_raises_connect_error(self):
-        # BookingTool treats ConnectError as "never reached the server"; keep that contract true.
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]

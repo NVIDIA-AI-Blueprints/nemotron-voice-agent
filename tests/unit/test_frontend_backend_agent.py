@@ -318,6 +318,12 @@ class _PlannerErrorThinker:
     def cancel_pending_booking(self) -> bool:
         return False
 
+    def cancellation_warning(self) -> dict[str, Any] | None:
+        return None
+
+    def acknowledge_cancellation_warning(self) -> None:
+        pass
+
 
 class _PlannerErrorWithTerminalPathsThinker(_PlannerErrorThinker):
     async def call(self, query: str, slots: dict[str, Any] | None = None, *, on_started=None) -> dict[str, Any]:
