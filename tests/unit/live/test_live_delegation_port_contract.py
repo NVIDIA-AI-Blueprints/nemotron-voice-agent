@@ -3,20 +3,20 @@
 
 # ruff: noqa: D101, D102, D103, D105, D107
 
-"""The gateway's two delegation parts against ``live.ports.DelegationPort``.
+"""The gateway's two delegation parts against ``gateways.live.ports.DelegationPort``.
 
 Both parts keep the contract; the server delegation refuses a delegation made before ``listen()``.
 """
 
 import unittest
 
-from live.client_delegation import ClientDelegation
-from live.server_delegation import ServerDelegation
+from gateways.live.client_delegation import ClientDelegation
+from gateways.live.server_delegation import ServerDelegation
 from tests.unit.contracts.delegation_port import DelegationPortContract
 
 
 class View:
-    """The session's delegation view (``live.ports.DelegationView``): clock, settings, events and refusals."""
+    """The session's delegation view (``gateways.live.ports.DelegationView``): clock, settings, events and refusals."""
 
     id, input_ms, responses, acknowledgement_delay_ms = "live_test", 0, None, 0
 

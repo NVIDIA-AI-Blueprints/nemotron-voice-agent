@@ -24,7 +24,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 # What the rules cover, relative to src.
-WALKED = ("live", "examples/frontend_backend_live", "server.py")
+WALKED = ("gateways/live", "examples/frontend_backend_live", "server.py")
 
 # ----------------------------------------------------------------------------------------------------- groups
 ADAPTER = "adapter"
@@ -32,20 +32,22 @@ ROOT = "composition root"
 FBL = "examples.frontend_backend_live"
 # The delegation core's package, inside the example's folder; its groups keep the core's own names.
 CORE = f"{FBL}.delegation_core"
+# The Live gateway's package, under src/gateways/; its groups keep the gateway's own names.
+LIVE = "gateways.live"
 
 GROUPS = {
     # The gateway. "live" alone is the package's docstring, and any module no other row places.
-    "live": "live",
-    "live.protocol": "live.protocol",
-    "live.events": "live.events",
-    "live.ports": "live.ports",
-    "live.server_delegation": "live.server_delegation",
-    "live.client_delegation": "live.client_delegation",
-    "live.session": "live.session",
-    "live.gateway": "live.gateway",
-    "live.media": "live.media",
-    "live.extras": "live.extras",
-    "live.mount": "live.mount",
+    LIVE: "live",
+    f"{LIVE}.protocol": "live.protocol",
+    f"{LIVE}.events": "live.events",
+    f"{LIVE}.ports": "live.ports",
+    f"{LIVE}.server_delegation": "live.server_delegation",
+    f"{LIVE}.client_delegation": "live.client_delegation",
+    f"{LIVE}.session": "live.session",
+    f"{LIVE}.gateway": "live.gateway",
+    f"{LIVE}.media": "live.media",
+    f"{LIVE}.extras": "live.extras",
+    f"{LIVE}.mount": "live.mount",
     # The example package is the frontend adapter (adapter/, cascade/, media/, models/, prompts.py, config_manager/),
     # except its two composition roots and its delegation core.
     FBL: ADAPTER,
@@ -174,8 +176,8 @@ MAY_IMPORT = {
     "delegation_core.ids": frozenset(),
 }
 
-WEB_EDGES = ("live.gateway", "live.mount", "live.extras")
-CODEC = ("live.media.audio", "live.gateway.websocket")
+WEB_EDGES = (f"{LIVE}.gateway", f"{LIVE}.mount", f"{LIVE}.extras")
+CODEC = (f"{LIVE}.media.audio", f"{LIVE}.gateway.websocket")
 # Where each outside package may be imported. Composition roots are not checked.
 PACKAGE_RULES = {
     # The voice agent's speech pipeline (media/), the cascade adapter's Pipecat modules, and the WebRTC peer that the
@@ -183,8 +185,8 @@ PACKAGE_RULES = {
     "pipecat": (
         "examples.frontend_backend_live.media",
         "examples.frontend_backend_live.adapter",
-        "live.gateway.webrtc",
-        "live.media.connection",
+        f"{LIVE}.gateway.webrtc",
+        f"{LIVE}.media.connection",
     ),
     # The core's providers and the adapter's talker models.
     "openai": (f"{CORE}.backend.providers", f"{FBL}.models"),
@@ -206,7 +208,7 @@ PACKAGE_RULES = {
 # other stream is one that is no model provider's, listed here by module and receiver with the reason.
 ROUND_OWNER = f"{CORE}.backend"
 NOT_MODEL_STREAMS = {
-    ("live.gateway.security", "request"): "Starlette's Request.stream(): the HTTP request's body, read in chunks",
+    (f"{LIVE}.gateway.security", "request"): "Starlette's Request.stream(): the HTTP request's body, read in chunks",
     (f"{CORE}.api.service", "admission"): "Admission.stream: the response stream the IM gives a request",
     (f"{CORE}.api.service", "self"): "StatelessStream.stream: the response stream of a stateless request",
     (f"{CORE}.im.stream", "self"): "ResponseWriter.stream: the response stream the writer writes into",
@@ -593,7 +595,7 @@ class LayoutTests(RuleCase):
             f"{imp.where} imports {imp.imported}: the speech pipeline may not import the Live adapter or the gateway, "
             "nor the cascade the speech pipeline"
             for imp in all_imports()
-            if (within(imp.importer, media) and (within(imp.imported, adapter) or within(imp.imported, "live")))
+            if (within(imp.importer, media) and (within(imp.imported, adapter) or within(imp.imported, LIVE)))
             or (within(imp.importer, cascade) and within(imp.imported, media))
         ]
         self.assert_no_problems("The voice agent imports what hosts it:", problems)
@@ -627,7 +629,7 @@ class LayoutTests(RuleCase):
                 continue
             source = path.read_text(encoding="utf-8")
             for line, imported in imports_in(source, module, path.name == "__init__.py", walked_modules()):
-                if within(imported, "live") or within(imported, CORE):
+                if within(imported, LIVE) or within(imported, CORE):
                     problems.append(f"{path.relative_to(REPO)}:{line} imports {imported}")
         self.assert_no_problems("Modules outside the boxes that import the gateway or the core:", problems)
 
@@ -651,7 +653,7 @@ class TestModuleRuleTests(RuleCase):
 class WalkTests(RuleCase):
     def test_the_walk_reads_the_gateway_the_example_and_the_server(self):
         importers = {imp.importer for imp in all_imports()}
-        for module in ("live.session.session", f"{FBL}.pipeline", "server"):
+        for module in (f"{LIVE}.session.session", f"{FBL}.pipeline", "server"):
             self.assertIn(module, importers)
 
     def test_every_group_has_a_rule(self):
@@ -752,7 +754,7 @@ class StreamReferenceWalkerTests(unittest.TestCase):
 class RuleTests(unittest.TestCase):
     def test_a_module_belongs_to_the_group_of_its_longest_prefix(self):
         cases = {
-            "live.server_delegation.passthrough": "live.server_delegation",
+            f"{LIVE}.server_delegation.passthrough": "live.server_delegation",
             f"{CORE}.backend.port": "delegation_core.backend.port",
             f"{CORE}.backend.providers.chat_completions": "delegation_core.backend",
             f"{CORE}.backend.harness.acp.codec": "delegation_core.backend.harness",
@@ -805,10 +807,10 @@ class RuleTests(unittest.TestCase):
 
     def test_a_failure_names_the_file_the_line_the_module_and_both_groups(self):
         path = "src/examples/frontend_backend_live/cascade/turns.py"
-        imp = Import(path, 7, f"{FBL}.cascade.turns", "live.session.session")
+        imp = Import(path, 7, f"{FBL}.cascade.turns", f"{LIVE}.session.session")
         self.assertEqual(
             str(internal_violation(imp)),
-            f"{path}:7 imports live.session.session: group adapter may not import group live.session",
+            f"{path}:7 imports {LIVE}.session.session: group adapter may not import group live.session",
         )
         imp = Import(path, 3, f"{FBL}.cascade.turns", "pipecat.frames.frames")
         self.assertTrue(str(package_violation(imp)).startswith(f"{path}:3 imports pipecat.frames.frames: {FBL}"))
@@ -822,12 +824,12 @@ class RuleTests(unittest.TestCase):
             self.assertIsNotNone(package_violation(Import(path, 1, importer, "pipecat.frames.frames")), importer)
 
     def test_no_group_may_import_the_tests_not_even_a_root(self):
-        importers = ("server", f"{FBL}.factory", f"{FBL}.pipeline", "live.mount")
+        importers = ("server", f"{FBL}.factory", f"{FBL}.pipeline", f"{LIVE}.mount")
         for importer in importers:
             for imported in ("tests.unit.core_helpers", "tests.unit.live_helpers", "tests"):
                 imp = Import("src/x.py", 1, importer, imported)
                 self.assertIsNotNone(imports_the_tests(imp), (importer, imported))
-        for imported in ("live.protocol", "testsuite", "unittest.mock"):
+        for imported in (f"{LIVE}.protocol", "testsuite", "unittest.mock"):
             self.assertIsNone(imports_the_tests(Import("src/x.py", 1, f"{FBL}.factory", imported)), imported)
         imp = Import("src/server.py", 5, "server", "tests.unit.core_helpers")
         self.assertEqual(
@@ -850,8 +852,8 @@ class RuleTests(unittest.TestCase):
             "httpx",
         )
         refused_modules = (
-            "live.protocol",
-            "live.server_delegation",
+            f"{LIVE}.protocol",
+            f"{LIVE}.server_delegation",
             f"{FBL}.factory",
             "examples_registry",
             "utils",
@@ -867,8 +869,8 @@ class RuleTests(unittest.TestCase):
         for module in refused_modules:
             self.assertIsNotNone(core_test_violation(Import(path, 1, importer, module)), module)
         self.assertEqual(
-            str(core_test_violation(Import(path, 9, importer, "live.protocol"))),
-            f"{path}:9 imports live.protocol: the delegation core's tests may import only {CORE}, "
+            str(core_test_violation(Import(path, 9, importer, f"{LIVE}.protocol"))),
+            f"{path}:9 imports {LIVE}.protocol: the delegation core's tests may import only {CORE}, "
             "tests.unit.core_helpers, tests.unit.contracts, tests.unit.delegation_core, the standard library, openai "
             "and httpx",
         )

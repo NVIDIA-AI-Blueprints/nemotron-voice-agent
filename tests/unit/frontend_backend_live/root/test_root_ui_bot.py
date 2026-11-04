@@ -24,8 +24,8 @@ from examples.frontend_backend_live.media.services import LineTextHold
 from examples.frontend_backend_live.media.task_cards import RtviTaskCards
 from examples.frontend_backend_live.prompts import load_prompts
 from examples.shared.pipeline_utils import register_session_start_handlers
-from realtime.lifecycle import announce_response, finish_response
-from realtime.serializer import RealtimeFrameSerializer
+from gateways.realtime.lifecycle import announce_response, finish_response
+from gateways.realtime.serializer import RealtimeFrameSerializer
 from tests.unit.frontend_backend_live.root.root_helpers import CATALOG
 
 # The example's prompts.yaml as written, and the greeting its lines hold.

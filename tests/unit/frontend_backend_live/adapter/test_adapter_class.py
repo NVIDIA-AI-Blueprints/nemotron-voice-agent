@@ -35,8 +35,8 @@ from examples.frontend_backend_live.models import FRONTENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import load_prompts
 from examples.frontend_backend_live.tables import pick
-from live.ports import EXCHANGE_RATE, FrontendAdapter
-from live.protocol import SessionConfig
+from gateways.live.ports import EXCHANGE_RATE, FrontendAdapter
+from gateways.live.protocol import SessionConfig
 from tests.unit.cascade_helpers import LIVE_CONFIG as CASCADE_TEST_CONFIG
 from tests.unit.frontend_backend_live.adapter.adapter_helpers import RecordingPort
 from utils import NVCF_GRPC_SERVER, NVCF_LLM_BASE_URL

@@ -10,7 +10,7 @@ example's catalog once, waits until the class's services are ready, then builds 
 2. ``readiness(settings, catalog).ensure_ready()``: off the event loop and cached; a service still starting refuses
    the session with ``ServiceStarting`` (the root's "still starting" answer);
 3. ``from_config(session, transport, connection, settings, catalog)``: builds the session's ``FrontendAdapter``
-   (``live.ports``) and connects nothing; ``start()`` connects.
+   (``gateways.live.ports``) and connects nothing; ``start()`` connects.
 
 ``describe(settings, catalog)`` is the adapter's half of ``GET /v1/live/info``. ``hosts_rtvi`` says whether the
 repository UI bot can host the class in its own RTVI pipeline: the bot refuses one that cannot, with no class compare.
@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
-    from live.ports import FrontendAdapter, MediaConnection
-    from live.protocol import SessionConfig
+    from gateways.live.ports import FrontendAdapter, MediaConnection
+    from gateways.live.protocol import SessionConfig
 
 
 class ServiceStarting(Exception):

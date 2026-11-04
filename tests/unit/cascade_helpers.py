@@ -47,8 +47,8 @@ from examples.frontend_backend_live.delegation_core.config import ModelEndpoint 
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.models import Frontend
 from examples.frontend_backend_live.prompts import load_prompts
-from live.ports import SessionParts
-from live.server_delegation import ServerDelegation
+from gateways.live.ports import SessionParts
+from gateways.live.server_delegation import ServerDelegation
 from tests.unit.core_helpers import chunk, tool_fragment
 
 CORE_YAML = Path(__file__).resolve().parents[2] / "src/examples/frontend_backend_live/core.yaml"

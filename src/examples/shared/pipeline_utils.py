@@ -96,7 +96,7 @@ def with_realtime_observers(*observers, transport=None) -> list:
     out = list(observers)
     if transport is None:
         return out
-    from realtime.transport import realtime_lifecycle_observer
+    from gateways.realtime.transport import realtime_lifecycle_observer
 
     realtime_obs = realtime_lifecycle_observer(transport)
     if realtime_obs is not None:
@@ -427,7 +427,7 @@ async def create_transport(runner_args: RunnerArguments):
 
     body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
     if runner_protocol(runner_args) == "realtime":
-        from realtime.transport import create_realtime_transport
+        from gateways.realtime.transport import create_realtime_transport
 
         return create_realtime_transport(
             websocket,

@@ -21,7 +21,7 @@ from pipecat.services.openai.live.llm import OpenAILiveLLMService
 from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
 from pipecat.workers.runner import WorkerRunner
 
-from live.mount import mount_live
+from gateways.live.mount import mount_live
 from tests.unit.cascade_helpers import (
     FakeSTT,
     FakeTTS,

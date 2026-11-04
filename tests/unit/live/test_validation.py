@@ -14,10 +14,10 @@ import base64
 import time
 import unittest
 
-from live.gateway.websocket import wire_codec
-from live.protocol import SessionConfig
-from live.protocol.config import TOOL_TYPES
-from live.session import LiveProtocolSession
+from gateways.live.gateway.websocket import wire_codec
+from gateways.live.protocol import SessionConfig
+from gateways.live.protocol.config import TOOL_TYPES
+from gateways.live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 MCP = {

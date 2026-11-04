@@ -23,7 +23,7 @@ from examples.frontend_backend_live.delegation_core.backend.providers import ret
 from examples.frontend_backend_live.delegation_core.backend.providers import translation as core_translation
 from examples.frontend_backend_live.models import chat_completions as frontend_chat
 from examples.frontend_backend_live.models import retry as frontend_retry
-from live.protocol import errors as gateway_errors
+from gateways.live.protocol import errors as gateway_errors
 
 PICKS = {"core": core_tables.pick, "frontend": frontend_tables.pick}
 STRIPS = {"core": core_translation.strip_reasoning, "frontend": frontend_chat.strip_reasoning}

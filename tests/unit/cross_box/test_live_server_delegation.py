@@ -13,8 +13,8 @@ import asyncio
 import unittest
 
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask, settings_for
-from live.protocol import SessionConfig
-from live.server_delegation.passthrough import ServerDelegation, client_settings
+from gateways.live.protocol import SessionConfig
+from gateways.live.server_delegation.passthrough import ServerDelegation, client_settings
 from tests.unit.cascade_helpers import MENU_TOOL, _delegation, core_session
 from tests.unit.contracts.backend import ScriptedBackend, call_round, text_round
 from tests.unit.core_helpers import answer_text
@@ -50,7 +50,7 @@ class Provider(ScriptedBackend):
 
 
 class RecordingView:
-    """The session's delegation view (``live.ports.DelegationView``): it notes each event relayed and each refusal."""
+    """The delegation view (``gateways.live.ports.DelegationView``): it notes each event relayed and each refusal."""
 
     id, input_ms, acknowledgement_delay_ms = "live_test", 0, 0
 

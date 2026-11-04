@@ -25,7 +25,7 @@ from examples.frontend_backend_live.adapter.adapter import LIVE_AUDIO_IN_RATE
 from examples.frontend_backend_live.adapter.bridge import LiveInputGate, LiveWebSocketAudioOutput
 from examples.frontend_backend_live.adapter.pipeline_host import MEDIA_EDGES, PipelineHost, WebRtcEdges, WebSocketEdges
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, PIPELINE_AUDIO_OUT_SAMPLE_RATE
-from live.ports import EXCHANGE_RATE
+from gateways.live.ports import EXCHANGE_RATE
 from tests.unit.frontend_backend_live.adapter.adapter_helpers import (
     PACKET_BYTES,
     Probe,

@@ -9,7 +9,7 @@ The example has two ways in:
 
 Four parts serve a live session, and the [Frontend/Backend Live Architecture](../../../docs/design/architecture.md) page describes what each one owns and how they meet:
 
-- The **Live gateway** ([`src/live/`](../../live/)) serves the live session protocol.
+- The **Live gateway** ([`src/gateways/live/`](../../gateways/live/)) serves the live session protocol.
 - The **frontend adapter** is the example's `adapter/`, `cascade/`, `media/`, `models/`, `config_manager/`, `prompts.py`, and `tables.py`. It turns each live session into a Pipecat cascade of automatic speech recognition (ASR), the talker, the writer, and text-to-speech (TTS).
 - The **delegation core** ([`delegation_core/`](delegation_core/)), a package of its own with its own README, takes each delegation through the OpenAI Responses API. `factory.py` and `pipeline.py` build it in process, from `core.yaml` or one of its profiles. Its interaction manager (IM) owns the delegated work from then on.
 - The **backend adapter** runs the work: the backend LLM, directly connected (the default); the backend LLM agent, a model conductor with LLM workers; or the harness, an external agent that you deploy, such as Hermes.
@@ -180,7 +180,7 @@ During the call, the client can steer the cascade with three appends. Each one c
 - `session.thinking.append` adds silent context, which the talker sees and the next delegation carries.
 - `session.commentary.append` adds a fact that the writer words and the voice says when the caller is idle. Under `as_written` or a writer fallback, the voice says the fact word for word.
 
-For the events of each delegation and the ways it ends, refer to [Endings](../../../docs/design/architecture.md#endings) on the architecture page. For how the server passes requests and function results to the delegation core, refer to [Server Delegation](../../live/README.md#server-delegation) in the Live gateway's README.
+For the events of each delegation and the ways it ends, refer to [Endings](../../../docs/design/architecture.md#endings) on the architecture page. For how the server passes requests and function results to the delegation core, refer to [Server Delegation](../../gateways/live/README.md#server-delegation) in the Live gateway's README.
 
 A Pipecat app connects with `OpenAILiveLLMService`. `ResponsesDelegation` selects Responses mode and sends the tools in the pipeline's `LLMContext` as the backend's function tools, and `ClientDelegation` selects client mode with a backend of the app's own. The following example selects Responses mode on a server started with `PIPELINE_TLS=false`:
 

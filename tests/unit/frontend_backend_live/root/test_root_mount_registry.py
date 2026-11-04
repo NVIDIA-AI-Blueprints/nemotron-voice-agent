@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import patch
 
 import examples_registry
-import live.mount
+import gateways.live.mount
 import server
-from live.gateway import LiveSettings
+from gateways.live.gateway import LiveSettings
 from tests.unit.frontend_backend_live.root.root_helpers import module
 from utils import clear_service_context, set_active_services
 
@@ -82,7 +82,7 @@ class MountCase(unittest.TestCase):
             os.environ.pop(name, None)
         self.enterContext(patch.object(examples_registry, "_SELECTION", selection(None)))
         self.enterContext(
-            patch.object(live.mount, "mount_live", lambda *args, **kwargs: self.mounts.append((args, kwargs)))
+            patch.object(gateways.live.mount, "mount_live", lambda *args, **kwargs: self.mounts.append((args, kwargs)))
         )
 
     def mount(self) -> dict:

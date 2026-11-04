@@ -35,7 +35,7 @@ class ActivityCheckConfig(TypedDict, total=False):
 class LiveHooks(TypedDict):
     """The hooks of an example that serves the Live API (``live:``), each a lazily imported ``module.path:callable``."""
 
-    factory: str  # builds one live session's parts (``live.ports.AdapterFactory``)
+    factory: str  # builds one live session's parts (``gateways.live.ports.AdapterFactory``)
     describe: str  # the example's half of ``GET /v1/live/info``
     core: str  # builds the client of the process's one delegation core
 

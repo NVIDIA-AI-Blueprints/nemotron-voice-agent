@@ -12,8 +12,8 @@ the gateway's tests.
 import asyncio
 import json
 
-from live.ports import SessionParts
-from live.protocol import SessionConfig
+from gateways.live.ports import SessionParts
+from gateways.live.protocol import SessionConfig
 
 
 class FakeAdapter:
@@ -54,7 +54,7 @@ class FakeAdapter:
     async def close(self):
         self.closed = True
 
-    # The delegation core's official endpoints (live.server_delegation.ResponsesClient).
+    # The delegation core's official endpoints (gateways.live.server_delegation.ResponsesClient).
     async def create_conversation(self, metadata):
         return {"id": self.CONVERSATION, "object": "conversation", "created_at": 0, "metadata": dict(metadata)}
 

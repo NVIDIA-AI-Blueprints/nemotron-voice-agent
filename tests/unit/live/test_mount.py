@@ -17,10 +17,10 @@ from unittest.mock import patch
 import httpx
 from fastapi import FastAPI
 
-from live.gateway import LiveGateway, LiveSettings
-from live.gateway import webrtc as webrtc_edge
-from live.mount import mount_live
-from live.protocol import ProtocolError, SessionConfig
+from gateways.live.gateway import LiveGateway, LiveSettings
+from gateways.live.gateway import webrtc as webrtc_edge
+from gateways.live.mount import mount_live
+from gateways.live.protocol import ProtocolError, SessionConfig
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 OFFER = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
@@ -127,7 +127,7 @@ class OneCoreTests(unittest.IsolatedAsyncioTestCase):
         core = ClosingCore(fails=True)
         gateway = LiveGateway(adapter_factory, LiveSettings(), core=CountingCore(core=core))
         session = await self.start(gateway, responses_config())
-        with patch("live.gateway.gateway.logger") as logger:
+        with patch("gateways.live.gateway.gateway.logger") as logger:
             await gateway.close_all()  # returns: nothing is raised to the server's shutdown
         self.assertEqual((session.status, len(core.closes)), ("closed", 1))
         logger.exception.assert_called_once()

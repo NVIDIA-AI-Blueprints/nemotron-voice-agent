@@ -12,11 +12,11 @@ from fastapi.testclient import TestClient
 from loguru import logger
 from pydantic import ValidationError
 
-from live.events import error_event
-from live.gateway import create_live_router
-from live.gateway.websocket import wire_codec
-from live.protocol import LIVE_VOICES, ProtocolError, SessionConfig, validation_error
-from live.session import LiveProtocolSession
+from gateways.live.events import error_event
+from gateways.live.gateway import create_live_router
+from gateways.live.gateway.websocket import wire_codec
+from gateways.live.protocol import LIVE_VOICES, ProtocolError, SessionConfig, validation_error
+from gateways.live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 

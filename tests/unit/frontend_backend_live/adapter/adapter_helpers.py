@@ -12,7 +12,7 @@ from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.workers.runner import WorkerRunner
 
-from live.ports import EXCHANGE_RATE
+from gateways.live.ports import EXCHANGE_RATE
 
 SILENCE = 0
 PACKET_BYTES = EXCHANGE_RATE // 10 * 2  # 100 ms of PCM16 at the exchange rate

@@ -8,7 +8,7 @@
 import re
 import unittest
 
-from live.client_delegation import ClientDelegation
+from gateways.live.client_delegation import ClientDelegation
 
 
 class View:

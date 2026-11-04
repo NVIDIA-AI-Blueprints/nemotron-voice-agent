@@ -5,8 +5,8 @@
 
 """The narrow views a session gives its two parts, the runtime companion of the import rules.
 
-The frontend adapter gets a :class:`live.ports.SessionPort` and the server delegation a
-:class:`live.ports.DelegationView`; each view sends only its own event types and refuses every other one.
+The frontend adapter gets a :class:`gateways.live.ports.SessionPort` and the server delegation a
+:class:`gateways.live.ports.DelegationView`; each view sends only its own event types and refuses every other one.
 """
 
 import asyncio
@@ -21,12 +21,12 @@ from pipecat.processors.frame_processor import FrameProcessor
 
 from examples.frontend_backend_live.adapter.bridge import LiveWebSocketAudioOutput
 from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
-from live.gateway.websocket import wire_codec
-from live.media.audio import WireCodec
-from live.mount import mount_live
-from live.ports import DelegationView, SessionPort
-from live.protocol import AudioFormat
-from live.session import LiveProtocolSession
+from gateways.live.gateway.websocket import wire_codec
+from gateways.live.media.audio import WireCodec
+from gateways.live.mount import mount_live
+from gateways.live.ports import DelegationView, SessionPort
+from gateways.live.protocol import AudioFormat
+from gateways.live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 # The 22 server events of the Live wire, and names that are no Live server event at all.

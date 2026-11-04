@@ -42,8 +42,8 @@ from examples.frontend_backend_live.media.services import (
 )
 from examples.frontend_backend_live.prompts import load_prompts
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_OUT_SAMPLE_RATE, build_pipeline_params
-from live.ports import EXCHANGE_RATE
-from live.protocol import SessionConfig
+from gateways.live.ports import EXCHANGE_RATE
+from gateways.live.protocol import SessionConfig
 from tests.unit.cascade_helpers import LIVE_CONFIG as CASCADE_TEST_CONFIG
 from tests.unit.cascade_helpers import FakeTTS
 from tests.unit.frontend_backend_live.adapter.adapter_helpers import FLUSH, Probe, RecordingPort, run_frames, tone

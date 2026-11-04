@@ -43,10 +43,10 @@ import utils
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
 from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
 from examples.frontend_backend_live.delegation_core.im.session import IMSession
-from live.gateway import create_live_router
-from live.mount import mount_live
-from live.protocol import approx_tokens
-from live.session import lifecycle
+from gateways.live.gateway import create_live_router
+from gateways.live.mount import mount_live
+from gateways.live.protocol import approx_tokens
+from gateways.live.session import lifecycle
 from tests.unit.cascade_helpers import FakeSTT, FakeTTS, cascade_parts, chat_core, core_hook
 from tests.unit.frontend_backend_live.root.root_helpers import clear_root_caches
 from tests.unit.goldens import harness

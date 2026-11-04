@@ -16,7 +16,7 @@ from unittest.mock import patch
 from examples.frontend_backend_live import factory, pipeline
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ConfigError
-from live.protocol import ProtocolError, SessionConfig
+from gateways.live.protocol import ProtocolError, SessionConfig
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,
     NoRtviAdapter,

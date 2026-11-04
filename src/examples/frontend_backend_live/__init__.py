@@ -3,10 +3,10 @@
 
 """Frontend/Backend Live: the frontend adapter hosting the cascade, which talks to the caller and delegates the work.
 
-The example sits behind the live gateway (``live``). In ``responses`` mode, what the cascade delegates goes through the
-session's server delegation (``live.server_delegation``) to the delegation core (``delegation_core``); in client mode
-the session's client delegation (``live.client_delegation``) announces each delegation and the client app does the
-work. ``docs/design/architecture.md`` describes the design.
+The example sits behind the live gateway (``gateways.live``). In ``responses`` mode, what the cascade delegates goes
+through the session's server delegation (``gateways.live.server_delegation``) to the delegation core
+(``delegation_core``); in client mode the session's client delegation (``gateways.live.client_delegation``) announces
+each delegation and the client app does the work. ``docs/design/architecture.md`` describes the design.
 
 Two composition roots build each call:
 
@@ -18,8 +18,8 @@ Two composition roots build each call:
 
 Packages, one per responsibility:
 
-* ``adapter``: the cascade adapter (a ``live.ports.FrontendAdapter``), its class contract and table, and its Live
-  integration: the pipeline host and the bridge between a live session and its pipeline.
+* ``adapter``: the cascade adapter (a ``gateways.live.ports.FrontendAdapter``), its class contract and table, and its
+  Live integration: the pipeline host and the bridge between a live session and its pipeline.
 * ``cascade``: the cascade's Pipecat-free parts for one call: caller turns, the routing talker, the writer, the floor,
   the work note, the heard log, the talker's memory, the presenter's inbox, and the reader of the official events.
 * ``media``: the cascade's Pipecat speech pipeline, which each host builds around it: the Pipecat processor that runs

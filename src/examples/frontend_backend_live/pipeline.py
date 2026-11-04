@@ -58,7 +58,7 @@ from examples.shared.pipeline_utils import (
     register_session_start_handlers,
     with_realtime_observers,
 )
-from live.server_delegation import ServerDelegation
+from gateways.live.server_delegation import ServerDelegation
 from tracing import IS_TRACING_ENABLED
 from utils import (
     normalize_lang_code,
@@ -117,8 +117,8 @@ def backend_overrides(body: dict) -> dict:
 def hold_client_text(transport) -> None:
     """Shut a Realtime client's text gate, which the shared start handler opens when its own welcome is off.
 
-    The gate opens when the first response, the greeting, is done (``realtime.conversation``), as the caller's audio
-    waits for the greeting's end. A transport that speaks no Realtime has no gate.
+    The gate opens when the first response, the greeting, is done (``gateways.realtime.conversation``), as the caller's
+    audio waits for the greeting's end. A transport that speaks no Realtime has no gate.
     """
     conversation = getattr(getattr(transport, "_realtime_serializer", None), "conversation", None)
     if conversation is not None:

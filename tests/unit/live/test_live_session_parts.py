@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D107
 
-"""A session served by two parts: the frontend adapter and its delegation part (``live.ports``).
+"""A session served by two parts: the frontend adapter and its delegation part (``gateways.live.ports``).
 
 The fakes note every call in one shared log, so the tests see where each command goes and the order of start and close.
 """
@@ -16,12 +16,12 @@ from unittest.mock import patch
 import httpx
 from fastapi import FastAPI
 
-from live.gateway import LiveSettings, create_live_router
-from live.gateway.websocket import wire_codec
-from live.ports import SessionParts
-from live.protocol import ProtocolError, SessionConfig
-from live.server_delegation import passthrough as server_delegation
-from live.session import LiveProtocolSession, lifecycle
+from gateways.live.gateway import LiveSettings, create_live_router
+from gateways.live.gateway.websocket import wire_codec
+from gateways.live.ports import SessionParts
+from gateways.live.protocol import ProtocolError, SessionConfig
+from gateways.live.server_delegation import passthrough as server_delegation
+from gateways.live.session import LiveProtocolSession, lifecycle
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]
@@ -64,7 +64,7 @@ class FakeFrontend:
 
 
 class TypingFrontend(FakeFrontend):
-    """A frontend adapter that also reads the application's typed questions (``live.ports.TypedReader``)."""
+    """A frontend adapter that also reads the application's typed questions (``gateways.live.ports.TypedReader``)."""
 
     def typed(self, text):
         self.log.append(("frontend.typed", text))

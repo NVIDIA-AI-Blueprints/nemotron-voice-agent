@@ -39,7 +39,8 @@ The example is four boxes. Each box owns its decisions, and none reaches into an
 diagram shows a call from the caller to the backend and back:
 
 ```text
- caller --- app (Live client) --- LIVE GATEWAY (src/live): sessions, media, command and close order, the wire schema
+ caller --- app (Live client) --- LIVE GATEWAY (src/gateways/live)
+                                    sessions, media, command and close order, the wire schema
                                        |                                    |
                                        | frontend part                      | delegation part, by delegation.type
                                        v                                    v
@@ -66,7 +67,7 @@ The following table lists the boxes, what each owns, and what each never knows:
 
 | Box | Path | Owns | Never knows |
 | --- | --- | --- | --- |
-| Live gateway | [`src/live/`](../../src/live/) | Sessions, the order of commands and of the close, the wire schema, the relay of delegation events, and the choice of the delegation part by the resolved `delegation.type` | Pipecat, the cascade, and the IM's records |
+| Live gateway | [`src/gateways/live/`](../../src/gateways/live/) | Sessions, the order of commands and of the close, the wire schema, the relay of delegation events, and the choice of the delegation part by the resolved `delegation.type` | Pipecat, the cascade, and the IM's records |
 | Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/), [`cascade/`](../../src/examples/frontend_backend_live/cascade/), and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `models/`, `prompts.py`, `tables.py`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
 | Delegation core: the IM, the work ledger, and the Responses API surface | [`im/`](../../src/examples/frontend_backend_live/delegation_core/im/), [`ledger/`](../../src/examples/frontend_backend_live/delegation_core/ledger/), and [`api/`](../../src/examples/frontend_backend_live/delegation_core/api/) of the example's [`delegation_core/`](../../src/examples/frontend_backend_live/delegation_core/) | Admission, placement through the conductor, Works and their tasks, steering, the commit gate, stops, progress notes, results, endings, one-shot sessions, every record, and the official endpoints | Speech, playout, and backend protocols |
 | Backend adapter | [`backend/`](../../src/examples/frontend_backend_live/delegation_core/backend/) of the delegation core | Model rounds, model providers, tool sources, conductors, worker sessions, and harness protocols | Speech and the voice wire |
@@ -97,12 +98,12 @@ The frontend media plane is the gateway's media and session handling, the fronte
 the IM side, which is the delegation core, over two channels:
 
 - Toward the core, the official Responses API. The gateway's server delegation sends each request through a
-  `ResponsesClient` ([`responses_client.py`](../../src/live/server_delegation/responses_client.py)). In process, that
-  client is `LocalResponsesClient`
+  `ResponsesClient` ([`responses_client.py`](../../src/gateways/live/server_delegation/responses_client.py)). In
+  process, that client is `LocalResponsesClient`
   ([`api/local.py`](../../src/examples/frontend_backend_live/delegation_core/api/local.py)), which sends every request,
   result, and event through a JSON round trip, as HTTP would.
 - Back to the media plane, the official Responses streaming events, plus one transport fact,
-  `on_delegation_lost`, when a stream ends with no terminal event ([`live/ports.py`](../../src/live/ports.py),
+  `on_delegation_lost`, when a stream ends with no terminal event ([`live/ports.py`](../../src/gateways/live/ports.py),
   `DelegationEvents`).
 
 ### The Four Meeting Points
@@ -723,8 +724,8 @@ A frontend adapter serves a live session's voice. To add one:
    ([`adapter/contract.py`](../../src/examples/frontend_backend_live/adapter/contract.py)): `Settings.parse(block)`,
    `readiness(settings, catalog)`, `from_config(session, transport, connection, settings, catalog)`,
    `describe(settings, catalog)`, and `hosts_rtvi`. Each instance is a `FrontendAdapter`
-   ([`live/ports.py`](../../src/live/ports.py)): `start`, `close`, `set_muted`, `feed_audio`, and the three appends,
-   each of which returns quickly and never waits on a model.
+   ([`live/ports.py`](../../src/gateways/live/ports.py)): `start`, `close`, `set_muted`, `feed_audio`, and the three
+   appends, each of which returns quickly and never waits on a model.
 2. Add the class to `FRONTEND_ADAPTERS` in
    [`adapter/registry.py`](../../src/examples/frontend_backend_live/adapter/registry.py).
 3. Set `frontend.adapter` to its name in `config.yaml`, and give it its own `frontend.<name>` block.
@@ -811,7 +812,7 @@ as a cart, is never shared. The cafe tools in
 
 The following table lists every extension point, its interface, what is built, and the key that chooses it. In its
 module paths, `core/` is `FBL/delegation_core/`, `harness/` is `FBL/delegation_core/backend/harness/`, `live/` is
-`src/live/`, and `FBL/` is the example's folder, `src/examples/frontend_backend_live/`:
+`src/gateways/live/`, and `FBL/` is the example's folder, `src/examples/frontend_backend_live/`:
 
 | Point | Interface (module) | Built | Chosen by |
 | --- | --- | --- | --- |
@@ -1137,8 +1138,8 @@ import it.
 
 ### The Guard Test
 
-The guard ([`tests/unit/guard/guard.py`](../../tests/unit/guard/guard.py), run by `test_guard.py`) walks `src/live`,
-the example with its delegation core, and `src/server.py`, and fails on any of four kinds of site:
+The guard ([`tests/unit/guard/guard.py`](../../tests/unit/guard/guard.py), run by `test_guard.py`) walks
+`src/gateways/live`, the example with its delegation core, and `src/server.py`, and fails on any of four kinds of site:
 
 - `compare`: a kind, such as `.mode`, `.adapter`, `.agent`, or `delegation.type`, compared or matched with a string or
   a constant outside the table modules. `KIND_ATTRIBUTES` and `KIND_NAMES` list the kinds.
@@ -1153,9 +1154,10 @@ Each failure names the file, the line, and the site.
 ### The Import Rules
 
 [`tests/unit/test_import_boundaries.py`](../../tests/unit/test_import_boundaries.py) puts each module in a group by the
-longest prefix of its name, and each group may import only its own modules and the groups it lists. The core's
-groups are named by its packages, so the group `delegation_core.im` holds the modules of
-`examples.frontend_backend_live.delegation_core.im`. The following table summarizes the rules:
+longest prefix of its name, and each group may import only its own modules and the groups it lists. The gateway's and
+the core's groups are named by their packages, so the group `live.session` holds the modules of `gateways.live.session`,
+and the group `delegation_core.im` those of `examples.frontend_backend_live.delegation_core.im`. The following table
+summarizes the rules:
 
 | Group | May import |
 | --- | --- |

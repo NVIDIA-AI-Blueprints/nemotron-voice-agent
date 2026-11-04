@@ -10,8 +10,8 @@ import unittest
 
 import anyio
 
-from live.events import Fanout, Timeline, client_event_allowed, error_event, event, server_event_allowed
-from live.protocol import ProtocolError, SessionConfig
+from gateways.live.events import Fanout, Timeline, client_event_allowed, error_event, event, server_event_allowed
+from gateways.live.protocol import ProtocolError, SessionConfig
 
 
 def webrtc_config(**data_channel):

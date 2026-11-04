@@ -43,8 +43,8 @@ from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import Prompts, load_prompts
 from examples.frontend_backend_live.tables import pick
-from live.ports import SessionParts
-from live.protocol import ProtocolError, SessionConfig
+from gateways.live.ports import SessionParts
+from gateways.live.protocol import ProtocolError, SessionConfig
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.adapter.contract import (

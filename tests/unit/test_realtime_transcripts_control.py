@@ -35,9 +35,9 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.utils.text.base_text_aggregator import TextType
 
-from realtime.conversation import ConversationState
-from realtime.observer import RealtimeLifecycleObserver
-from realtime.serializer import RealtimeFrameSerializer
+from gateways.realtime.conversation import ConversationState
+from gateways.realtime.observer import RealtimeLifecycleObserver
+from gateways.realtime.serializer import RealtimeFrameSerializer
 
 
 class ConversationStateTests(unittest.TestCase):
@@ -1112,7 +1112,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(run, LLMRunFrame)
 
     async def test_finish_does_not_reset_newer_response(self) -> None:
-        from realtime.lifecycle import finish_response
+        from gateways.realtime.lifecycle import finish_response
 
         emitted: list[dict[str, Any]] = []
 
@@ -1136,7 +1136,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
 
         from pipecat.frames.frames import InputAudioRawFrame
 
-        from realtime.audio import PIPELINE_PCM_RATE
+        from gateways.realtime.audio import PIPELINE_PCM_RATE
 
         emitted: list[dict[str, Any]] = []
 
@@ -1325,7 +1325,7 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_register_handlers_opens_gate_when_welcome_disabled(self) -> None:
         from examples.shared.pipeline_utils import register_session_start_handlers
-        from realtime.serializer import RealtimeFrameSerializer
+        from gateways.realtime.serializer import RealtimeFrameSerializer
 
         class _Transport:
             def __init__(self) -> None:
@@ -1356,7 +1356,7 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_register_handlers_keeps_gate_when_welcome_enabled(self) -> None:
         from examples.shared.pipeline_utils import register_session_start_handlers
-        from realtime.serializer import RealtimeFrameSerializer
+        from gateways.realtime.serializer import RealtimeFrameSerializer
 
         class _Transport:
             def __init__(self) -> None:

@@ -32,10 +32,10 @@ from examples.frontend_backend_live.adapter.bridge import (
     LiveWebSocketAudioOutput,
     audio_ms,
 )
-from live.gateway.websocket import wire_codec
-from live.media.audio import WireCodec
-from live.protocol import AudioFormat
-from live.session import LiveProtocolSession
+from gateways.live.gateway.websocket import wire_codec
+from gateways.live.media.audio import WireCodec
+from gateways.live.protocol import AudioFormat
+from gateways.live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 

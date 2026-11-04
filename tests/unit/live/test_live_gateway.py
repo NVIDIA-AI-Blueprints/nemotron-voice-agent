@@ -13,10 +13,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from live.gateway import LiveSettings
-from live.gateway.webrtc import expire_unconnected
-from live.mount import mount_live
-from live.protocol import SessionConfig
+from gateways.live.gateway import LiveSettings
+from gateways.live.gateway.webrtc import expire_unconnected
+from gateways.live.mount import mount_live
+from gateways.live.protocol import SessionConfig
 from tests.unit.live_helpers import FakeAdapter
 
 START = {
@@ -323,7 +323,7 @@ class UnconnectedPeerTests(unittest.IsolatedAsyncioTestCase):
 
 class OpenByDefaultTests(unittest.TestCase):
     def test_a_server_without_a_token_warns_at_startup_and_one_with_a_token_does_not(self):
-        with patch("live.mount.logger") as logger:
+        with patch("gateways.live.mount.logger") as logger:
             with patch.dict(os.environ, {"LIVE_API_TOKEN": ""}):
                 mount_live(FastAPI(), factory=FakeAdapterFactory)
             self.assertIn("LIVE_API_TOKEN is not set", logger.warning.call_args.args[0])
