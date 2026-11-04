@@ -3,7 +3,8 @@
 
 """Pipecat processors that adapt a voice pipeline to the live session protocol.
 
-Each works through the adapter's view of the session (:class:`live.ports.SessionPort`), never the session itself.
+Each works through the adapter's view of the session (:class:`gateways.live.ports.SessionPort`), never the session
+itself.
 
 * :class:`LiveInputGate` counts caller audio against the session's input clock, honors mute, hands the frontend the
   caller's audio at the rate it hears, and logs each caller turn's level.
@@ -51,10 +52,12 @@ from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE
-from live.ports import EXCHANGE_RATE  # the PCM16 the adapter exchanges with the gateway, caller and reply audio
+
+# The PCM16 the adapter exchanges with the gateway, caller and reply audio.
+from gateways.live.ports import EXCHANGE_RATE
 
 if TYPE_CHECKING:
-    from live.ports import SessionPort
+    from gateways.live.ports import SessionPort
 
 # Pipecat's warning for one TTS context that produced no audio (typically after a barge-in cut the reply short).
 # Nothing is lost for the caller, so it is logged, not sent as an ``error`` event; a run of them is a different,
@@ -398,5 +401,5 @@ class LiveWebSocketAudioOutput(FrameProcessor):
     async def _stop(self) -> None:
         if self._worker:
             self._worker.cancel()
-            await asyncio.wait({self._worker})  # not gather: see live.events.fanout.Subscription.close
+            await asyncio.wait({self._worker})  # not gather: see gateways.live.events.fanout.Subscription.close
             self._worker = None

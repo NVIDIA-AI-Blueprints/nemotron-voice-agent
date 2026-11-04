@@ -5,10 +5,10 @@
 
 It builds the Pipecat pipeline (speech-to-text, user aggregator, :class:`LiveTalkerProcessor`, text-to-speech) around a
 :class:`CascadeSession`. The client supplies the prompts and tools; the server supplies the models and the speech
-services from the registry. The session hands the adapter its delegation part (``live.ports.DelegationPort``): the
-server delegation in ``responses`` mode, whose official events are the cascade's only view of its delegations, or the
-client delegation in client mode, which announces each delegation to the client app. The session opens and closes the
-delegation part; the adapter owns its pipeline, its presenter's task and its silence timer.
+services from the registry. The session hands the adapter its delegation part (``gateways.live.ports.DelegationPort``):
+the server delegation in ``responses`` mode, whose official events are the cascade's only view of its delegations, or
+the client delegation in client mode, which announces each delegation to the client app. The session opens and closes
+the delegation part; the adapter owns its pipeline, its presenter's task and its silence timer.
 """
 
 from __future__ import annotations
@@ -45,11 +45,11 @@ from examples.frontend_backend_live.models import FRONTENDS
 from examples.frontend_backend_live.prompts import Prompts, load_prompts
 from examples.frontend_backend_live.tables import pick
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, build_user_aggregator_params
-from live.protocol import SessionConfig, approx_tokens
+from gateways.live.protocol import SessionConfig, approx_tokens
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.adapter.contract import ServiceCatalog, ServiceReadiness
-    from live.ports import DelegationPort, MediaConnection, SessionPort
+    from gateways.live.ports import DelegationPort, MediaConnection, SessionPort
 
 LIVE_AUDIO_IN_RATE = PIPELINE_AUDIO_IN_SAMPLE_RATE  # the rate the cascade hears the caller at: the shared input rate
 SEED_ROLES = {"developer": "developer", "user": "user", "assistant": "assistant"}

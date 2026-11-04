@@ -3,10 +3,10 @@
 The delegation core runs the work that a voice frontend delegates. It accepts each request through the OpenAI
 Responses API, runs it on the backend adapter that its settings name, and streams the response's events back. By
 default, the backend adapter is the backend large language model (LLM), directly connected. The core is a separate
-Python package in the example's folder: it imports nothing from the Live gateway ([`src/live/`](../../../live/)), the
-example's frontend adapter, or Pipecat, and no frontend or gateway module imports it. Only the example's composition
-roots build it, in process. It has its own settings file (`core.yaml`), tests, and README, and it keeps its records in
-memory.
+Python package in the example's folder: it imports nothing from the Live gateway
+([`src/gateways/live/`](../../../gateways/live/)), the example's frontend adapter, or Pipecat, and no frontend or
+gateway module imports it. Only the example's composition roots build it, in process. It has its own settings file
+(`core.yaml`), tests, and README, and it keeps its records in memory.
 
 For the design, including the interaction manager (IM), the backend port, the three backend adapters, and how to extend
 each part, refer to the [Frontend/Backend Live Architecture](../../../../docs/design/architecture.md) page.
@@ -33,8 +33,8 @@ and keeps nothing.
 
 In the [Frontend/Backend Live example](../README.md), the composition root builds one
 core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the
-gateway's [server delegation](../../../live/README.md#server-delegation), in a conversation of its own. A client-mode
-app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one
+gateway's [server delegation](../../../gateways/live/README.md#server-delegation), in a conversation of its own. A
+client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one
 stateless request. The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml`,
 which sets the cafe's `backend.prompt` and `backend.tools`.
 

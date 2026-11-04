@@ -350,7 +350,7 @@ endpoint = ModelEndpoint(model="m", base_url="http://localhost:1/v1")
 build_core(settings, endpoints=lambda model: endpoint, defaults=BackendTask("m", "x", []), adapters=ADAPTERS)
 held = ("examples", "examples.frontend_backend_live")  # the packages that hold the core
 core = "examples.frontend_backend_live.delegation_core"
-loaded = (name for name in sys.modules if name.startswith(("examples", "live", "pipecat")))
+loaded = (name for name in sys.modules if name.startswith(("examples", "gateways", "pipecat")))
 print(sorted(name for name in loaded if name not in held and name != core and not name.startswith(core + ".")))
 """
         repo = Path(__file__).resolve().parents[4]

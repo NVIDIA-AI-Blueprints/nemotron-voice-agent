@@ -18,8 +18,8 @@ import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from live.gateway import LiveSettings
-from live.mount import mount_live
+from gateways.live.gateway import LiveSettings
+from gateways.live.mount import mount_live
 from tests.unit.live_helpers import FakeAdapter
 
 INPUT = [{"role": "user", "content": [{"type": "input_text", "text": "What teas do you have?"}]}]

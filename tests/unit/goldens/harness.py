@@ -121,10 +121,10 @@ from examples.frontend_backend_live.cascade.worknote import WorkNote
 from examples.frontend_backend_live.delegation_core.im.run import TaskRun
 from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.prompts import load_prompts
-from live.gateway import LiveGateway, LiveSettings
-from live.gateway.websocket import run_primary_websocket
-from live.ports import SessionParts
-from live.session import LiveProtocolSession, lifecycle
+from gateways.live.gateway import LiveGateway, LiveSettings
+from gateways.live.gateway.websocket import run_primary_websocket
+from gateways.live.ports import SessionParts
+from gateways.live.session import LiveProtocolSession, lifecycle
 from tests.unit.cascade_helpers import (
     ENDPOINT,
     LIVE_CONFIG,
@@ -172,8 +172,8 @@ RECORD_VARIABLE = "LIVE_GOLDEN_RECORD"
 # Timers that would put clock-driven lines into a golden. A golden that tests one of them sets it small itself.
 # A quiet spell's progress line may come after 8 s of silent work by default; an hour keeps it out.
 QUIET_PROGRESS_SECONDS = 3600.0
-# The gateway reports session.usage.updated every 5 s (live.session.lifecycle.USAGE_INTERVAL_SECONDS); the harness
-# patches the interval to an hour for the length of each test.
+# The gateway reports session.usage.updated every 5 s (gateways.live.session.lifecycle.USAGE_INTERVAL_SECONDS); the
+# harness patches the interval to an hour for the length of each test.
 USAGE_INTERVAL_SECONDS = 3600
 # The prompt set the goldens run on: the shipped prompts.yaml's, so a change to its texts shows in every golden's
 # frontend requests.

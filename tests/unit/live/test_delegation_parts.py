@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D107
 
-"""Both delegation parts are a ``live.ports.DelegationPart``, picked from ``DELEGATION_PARTS`` by delegation type.
+"""Both delegation parts are a ``gateways.live.ports.DelegationPart``, picked from ``DELEGATION_PARTS`` by type.
 
 An omitted, ``null`` or ``{}`` delegation builds the client part, and the frontend adapter gets only the narrow
 ``DelegationPort``.
@@ -12,12 +12,12 @@ An omitted, ``null`` or ``{}`` delegation builds the client part, and the fronte
 import inspect
 import unittest
 
-from live.client_delegation import ClientDelegation
-from live.ports import DelegationPart, DelegationPort, DelegationView
-from live.protocol import SessionConfig
-from live.server_delegation import ServerDelegation
-from live.session import LiveProtocolSession
-from live.session.session import DelegationPortView, DelegationSideView
+from gateways.live.client_delegation import ClientDelegation
+from gateways.live.ports import DelegationPart, DelegationPort, DelegationView
+from gateways.live.protocol import SessionConfig
+from gateways.live.server_delegation import ServerDelegation
+from gateways.live.session import LiveProtocolSession
+from gateways.live.session.session import DelegationPortView, DelegationSideView
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]
@@ -27,7 +27,7 @@ def declared(protocol) -> set[str]:
     """The members a port declares: its methods and its annotated attributes, its port bases' included."""
     names = set()
     for cls in protocol.__mro__:
-        if cls.__module__ == "live.ports":
+        if cls.__module__ == "gateways.live.ports":
             names |= {name for name in vars(cls) if not name.startswith("_")} | set(cls.__annotations__)
     return names
 

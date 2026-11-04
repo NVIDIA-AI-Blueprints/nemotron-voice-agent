@@ -13,9 +13,9 @@ import asyncio
 import unittest
 from unittest import mock
 
-from live.gateway.websocket import wire_codec
-from live.server_delegation import passthrough
-from live.session import LiveProtocolSession, lifecycle
+from gateways.live.gateway.websocket import wire_codec
+from gateways.live.server_delegation import passthrough
+from gateways.live.session import LiveProtocolSession, lifecycle
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]

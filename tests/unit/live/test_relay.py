@@ -13,12 +13,12 @@ import asyncio
 import unittest
 from unittest import mock
 
-from live.events import Fanout, event
-from live.events import fanout as fanout_module
-from live.gateway.websocket import TRY_AGAIN_LATER, close_dropped, wire_codec
-from live.protocol import SessionConfig
-from live.server_delegation.passthrough import sanitize_response_event
-from live.session import LiveProtocolSession
+from gateways.live.events import Fanout, event
+from gateways.live.events import fanout as fanout_module
+from gateways.live.gateway.websocket import TRY_AGAIN_LATER, close_dropped, wire_codec
+from gateways.live.protocol import SessionConfig
+from gateways.live.server_delegation.passthrough import sanitize_response_event
+from gateways.live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]

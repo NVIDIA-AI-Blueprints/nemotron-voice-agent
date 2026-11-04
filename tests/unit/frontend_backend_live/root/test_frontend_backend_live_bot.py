@@ -38,7 +38,7 @@ class CafeOrderTests(ContractCase, unittest.IsolatedAsyncioTestCase):
         from examples.frontend_backend_live.cascade.session import CascadeSession
         from examples.frontend_backend_live.delegation_core.app import build_core
         from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
-        from live.server_delegation import ServerDelegation
+        from gateways.live.server_delegation import ServerDelegation
         from tests.unit.cascade_helpers import CASCADE_ENDPOINT, ListConversation, _decision_chunks, _messages
         from tests.unit.core_helpers import FakeChat, chunk, tool_fragment
 

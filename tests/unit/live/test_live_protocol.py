@@ -11,12 +11,12 @@ from unittest import mock
 import anyio
 from pydantic import ValidationError
 
-from live.events import error_event, event
-from live.gateway import LiveGateway, LiveSettings
-from live.gateway.websocket import run_primary_websocket, wire_codec
-from live.media.audio import WireCodec
-from live.protocol import AudioFormat, ProtocolError, SessionConfig
-from live.session import LiveProtocolSession, lifecycle
+from gateways.live.events import error_event, event
+from gateways.live.gateway import LiveGateway, LiveSettings
+from gateways.live.gateway.websocket import run_primary_websocket, wire_codec
+from gateways.live.media.audio import WireCodec
+from gateways.live.protocol import AudioFormat, ProtocolError, SessionConfig
+from gateways.live.session import LiveProtocolSession, lifecycle
 from tests.unit.live_helpers import Collector, FakeAdapter, FakeWebSocket, responses_config
 
 
@@ -432,7 +432,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         # The refused append is not counted: once the first two leave the window, two more fit.
         await self.start(max_appends_per_minute=2)
         note = {"type": "session.thinking.append", "delegation_id": None, "content": "note"}
-        with mock.patch("live.session.appends.time") as clock:  # the appends module's clock only, not the event loop's
+        # The appends module's clock only, not the event loop's.
+        with mock.patch("gateways.live.session.appends.time") as clock:
             for at, label in ((0, "a"), (0, "b"), (59, "c"), (61, "d"), (61, "e"), (61, "f")):
                 clock.monotonic.return_value = 1000.0 + at
                 await self.handle({**note, "event_id": label})
@@ -449,7 +450,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         # "b" at 50 s is still within the minute at 62 s, so "d" is refused although "a" has left it.
         await self.start(max_appends_per_minute=2)
         note = {"type": "session.thinking.append", "delegation_id": None, "content": "note"}
-        with mock.patch("live.session.appends.time") as clock:
+        with mock.patch("gateways.live.session.appends.time") as clock:
             for at, label in ((0, "a"), (50, "b"), (61, "c"), (62, "d")):
                 clock.monotonic.return_value = 1000.0 + at
                 await self.handle({**note, "event_id": label})

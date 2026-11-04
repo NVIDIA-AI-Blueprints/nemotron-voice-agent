@@ -741,8 +741,8 @@ def _mount_live(app: FastAPI) -> None:
     Raises:
         RuntimeError: The factory setting names a module that does not exist.
     """
-    from live.gateway import LiveSettings
-    from live.mount import mount_live
+    from gateways.live.gateway import LiveSettings
+    from gateways.live.mount import mount_live
 
     example = examples_registry.live_example()
     if example is None or not _live_served(example):
@@ -1036,7 +1036,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         After ``session.update`` + the same readiness checks as ``/api/ws``,
         hands the socket to the selected example bot (``protocol=realtime``).
         """
-        from realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
+        from gateways.realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
 
         async def _ensure_ready(config: dict) -> None:
             await _ensure_services_ready_for_connection(config, _resolve_example(config))

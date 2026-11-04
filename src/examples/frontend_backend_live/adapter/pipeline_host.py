@@ -5,8 +5,8 @@
 
 The pipeline runs at the shared rates (``examples.shared.pipeline_utils``): caller audio at 16 kHz, reply audio at
 ``PIPELINE_AUDIO_OUT_SAMPLE_RATE``, which every Magpie deployment accepts. The edges convert: the input gate hands the
-frontend 16 kHz audio, and both outputs send the caller reply audio at the exchange rate (``live.ports.EXCHANGE_RATE``).
-Each transport is a class of :data:`MEDIA_EDGES`.
+frontend 16 kHz audio, and both outputs send the caller reply audio at the exchange rate
+(``gateways.live.ports.EXCHANGE_RATE``). Each transport is a class of :data:`MEDIA_EDGES`.
 """
 
 from __future__ import annotations
@@ -29,11 +29,11 @@ from examples.frontend_backend_live.adapter.bridge import (
 )
 from examples.frontend_backend_live.media.playout import PlayoutTracker
 from examples.shared.pipeline_utils import build_pipeline_params
-from live.ports import EXCHANGE_RATE
+from gateways.live.ports import EXCHANGE_RATE
 from utils import parse_env_bool, parse_env_int
 
 if TYPE_CHECKING:
-    from live.ports import MediaConnection, SessionPort
+    from gateways.live.ports import MediaConnection, SessionPort
 
 START_TIMEOUT_SECONDS = 30
 # The switch the repository's tracing setup reads (``src/tracing.py``); the roots import that module, which starts

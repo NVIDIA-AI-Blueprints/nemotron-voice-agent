@@ -24,11 +24,11 @@ from examples.frontend_backend_live.adapter.adapter import LIVE_AUDIO_IN_RATE, C
 from examples.frontend_backend_live.cascade.heard_log import Heard
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask, compose, settings_for
 from examples.frontend_backend_live.prompts import load_prompts
-from live.gateway import LiveGateway, LiveSettings, create_live_router
-from live.gateway.websocket import run_primary_websocket
-from live.ports import SessionParts
-from live.protocol import SessionConfig
-from live.server_delegation.passthrough import COMPOSED_SOURCE, client_settings
+from gateways.live.gateway import LiveGateway, LiveSettings, create_live_router
+from gateways.live.gateway.websocket import run_primary_websocket
+from gateways.live.ports import SessionParts
+from gateways.live.protocol import SessionConfig
+from gateways.live.server_delegation.passthrough import COMPOSED_SOURCE, client_settings
 from tests.unit.cascade_helpers import (
     CORE_YAML,
     ENDPOINT,
@@ -651,7 +651,7 @@ class WebRTCEndToEndTests(unittest.IsolatedAsyncioTestCase):
         from aiortc.mediastreams import AudioStreamTrack
         from fastapi import FastAPI
 
-        from live.mount import mount_live
+        from gateways.live.mount import mount_live
 
         chat = FakeChat(_decision_chunks('{"action":"speak","speech":"Hello from the kiosk."}'))
         stt, tts = FakeSTT(), FakeTTS()

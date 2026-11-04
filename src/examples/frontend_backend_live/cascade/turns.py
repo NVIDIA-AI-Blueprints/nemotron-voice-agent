@@ -41,7 +41,7 @@ from examples.frontend_backend_live.cascade.worknote import WorkNote
 from examples.frontend_backend_live.models.decision import TalkerDecision
 
 if TYPE_CHECKING:
-    from live.ports import DelegationPort
+    from gateways.live.ports import DelegationPort
 
 
 class Acknowledgements:

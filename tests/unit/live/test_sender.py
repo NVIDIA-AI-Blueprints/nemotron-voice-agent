@@ -14,8 +14,8 @@ import base64
 import time
 import unittest
 
-from live.gateway.websocket import wire_codec
-from live.session import LiveProtocolSession
+from gateways.live.gateway.websocket import wire_codec
+from gateways.live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]

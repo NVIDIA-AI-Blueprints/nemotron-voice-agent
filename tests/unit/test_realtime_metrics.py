@@ -26,9 +26,9 @@ from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 
-from realtime.metrics import RealtimeMetricsAccumulator
-from realtime.observer import RealtimeLifecycleObserver
-from realtime.serializer import RealtimeFrameSerializer
+from gateways.realtime.metrics import RealtimeMetricsAccumulator
+from gateways.realtime.observer import RealtimeLifecycleObserver
+from gateways.realtime.serializer import RealtimeFrameSerializer
 
 
 def metrics_frame() -> MetricsFrame:

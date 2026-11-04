@@ -21,13 +21,13 @@ from fastapi.testclient import TestClient
 from loguru import logger
 from starlette.websockets import WebSocketDisconnect
 
-from live.gateway import LiveGateway, LiveSettings
-from live.gateway.websocket import run_primary_websocket
-from live.media.audio import ALAW, SAMPLE_CODECS, ULAW, ALaw, LinearPcm, MuLaw, WireCodec
-from live.media.connection import LiveWebRTCConnection
-from live.mount import mount_live
-from live.protocol import AudioFormat, ProtocolError, SessionConfig
-from live.session import LiveProtocolSession
+from gateways.live.gateway import LiveGateway, LiveSettings
+from gateways.live.gateway.websocket import run_primary_websocket
+from gateways.live.media.audio import ALAW, SAMPLE_CODECS, ULAW, ALaw, LinearPcm, MuLaw, WireCodec
+from gateways.live.media.connection import LiveWebRTCConnection
+from gateways.live.mount import mount_live
+from gateways.live.protocol import AudioFormat, ProtocolError, SessionConfig
+from gateways.live.session import LiveProtocolSession
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
 START = {"type": "session.start", "event_id": "start_1", "session": {"model": "live-1"}}
@@ -186,7 +186,7 @@ class WebRTCHangUpTests(unittest.IsolatedAsyncioTestCase):
 class WorkerTests(unittest.TestCase):
     def test_several_workers_serve_no_live_route_and_say_why(self):
         app = FastAPI()
-        with patch.dict(os.environ, {"UVICORN_WORKERS": "2"}), patch("live.mount.logger") as log:
+        with patch.dict(os.environ, {"UVICORN_WORKERS": "2"}), patch("gateways.live.mount.logger") as log:
             self.assertIsNone(mount_live(app, factory=lambda *args: None))
         self.assertIn("UVICORN_WORKERS=2", log.error.call_args.args[0])
         with TestClient(app) as client:

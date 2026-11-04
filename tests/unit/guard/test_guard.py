@@ -12,6 +12,7 @@ import unittest
 
 from tests.unit.guard.guard import (
     CORE,
+    LIVE,
     module_name,
     sites_in,
     walked_files,
@@ -27,12 +28,12 @@ class GuardTests(unittest.TestCase):
     def test_the_walk_reads_the_gateway_the_example_and_the_core(self):
         # The walk reads every tree it guards, so the rules cannot pass by reading nothing.
         modules = {module_name(path) for path in walked_files()}
-        self.assertLessEqual({"live", "examples"}, {module.split(".")[0] for module in modules})
+        self.assertLessEqual({"gateways", "examples"}, {module.split(".")[0] for module in modules})
         self.assertTrue(any(module.startswith(f"{CORE}.") for module in modules))
 
 
 class RuleTests(unittest.TestCase):
-    def kinds(self, source, module="live.session.example"):
+    def kinds(self, source, module=f"{LIVE}.session.example"):
         return [(site.kind, site.name) for _, site in sites_in(source, module)]
 
     def test_a_kind_compared_with_a_literal_is_a_site(self):
@@ -108,8 +109,8 @@ class RuleTests(unittest.TestCase):
         source = "\n".join(
             [
                 f"from {CORE}.api.service import StatelessStream",
-                "from live.ports import ContextMeter",
-                "from live.protocol import ProtocolError",
+                f"from {LIVE}.ports import ContextMeter",
+                f"from {LIVE}.protocol import ProtocolError",
                 "class Local: pass",
                 "isinstance(x, StatelessStream)",
                 "isinstance(x, ContextMeter)",  # a port type: a capability check
@@ -123,10 +124,10 @@ class RuleTests(unittest.TestCase):
     def test_a_class_reached_through_its_module_or_by_issubclass_is_a_site_too(self):
         source = "\n".join(
             [
-                "import live.session.session as live_session",
+                f"import {LIVE}.session.session as live_session",
                 "import examples.frontend_backend_live.models.chat_completions",
                 f"from {CORE}.api import service",
-                "from live import ports",
+                f"from {LIVE} import ports",
                 "isinstance(x, live_session.LiveProtocolSession)",
                 "isinstance(x, examples.frontend_backend_live.models.chat_completions.ChatCompletionsFrontend)",
                 "issubclass(cls, service.StatelessStream)",

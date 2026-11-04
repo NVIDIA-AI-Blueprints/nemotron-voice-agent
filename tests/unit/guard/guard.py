@@ -4,7 +4,7 @@
 """The guard against hardcoding: what it finds in the code, read with ``ast``, never imported.
 
 Every extension point is an interface whose implementations are named in config and picked by a composition root, so
-no code branches on a kind. The guard walks the modules the import rules walk (``src/live``,
+no code branches on a kind. The guard walks the modules the import rules walk (``src/gateways/live``,
 ``src/examples/frontend_backend_live`` with its delegation core, and ``src/server.py``) and
 finds four kinds of site:
 
@@ -33,7 +33,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "src"
-WALKED = ("live", "examples/frontend_backend_live", "server.py")
+WALKED = ("gateways/live", "examples/frontend_backend_live", "server.py")
+LIVE = "gateways.live"
 CORE = "examples.frontend_backend_live.delegation_core"
 
 # The kinds a config names: comparing one against a literal is a branch on a kind.
@@ -82,7 +83,7 @@ BANNED_FLAGS = frozenset(
 # Port modules: an isinstance check against their types (runtime-checkable protocols) is a capability check.
 PORT_MODULES = frozenset(
     {
-        "live.ports",
+        f"{LIVE}.ports",
         f"{CORE}.backend.port",
         "examples.frontend_backend_live.cascade.ports",
         "examples.frontend_backend_live.adapter.contract",
@@ -100,7 +101,7 @@ ROOTS = frozenset(
 TABLE_MODULES = frozenset({f"{CORE}.tables", "examples.frontend_backend_live.tables"})
 # The methods in which a class may pick from a table: when it is built.
 BUILD_METHODS = frozenset({"from_settings", "from_config", "parse"})
-INTERNAL_TOPS = frozenset({"live", "examples", "utils", "examples_registry", "server", "tracing"})
+INTERNAL_TOPS = frozenset({"gateways", "examples", "utils", "examples_registry", "server", "tracing"})
 
 
 @dataclass(frozen=True)

@@ -35,7 +35,7 @@ from examples.frontend_backend_live.cascade.worknote import WorkNote
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
 
 if TYPE_CHECKING:
-    from live.ports import DelegationPort
+    from gateways.live.ports import DelegationPort
 
 __all__ = ["CascadeSession", "log_observation"]
 

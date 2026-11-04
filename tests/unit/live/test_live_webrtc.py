@@ -12,7 +12,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import AudioStreamTrack
 from fastapi import FastAPI
 
-from live.mount import mount_live
+from gateways.live.mount import mount_live
 from tests.unit.live_helpers import FakeAdapter
 
 SESSION = {"model": "live-1", "instructions": "Be brief."}

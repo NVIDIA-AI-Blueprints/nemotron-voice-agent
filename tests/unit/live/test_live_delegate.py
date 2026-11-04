@@ -13,8 +13,8 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from live.gateway import LiveSettings
-from live.mount import mount_live
+from gateways.live.gateway import LiveSettings
+from gateways.live.mount import mount_live
 from tests.unit.live_helpers import FakeAdapter
 
 FUNCTION_CALL = {"type": "function_call", "call_id": "call_1", "name": "get_menu", "arguments": '{"category":"tea"}'}

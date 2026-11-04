@@ -24,7 +24,7 @@ deployment profiles when changing shared behavior.
   `src/server.py`, and the other root modules in `src/`.
 - For the Frontend/Backend Live example, also use its `config.yaml` and
   `core.yaml` with their profiles, its `factory.py`, the Live gateway in
-  `src/live/`, and the delegation core in
+  `src/gateways/live/`, and the delegation core in
   `src/examples/frontend_backend_live/delegation_core/`.
   `docs/design/architecture.md` describes how they fit together.
 - Use `docker-compose.yml` and the files in `docker/` for Compose profiles,
