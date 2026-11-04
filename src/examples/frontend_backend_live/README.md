@@ -22,11 +22,11 @@ The `services` lists in [`examples_registry.yaml`](../../../examples_registry.ya
 
 | Profile | ASR | Talker LLM | Backend LLM | TTS |
 | --- | --- | --- | --- | --- |
-| Cloud | Nemotron ASR Streaming English | Nemotron 3.5 Lightning 30B A3B | Nemotron 3 Ultra 550B A55B with reasoning enabled | Magpie TTS Multilingual |
-| Server | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Nemotron 3 Ultra 550B A55B with reasoning enabled, on the public NVIDIA API | Magpie TTS Multilingual NIM |
+| Cloud | Nemotron ASR Streaming English | Nemotron 3.5 Lightning 30B A3B | Nemotron 3.5 Super VL 120B A12B with reasoning enabled | Magpie TTS Multilingual |
+| Server | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Nemotron 3.5 Super VL 120B A12B with reasoning enabled, on the public NVIDIA API | Magpie TTS Multilingual NIM |
 | Single GPU | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Nemotron 3.5 Lightning 30B A3B through vLLM with reasoning enabled | Magpie TTS Multilingual through NeMo-Speech.cpp |
 
-The talker's `llm` slot lists Nemotron 3.5 Lightning. The backend's `thinker-llm` slot lists Nemotron 3 Ultra, then Lightning. A profile's default is the first entry that its catalog serves. Ultra has no local server: the Cloud and Server profiles call it on the public NVIDIA API (`integrate.api.nvidia.com`) with `NVIDIA_API_KEY`, and Single GPU keeps its local Lightning, with Ultra listed after it when `NVIDIA_API_KEY` is set. Each slot's `settings` in `examples_registry.yaml` set its sampling. The talker runs at temperature 0, with reasoning off and at most 512 output tokens. The backend on Ultra runs at temperature 0, with reasoning on, at most 4,096 output tokens, and no reasoning budget, which Ultra's endpoint refuses. On Nemotron 3.5 Lightning, the backend runs at temperature 0.7 with a 256-token reasoning budget.
+The talker's `llm` slot lists Nemotron 3.5 Lightning. The backend's `thinker-llm` slot lists Nemotron 3.5 Super VL, then Lightning. A profile's default is the first entry that its catalog serves. The Super VL entry, `nemotron-super-cloud`, has no local server. The Cloud and Server profiles call it on the public NVIDIA API (`integrate.api.nvidia.com`) with `NVIDIA_API_KEY`. Single GPU keeps its local Lightning and lists Super VL after it when `NVIDIA_API_KEY` is set. Each slot's `settings` in `examples_registry.yaml` set its sampling. The talker runs at temperature 0, with reasoning off and at most 512 output tokens. The backend on Super VL runs at temperature 0, with reasoning on, a 1,024-token reasoning budget, medium reasoning effort, and at most 4,096 output tokens. On Nemotron 3.5 Lightning, the backend runs at temperature 0.7 with a 256-token reasoning budget.
 
 ## Running the Example
 

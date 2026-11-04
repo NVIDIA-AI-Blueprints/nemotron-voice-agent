@@ -4,6 +4,7 @@
 # ruff: noqa: D101, D102, D103
 """The root's catalog: the profiles' default models, keys and unlisted slots."""
 
+import json
 import os
 import re
 import unittest
@@ -22,7 +23,7 @@ REPO = Path(__file__).resolve().parents[4]
 SELF_HOSTED_RECIPES = ("server", "single-gpu")
 EXAMPLE = "frontend-backend-live"
 LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
-ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
+SUPER_VL = "nvidia/nemotron-3.5-super-vl-120b-a12b"
 
 
 def compose_services() -> dict[str, dict]:
@@ -105,10 +106,10 @@ class DefaultModelTests(unittest.TestCase):
             finally:
                 clear_service_context()
 
-    def test_cloud_and_server_run_lightning_and_ultra_on_the_public_api(self):
+    def test_cloud_and_server_run_lightning_and_super_vl_on_the_public_api(self):
         defaults = {
-            "cloud": ("cloud-nim:nemotron-lightning", "cloud-nim:nemotron-ultra"),
-            "server": ("self-hosted:nemotron-lightning", "self-hosted:nemotron-ultra"),
+            "cloud": ("cloud-nim:nemotron-lightning", "cloud-nim:nemotron-super-cloud"),
+            "server": ("self-hosted:nemotron-lightning", "self-hosted:nemotron-super-cloud"),
         }
         for recipe, ids in defaults.items():
             with self.subTest(recipe=recipe), self.recipe(recipe) as catalog:
@@ -116,20 +117,34 @@ class DefaultModelTests(unittest.TestCase):
                 frontend, backend = catalog.model("llm"), catalog.model("thinker-llm")
                 thinking = frontend.extra_params["extra_body"]["chat_template_kwargs"]
                 self.assertEqual((frontend.model, thinking), (LIGHTNING, {"enable_thinking": False}))
-                self.assertEqual((backend.model, backend.base_url), (ULTRA, NVCF_LLM_BASE_URL))
-                # Reasoning on, and no reasoning budget, which the public endpoint rejects for Ultra.
-                reasoning = {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}
-                self.assertEqual(backend.extra_params, {"temperature": 0.0, "max_tokens": 4096, **reasoning})
+                self.assertEqual((backend.model, backend.base_url), (SUPER_VL, NVCF_LLM_BASE_URL))
+                reasoning = {
+                    "chat_template_kwargs": {"enable_thinking": True},
+                    "reasoning_budget": 1024,
+                    "reasoning_effort": "medium",
+                }
+                self.assertEqual(
+                    backend.extra_params, {"temperature": 0.0, "max_tokens": 4096, "extra_body": reasoning}
+                )
 
-    def test_single_gpu_runs_both_roles_on_its_lightning_and_lists_ultra_after(self):
+    def test_a_session_with_reasoning_off_drops_the_super_vl_budget_and_effort(self):
+        with self.recipe("cloud") as catalog:
+            entry = catalog.entry("thinker-llm")
+            settings = json.dumps({"enable_thinking": False})  # the Services tab's Reasoning toggle, turned off
+            session = {"pipeline_mode": EXAMPLE, "thinker_llm_id": entry["id"], "thinker_llm_settings": settings}
+            backend = resolve_endpoint(entry, filter_session_config(session), "thinker_", slot="thinker-llm")
+            off = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+            self.assertEqual(backend.extra_params, {"temperature": 0.0, "max_tokens": 4096, **off})
+
+    def test_single_gpu_runs_both_roles_on_its_lightning_and_lists_super_vl_after(self):
         with self.recipe("single-gpu") as catalog:
             local = "self-hosted:nemotron-lightning"
             self.assertEqual((catalog.entry("llm")["id"], catalog.entry("thinker-llm")["id"]), (local, local))
-            self.assertEqual(catalog.models("thinker-llm"), [LIGHTNING, ULTRA])
-            # A session that picks Ultra reaches the public API, not the local server of the slot's default.
-            body = filter_session_config({"pipeline_mode": EXAMPLE, "thinker_llm_id": "cloud-nim:nemotron-ultra"})
+            self.assertEqual(catalog.models("thinker-llm"), [LIGHTNING, SUPER_VL])
+            # A session that picks Super VL reaches the public API, not the local server of the slot's default.
+            body = filter_session_config({"pipeline_mode": EXAMPLE, "thinker_llm_id": "cloud-nim:nemotron-super-cloud"})
             picked = resolve_endpoint(catalog.entry("thinker-llm"), body, "thinker_", slot="thinker-llm")
-            self.assertEqual((picked.model, picked.base_url), (ULTRA, NVCF_LLM_BASE_URL))
+            self.assertEqual((picked.model, picked.base_url), (SUPER_VL, NVCF_LLM_BASE_URL))
 
 
 class EndpointTests(unittest.TestCase):

@@ -97,6 +97,16 @@ nemotron-bolt-4b-nvcf:
 nemotron-super:
   <<: *llm
 
+nemotron-super-cloud:
+  <<: *nim
+  reasoning_effort:
+    label: "Reasoning Effort"
+    type: enum
+    options: [low, medium, high]
+    default: medium
+    requires: enable_thinking
+    path: extra_body.reasoning_effort
+
 magpie-tts:
   synthesis_mode:
     label: "Synthesis Mode"
