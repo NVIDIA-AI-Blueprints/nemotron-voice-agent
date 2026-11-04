@@ -543,6 +543,20 @@ class SpeakerHistoryOwnershipTests(unittest.IsolatedAsyncioTestCase):
         )
         service.push_frame.assert_awaited_once()
 
+    async def test_the_spoken_turn_is_reported_to_the_user_turn_handler(self) -> None:
+        handler = AsyncMock()
+        service = SubagentsSpeakerOmniService(
+            api_key="test",
+            context=LLMContext([{"role": "system", "content": "identity"}]),
+            audio_response_instruction="contract",
+            user_turn_handler=handler,
+        )
+        service.push_frame = AsyncMock()
+
+        await service._emit_user_transcript("what is the capital of Spain")
+
+        handler.assert_awaited_once_with("what is the capital of Spain")
+
     def test_the_speaker_is_not_announced_as_a_realtime_service(self) -> None:
         # The transport worker's assistant aggregator, which sees every frame
         # bridged out of this worker, has no user half to pair with.

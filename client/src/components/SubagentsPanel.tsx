@@ -28,7 +28,7 @@ function SubagentList({ subagents }: Readonly<{ subagents: Subagent[] }>) {
       const agent = stringField(message, "agent");
       const taskId = stringField(message, "task_id");
       if (!agent || !taskId) return;
-      const done = ["done", "error", "complete"].includes(stringField(message, "status"));
+      const done = ["done", "error", "complete", "cancelled"].includes(stringField(message, "status"));
       setActiveTasks((prev) => {
         const next = new Map(prev);
         const tasks = new Set(next.get(agent) ?? []);

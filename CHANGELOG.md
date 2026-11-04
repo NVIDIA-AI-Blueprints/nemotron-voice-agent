@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Omni examples use Pipecat's `NvidiaOmniLLMService`.** The blueprint's own `nvidia_omni_multimodal_service.py` is removed. The service always reads the user transcript from the Omni response, so `OMNI_EMIT_TRANSCRIPTIONS` is no longer read.
 - **Pipecat 1.15.** The server moves from Pipecat 1.12 to `pipecat-ai` 1.15.0, including Silero VAD state retention and the current service APIs. The browser packages were updated for compatibility with that server.
+- **Omni vLLM 0.33.0.** The Omni vLLM service moves from 0.20.0 to 0.33.0.
 - **Scaling metric names.** `llm_ttft` is reported as `llm_ttfb`. `vad_smart_turn` is reported as `turn_taking_latency`, measured from the VAD stop to the LLM request for any configured turn strategy. Result files that still contain `llm_ttft` remain readable.
 
 ## [2.3.1] - 2026-10-29
