@@ -25,12 +25,11 @@ from typing import Any, ClassVar, Protocol
 from loguru import logger
 from pipecat.frames.frames import CancelFrame, EndFrame, InterruptionFrame, TTSStoppedFrame, TTSTextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.nvidia.stt import NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 
 from examples.frontend_backend_live.media.turns import TurnEnd
 from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
-from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from utils import NVCF_GRPC_SERVER, is_nvcf, load_ipa_dictionary, nvidia_api_key
 
 
@@ -39,10 +38,10 @@ def speech_server(entry: Mapping[str, Any]) -> str:
     return str(entry.get("server") or NVCF_GRPC_SERVER)
 
 
-def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaForceEouSTTService:
+def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaSTTService:
     """Build the streaming speech-to-text service from the catalog entry and body overrides.
 
-    ``turn_end`` builds it, so that it finalizes what it heard when that turn end needs it (``media/turns.py``).
+    ``turn_end`` builds it, with its budget for the final measured from that turn end's VAD stop (``media/turns.py``).
     """
     server = body.get("asr_server", "") or speech_server(default_asr)
     kwargs: dict = {"api_key": nvidia_api_key(), "server": server, "use_ssl": is_nvcf(server)}
@@ -56,7 +55,7 @@ def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaForceEo
     if language:
         kwargs["settings"].language = language
     logger.info(f"ASR: server={server}, function_id={function_id or '(default)'}, language={language or '(default)'}")
-    return turn_end.stt(**kwargs, stop_history=400)
+    return turn_end.stt(**kwargs, stop_history=320)
 
 
 def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:

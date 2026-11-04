@@ -5,13 +5,13 @@
 
 """The turn ends: their strategies in Pipecat's own user aggregator, and the speech-to-text each builds.
 
-Local only: a scripted turn analyzer stands in for Smart Turn's verdicts, and no speech-to-text connects. A turn's words
-are read from each context frame as it passes: Pipecat's context is one object, which later turns change.
+Local only: no speech-to-text connects. A turn's words are read from each context frame as it passes: Pipecat's context
+is one object, which later turns change.
 """
 
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from pipecat.audio.turn.base_turn_analyzer import BaseTurnAnalyzer, BaseTurnParams, EndOfTurnState
 from pipecat.audio.vad.vad_analyzer import VAD_START_SECS
@@ -28,69 +28,20 @@ from pipecat.frames.frames import (
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair, LLMUserAggregatorParams
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.stt_service import STTService
+from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.services.nvidia.stt import NvidiaSTTService
 from pipecat.tests.utils import SleepFrame, run_test
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
-from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy, TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from examples.frontend_backend_live.config_manager.schema import SpeechConfig
 from examples.frontend_backend_live.media import turns
-from examples.frontend_backend_live.media.turns import (
-    TURN_ENDS,
-    FinalizeAtVerdictUserTurnStopStrategy,
-    FinalizeOnRequestSTTService,
-    Shared,
-    Silence,
-    SmartTurn,
-    STTFinalizeFrame,
-    ttfs_after,
-)
-from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
+from examples.frontend_backend_live.media.services import build_stt
+from examples.frontend_backend_live.media.turns import TURN_ENDS, Shared, Silence, SmartTurn, ttfs_after
 
 SILENCE = b"\x00" * 640  # 20 ms at 16 kHz
 BUDGET = (0.7, 1.1)  # the final's 0.8 s after the VAD stop, with the event loop's slack
-
-
-class ScriptedTurnAnalyzer(BaseTurnAnalyzer):
-    """Smart Turn's stand-in: one scripted verdict per VAD stop, and its silence fallback after N silent frames."""
-
-    def __init__(self, verdicts, fallback_frames=None):
-        super().__init__()
-        self.verdicts = list(verdicts)
-        self.fallback_frames = fallback_frames
-        self.silent = 0
-        self.fell_back = False
-        self._triggered = False
-
-    @property
-    def speech_triggered(self):
-        return self._triggered
-
-    @property
-    def params(self):
-        return BaseTurnParams()
-
-    def append_audio(self, buffer, is_speech):
-        if is_speech:
-            self._triggered, self.silent = True, 0
-            return EndOfTurnState.INCOMPLETE
-        if self._triggered:
-            self.silent += 1
-            if self.fallback_frames is not None and self.silent >= self.fallback_frames:
-                self._triggered, self.fell_back = False, True
-                return EndOfTurnState.COMPLETE
-        return EndOfTurnState.INCOMPLETE
-
-    async def analyze_end_of_turn(self):
-        if self.fell_back:  # Pipecat asks again after a fallback, only for its metrics
-            self.fell_back = False
-            return EndOfTurnState.INCOMPLETE, None
-        return self.verdicts.pop(0), None
-
-    def clear(self):
-        self._triggered, self.silent = False, 0
 
 
 class Stamps(FrameProcessor):
@@ -120,10 +71,6 @@ class Run:
         self.heard, self.out, self.up = heard, out, up
 
     @property
-    def asks(self):
-        return sum(isinstance(f, STTFinalizeFrame) for f in self.up)
-
-    @property
     def ends(self):
         return self.out.times(UserStoppedSpeakingFrame)
 
@@ -140,9 +87,30 @@ class Run:
         return moment - self.heard.times(VADUserStoppedSpeakingFrame)[0]
 
 
-def user_aggregator(stop_strategy):
-    params = LLMUserAggregatorParams(user_turn_strategies=UserTurnStrategies(stop=[stop_strategy]))
+def user_aggregator(stop_strategy, **params):
+    params = LLMUserAggregatorParams(user_turn_strategies=UserTurnStrategies(stop=[stop_strategy]), **params)
     return LLMContextAggregatorPair(LLMContext(), user_params=params).user()
+
+
+class Complete(BaseTurnAnalyzer):
+    """Smart Turn's stand-in: every pause judged complete."""
+
+    @property
+    def speech_triggered(self):
+        return True
+
+    @property
+    def params(self):
+        return BaseTurnParams()
+
+    def append_audio(self, buffer, is_speech):
+        return EndOfTurnState.INCOMPLETE
+
+    async def analyze_end_of_turn(self):
+        return EndOfTurnState.COMPLETE, None
+
+    def clear(self):
+        pass
 
 
 def final(text):
@@ -170,9 +138,9 @@ def pause(stop=0.2):
 
 
 class TurnCase(unittest.IsolatedAsyncioTestCase):
-    async def run_turns(self, stop_strategy, frames):
+    async def run_turns(self, stop_strategy, frames, **params):
         heard, out = Stamps(), Stamps()
-        _, up = await run_test(Pipeline([heard, user_aggregator(stop_strategy), out]), frames_to_send=frames)
+        _, up = await run_test(Pipeline([heard, user_aggregator(stop_strategy, **params), out]), frames_to_send=frames)
         return Run(heard, out, up)
 
     def assert_one_turn_on_its_final(self, run, words):
@@ -186,100 +154,14 @@ class TurnCase(unittest.IsolatedAsyncioTestCase):
         self.assertLess(seconds, BUDGET[1])
 
 
-class FinalizeAtVerdict(TurnCase):
-    def strategy(self, verdicts, fallback_frames=None):
-        return FinalizeAtVerdictUserTurnStopStrategy(turn_analyzer=ScriptedTurnAnalyzer(verdicts, fallback_frames))
-
-    async def test_a_complete_verdict_asks_for_the_final_and_the_turn_ends_on_it(self):
-        frames = [*start(), *speech(), interim("H"), pause(), SleepFrame(0.1), final("H X"), SleepFrame(0.1)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(run.asks, 1)
-        self.assert_one_turn_on_its_final(run, "H X")
-
-    async def test_an_incomplete_verdict_asks_for_nothing_and_keeps_the_turn(self):
-        frames = [*start(), *speech(), pause(), SleepFrame(0.3), final("H X"), SleepFrame(0.2)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.INCOMPLETE]), frames)
-        self.assertEqual(run.asks, 0)
-        self.assertEqual(run.ends, [])
-
-    async def test_a_final_from_before_the_pause_does_not_end_a_complete_turn_without_asking(self):
-        # The speech-to-text finalized "H" on its own, then heard "X" with no partial yet: Pipecat alone would end the
-        # turn on "H" at the verdict, and "X" would open a turn of its own. Only the asked-for final has "X".
-        frames = [*start(), *speech(), final("H"), SleepFrame(0.05), *speech(3), pause(), SleepFrame(0.1)]
-        frames += [final("X"), SleepFrame(0.1)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(run.asks, 1)
-        self.assert_one_turn_on_its_final(run, "H X")
-
-    async def test_a_complete_turn_with_no_words_ends_within_the_final_budget_not_at_five_seconds(self):
-        frames = [*start(), *speech(), pause(), SleepFrame(1.2)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(run.asks, 1)
+class SmartTurnTurns(TurnCase):
+    async def test_a_complete_turn_with_no_words_ends_at_the_turn_silence_not_at_five_seconds(self):
+        params = SmartTurn(SpeechConfig()).user_params(welcome_enabled=False)
+        frames = [*start(), *speech(), pause(), SleepFrame(1.4)]
+        stop = TurnAnalyzerUserTurnStopStrategy(turn_analyzer=Complete())
+        run = await self.run_turns(stop, frames, user_turn_stop_timeout=params.user_turn_stop_timeout)
         self.assertEqual((len(run.ends), run.words), (1, []))
-        self.assert_within_the_budget(run.after_the_pause(run.ends[0]))
-
-    async def test_the_final_keeps_its_budget_after_a_longer_pause(self):
-        frames = [*start(0.4), *speech(), pause(0.4), SleepFrame(1.2)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(len(run.ends), 1)
-        self.assert_within_the_budget(run.after_the_pause(run.ends[0]))  # 0.8 s after the stop, as at a 0.2 s stop
-
-    async def test_an_ask_after_everything_was_final_waits_out_the_budget(self):
-        # The speech-to-text finalized all it heard before the pause, so the ask brings no final: the turn keeps its
-        # words and ends once the budget has run out, where Pipecat alone would end it at the verdict.
-        frames = [*start(), *speech(), interim("yes"), final("yes"), SleepFrame(0.05), pause(), SleepFrame(1.2)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(run.asks, 1)
-        self.assert_one_turn_on_its_final(run, "yes")
-        self.assert_within_the_budget(run.after_the_pause(run.ends[0]))
-
-    async def test_an_earlier_final_that_lands_after_the_ask_ends_the_turn_and_the_asked_final_starts_the_next(self):
-        # The speech-to-text closes "eight two" on its own just after the ask, then the asked-for final brings "eight":
-        # no words are lost, but they come as two turns.
-        frames = [*start(), *speech(), interim("eight two"), pause(), SleepFrame(0.25), final("eight two")]
-        frames += [SleepFrame(0.2), final("eight"), SleepFrame(1.2)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(run.asks, 1)
-        self.assertEqual(len(run.ends), 2)
-        self.assertTrue(run.finals[0] < run.ends[0] < run.finals[1] < run.ends[1])
-        self.assertEqual(run.words, ["eight two", "eight"])
-
-    async def test_a_final_later_than_its_budget_starts_a_turn_of_its_own(self):
-        # The turn ends with no words when the budget runs out; the late final's words are the next turn.
-        frames = [*start(), *speech(), interim("H X"), pause(), SleepFrame(1.0), final("H X"), SleepFrame(1.2)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(run.asks, 1)
-        self.assertEqual(len(run.ends), 2)
-        self.assertTrue(run.ends[0] < run.finals[0] < run.ends[1])
-        self.assert_within_the_budget(run.after_the_pause(run.ends[0]))
-        self.assertEqual(run.words, ["H X"])
-
-    async def test_the_fallback_after_the_speech_to_text_finalized_on_its_own_ends_at_once_without_asking(self):
-        frames = [*start(), *speech(), interim("H"), pause(), SleepFrame(0.05), final("H X"), SleepFrame(0.05)]
-        frames += [*speech(10), SleepFrame(0.1)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.INCOMPLETE], 5), frames)
-        self.assertEqual(run.asks, 0)
-        self.assert_one_turn_on_its_final(run, "H X")
-
-    async def test_the_fallback_with_a_partial_result_unfinalized_asks_for_the_final(self):
-        frames = [*start(), *speech(), pause(), SleepFrame(0.05), interim("H"), SleepFrame(0.05), *speech(10)]
-        frames += [SleepFrame(0.1), final("H X"), SleepFrame(0.1)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.INCOMPLETE], 5), frames)
-        self.assertEqual(run.asks, 1)
-        self.assert_one_turn_on_its_final(run, "H X")
-
-    async def test_a_turn_with_no_words_ends_at_the_fallback_without_asking(self):
-        frames = [*start(), *speech(), pause(), SleepFrame(0.05), *speech(10), SleepFrame(0.1)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.INCOMPLETE], 5), frames)
-        self.assertEqual(run.asks, 0)
-        self.assertEqual((len(run.ends), run.words), (1, []))
-
-    async def test_speaking_again_drops_the_pending_end_and_its_wait(self):
-        frames = [*start(), *speech(), pause(), SleepFrame(0.05)]
-        frames += [VADUserStartedSpeakingFrame(start_secs=0.2), *speech(), SleepFrame(1.0)]
-        run = await self.run_turns(self.strategy([EndOfTurnState.COMPLETE]), frames)
-        self.assertEqual(run.asks, 1)
-        self.assertEqual(run.ends, [])
+        self.assertAlmostEqual(run.after_the_pause(run.ends[0]), 1.0, delta=0.15)  # 1.2 s of silence, after 0.2 s
 
 
 class SilenceTurns(TurnCase):
@@ -307,20 +189,6 @@ class SilenceTurns(TurnCase):
         self.assertEqual(run.words, ["yes"])
 
 
-class FinalizeOnRequest(unittest.IsolatedAsyncioTestCase):
-    async def test_a_vad_stop_does_not_finalize_and_a_request_does(self):
-        stt = FinalizeOnRequestSTTService(use_ssl=False)
-        with (
-            patch.object(STTService, "process_frame", AsyncMock()) as base,
-            patch.object(FinalizeOnRequestSTTService, "request_force_eou", AsyncMock()) as force,
-        ):
-            await stt.process_frame(VADUserStoppedSpeakingFrame(stop_secs=0.2), FrameDirection.UPSTREAM)
-            force.assert_not_awaited()
-            self.assertEqual(base.await_count, 1)  # Pipecat's own handling of the stop still runs
-            await stt.process_frame(STTFinalizeFrame(), FrameDirection.UPSTREAM)
-            force.assert_awaited_once()
-
-
 class TurnEnds(unittest.TestCase):
     def assert_mutes_only_for_a_welcome(self, end):
         """The mute keeps the caller's audio out until a welcome has played, and there is none without one."""
@@ -328,20 +196,26 @@ class TurnEnds(unittest.TestCase):
         self.assertIsInstance(mute, MuteUntilFirstBotCompleteUserMuteStrategy)
         self.assertEqual(end.user_params(welcome_enabled=False).user_mute_strategies, [])
 
-    def test_smart_turn_judges_the_configured_pause_and_builds_a_speech_to_text_that_finalizes_when_asked(self):
+    def test_smart_turn_judges_the_configured_pause_with_pipecats_strategy_and_speech_to_text(self):
         end = SmartTurn(SpeechConfig())
         stt = end.stt(use_ssl=False)
-        self.assertIs(type(stt), FinalizeOnRequestSTTService)
+        self.assertIs(type(stt), NvidiaSTTService)
         self.assertAlmostEqual(stt._ttfs_p99_latency, 1.0)  # the final's 0.8 s budget, after the 0.2 s stop
         params = end.user_params(welcome_enabled=False)
         self.assertEqual(params.vad_analyzer.params.stop_secs, 0.2)
         (stop,) = params.user_turn_strategies.stop
-        self.assertIsInstance(stop, FinalizeAtVerdictUserTurnStopStrategy)
+        self.assertIs(type(stop), TurnAnalyzerUserTurnStopStrategy)
         self.assertAlmostEqual(stop._turn_analyzer.params.stop_secs, 1.0)  # 1.2 s of silence ends any turn
         self.assertEqual(
             end.describe(), {"vad_start_seconds": 0.12, "vad_stop_seconds": 0.2, "turn_silence_seconds": 1.2}
         )
         self.assert_mutes_only_for_a_welcome(end)
+
+    def test_build_stt_finalizes_after_320_ms_of_silence_under_every_turn_end(self):
+        for name, end in TURN_ENDS.items():
+            with self.subTest(name):
+                stt = build_stt({}, {"server": "nemotron-asr:50051"}, end(SpeechConfig(turn_end=name)))
+                self.assertEqual((type(stt), stt._stop_history), (NvidiaSTTService, 320))
 
     def test_the_entries_with_their_own_vad_start_it_after_the_configured_speech_and_shared_keeps_its_own(self):
         for name in ("smart_turn", "silence"):
@@ -364,7 +238,7 @@ class TurnEnds(unittest.TestCase):
     def test_silence_ends_the_turn_at_its_pause_with_no_smart_turn(self):
         end = Silence(SpeechConfig(turn_end="silence", turn_silence_seconds=0.8))
         stt = end.stt(use_ssl=False)
-        self.assertIs(type(stt), NvidiaForceEouSTTService)
+        self.assertIs(type(stt), NvidiaSTTService)
         self.assertAlmostEqual(stt._ttfs_p99_latency, 1.6)
         params = end.user_params(welcome_enabled=False)
         self.assertEqual(params.vad_analyzer.params.stop_secs, 0.8)
@@ -379,7 +253,7 @@ class TurnEnds(unittest.TestCase):
 
     def test_shared_is_nvas_shared_pipeline(self):
         end = Shared(SpeechConfig(turn_end="shared"))
-        self.assertIs(type(end.stt(use_ssl=False)), NvidiaForceEouSTTService)
+        self.assertIs(type(end.stt(use_ssl=False)), NvidiaSTTService)
         with patch.object(turns, "build_user_aggregator_params", return_value="shared params") as shared:
             self.assertEqual(end.user_params(welcome_enabled=True), "shared params")
         shared.assert_called_once_with(True)

@@ -133,8 +133,7 @@ class SpeechConfig:
     """How replies are spoken."""
 
     tts_mode: str = "per_sentence"  # per_sentence | stitched
-    # How the caller's turn ends, and when the speech-to-text finalizes what it heard (media/turns.py): smart_turn,
-    # silence or shared.
+    # How the caller's turn ends (media/turns.py): smart_turn, silence or shared.
     turn_end: str = "smart_turn"
     vad_start_seconds: float = 0.12  # smart_turn, silence: speech this long marks the caller as speaking
     vad_stop_seconds: float = 0.2  # smart_turn: the pause Smart Turn judges, below turn_silence_seconds

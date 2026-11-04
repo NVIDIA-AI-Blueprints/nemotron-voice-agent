@@ -134,14 +134,14 @@ heard, which the work note marks with the prompt set's `answer_ready_label`, the
 the backend does not take the caller's newer words for a reply to it.
 
 The speech pipeline ends each caller turn as `frontend.cascade.speech.turn_end` sets
-([`media/turns.py`](../../src/examples/frontend_backend_live/media/turns.py)). With `smart_turn`, the default, Smart
-Turn judges each pause of `vad_stop_seconds`, which must be shorter than `turn_silence_seconds`. The speech-to-text is
-asked to finalize only when Smart Turn judges the turn complete, or at a pause of `turn_silence_seconds` while it holds
-words that it has not finalized, because a final forced between the letters of a spelled ID loses letters. With
-`silence`, a pause of `turn_silence_seconds` ends the turn, and the speech-to-text finalizes there. With either one, the
-turn ends at the final, or 0.8 seconds after the request when no final comes, so a turn whose words the speech-to-text
-missed does not wait for Pipecat's 5-second turn stop timeout. `shared` uses the turn detection of the shared pipeline,
-with its environment variables.
+([`media/turns.py`](../../src/examples/frontend_backend_live/media/turns.py)). The speech-to-text finalizes what it
+heard on its own after 320 ms of silence, as in the other cascaded examples. With `smart_turn`, the default, Smart Turn
+judges each pause of `vad_stop_seconds`, which must be shorter than `turn_silence_seconds`, and a turn that it judges
+complete ends as in the other cascaded examples ([How It Works](../how-to/tune-pipeline-performance.md#how-it-works)).
+A pause of `turn_silence_seconds` ends any turn whatever Smart Turn judged, and Pipecat's `user_turn_stop_timeout`, set
+to `turn_silence_seconds` less `vad_stop_seconds`, ends a turn that brought no transcript at that same pause. With
+`silence`, a pause of `turn_silence_seconds` ends the turn, at the final or 0.8 seconds after the pause when no final
+comes. `shared` uses the turn detection of the shared pipeline, with its environment variables.
 
 A live session starts after its pipeline has started. Pipecat starts the pipeline only after every processor is set up,
 the text-to-speech's client, synthesis config, and zero-shot audio prompt included, so a session's audio begins only

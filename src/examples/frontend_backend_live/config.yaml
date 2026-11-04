@@ -63,11 +63,10 @@ frontend:
 
     speech:
       tts_mode: per_sentence   # per_sentence | stitched
-      # How the caller's turn ends, and when the speech-to-text finalizes what it heard (media/turns.py):
-      #   smart_turn  Smart Turn judges each pause of vad_stop_seconds; the speech-to-text finalizes once it judges
-      #               the turn over, so a spelled ID keeps its letters
+      # How the caller's turn ends (media/turns.py):
+      #   smart_turn  Smart Turn judges each pause of vad_stop_seconds
       #   silence     a pause of turn_silence_seconds ends the turn; no Smart Turn
-      #   shared      the repository's shared pipeline: Smart Turn at a 0.2 s pause, and a final at every pause
+      #   shared      the repository's shared pipeline: Smart Turn at a 0.2 s pause
       turn_end: smart_turn
       vad_start_seconds: 0.12  # smart_turn, silence: speech this long marks the caller as speaking
       vad_stop_seconds: 0.2    # smart_turn: the pause that Smart Turn judges
