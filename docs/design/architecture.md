@@ -30,7 +30,7 @@ The following terms have a fixed meaning on this page and in the code:
 | Commit gate | While newer input waits to land, or waits for a model conductor's decision, no new call of the work it can concern is dispatched. |
 | Carrier, taker | The carrier is the delegation whose open response carries a Work's output. When a join lands, the newer delegation, the taker, becomes the carrier. |
 | Envelope | The speak and display shape of a result: a `show` item for the screen, then the `final_answer` message to speak. |
-| Caller note | Text the IM adds to the backend's instructions about working with the caller, before the voice note: the `texts.caller_notes` entry that `delegation.caller_note` names. The `default` note asks the backend to ask, in one short question right after it identifies the caller and before any checks, about the caller's situation when a cause of the problem depends on it and no tool shows it. Short examples from several kinds of business show the question to ask, such as whether the caller is at home or travelling when a phone or internet service stopped working, and the backend must not hand the caller off or give up while such a question is unasked. It also asks the backend to do the remaining allowed steps that its instructions give before it hands the caller off, unless the instructions require the hand-off right away. Before any change that the caller cannot easily undo, it asks the backend to describe the exact change, including any amount and how it is paid or refunded, and to act only on a clear yes that the caller gives after hearing that description. A yes to something else, or the request itself, does not count, but a yes to the same description still counts after small talk. A caller note holds only generic rules, with no task, domain, or tool names. `none`, an empty note, adds nothing. |
+| Caller note | Text the IM adds to the backend's instructions about working with the caller, before the voice note: the `texts.caller_notes` entry that `delegation.caller_note` names. The `default` note covers three things. First, when a likely cause of the problem depends on the caller's situation and no tool shows it, the backend asks about it in one short question, right after it identifies the caller and before any checks. Short examples from several kinds of business show the pattern, such as whether a device that will not turn on was dropped or got wet, or whether a delivery that never arrived found the building locked. The backend must not hand the caller off or give up while such a question is unasked, unless its instructions require the handoff right away. Second, before a handoff, the backend does the remaining allowed steps that its instructions give, unless the instructions require the handoff right away. Third, before any change that the caller cannot easily undo, the backend describes the exact change, including any amount and how it is paid or refunded. It acts only on a clear yes that the caller gives after hearing that description. A yes to something else, or the request itself, does not count, but a yes to the same description still counts after small talk. A caller note holds only generic rules: short examples from several kinds of business may illustrate a rule, but it names no task, tool, or product. `none`, an empty note, adds nothing. |
 | Voice note | Text the IM adds to the backend's instructions about the voice channel: the `texts.voice_notes` entry that `delegation.voice_note` names. The `default` note asks for plain spoken sentences that start with the substance, says how speech recognition writes spelled letters, numbers, and IDs, and says how to recover when a lookup by ID fails. It also says that a cut-off reply was heard only up to the cut, so the backend repeats any question or request for confirmation after the cut before acting on what the caller said. An empty note adds nothing. |
 | One-shot session | A request with no conversation, the official stateless use. The client-mode rounds of `POST /v1/live/delegate` use it. |
 
@@ -378,18 +378,22 @@ latte asked for while the work plans, always sends the call to the app.
 
 The IM also helps a task recover an ID that the app does not know
 ([`recovery.py`](../../src/examples/frontend_backend_live/delegation_core/im/recovery.py)). Speech recognition can write an ID that the caller
-spelled correctly in a form the app does not use, such as `Ethan_Martin_2396` for `ethan_martin_2396`. When the app's
+spelled correctly in a form the app does not use, such as `Maya_Ross_3817` for `maya_ross_3817`. When the app's
 output for a call matches `delegation.not_found_pattern` (the default is
-`(?i)\b(not found|does not exist|no such)\b`), the IM takes the failed string argument: the one the output quotes, or
-else the call's only string argument. The IM writes that value in the shape the app's IDs take and appends
+`(?i)\b(not found|does not exist|no such)\b`), the IM takes the failed string argument: the one the output quotes as a
+whole word, or else the call's only string argument. The IM writes that value in the shape the app's IDs take and appends
 `texts.shape_hint` to the output that the task reads. The shape covers letter case, the separator between groups, a
 leading mark such as `#`, and digit grouping. The IM learns it from values that worked earlier in the session for the
 same tool parameter, from string fields of the same name in earlier app outputs, and from the first quoted example in
-the parameter's description, such as `The user id, such as 'sara_doe_496'`. The IM adds a hint only when the session
-has not sent that form yet. A hint never changes a letter or a digit, and it never refuses a call. The ledger and the
+the parameter's description, such as `The user id, such as 'lee_park_42'`. The IM adds a hint only when the session
+has not sent or been offered that form yet, so a retry of the same failed form gets no second hint. An output that
+reports an error, one whose text starts with `Error` or `Exception` or whose JSON object has an `error` key, teaches
+no shape. A hint never changes a letter or a digit, and it never refuses a call. The ledger and the
 records keep the app's original output, and server tools and harness tools get no hint. Each hint emits the
 `tools.shape_hint` trace event with the tool, the failed value, the suggested value, and its source (`session` or
-`description`). Set `delegation.shape_hints: false` to pass the app's outputs unchanged.
+`description`). One-shot requests (`POST /v1/live/delegate`) get no hints, because they send the app's
+outputs back as input. Outputs that arrive after their Work has ended get none either: the IM only records them, and no
+task reads them. Set `delegation.shape_hints: false` to pass the app's outputs unchanged.
 
 ### Stops
 

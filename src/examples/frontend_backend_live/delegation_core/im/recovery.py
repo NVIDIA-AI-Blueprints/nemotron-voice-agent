@@ -4,9 +4,9 @@
 """ID recovery: after an app lookup finds nothing, point the backend at the one written form worth trying.
 
 Speech recognition guesses letter case, spacing and symbols, so the backend often sends an id the caller spelled right
-in a form the app does not know (``Ethan_Martin_2396`` where the app keeps ``ethan_martin_2396``). When an app call's
+in a form the app does not know (``Maya_Ross_3817`` where the app keeps ``maya_ross_3817``). When an app call's
 output says nothing was found, :class:`ShapeHints` writes the value that failed in the shape the app's ids take, learned
-from the tool's parameter description (``such as 'sara_doe_496'``), from values that worked earlier in the session, and
+from the tool's parameter description (``such as 'lee_park_42'``), from values that worked earlier in the session, and
 from fields of the same name in earlier outputs. It adds that form to the output the backend reads, once, and only when
 the session has not tried it yet. It never changes a letter or a digit, and it never refuses a call.
 """
@@ -18,13 +18,17 @@ import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 
-# A quoted example in a parameter's description: 'sara_doe_496' or "#W0000000" (no spaces inside).
+# A quoted example in a parameter's description: 'lee_park_42' or "#A1234567" (no spaces inside).
 _QUOTED = re.compile(r"'([^'\s]+)'|\"([^\"\s]+)\"")
 # The separators an id's groups may be joined with, and every character besides letters and digits an id may hold.
 _SEPARATORS = "_-. "
 _DROPPED = re.compile(r"[\s_\-.()]+")
 # The groups of a value: runs of letters and digits between separators.
 _GROUPS = re.compile(r"[^\W_]+")
+# An app output that reports an error rather than a result (its text starts with "Error" or "Exception", or its JSON
+# object has an "error" key): the values it was given did not work.
+_ERROR_TEXT = re.compile(r"(?i)^\W*(error|exception)\b")
+_ERROR_KEYS = ("error", "errors")
 # Values longer than this, or holding more than this many groups, are not ids.
 _MAX_ID_CHARS = 64
 _MAX_GROUPS = 8
@@ -107,13 +111,22 @@ def _string_arguments(call: Mapping) -> dict[str, str]:
 
 
 def failed_value(arguments: Mapping[str, str], output: str) -> tuple[str, str] | None:
-    """The argument (name, value) a "not found" output is about: the one it quotes, else the call's only string."""
-    quoted = [(name, value) for name, value in arguments.items() if value in output]
+    """The argument (name, value) a "not found" output is about: the one it quotes, else the call's only string.
+
+    A value counts as quoted only where it stands as a whole word, so a short value such as ``1`` is not found inside
+    ``10``.
+    """
+    quoted = [(name, value) for name, value in arguments.items() if value and _quotes(output, value)]
     if len(quoted) == 1:
         return quoted[0]
     if not quoted and len(arguments) == 1:
         return next(iter(arguments.items()))
     return None
+
+
+def _quotes(output: str, value: str) -> bool:
+    """Whether ``output`` holds ``value`` with no letter, digit or underscore right before or after it."""
+    return re.search(rf"(?<!\w){re.escape(value)}(?!\w)", output) is not None
 
 
 def _function(tool: Mapping) -> Mapping:
@@ -165,7 +178,7 @@ class ShapeHints:
         self.observe = observe
         self.worked: dict[tuple[str, str], str] = {}  # (tool, parameter): the newest value that worked
         self.fields: dict[str, str] = {}  # field name: the newest string an app output held for it
-        self.tried: dict[str, set[str]] = {}  # skeleton: every form sent in this session
+        self.tried: dict[str, set[str]] = {}  # skeleton: every form sent or suggested in this session
 
     def outputs(self, calls: Iterable[tuple[dict, dict]], tools: Iterable[Mapping]) -> dict[str, dict]:
         """The outputs of the app's ``calls`` (call, output item) as the backend reads them, by call id.
@@ -194,14 +207,23 @@ class ShapeHints:
         return hinted
 
     def _learn(self, name: str, arguments: Mapping[str, str], text: str) -> None:
-        """A call that found something: its values worked, and its output's fields are values the app knows."""
-        for parameter, value in arguments.items():
-            self.worked[(name, parameter)] = value
+        """A call that found something: its values worked, and its output's fields are values the app knows.
+
+        An output that reports an error teaches nothing, and an output too deeply nested to read teaches only its
+        call's values: learning never fails the outputs it reads.
+        """
+        if _ERROR_TEXT.match(text):
+            return
         try:
             parsed = json.loads(text)
-        except ValueError:
+            pairs = list(_fields(parsed))
+        except (ValueError, RecursionError):
+            parsed, pairs = None, []
+        if isinstance(parsed, Mapping) and any(key in parsed for key in _ERROR_KEYS):
             return
-        for key, value in _fields(parsed):
+        for parameter, value in arguments.items():
+            self.worked[(name, parameter)] = value
+        for key, value in pairs:
             if shape_of(value) is not None:
                 self.fields[key] = value
 
@@ -223,8 +245,10 @@ class ShapeHints:
             suggestion = apply_shape(value, shape) if shape is not None else None
             if suggestion is None:
                 continue
-            if suggestion in self.tried.get(skeleton(value), set()):
+            forms = self.tried.setdefault(skeleton(value), set())
+            if suggestion in forms:
                 return None
+            forms.add(suggestion)  # suggested once: a retry of the same failed form gets no second hint
             self.observe("tools.shape_hint", tool=name, failed=value, suggested=suggestion, source=source)
             return suggestion
         return None
