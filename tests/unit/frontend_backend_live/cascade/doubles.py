@@ -12,7 +12,6 @@ import json
 import unittest
 
 from examples.frontend_backend_live.cascade.agent import LiveAgent
-from examples.frontend_backend_live.cascade.lines import catalog_lines
 from examples.frontend_backend_live.cascade.memory import trim_messages
 from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.cascade.settings import CascadeSettings
@@ -20,29 +19,25 @@ from examples.frontend_backend_live.cascade.talker.talker import Talker
 from examples.frontend_backend_live.cascade.writer.writer import CommentaryWriter
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint, ReliabilityConfig
 from examples.frontend_backend_live.models import Frontend
-from examples.frontend_backend_live.prompts import PromptSet, get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.contracts.delegation_port import ScriptedDelegationPort
 
-
-def prompt_set(version: str = "default") -> PromptSet:
-    return get_prompt_set(version)
-
-
-# The default set, whose words the cascade writes in these tests, and its words for the work note, which tests build
-# the lines they expect with.
-PROMPTS = prompt_set()
+# The example's prompt file: its prompt set, whose words the cascade writes in these tests, its words for the work
+# note, which tests build the lines they expect with, and its lines.
+LOADED = load_prompts()
+PROMPTS, LINES = LOADED.cascade, LOADED.lines
 WORK = PROMPTS.work_texts
 WORK_IN_PROGRESS, NO_WORK_IN_PROGRESS = PROMPTS.work_in_progress, PROMPTS.no_work_in_progress
 ANSWER_READY_LABEL = PROMPTS.answer_ready_label
 
 
 def work_item(number, state, request, update=""):
-    """One entry of the work note, as the default set words it; ``update`` is its worded progress line, if any."""
+    """One entry of the work note, as the prompt set words it; ``update`` is its worded progress line, if any."""
     return WORK.item.format(number=number, state=state, request=request, update=update)
 
 
 def running_state(seconds, steps="", ended=()):
-    """The state of running work, as the default set words it: the calls that ``ended`` (name, status), then ``steps``.
+    """The state of running work, as the prompt set words it: the calls that ``ended`` (name, status), then ``steps``.
 
     ``steps`` are the tools it uses now, when it uses some.
     """
@@ -52,7 +47,7 @@ def running_state(seconds, steps="", ended=()):
 
 
 def progress_update(progress):
-    """An entry's newest progress line, as the default set words it."""
+    """An entry's newest progress line, as the prompt set words it."""
     return WORK.update.format(progress=progress)
 
 
@@ -97,9 +92,8 @@ class ScriptedFrontend(Frontend):
         return step
 
 
-def agent(frontend: Frontend, version: str = "default") -> LiveAgent:
-    prompts = prompt_set(version)
-    return LiveAgent(frontend, prompts, Talker(frontend, prompts), CommentaryWriter(frontend, prompts))
+def agent(frontend: Frontend) -> LiveAgent:
+    return LiveAgent(frontend, PROMPTS, Talker(frontend, PROMPTS), CommentaryWriter(frontend, PROMPTS))
 
 
 class Buffer:
@@ -254,8 +248,7 @@ class Call(unittest.IsolatedAsyncioTestCase):
         reports_playout=False,
         say=None,
         display=None,
-        lines=None,
-        version="default",
+        lines=LINES,
     ):
         self.frontend = ScriptedFrontend(script)
         self.port = port or ScriptedDelegationPort()
@@ -271,7 +264,7 @@ class Call(unittest.IsolatedAsyncioTestCase):
             self.events.append((kind, fields))
 
         self.session = CascadeSession(
-            agent(self.frontend, version),
+            agent(self.frontend),
             config,
             self.buffer,
             delegation=self.port,
@@ -309,4 +302,4 @@ class Call(unittest.IsolatedAsyncioTestCase):
 
     @property
     def lines(self):
-        return catalog_lines()
+        return LINES

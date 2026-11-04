@@ -2,30 +2,41 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D101, D102, D103, D107
-"""What the backend reads when a request sets no instructions: the Live core's generic prompt, a UI bot profile's."""
+"""What the backend reads when a request sets no instructions: the Live core's generic prompt, the UI bot's cafe one."""
 
 import asyncio
 import os
 import unittest
 from unittest.mock import patch
 
+import yaml
+
 from delegation_core.app import build_core
 from delegation_core.backend.providers import base as providers
 from examples.frontend_backend_live import factory, pipeline
-from examples.frontend_backend_live.prompts.catalog import default_profile, get_profile
+from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.core_helpers import FakeChat, chunk
 from tests.unit.frontend_backend_live.root.root_helpers import CATALOG, StubAdapter, clear_root_caches
 
 USER = {"type": "message", "role": "user", "content": "What can you do for me?"}
+# The example's prompts.yaml as written.
+AGENT_PROMPTS = yaml.safe_load(CONFIG_PATH.with_name("prompts.yaml").read_text(encoding="utf-8"))["agent_prompts"]
+
+
+def entry(group: str, name: str) -> str:
+    """The text of ``agent_prompts.<group>.<name>`` as the file holds it, stripped as a backend prompt is used."""
+    return AGENT_PROMPTS[group][name]["content"].strip()
 
 
 def ui_bot_core():
-    """The UI bot's delegation core for a session of the default prompt profile, as ``pipeline.py`` builds it."""
+    """The UI bot's delegation core, as ``pipeline.py`` builds it."""
     state = pipeline.bot_root()
-    settings, instructions = factory.ui_bot_session(state.core, default_profile())
-    endpoints = factory.endpoint_lookup(state.catalog, settings.backend.slot)
+    prompts = load_prompts()
+    instructions = factory.ui_bot_instructions(prompts, prompts.text("Channel", state.channel))
+    endpoints = factory.endpoint_lookup(state.catalog, state.core.backend.slot)
     return build_core(
-        settings, endpoints=endpoints, defaults=factory.backend_defaults(settings, endpoints, instructions)
+        state.core, endpoints=endpoints, defaults=factory.backend_defaults(state.core, endpoints, instructions)
     )
 
 
@@ -60,13 +71,14 @@ class DefaultPromptTests(unittest.IsolatedAsyncioTestCase):
         return request["messages"][0]["content"]
 
     async def test_a_request_with_no_instructions_gets_the_generic_prompt_and_the_ui_bot_the_cafe_prompt(self):
-        cafe = get_profile("cafe")
+        channel = entry("Channel", "cafe")
         live = await self.system_message(factory.delegation_core)
-        self.assertTrue(live.startswith(get_profile("generic").prompt("thinker")), live)
-        self.assertNotIn(cafe.prompt("channel"), live)
+        self.assertTrue(live.startswith(entry("Backend", "generic")), live)
+        self.assertNotIn(channel, live)
         self.assertNotIn("Bluebird", live)  # nothing of the cafe for a client that brings its own tools
         ui_bot = await self.system_message(ui_bot_core)
-        self.assertTrue(ui_bot.startswith(cafe.instructions("thinker")), ui_bot)  # the cafe's prompt, then its channel
+        cafe = f"{entry('Backend', 'cafe')}\n\n{channel}"  # the cafe's prompt, then its channel
+        self.assertTrue(ui_bot.startswith(cafe), ui_bot)
 
 
 if __name__ == "__main__":

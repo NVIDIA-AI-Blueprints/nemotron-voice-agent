@@ -20,10 +20,10 @@ does for a browser session; only its outside edges are replaced:
 * the environment: no audio recorder, no tracing, the welcome switch set by the test, no prompt path override.
 
 Everything else is the bot's own code: its root (:func:`golden_root` runs ``bot_root``'s own reading of
-``config.yaml`` and ``core.ui-bot.yaml``, so the prompt set and the voice note are the files' own), the session's
-prompt profile (the cafe's: its talker, channel, backend prompt and tools), the cascade (talker, writer, work note,
-the greeting line, the task cards), its delegation core and the cafe tools, which its backend runs itself as server
-tools.
+``config.yaml`` and ``core.ui-bot.yaml``, so the channel, the voice note and the backend's prompt and tools are the
+files' own), the session's read of ``prompts.yaml`` (the cafe's talker, backend prompt and channel, the prompt set and
+the lines), the cascade (talker, writer, work note, the greeting line, the task cards), its delegation core and the
+cafe tools, which its backend runs itself as server tools.
 
 Timers: :func:`golden_root` sets the quiet before a progress line (``progress_after_seconds``) to an hour, so no golden
 gets a clock-driven line. The other timers keep the files' values, which these calls never reach (a held round is
@@ -413,8 +413,8 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
             case.workers.append(worker)
             return worker
 
-        def scripted_agent(config, frontend_endpoint):
-            return build_agent(config, frontend_endpoint, frontend_client=case.frontend)
+        def scripted_agent(config, frontend_endpoint, prompts):
+            return build_agent(config, frontend_endpoint, prompts, frontend_client=case.frontend)
 
         def scripted_core(settings, *, endpoints, defaults):
             # The bot's own core, from its profile, with its backend LLM on the backend's script.
@@ -901,7 +901,7 @@ class BotWiringTests(BotGoldenCase):
             (self.transport.input(), self.stt, session, self.tts, self.transport.output()),
         )
         # The backend runs the cafe tools itself, as server tools: the conversation's IM session's backend adapter holds
-        # the tool sources the session's prompt profile names (prompts/cafe/profile.yaml tools: cafe), with their
+        # the tool sources that the bot's core profile names (core.ui-bot.yaml backend.tools: cafe), with their
         # schemas; the core's defaults offer no request tools of their own.
         im = self.ims[0]
         self.assertEqual([type(source) for source in im.backend.tools], [CafeTools])

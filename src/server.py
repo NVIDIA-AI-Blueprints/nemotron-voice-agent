@@ -83,6 +83,7 @@ from utils import (
     default_prompt_key,
     filter_session_config,
     is_nvcf,
+    load_prompt_catalog,
     load_service_entry,
     load_service_entry_by_id,
     load_tools_catalog,
@@ -238,7 +239,7 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
             for key in keys:
                 config.pop(key, None)
     config = filter_session_config(config)
-    prompt = examples_registry.prompt_catalog(example).get(config.get("prompt_key", ""), {})
+    prompt = load_prompt_catalog(examples_registry.example_module_file(example)).get(config.get("prompt_key", ""), {})
     multi_speaker_prompt = isinstance(prompt, dict) and prompt.get("multi_speaker_support") is True
     diarization_disabled = not speaker_diarization_requested(config)
     if multi_speaker_prompt and (
@@ -1041,8 +1042,8 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             await _ensure_services_ready_for_connection(config, _resolve_example(config))
 
         def _resolve_server_tools(config: dict) -> list[str]:
-            example, _ = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
-            prompt = examples_registry.prompt_catalog(example).get(str(config.get("prompt_key", "")), {})
+            _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
+            prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
             if not isinstance(prompt, dict):
                 return []
             raw_tools = prompt.get("tools_available")
@@ -1097,7 +1098,8 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     ):
         example_key = pipeline_mode or fallback_example_key
         example = _bind_example_context_by_key(example_key)
-        catalog = examples_registry.prompt_catalog(example)
+        _, module_file = _example_with_module_file(example_key)
+        catalog = load_prompt_catalog(module_file)
         diarization_supported = _asr_supports_diarization({"asr_id": asr_id})
         speaker_labels_supported = "speaker_labels" in set(example.get("capabilities") or [])
         registry_default_key = examples_registry.prompt_default_key(example_key)

@@ -67,7 +67,7 @@ The following table lists the boxes, what each owns, and what each never knows:
 | Box | Path | Owns | Never knows |
 | --- | --- | --- | --- |
 | Live gateway | [`src/live/`](../../src/live/) | Sessions, the order of commands and of the close, the wire schema, the relay of delegation events, and the choice of the delegation part by the resolved `delegation.type` | Pipecat, the cascade, and the IM's records |
-| Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/), [`cascade/`](../../src/examples/frontend_backend_live/cascade/), and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `models/`, `prompts/`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
+| Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/), [`cascade/`](../../src/examples/frontend_backend_live/cascade/), and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `models/`, `prompts.py`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
 | Delegation core: the IM, the work ledger, and the Responses API surface | [`im/`](../../src/delegation_core/im/), [`ledger/`](../../src/delegation_core/ledger/), and [`api/`](../../src/delegation_core/api/) of [`src/delegation_core/`](../../src/delegation_core/) | Admission, placement through the conductor, Works and their tasks, steering, the commit gate, stops, progress notes, results, endings, one-shot sessions, every record, and the official endpoints | Speech, playout, and backend protocols |
 | Backend adapter | [`src/delegation_core/backend/`](../../src/delegation_core/backend/) | Model rounds, model providers, tool sources, conductors, worker sessions, and harness protocols | Speech and the voice wire |
 
@@ -209,8 +209,8 @@ word for word.
 ### Endings
 
 A delegation ends in one of the following ways. The cascade reads each ending by structure, never by text, and says
-its own fixed line from `lines:` in the example's [`prompts/shared/lines.yaml`](../../src/examples/frontend_backend_live/prompts/shared/lines.yaml)
-where one applies:
+its own fixed line from `agent_prompts.Lines` in the example's
+[`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml) where one applies:
 
 | Ending | What the core writes | What the voice says |
 | --- | --- | --- |
@@ -787,20 +787,8 @@ A tool source runs tools on the server for the backend. Write a `ToolSource`
 [`backend/tools/__init__.py`](../../src/delegation_core/backend/tools/__init__.py), and name it under `backend.tools`
 with its block. The root makes a fresh set for each IM session, so per-session state, such as a cart, is never
 shared. The cafe tools in [`tools/cafe/`](../../src/delegation_core/backend/tools/cafe/) are the reference, and
-the cafe prompt profile turns them on for the UI bot under `tools` in
-[`prompts/cafe/profile.yaml`](../../src/examples/frontend_backend_live/prompts/cafe/profile.yaml).
-
-### Add a Prompt Set
-
-A prompt set holds the text that the cascade writes for a model to read. That covers the cascade's own model calls,
-the labels and the cut mark in the talker's memory, and each delegation's input, which the backend reads. Write a
-module that builds its `PROMPT_SET`
-([`prompts/promptset.py`](../../src/examples/frontend_backend_live/prompts/promptset.py)), add it to `PROMPT_SETS` in
-[`prompts/__init__.py`](../../src/examples/frontend_backend_live/prompts/__init__.py), and set
-`frontend.cascade.prompt_version`. Behavior that differs between sets is data in the set, so no code asks which set it
-runs. The example ships one set, `default`
-([`prompts/default.py`](../../src/examples/frontend_backend_live/prompts/default.py)), which a configuration that names
-none also gets.
+[`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) turns them on for the UI bot under
+`backend.tools`.
 
 ### Extension Points at a Glance
 
@@ -823,7 +811,7 @@ module paths, `core/` is `src/delegation_core/`, `harness/` is `src/delegation_c
 | TTS mode | `SpeechMode` (`FBL/media/services.py`) | `per_sentence`, `stitched` | `frontend.cascade.speech.tts_mode` |
 | Turn end | `TurnEnd` (`FBL/media/turns.py`) | `smart_turn`, `silence`, `shared` | `frontend.cascade.speech.turn_end` |
 | Cut memory | `CutMemory` (`FBL/cascade/utterances.py`) | `as_recorded`, `estimated` | `frontend.cascade.speech.heard_words` |
-| Frontend model provider; prompt set | `Frontend` (`FBL/models/base.py`); `PromptSet` (`FBL/prompts/promptset.py`) | `chat-completions`, `openai-responses`; `default` | `frontend.cascade.provider`; `frontend.cascade.prompt_version` |
+| Frontend model provider | `Frontend` (`FBL/models/base.py`) | `chat-completions`, `openai-responses` | `frontend.cascade.provider` |
 | Result wording; display sink | `ResultWording`, `DisplaySink` (`FBL/cascade/ports.py`) | `writer`, `as_written`; `NullDisplay`, `RtviTaskCards` | `frontend.cascade.delegation.result_wording`; the root |
 | Live example | The registry's `live:` block | `frontend-backend-live` | `examples_registry.yaml` |
 
@@ -838,22 +826,25 @@ The following table lists the files in the example's folder:
 
 | File | Holds | Selected by |
 | --- | --- | --- |
-| [`config.yaml`](../../src/examples/frontend_backend_live/config.yaml) | The frontend only: `frontend.adapter`, each adapter's block (`frontend.cascade`), and `ui_bot.core_config` | The default; `LIVE_CONFIG_PATH` names another file |
+| [`config.yaml`](../../src/examples/frontend_backend_live/config.yaml) | The frontend only: `frontend.adapter`, each adapter's block (`frontend.cascade`), and `ui_bot` (`core_config` and `channel`) | The default; `LIVE_CONFIG_PATH` names another file |
 | [`core.yaml`](../../src/examples/frontend_backend_live/core.yaml) | The delegation core: `delegation` (the IM's settings), `texts` (the lines that the IM and the backend write or add to a model's input; a harness words its own prompts in `backend.harness.prompts`), and `backend` (the adapter, the default model's slot and prompt, the tool sources, and each adapter's block) | The default; `CORE_CONFIG_PATH` names another file |
-| [`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) | `core.yaml` with the envelope, for the repository UI bot; each bot session's prompt profile sets `backend.prompt` and `backend.tools` over it | `ui_bot.core_config` in `config.yaml` |
+| [`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) | `core.yaml` with the envelope and the cafe's `backend.prompt` and `backend.tools`, for the repository UI bot | `ui_bot.core_config` in `config.yaml` |
 | [`core.agent.yaml`](../../src/examples/frontend_backend_live/core.agent.yaml) | `core.yaml` with `backend.adapter: llm-agent` and the envelope | `CORE_CONFIG_PATH` |
 | [`core.harness.yaml`](../../src/examples/frontend_backend_live/core.harness.yaml) | `core.agent.yaml` with `backend.adapter: harness`. The `backend.harness` block of `core.yaml` names the Hermes agent class, starts `hermes acp` over stdio, and binds the bridge on `127.0.0.1:8791` | `CORE_CONFIG_PATH` |
 
 The model behind each role comes from a services slot of the example's registry entry: the talker's and the writer's
 model from `frontend.cascade.slot` (`llm`), and the backend's default model from `backend.slot` (`thinker-llm`). The
-prompts come from the example's prompt profiles, one folder each in
-[`prompts/`](../../src/examples/frontend_backend_live/prompts/), each used as written: the `talker.yaml` of the profile
-that `frontend.cascade.prompt` names (`generic`) when a session sets no instructions or blank ones, and the
-`thinker.yaml` of the profile that `backend.prompt` names (`generic`) when a request sets none. The `generic` profile
-names no domain, and its talker follows the Live API's Live prompt template. The UI bot uses the profile that the UI
-selects, `cafe` by default: its talker, backend prompt, and tools switch together, and the bot adds the profile's
-`channel` context after each prompt. When the talker's services entry sets a `system_prompt`, the bot puts it before the
-talker's prompt, and the talker's memory keeps both as its instructions through compaction.
+prompts come from the example's [`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml), each used as
+written: the `agent_prompts.Talker` entry that `frontend.cascade.prompt` names (`generic`) when a session sets no
+instructions or blank ones, and the `agent_prompts.Backend` entry that `backend.prompt` names (`generic`) when a request
+sets none. The `generic` prompts name no domain, and the talker follows the Live API's Live prompt template.
+`agent_prompts.Cascade` holds the prompt set: the text of the cascade's own model calls, the labels and the cut mark in
+the talker's memory, and each delegation's input, each used exactly as written. The UI bot takes its talker from the
+top-level entry that the UI selects, `cafe` by default, and its backend prompt and tools from `core.ui-bot.yaml`; it
+adds the `agent_prompts.Channel` context that `ui_bot.channel` names after each prompt. Each session reads
+`prompts.yaml` when it starts, and the Live core reads its default backend prompt when it is built. When the talker's
+services entry sets a `system_prompt`, the bot puts it before the talker's prompt, and the talker's memory keeps both as
+its instructions through compaction.
 
 ### How Profiles Extend
 
@@ -903,8 +894,8 @@ The delegation core runs in that process, and the gateway reaches it only throug
 - When the server shuts down, the gateway closes every session and then the core, which releases the core's backend
   resources, such as the harness's tool bridge.
 - A Work ends with its session.
-- The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml` plus the session's
-  prompt profile, and closes it when the session ends.
+- The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml`, and closes it when the
+  session ends.
 
 The server has three ways in for this example:
 

@@ -10,9 +10,9 @@ import unittest
 from dataclasses import replace
 
 from examples.frontend_backend_live.cascade.heard_log import MAX_TRANSCRIPT_CHARS, Heard, HeardLog
-from examples.frontend_backend_live.prompts import TranscriptText, get_prompt_set
+from examples.frontend_backend_live.prompts import TranscriptText, load_prompts
 
-PROMPTS = get_prompt_set("default")
+PROMPTS = load_prompts().cascade
 WORDS = PROMPTS.transcript
 CUT = PROMPTS.cut_mark
 

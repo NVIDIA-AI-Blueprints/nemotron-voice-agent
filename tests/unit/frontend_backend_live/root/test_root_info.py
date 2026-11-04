@@ -28,7 +28,6 @@ INFO_KEYS = (
     ("frontend", "model"),
     ("frontend", "prompt"),
     ("frontend", "provider"),
-    ("prompt_version",),
 )
 
 
@@ -59,7 +58,6 @@ class DescribeTests(DescribeCase):
         info = self.describe(CORE_HALVES["llm"])
         adapter_half = StubAdapter.describe(self.state.settings, self.state.catalog)
         self.assertEqual(info["frontend"], adapter_half["frontend"])
-        self.assertEqual(info["prompt_version"], adapter_half["prompt_version"])
         self.assertEqual(
             info["backend"],
             {
@@ -67,7 +65,7 @@ class DescribeTests(DescribeCase):
                 "slot": "thinker-llm",
                 "model": "org/back",
                 "base_url": "http://back/v1",
-                "prompt": "generic",  # the core's own default profile, for a request with no instructions
+                "prompt": "generic",  # the core's own default backend prompt, for a request with no instructions
             },
         )
         self.assertEqual(info["backend_models"], ["org/back", "org/other"])  # the default first

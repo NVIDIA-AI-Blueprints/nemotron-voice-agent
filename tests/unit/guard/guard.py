@@ -52,7 +52,6 @@ KIND_ATTRIBUTES = frozenset(
         "agent",
         "result_format",
         "result_wording",
-        "prompt_version",
         "voice_note",
         "kind",
         "tts_mode",

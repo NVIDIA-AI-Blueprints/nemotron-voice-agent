@@ -85,9 +85,9 @@ The following files configure the example. The server reads `config.yaml` and `c
 | File | What it sets |
 | --- | --- |
 | [`examples_registry.yaml`](../../../examples_registry.yaml) | The `services.yaml` entries that each slot offers (`llm` for the talker and the writer, `thinker-llm` for the backend), and their sampling and reasoning settings. |
-| [`config.yaml`](config.yaml) | The frontend: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`). `LIVE_CONFIG_PATH` selects another file. |
+| [`config.yaml`](config.yaml) | The frontend: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`), and the UI bot's core profile and channel context (`ui_bot`). `LIVE_CONFIG_PATH` selects another file. |
 | [`core.yaml`](core.yaml) | The delegation core: the IM's settings (`delegation`), the lines that the IM and the backend write (`texts`), and the backend adapter with its blocks (`backend`). `CORE_CONFIG_PATH` selects another file. |
-| [`prompts/`](prompts/) | The prompt profiles, one folder each. The internal `generic` profile holds the talker and backend prompts used as written when a session or a request sets none (neither names a domain). The `cafe` profile, the default, holds the cafe's talker, backend prompt, and channel context, and its server tools. [`prompts/shared/lines.yaml`](prompts/shared/lines.yaml) holds the lines that the voice says word for word (`lines`). Refer to [Prompt Profiles](#prompt-profiles). |
+| [`prompts.yaml`](prompts.yaml) | The talker prompt that the repository UI lists (`cafe`) and the other prompts (`agent_prompts`): the talker and backend prompts used when a session or a request sets none, the cafe's backend prompt and channel context, the texts of the cascade's own model calls, and the lines that the voice says word for word. Refer to [Prompts](#prompts). |
 
 A profile is a file that names the file it builds on (`extends: core.yaml`) and sets only what differs. The example ships the following profiles:
 
@@ -95,7 +95,7 @@ A profile is a file that names the file it builds on (`extends: core.yaml`) and 
 | --- | --- |
 | [`core.agent.yaml`](core.agent.yaml) | The backend LLM agent (`backend.adapter: llm-agent`). |
 | [`core.harness.yaml`](core.harness.yaml) | The harness (`backend.adapter: harness`), connected to an agent that you deploy. |
-| [`core.ui-bot.yaml`](core.ui-bot.yaml) | The repository UI bot: a display part for the task cards. Each bot session's prompt profile sets its backend prompt and server tools over this file's. `ui_bot.core_config` in `config.yaml` names it. |
+| [`core.ui-bot.yaml`](core.ui-bot.yaml) | The repository UI bot: a display part for the task cards, and the cafe's backend prompt and server tools (`backend.prompt` and `backend.tools`). `ui_bot.core_config` in `config.yaml` names it. |
 
 In `config.yaml`, `frontend.cascade` sets the talker's and the writer's model and prompt, and the cascade's behavior. The following excerpt shows the keys that you are most likely to change:
 
@@ -105,8 +105,7 @@ frontend:
   cascade:
     provider: chat-completions     # chat-completions (any OpenAI-compatible chat endpoint) | openai-responses
     slot: llm                      # the examples_registry.yaml services slot of the model
-    prompt: generic                # the prompt profile whose talker.yaml is used, as written, when a session sets no instructions or blank ones
-    prompt_version: default        # the prompt set (prompts/default.py, the one set)
+    prompt: generic                # the talker prompt (agent_prompts.Talker) used, as written, when a session sets no instructions or blank ones
     delegation:
       app_wait_seconds: 50         # the app-wait line when the app's outputs take this long; null: none
       result_wording: writer       # writer | as_written
@@ -123,7 +122,7 @@ In `speech`, `turn_end` sets how live sessions and the repository UI bot decide 
 
 With `result_wording: writer`, the writer reads the talker's instructions and keeps any limits that they set on what the caller may be told. `as_written`, and every writer fallback for a result, says the backend's text as written, cleaned only for speech, so also put those limits in the backend's instructions: `delegation.responses.instructions`, or your own backend's prompt in client mode. For the writer's fallbacks, refer to [The Result Lifecycle](../../../docs/design/architecture.md#the-result-lifecycle).
 
-When a delegation still waits for the app's function outputs after `frontend.cascade.delegation.app_wait_seconds` (50), the voice says the `app_wait_line` from `lines:` in [`prompts/shared/lines.yaml`](prompts/shared/lines.yaml) once. Keep this value below the core's deadline for those outputs, `delegation.client_tool_timeout_seconds` (60) in `core.yaml`, so the line plays while the work still waits.
+When a delegation still waits for the app's function outputs after `frontend.cascade.delegation.app_wait_seconds` (50), the voice says the `app_wait_line` from `agent_prompts.Lines` in [`prompts.yaml`](prompts.yaml) once. Keep this value below the core's deadline for those outputs, `delegation.client_tool_timeout_seconds` (60) in `core.yaml`, so the line plays while the work still waits.
 
 After `progress_after_seconds` (8) of quiet while work runs, the writer can word a short progress line, up to `progress_max_per_delegation` (3) for one delegation. The writer reads the session's `instructions`, so a client that asks for silence while the backend works, such as the cafe's "then wait," gets no line. With `as_written`, no progress line is said. For the details, refer to [Spoken Progress](../../../docs/design/architecture.md#spoken-progress).
 
@@ -137,7 +136,7 @@ delegation:
 backend:
   adapter: llm                      # llm (the default) | llm-agent | harness
   slot: thinker-llm                 # the services slot of the backend's default model
-  prompt: generic                   # the prompt profile whose thinker.yaml is used when a request sets no instructions
+  prompt: generic                   # the backend prompt (agent_prompts.Backend) used when a request sets no instructions
   llm:
     provider: chat-completions      # chat-completions | openai-responses
     conductor: steer                # steer: a new request joins the newest open work | start_each: a queue
@@ -153,29 +152,22 @@ The three backend adapters differ in how they place each request and run the wor
 
 To switch adapters, set `CORE_CONFIG_PATH` to its profile in `.env` (for Compose) or in your shell (on the host), for example `CORE_CONFIG_PATH=src/examples/frontend_backend_live/core.agent.yaml`, and restart the app service. The harness reaches an Agent Client Protocol (ACP) agent that you deploy, such as Hermes, through the `backend.harness` block of `core.yaml`. To deploy Hermes and connect it over stdio or WebSocket, refer to [Connect Your Own Harness](../../../docs/design/architecture.md#connect-your-own-harness).
 
-### Prompt Profiles
+### Prompts
 
-A prompt profile is a folder under [`prompts/`](prompts/) that holds the following files:
+[`prompts.yaml`](prompts.yaml) holds the example's prompts and the texts of the cascade's own model calls. The delegation core keeps its own texts in `core.yaml` (`texts`). The file's top-level `cafe` entry is the Bluebird Cafe talker prompt, which the repository UI lists as the default (`defaults.prompt` in `examples_registry.yaml`). The **Prompts** tab shows the other texts read-only, in the following `agent_prompts` groups:
 
-- `profile.yaml` holds the profile's settings: `default` (the profile a UI bot session gets when it selects none), `internal` (the UI does not list it), and `tools` (the backend's server tool sources for UI bot sessions).
-- `talker.yaml` holds the talker's prompt, as a `description` and a `content`.
-- `thinker.yaml` holds the backend's prompt, in the same form.
-- `channel.yaml` holds the context that the UI bot adds after both prompts, in the same form.
+- `Talker` and `Backend` hold the `generic` prompts, used as written when a session or a request sets no instructions. Neither names a domain. `Backend` also holds the cafe's backend prompt.
+- `Channel` holds the cafe's channel context, which the UI bot adds after its talker prompt and its backend prompt.
+- `Cascade` holds the text of the cascade's own model calls and of each delegation's input. Each text is used exactly as written, spaces and line breaks included.
+- `Lines` holds the lines that the voice says word for word, except `intro`, from which the writer words the UI bot's greeting.
 
-The example ships two profiles. `cafe`, the default, is the Bluebird Cafe demo. `generic` is internal, has no channel, and names no domain. `frontend.cascade.prompt` in `config.yaml` and `backend.prompt` in `core.yaml` name it. Exactly one profile sets `default: true`, and that profile cannot be internal. The lines in [`prompts/shared/lines.yaml`](prompts/shared/lines.yaml) apply to every profile.
+The UI bot takes its talker prompt from the session's selection, as every example does. Its backend prompt and server tools are `backend.prompt` and `backend.tools` in [`core.ui-bot.yaml`](core.ui-bot.yaml), and `ui_bot.channel` in `config.yaml` names its channel context. A new top-level talker prompt therefore runs with the cafe's channel context, backend prompt, and tools, and the greeting lines (`intro` and `greeting`) stay the cafe's.
 
-The repository UI lists each profile that is not internal, through the `prompt_catalog` key of this example's entry in `examples_registry.yaml`. When a UI bot session selects a profile, its talker prompt, channel, backend prompt, and tools switch together. The profile's backend prompt and tools override `backend.prompt` and `backend.tools` in `ui_bot.core_config`. A session's own prompt text (`prompt_content`) replaces the selected profile's talker prompt. A server prompt file (`PROMPT_FILE_PATH`) also replaces the talker prompt, and the session uses the default profile, but a session's own prompt text still wins over the file. Without a selection, `PROMPT_SELECTOR` names the profile. An unknown or internal profile name logs a warning and falls back to `cafe`.
-
-The server reads the role files and `profile.yaml` on each use, so an edit takes effect at the next session or request. The cascade reads its fixed lines from `prompts/shared/lines.yaml` once per process, so restart the server after editing them.
-
-To add a profile, complete the following steps. No Python change is needed.
-
-1. Create `prompts/<name>/` with `profile.yaml`, `talker.yaml`, `thinker.yaml`, and `channel.yaml`. A listed profile requires `channel.yaml`. Only an `internal: true` profile, such as `generic`, which serves as a Live default, can omit it.
-2. Select the profile in the UI, or name it in `frontend.cascade.prompt` in `config.yaml` or in `backend.prompt` in `core.yaml`.
+Each session reads the file when it starts, so an edit takes effect at the next session. The Live core reads its default backend prompt when it is built, so restart the server after you edit that prompt. A prompt file that you start the server with (`PROMPT_FILE_PATH`) replaces the whole file, so it must also hold the `agent_prompts` entries. Without them, the Live routes (live sessions, `GET /v1/live/info`, and `POST /v1/live/delegate`) and UI bot sessions fail, and the server log names the missing entry. The prompt file applies to the whole server, so a file for another example also breaks the Live routes when the server serves them.
 
 ## Live Sessions
 
-A live session client sends its `instructions`, which are the talker's prompt (a session that sets none, or blank ones, gets the talker prompt of the `generic` profile, [`prompts/generic/talker.yaml`](prompts/generic/talker.yaml), which names no domain), and a `delegation` block that selects the delegation mode for the whole session:
+A live session client sends its `instructions`, which are the talker's prompt (a session that sets none, or blank ones, gets the `generic` talker prompt of [`prompts.yaml`](prompts.yaml), which names no domain), and a `delegation` block that selects the delegation mode for the whole session:
 
 - **Responses mode** (`delegation.type: responses`). The server runs the backend work with the settings in `delegation.responses`: the backend `model`, which is required, and optional `instructions` and function `tools`. The backend's function calls stream to the client as `response.event`. The client returns each result as a `function_call_output` item with `response.item.create`, and then sends `response.create` to continue. The results must arrive within `delegation.client_tool_timeout_seconds` in `core.yaml`, or the core stops the work. When a backend task repeats its newest call with the same function and arguments after the client answered it, the core answers the repeat with that output and a note (`texts.repeated_call_output` in `core.yaml`) instead of sending it again, unless a request was admitted since or the work has taken more than one request.
 - **Client mode** (`delegation.type: client`, or no `delegation` block). The server runs no backend. It announces each delegation with `session.delegation.created`, and the client app does the work and sends the result back as a `session.commentary.append`.
@@ -222,10 +214,9 @@ The server serves the Live routes when `LIVE_ENABLED` is `true`, when `LIVE_API_
 
 The following list describes the common changes and where each one is documented:
 
-- **Prompts.** Edit the role files of a profile in [`prompts/`](prompts/), add a profile as [Prompt Profiles](#prompt-profiles) describes, or send your own prompts in each session's `instructions` and `delegation.responses.instructions`.
-- **Server tools.** A tool source runs tools on the server for the backend, as the cafe tools do under `tools` in [`prompts/cafe/profile.yaml`](prompts/cafe/profile.yaml). Refer to [Add a Tool Source](../../../docs/design/architecture.md#add-a-tool-source).
+- **Prompts.** Edit [`prompts.yaml`](prompts.yaml) as [Prompts](#prompts) describes, or send your own prompts in each session's `instructions` and `delegation.responses.instructions`.
+- **Server tools.** A tool source runs tools on the server for the backend, as the cafe tools do under `backend.tools` in [`core.ui-bot.yaml`](core.ui-bot.yaml). Refer to [Add a Tool Source](../../../docs/design/architecture.md#add-a-tool-source).
 - **Frontend or backend model provider.** Refer to [Add a Model Provider](../../../docs/design/architecture.md#add-a-model-provider).
-- **Prompt set.** Refer to [Add a Prompt Set](../../../docs/design/architecture.md#add-a-prompt-set).
 - **Frontend adapter, backend adapter, or harness agent.** Refer to [Extension Recipes](../../../docs/design/architecture.md#extension-recipes).
 
 For models, services, and prompts in general, refer to [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure Services](../../../docs/how-to/configure-services.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md). The Live tests run offline with scripted models. For their commands, refer to [Tests](../../../docs/design/architecture.md#tests) on the architecture page.

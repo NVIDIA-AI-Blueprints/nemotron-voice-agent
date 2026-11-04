@@ -20,10 +20,8 @@ deployment profiles when changing shared behavior.
   `single-gpu` sections, `nvcf` for NVIDIA Cloud) and `settings.yaml` for
   editable service settings.
 - Use each `src/examples/<example>/pipeline.py` and `prompts.yaml` for example
-  behavior and configuration. Frontend/Backend Live keeps its prompts in
-  `src/examples/frontend_backend_live/prompts/<profile>/` instead. Shared
-  runtime behavior lives in `src/examples/shared/`, `src/server.py`, and the
-  other root modules in `src/`.
+  behavior and configuration. Shared runtime behavior lives in `src/examples/shared/`,
+  `src/server.py`, and the other root modules in `src/`.
 - For the Frontend/Backend Live example, also use its `config.yaml` and
   `core.yaml` with their profiles, its `factory.py`, the Live gateway in
   `src/live/`, and the delegation core in `src/delegation_core/`.

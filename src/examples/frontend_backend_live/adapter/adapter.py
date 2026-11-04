@@ -42,6 +42,7 @@ from examples.frontend_backend_live.media.services import (
 )
 from examples.frontend_backend_live.media.turns import TURN_ENDS, TurnEnd
 from examples.frontend_backend_live.models import FRONTENDS
+from examples.frontend_backend_live.prompts import Prompts, load_prompts
 from examples.frontend_backend_live.tables import pick
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, build_user_aggregator_params
 from live.protocol import SessionConfig, approx_tokens
@@ -114,6 +115,7 @@ class CascadeAdapter(PipelineHost):
         live_config: LiveConfig,
         frontend_endpoint: ModelEndpoint,
         instructions: str,
+        prompts: Prompts,
         stt,
         tts,
         user_params=None,
@@ -129,6 +131,7 @@ class CascadeAdapter(PipelineHost):
             live_config: The validated example configuration.
             frontend_endpoint: The talker's model endpoint.
             instructions: The talker's instructions.
+            prompts: The session's read of the example's prompt file: the cascade's texts and lines.
             stt: The speech-to-text service.
             tts: The text-to-speech service.
             user_params: The user aggregator's parameters, from the turn end. Without them the session gets the
@@ -142,6 +145,7 @@ class CascadeAdapter(PipelineHost):
         self.delegation: DelegationPort | None = None  # the session's delegation part, from start
         self.transport, self.connection, self.frontend_endpoint = transport, connection, frontend_endpoint
         self.instructions, self.stt, self.tts, self.user_params = instructions, stt, tts, user_params
+        self.prompts = prompts
         self.frontend_client = frontend_client
         self.speech = speech or speech_mode(tts)
         self.agent: LiveAgent | None = None
@@ -164,8 +168,12 @@ class CascadeAdapter(PipelineHost):
         The session's voice reaches the text-to-speech, and the TTS mode its synthesis mode, through the services'
         body overrides. The turn end (``speech.turn_end``) builds the speech-to-text and the user aggregator's
         settings, which share its VAD stop. Nothing connects until :meth:`start`.
+
+        The session reads the example's prompt file once, here: a session that sets no or blank instructions gets the
+        talker prompt that ``prompt`` names, and the cascade gets the file's prompt set and lines.
         """
         live = settings.live
+        prompts = load_prompts()
         voice = session.audio.output.voice
         overrides = {"tts_voice_id": voice["id"]} if isinstance(voice, dict) else {}
         speech = pick(SPEECH_MODES, settings.tts_mode, "speech.tts_mode")()
@@ -175,7 +183,8 @@ class CascadeAdapter(PipelineHost):
             connection,
             live_config=live,
             frontend_endpoint=catalog.model(live.slot, overrides),
-            instructions=own_instructions(session) or catalog.prompt(live.prompt),
+            instructions=own_instructions(session) or prompts.text("Talker", live.prompt),
+            prompts=prompts,
             stt=build_stt(overrides, catalog.service("asr"), settings.turn_end),
             tts=build_tts({**overrides, "tts_synthesis_mode": speech.synthesis_mode}, catalog.service("tts")),
             user_params=settings.turn_end.user_params(welcome_enabled=False),
@@ -184,7 +193,7 @@ class CascadeAdapter(PipelineHost):
 
     @classmethod
     def describe(cls, settings: CascadeAdapterSettings, catalog: ServiceCatalog) -> dict:
-        """The adapter's half of ``GET /v1/live/info``: its talker, prompt set and speech."""
+        """The adapter's half of ``GET /v1/live/info``: its talker and speech."""
         live = settings.live
         endpoint = catalog.model(live.slot)
         return {
@@ -195,7 +204,6 @@ class CascadeAdapter(PipelineHost):
                 "base_url": endpoint.base_url,
                 "prompt": live.prompt,
             },
-            "prompt_version": live.prompt_version,
             "speech": {"tts_mode": settings.tts_mode, "turn_end": live.speech.turn_end, **settings.turn_end.describe()},
         }
 
@@ -220,7 +228,9 @@ class CascadeAdapter(PipelineHost):
         pipeline runs.
         """
         self.session, self.delegation = session, delegation
-        self.agent = build_agent(self.live_config, self.frontend_endpoint, frontend_client=self.frontend_client)
+        self.agent = build_agent(
+            self.live_config, self.frontend_endpoint, self.prompts, frontend_client=self.frontend_client
+        )
         context = LLMContext(seed_messages(self.config, self.instructions))
         # Only the caller's turns come from Pipecat's aggregator; the cascade writes its own lines (cascade.utterances).
         user_aggregator = LLMContextAggregatorPair(
@@ -243,6 +253,7 @@ class CascadeAdapter(PipelineHost):
             delegation=self.delegation,
             say=self.live.speak,
             interrupt=self.live.interrupt,
+            lines=self.prompts.lines,
         )
         self.live.attach(self.cascade)
         self.cascade.start()
@@ -307,7 +318,7 @@ class CascadeAdapter(PipelineHost):
         call sends after the conversation (``Talker.runtime_data``) last.
         """
         own = own_instructions(self.config)
-        base = "session.instructions" if own else f"prompts/{self.live_config.prompt}/talker.yaml"
+        base = "session.instructions" if own else f"agent_prompts.Talker.{self.live_config.prompt}"
         instructions = [PromptPart(base, self.instructions)]
         instructions += [
             PromptPart("session.instructions.append", message_text(m), "\n\n")

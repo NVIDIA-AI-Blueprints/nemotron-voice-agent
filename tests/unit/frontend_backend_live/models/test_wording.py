@@ -14,11 +14,11 @@ from examples.frontend_backend_live.cascade.writer.wording import Instruction, W
 from examples.frontend_backend_live.cascade.writer.writer import CommentaryWriter
 from examples.frontend_backend_live.models.chat_completions import ChatCompletionsFrontend
 from examples.frontend_backend_live.models.decision import TalkerDecision
-from examples.frontend_backend_live.prompts import get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import CASCADE_ENDPOINT, FAST, ScriptedFrontend, _decision_chunks
 from tests.unit.core_helpers import FakeChat
 
-DEFAULT = get_prompt_set("default")
+DEFAULT = load_prompts().cascade
 INSTRUCTIONS = "You are Remy."
 HISTORY = [{"role": "user", "content": "A latte and a croissant, please."}, {"role": "assistant", "content": "Sure."}]
 LATTE = ReadyResult("item_d1", "msg_1", "Added one large Latte ($5.50).")

@@ -42,6 +42,7 @@ from tests.unit.contracts.delegation_port import ScriptedDelegationPort
 from tests.unit.frontend_backend_live.cascade.doubles import (
     CONFIG,
     FAST,
+    LINES,
     PROMPTS,
     QUIET,
     ScriptedFrontend,
@@ -97,6 +98,7 @@ class Binding(unittest.IsolatedAsyncioTestCase):
             say=self.processor.speak,
             interrupt=self.processor.interrupt,
             settings=settings,
+            lines=LINES,
             reports_playout=reports_playout,
         )
         self.processor.attach(self.session)

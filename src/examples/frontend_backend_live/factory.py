@@ -11,9 +11,9 @@
 
 The root reads ``config.yaml`` (``LIVE_CONFIG_PATH``), the core's ``core.yaml`` (``CORE_CONFIG_PATH``) and the
 example's catalog once, off the event loop (:func:`root`), and resolves what the core names by reference
-(``backend.slot``, and ``backend.prompt``: a prompt profile). Nothing of the frontend goes into the core. The repository
-UI bot (``pipeline.py``) builds a core of its own with these functions, from ``ui_bot.core_config`` and the prompt
-profile its session selected (:func:`ui_bot_session`).
+(``backend.slot``, and ``backend.prompt``: an ``agent_prompts.Backend`` entry of ``prompts.yaml``). Nothing of the
+frontend goes into the core. The repository UI bot (``pipeline.py``) builds a core of its own with these functions,
+from ``ui_bot.core_config``, with the channel context after its backend prompt (:func:`ui_bot_instructions`).
 """
 
 from __future__ import annotations
@@ -22,11 +22,9 @@ import asyncio
 import os
 import threading
 from collections.abc import Callable, Mapping
-from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import cache, wraps
 from pathlib import Path
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 # Starts OpenTelemetry when ENABLE_TRACING is on, as the UI bot's root does: the frontend adapter traces each session's
@@ -43,7 +41,7 @@ from examples.frontend_backend_live.adapter.contract import ServiceStarting
 from examples.frontend_backend_live.config_manager.loader import EXAMPLE_DIR, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ExampleConfig, ModelEndpoint
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts.catalog import PromptProfile, get_profile
+from examples.frontend_backend_live.prompts import Prompts, load_prompts
 from examples.frontend_backend_live.tables import pick
 from live.ports import SessionParts
 from live.protocol import ProtocolError, SessionConfig
@@ -167,34 +165,28 @@ def endpoint_lookup(catalog: ExampleCatalog, slot: str, overrides: dict | None =
 def backend_defaults(core: CoreSettings, endpoints: EndpointLookup, instructions: Callable[[str], str]) -> BackendTask:
     """What a request leaves out: the default model of ``backend.slot`` and the instructions of ``backend.prompt``.
 
-    ``instructions`` gives the text of the prompt profile that ``backend.prompt`` names: the Live core's
-    (:func:`live_backend_prompt`), or a UI bot session's (:func:`ui_bot_session`).
+    ``instructions`` gives the text of the backend prompt that ``backend.prompt`` names: the Live core's
+    (:func:`live_backend_prompt`), or the UI bot's (:func:`ui_bot_instructions`).
     """
     return BackendTask(model=endpoints(None).model, instructions=instructions(core.backend.prompt), tools=[])
 
 
-def live_backend_prompt(profile: str) -> str:
-    """The Live core's default backend instructions: profile ``profile``'s backend prompt as written, no channel.
+def live_backend_prompt(name: str) -> str:
+    """The Live core's default backend instructions: the backend prompt ``name`` of the prompt file, as written.
 
-    The Live core serves every Live client, whatever its tools, so the prompt is used as written.
+    The Live core serves every Live client, whatever its tools, so the prompt is used as written, with no channel. The
+    file is read once, when the core is built.
     """
-    return get_profile(profile).prompt("thinker")
+    return load_prompts().text("Backend", name)
 
 
-def frozen_tools(tools: Mapping[str, Mapping[str, Any]]) -> Mapping[str, Mapping[str, Any]]:
-    """Tool source blocks by name, frozen as the core's settings freeze ``backend.tools`` (``BackendChoice.parse``)."""
-    return MappingProxyType({str(name): MappingProxyType(deepcopy(dict(block))) for name, block in tools.items()})
+def ui_bot_instructions(prompts: Prompts, channel: str) -> Callable[[str], str]:
+    """The UI bot's backend instructions: the backend prompt that ``backend.prompt`` names, then the channel context.
 
-
-def ui_bot_session(core: CoreSettings, profile: PromptProfile) -> tuple[CoreSettings, Callable[[str], str]]:
-    """A UI bot session's core settings and backend instructions, for the prompt profile its session selected.
-
-    The selected profile has the highest priority: its name becomes ``backend.prompt`` and its tools ``backend.tools``,
-    over what ``ui_bot.core_config`` sets. The instructions (the backend prompt, then the channel) come from the same
-    read of the profile as the session's talker, so one session never mixes two versions of a profile.
+    ``prompts`` is the session's read of the prompt file, and ``channel`` the text of the channel context, which also
+    follows the session's talker prompt.
     """
-    backend = replace(core.backend, prompt=profile.name, tools=frozen_tools(profile.tools))
-    return replace(core, backend=backend), lambda _name: profile.instructions("thinker")
+    return lambda name: f"{prompts.text('Backend', name)}\n\n{channel}"
 
 
 def core_client(core: DelegationCore) -> LocalResponsesClient:
@@ -211,8 +203,8 @@ def core_client(core: DelegationCore) -> LocalResponsesClient:
 def delegation_core() -> DelegationCore:
     """The one delegation core of this process, built on first use from the core's own file; it blocks.
 
-    It serves every Live client, whatever its tools, so a request with no instructions gets the backend prompt of the
-    profile that ``backend.prompt`` names as written, with no channel context.
+    It serves every Live client, whatever its tools, so a request with no instructions gets the backend prompt that
+    ``backend.prompt`` names as written, with no channel context.
     """
     state = root()
     endpoints = endpoint_lookup(state.catalog, state.core.backend.slot)

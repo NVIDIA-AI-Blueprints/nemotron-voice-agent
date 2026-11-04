@@ -23,8 +23,7 @@ from pipecat.processors.frame_processor import FrameProcessor
 from delegation_core.im.input import BackendTask, compose, settings_for
 from examples.frontend_backend_live.adapter.adapter import LIVE_AUDIO_IN_RATE, CascadeAdapter
 from examples.frontend_backend_live.cascade.heard_log import Heard
-from examples.frontend_backend_live.cascade.lines import catalog_lines
-from examples.frontend_backend_live.prompts import get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from live.gateway import LiveGateway, LiveSettings, create_live_router
 from live.gateway.websocket import run_primary_websocket
 from live.ports import SessionParts
@@ -47,8 +46,9 @@ from tests.unit.cascade_helpers import (
 from tests.unit.core_helpers import FakeChat, chunk, tool_fragment
 from tests.unit.live_helpers import FakeWebSocket
 
-# The prompt set these whole-call tests run on, whose words the cascade writes.
-PROMPTS = get_prompt_set(LIVE_CONFIG.prompt_version)
+# The example's prompt file: its prompt set, whose words the cascade writes in these whole-call tests, and its lines.
+LOADED = load_prompts()
+PROMPTS, LINES = LOADED.cascade, LOADED.lines
 
 RESPONSES_SESSION = {
     "model": "live-1",
@@ -237,7 +237,7 @@ class ClientToolsEndToEndTests(EngineHarness):
         await self.stt.say("Is my flight on time?")
         ended = await self.ws.wait_for("response.event", where=lambda e: e["event"]["type"] == "response.incomplete")
         self.assertEqual(ended["event"]["response"]["incomplete_details"], {"reason": "max_output_tokens"})
-        apology = catalog_lines().apology
+        apology = LINES.apology
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "again?" in e["delta"])
         self.assertEqual(" ".join(self.tts.spoken), " ".join(apology.split()))  # no lead-in: the apology alone
         events = [e["event"]["type"] for e in self.ws.from_server if e["type"] == "response.event"]
@@ -456,7 +456,7 @@ class ClientToolsEndToEndTests(EngineHarness):
         session_part = talker.index("session.instructions")
         self.assertEqual(history["frontend"]["prompt"][session_part]["text"], RESPONSES_SESSION["instructions"])
         self.assertLess(session_part, talker.index("session.instructions.append"))
-        self.assertTrue(any("routing rules" in source for source in talker))
+        self.assertIn("agent_prompts.Cascade.routing", talker)
         thinker = history["backend"]["prompt"]
         self.assertEqual(thinker[0], {"source": "delegation.responses.instructions", "text": "Look things up."})
 
@@ -490,7 +490,7 @@ class ClientToolsEndToEndTests(EngineHarness):
             while im.busy:
                 await asyncio.sleep(0.01)
         self.assertTrue((await self.history())["backend"]["busy"])
-        line = catalog_lines().app_wait_line
+        line = LINES.app_wait_line
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: line.split()[-1] in e["delta"])
         self.assertTrue((await self.history())["backend"]["busy"])  # still watched after the app-wait line
 

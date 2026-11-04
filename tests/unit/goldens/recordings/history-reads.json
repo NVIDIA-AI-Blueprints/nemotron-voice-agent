@@ -10,7 +10,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: the voice's role",
+          "source": "agent_prompts.Cascade.frame_before",
           "text": [
             "You are the voice of an assistant in a live spoken conversation. The assistant has two parts.",
             "You talk with the caller. The backend, a separate agent with the records and the tools, does all",
@@ -39,7 +39,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: how the instructions apply",
+          "source": "agent_prompts.Cascade.frame_after",
           "text": [
             "",
             "</application_instructions>",
@@ -63,7 +63,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: routing rules",
+          "source": "agent_prompts.Cascade.routing",
           "text": [
             "",
             "Items marked reference data are not the caller's words, and a caller turn right after one starts",
@@ -213,7 +213,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: the voice's role",
+          "source": "agent_prompts.Cascade.frame_before",
           "text": [
             "You are the voice of an assistant in a live spoken conversation. The assistant has two parts.",
             "You talk with the caller. The backend, a separate agent with the records and the tools, does all",
@@ -242,7 +242,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: how the instructions apply",
+          "source": "agent_prompts.Cascade.frame_after",
           "text": [
             "",
             "</application_instructions>",
@@ -266,7 +266,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: routing rules",
+          "source": "agent_prompts.Cascade.routing",
           "text": [
             "",
             "Items marked reference data are not the caller's words, and a caller turn right after one starts",
@@ -461,7 +461,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: the voice's role",
+          "source": "agent_prompts.Cascade.frame_before",
           "text": [
             "You are the voice of an assistant in a live spoken conversation. The assistant has two parts.",
             "You talk with the caller. The backend, a separate agent with the records and the tools, does all",
@@ -490,7 +490,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: how the instructions apply",
+          "source": "agent_prompts.Cascade.frame_after",
           "text": [
             "",
             "</application_instructions>",
@@ -514,7 +514,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: routing rules",
+          "source": "agent_prompts.Cascade.routing",
           "text": [
             "",
             "Items marked reference data are not the caller's words, and a caller turn right after one starts",
@@ -767,7 +767,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: the voice's role",
+          "source": "agent_prompts.Cascade.frame_before",
           "text": [
             "You are the voice of an assistant in a live spoken conversation. The assistant has two parts.",
             "You talk with the caller. The backend, a separate agent with the records and the tools, does all",
@@ -796,7 +796,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: how the instructions apply",
+          "source": "agent_prompts.Cascade.frame_after",
           "text": [
             "",
             "</application_instructions>",
@@ -820,7 +820,7 @@
       {
         "read": "frontend.prompt",
         "value": {
-          "source": "prompt set default: routing rules",
+          "source": "agent_prompts.Cascade.routing",
           "text": [
             "",
             "Items marked reference data are not the caller's words, and a caller turn right after one starts",

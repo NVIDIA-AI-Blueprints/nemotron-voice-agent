@@ -6,8 +6,8 @@
 # delegation_core.config.CoreSettings defines every key below.
 #
 # Profiles are separate files that name the file they build on (`extends: core.yaml`) and set only what differs:
-#   core.ui-bot.yaml           delegation.result_format: speak_display (each UI bot session's prompt profile sets its
-#                              backend.prompt and backend.tools)
+#   core.ui-bot.yaml           delegation.result_format: speak_display; backend.prompt and backend.tools: the cafe's
+#                              (the repository UI bot's core)
 #   core.agent.yaml            backend.adapter: llm-agent; delegation.result_format: speak_display (its conductor
 #                              reads core.yaml's texts.conductor_prompt)
 #   core.harness.yaml          extends core.agent.yaml: backend.adapter: harness, connected to the operator's Hermes
@@ -205,14 +205,14 @@ texts:
 
 # The backend adapter. adapter and one_shot_adapter name entries of delegation_core/backend/adapters.py. slot and
 # prompt name the default model and instructions by reference; the composition root resolves them from the example's
-# catalog (prompt: a prompt profile, prompts/<profile>/, whose thinker.yaml is used as written). Each other key is one
+# catalog and prompts (prompt: an agent_prompts.Backend entry of prompts.yaml, used as written). Each other key is one
 # adapter's own block: its source validates it, and its settings class holds the defaults.
 backend:
   adapter: llm                         # llm (directly connected, the default) | llm-agent | harness
   one_shot_adapter: llm                # the adapter that serves stateless requests (POST /v1/live/delegate)
   slot: thinker-llm
-  prompt: generic                      # the generic profile, with no domain; a UI bot session uses its own profile's
-  tools: {}                            # server tool sources by name; a UI bot session uses its own profile's
+  prompt: generic                      # the generic backend prompt, with no domain
+  tools: {}                            # server tool sources by name
   llm:
     provider: chat-completions         # chat-completions | openai-responses
     conductor: steer                   # steer: each request joins the newest open Work | start_each: a queue

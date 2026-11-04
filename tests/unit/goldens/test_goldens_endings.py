@@ -6,7 +6,7 @@
 from dataclasses import replace
 from unittest.mock import patch
 
-from examples.frontend_backend_live.cascade.lines import catalog_lines
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.core_helpers import _timeout
 from tests.unit.goldens import harness
 from tests.unit.goldens.harness import (
@@ -33,6 +33,8 @@ HOURS = "We are open from seven in the morning until five."
 # How often a round that always times out is tried: the provider's own retries (backend.llm.provider_retries, 2) for
 # each of the run's two attempts.
 BACKEND_TRIES = 6
+# The lines the voice says, from the shipped prompts.yaml.
+LINES = load_prompts().lines
 
 
 # -------------------------------------------------------------------------------------------------- goldens
@@ -111,7 +113,7 @@ class EndingGoldens(GoldenCase):
             live_config=SHORT_APP_WAIT,
             delegation=SHORT_CLIENT_TOOL_WAIT,
         )
-        lines = catalog_lines()
+        lines = LINES
         await self.say("What teas do you have?")
         await self.release_when_settled(first, "the first round to wait for its model")
         call_1 = await self.wait_for_call("get_menu")
@@ -167,7 +169,7 @@ class EndingGoldens(GoldenCase):
         await self.wait_quiet()
         self.send(result_item(call["call_id"], TEAS))
         self.send({"type": "response.create", "event_id": "continue"})
-        await self.wait_until(lambda: catalog_lines().unclear in self.tts.utterances, "the unclear line")
+        await self.wait_until(lambda: LINES.unclear in self.tts.utterances, "the unclear line")
         await self.wait_quiet()
         await self.close()
         self.assert_golden("X2")

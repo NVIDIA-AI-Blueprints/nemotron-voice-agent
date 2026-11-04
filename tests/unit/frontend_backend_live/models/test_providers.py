@@ -26,9 +26,9 @@ from examples.frontend_backend_live.models.chat_completions import (
     ChatCompletionsFrontend,
     chat_messages,
 )
-from examples.frontend_backend_live.models.decision import TalkerDecision, decision_schema
+from examples.frontend_backend_live.models.decision import ACTIONS, TalkerDecision, decision_schema
 from examples.frontend_backend_live.models.openai_responses import OpenAIResponsesFrontend
-from examples.frontend_backend_live.prompts import get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import CASCADE_ENDPOINT as ENDPOINT
 from tests.unit.cascade_helpers import (
     FAST,
@@ -42,8 +42,9 @@ from tests.unit.cascade_helpers import (
 from tests.unit.contracts.backend import ScriptedBackend
 from tests.unit.core_helpers import FakeChat, _text_round, _timeout
 
-DEFAULT = get_prompt_set("default")
-TALKER = CallSpec("talker", DEFAULT.actions, DEFAULT.call_hints.talker)
+LOADED = load_prompts()
+DEFAULT = LOADED.cascade
+TALKER = CallSpec("talker", ACTIONS, DEFAULT.call_hints.talker)
 HISTORY = [{"role": "user", "content": "hi"}]
 
 
@@ -108,7 +109,7 @@ class ProviderTableTests(unittest.IsolatedAsyncioTestCase):
 
         config = _config(provider="scripted-test")
         with patch.dict(FRONTENDS, {Echo.name: Echo}):
-            agent = build_agent(config, ENDPOINT)
+            agent = build_agent(config, ENDPOINT, LOADED)
         decision = await agent.talker.decide("Be kind.", HISTORY)
         self.assertEqual((decision.action, decision.speech), ("speak", "heard 2"))  # the history, then the runtime data
         await agent.close()
@@ -116,26 +117,26 @@ class ProviderTableTests(unittest.IsolatedAsyncioTestCase):
     def test_an_unknown_provider_names_the_known_ones(self):
         config = _config(provider="nope")
         with self.assertRaisesRegex(ValueError, r"Unknown frontend provider 'nope'; known: chat-completions, openai-"):
-            build_agent(config, ENDPOINT)
+            build_agent(config, ENDPOINT, LOADED)
 
     def test_every_provider_takes_the_same_constructor_so_the_agent_always_passes_the_client(self):
         for name in FRONTENDS:
             with self.subTest(provider=name):
                 client = FakeChat() if name == "chat-completions" else FakeResponses()
                 config = _config(provider=name)
-                agent = LiveAgent.from_config(config, ENDPOINT, frontend_client=client)
+                agent = LiveAgent.from_config(config, ENDPOINT, LOADED, frontend_client=client)
                 self.assertIs(agent.frontend.client, client)
                 self.assertEqual(build_agent, LiveAgent.from_config)
 
     def test_the_agent_builds_the_normalizer_on_its_prompt_set_only_when_enabled(self):
-        config = _config(normalizer=NormalizerConfig(enabled=True), prompt_version="default")
+        config = _config(normalizer=NormalizerConfig(enabled=True))
         config = replace(config, provider="chat-completions")
-        agent = build_agent(config, ENDPOINT, frontend_client=FakeChat())
+        agent = build_agent(config, ENDPOINT, LOADED, frontend_client=FakeChat())
         self.assertIsInstance(agent.normalizer, TurnNormalizer)
         self.assertIs(agent.normalizer.prompts, agent.prompts)
         self.assertIs(agent.prompts, DEFAULT)
         plain = replace(config, normalizer=NormalizerConfig())
-        self.assertIsNone(build_agent(plain, ENDPOINT, frontend_client=FakeChat()).normalizer)
+        self.assertIsNone(build_agent(plain, ENDPOINT, LOADED, frontend_client=FakeChat()).normalizer)
 
 
 # ------------------------------------------------------------------------------------------------- call specs
@@ -210,11 +211,11 @@ class LayoutTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [part.source for part in parts],
             [
-                "prompt set default: the voice's role",
+                "agent_prompts.Cascade.frame_before",
                 "session.instructions",
                 "session.instructions.append",
-                "prompt set default: how the instructions apply",
-                "prompt set default: routing rules",
+                "agent_prompts.Cascade.frame_after",
+                "agent_prompts.Cascade.routing",
             ],
         )
         joined = "".join(part.sep + part.text for part in parts)
@@ -371,8 +372,8 @@ class ResponsesFrontendTests(unittest.IsolatedAsyncioTestCase):
             _decision("delegate", "Let me check."),
             _decision("speak", "A latte is four fifty."),
         )
-        config = _config(provider="openai-responses", prompt_version="default")
-        agent = build_agent(config, ENDPOINT, frontend_client=client)
+        config = _config(provider="openai-responses")
+        agent = build_agent(config, ENDPOINT, LOADED, frontend_client=client)
         backend = ScriptedBackend([_text_round("Latte: $4.50.")])
         delegation = _delegation(backend)
         conversation = ListConversation(_messages())
@@ -381,7 +382,7 @@ class ResponsesFrontendTests(unittest.IsolatedAsyncioTestCase):
         async def say(text):
             spoken.append(text)
 
-        session = CascadeSession(agent, config, conversation, delegation=delegation, say=say)
+        session = CascadeSession(agent, config, conversation, delegation=delegation, say=say, lines=LOADED.lines)
         await delegation.open(None)
         session.start()
         self.addAsyncCleanup(delegation.close)

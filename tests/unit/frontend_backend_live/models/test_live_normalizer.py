@@ -12,11 +12,11 @@ from examples.frontend_backend_live.cascade.normalizer import TurnNormalizer
 from examples.frontend_backend_live.config_manager.loader import ConfigError
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, NormalizerConfig
 from examples.frontend_backend_live.models.decision import TalkerDecision
-from examples.frontend_backend_live.prompts import get_prompt_set
+from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.frontend_backend_live.cascade.doubles import Call, ScriptedFrontend, conversation
 
 ON = NormalizerConfig(enabled=True)
-PROMPTS = get_prompt_set("default")
+PROMPTS = load_prompts().cascade
 NEWEST_TURN = PROMPTS.normalizer_prompt.newest_turn
 
 

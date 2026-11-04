@@ -123,8 +123,6 @@ examples:
     defaults:
       prompt: [cafe]
     bot: examples.frontend_backend_live.pipeline:bot
-    # The UI's prompt list: one entry per listed prompt profile (prompts/<profile>/), its talker as the prompt.
-    prompt_catalog: examples.frontend_backend_live.prompts.catalog:ui_catalog
     live:
       factory: examples.frontend_backend_live.factory:create_frontend_adapter
       describe: examples.frontend_backend_live.factory:describe
