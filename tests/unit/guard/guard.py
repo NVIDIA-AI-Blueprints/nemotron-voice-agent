@@ -5,7 +5,7 @@
 
 Every extension point is an interface whose implementations are named in config and picked by a composition root, so
 no code branches on a kind. The guard walks the modules the import rules walk (``src/live``,
-``src/examples/frontend_backend_live``, ``src/delegation_core`` and ``src/server.py``) and
+``src/examples/frontend_backend_live`` with its delegation core, and ``src/server.py``) and
 finds four kinds of site:
 
 * ``compare``: a comparison of a kind attribute (``.mode``, ``.target``, ``.provider``, ``.kind``, ``.adapter``,
@@ -33,7 +33,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "src"
-WALKED = ("live", "examples/frontend_backend_live", "delegation_core", "server.py")
+WALKED = ("live", "examples/frontend_backend_live", "server.py")
+CORE = "examples.frontend_backend_live.delegation_core"
 
 # The kinds a config names: comparing one against a literal is a branch on a kind.
 KIND_ATTRIBUTES = frozenset(
@@ -82,7 +83,7 @@ BANNED_FLAGS = frozenset(
 PORT_MODULES = frozenset(
     {
         "live.ports",
-        "delegation_core.backend.port",
+        f"{CORE}.backend.port",
         "examples.frontend_backend_live.cascade.ports",
         "examples.frontend_backend_live.adapter.contract",
     }
@@ -93,13 +94,13 @@ ROOTS = frozenset(
         "server",
         "examples.frontend_backend_live.factory",
         "examples.frontend_backend_live.pipeline",
-        "delegation_core.app",
+        f"{CORE}.app",
     }
 )
-TABLE_MODULES = frozenset({"delegation_core.tables", "examples.frontend_backend_live.tables"})
+TABLE_MODULES = frozenset({f"{CORE}.tables", "examples.frontend_backend_live.tables"})
 # The methods in which a class may pick from a table: when it is built.
 BUILD_METHODS = frozenset({"from_settings", "from_config", "parse"})
-INTERNAL_TOPS = frozenset({"live", "examples", "delegation_core", "utils", "examples_registry", "server", "tracing"})
+INTERNAL_TOPS = frozenset({"live", "examples", "utils", "examples_registry", "server", "tracing"})
 
 
 @dataclass(frozen=True)

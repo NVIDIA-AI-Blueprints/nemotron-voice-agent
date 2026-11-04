@@ -9,12 +9,15 @@ import asyncio
 import json
 import unittest
 
-from delegation_core.backend.conductors import StartEach, SteerOpenWork
-from delegation_core.backend.llm import LlmAdapter, LlmRun, LlmSettings, LlmSource
-from delegation_core.backend.port import OneShotSource
-from delegation_core.backend.providers import ChatCompletionsBackend, OpenAIResponsesBackend
-from delegation_core.backend.tools import CafeTools
-from delegation_core.config import ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.conductors import StartEach, SteerOpenWork
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmAdapter, LlmRun, LlmSettings, LlmSource
+from examples.frontend_backend_live.delegation_core.backend.port import OneShotSource
+from examples.frontend_backend_live.delegation_core.backend.providers import (
+    ChatCompletionsBackend,
+    OpenAIResponsesBackend,
+)
+from examples.frontend_backend_live.delegation_core.backend.tools import CafeTools
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
 from tests.unit.contracts.backend import BackendAdapterContract, ScriptedBackend, call_round, check_events, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     ENDPOINT,

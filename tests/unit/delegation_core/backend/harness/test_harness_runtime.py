@@ -21,12 +21,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import delegation_core
-from delegation_core.backend.harness.acp.transports import StdioTransport, WebSocketTransport
-from delegation_core.backend.harness.protocol import Role, RuntimeLaunch
-from delegation_core.backend.harness.runtime import RuntimeOpener, RuntimeProcess
-from delegation_core.backend.harness.settings import HarnessSettings
-from delegation_core.backend.harness.workdir import MARKER, WorkFolder
+from examples.frontend_backend_live import delegation_core
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.transports import (
+    StdioTransport,
+    WebSocketTransport,
+)
+from examples.frontend_backend_live.delegation_core.backend.harness.protocol import Role, RuntimeLaunch
+from examples.frontend_backend_live.delegation_core.backend.harness.runtime import RuntimeOpener, RuntimeProcess
+from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessSettings
+from examples.frontend_backend_live.delegation_core.backend.harness.workdir import MARKER, WorkFolder
 from tests.unit.delegation_core.backend.harness.doubles import AGENT_BLOCKS, PROMPTS, FakeClient, scratch
 
 # A process that makes a work folder, says where, holds it until its stdin ends, then crashes (it never removes it).
@@ -34,19 +37,19 @@ HOLDER = (
     "import os, sys\n"
     "from pathlib import Path\n"
     "sys.path.insert(0, sys.argv[1])\n"
-    "from delegation_core.backend.harness.workdir import WorkFolder\n"
+    "from examples.frontend_backend_live.delegation_core.backend.harness.workdir import WorkFolder\n"
     "print(WorkFolder.make(Path(sys.argv[2])).path, flush=True)\n"
     "sys.stdin.read()\n"
     "os._exit(9)\n"
 )
-SOURCES = Path(delegation_core.__file__).parents[1]
+SOURCES = Path(delegation_core.__file__).parents[3]  # src
 
 
 @contextlib.contextmanager
 def warnings_logged():
     """The warnings the transports log inside the block (their logger is patched)."""
     lines: list[str] = []
-    with mock.patch("delegation_core.backend.harness.acp.transports.logger") as log:
+    with mock.patch("examples.frontend_backend_live.delegation_core.backend.harness.acp.transports.logger") as log:
         log.warning.side_effect = lines.append
         yield lines
 
@@ -385,7 +388,7 @@ class WebSocketTransportTests(unittest.IsolatedAsyncioTestCase):
 
 class ConnectTimeoutTests(unittest.IsolatedAsyncioTestCase):
     async def test_reaching_a_served_agent_is_bounded_by_the_start_timeout_not_the_stop_grace(self):
-        from delegation_core.backend.harness.protocol import Role
+        from examples.frontend_backend_live.delegation_core.backend.harness.protocol import Role
 
         held = []  # the connections a server that never answers the handshake keeps
 

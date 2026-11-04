@@ -26,12 +26,12 @@ from pipecat.services.nvidia.tts import NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from delegation_core.app import build_core
-from delegation_core.config import CoreSettings
 from examples.frontend_backend_live.cascade.agent import build_agent
 from examples.frontend_backend_live.cascade.memory import ContextConversation
 from examples.frontend_backend_live.config_manager.loader import load_live_config
 from examples.frontend_backend_live.config_manager.schema import ConfigError, LiveConfig
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.factory import (
     adapter_block,
     backend_defaults,

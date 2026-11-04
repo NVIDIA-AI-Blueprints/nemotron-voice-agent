@@ -7,8 +7,8 @@
 
 import asyncio
 
-from delegation_core.backend.port import Answer, Cancel, Start
-from delegation_core.im.results import SpeakDisplay
+from examples.frontend_backend_live.delegation_core.backend.port import Answer, Cancel, Start
+from examples.frontend_backend_live.delegation_core.im.results import SpeakDisplay
 from tests.unit.contracts.endings import load
 from tests.unit.delegation_core.helpers import (
     MENU,

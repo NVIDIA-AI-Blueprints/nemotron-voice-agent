@@ -50,7 +50,7 @@ diagram shows a call from the caller to the backend and back:
                 display -> the screen at once                                       |
                                        ^ official events                            | Responses API (in process)
                                        |                                            v
-                                       +------------------------------- DELEGATION CORE (src/delegation_core)
+                                       +------------------------------- DELEGATION CORE (the example's delegation_core/)
                                                                           Responses API surface (api/)
                                                                           interaction manager (im/)
                                                                           work ledger (ledger/)
@@ -67,12 +67,13 @@ The following table lists the boxes, what each owns, and what each never knows:
 | Box | Path | Owns | Never knows |
 | --- | --- | --- | --- |
 | Live gateway | [`src/live/`](../../src/live/) | Sessions, the order of commands and of the close, the wire schema, the relay of delegation events, and the choice of the delegation part by the resolved `delegation.type` | Pipecat, the cascade, and the IM's records |
-| Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/), [`cascade/`](../../src/examples/frontend_backend_live/cascade/), and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `models/`, `prompts.py`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
-| Delegation core: the IM, the work ledger, and the Responses API surface | [`im/`](../../src/delegation_core/im/), [`ledger/`](../../src/delegation_core/ledger/), and [`api/`](../../src/delegation_core/api/) of [`src/delegation_core/`](../../src/delegation_core/) | Admission, placement through the conductor, Works and their tasks, steering, the commit gate, stops, progress notes, results, endings, one-shot sessions, every record, and the official endpoints | Speech, playout, and backend protocols |
-| Backend adapter | [`src/delegation_core/backend/`](../../src/delegation_core/backend/) | Model rounds, model providers, tool sources, conductors, worker sessions, and harness protocols | Speech and the voice wire |
+| Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/), [`cascade/`](../../src/examples/frontend_backend_live/cascade/), and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `models/`, `prompts.py`, `tables.py`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
+| Delegation core: the IM, the work ledger, and the Responses API surface | [`im/`](../../src/examples/frontend_backend_live/delegation_core/im/), [`ledger/`](../../src/examples/frontend_backend_live/delegation_core/ledger/), and [`api/`](../../src/examples/frontend_backend_live/delegation_core/api/) of the example's [`delegation_core/`](../../src/examples/frontend_backend_live/delegation_core/) | Admission, placement through the conductor, Works and their tasks, steering, the commit gate, stops, progress notes, results, endings, one-shot sessions, every record, and the official endpoints | Speech, playout, and backend protocols |
+| Backend adapter | [`backend/`](../../src/examples/frontend_backend_live/delegation_core/backend/) of the delegation core | Model rounds, model providers, tool sources, conductors, worker sessions, and harness protocols | Speech and the voice wire |
 
 The backend adapter lives in the `backend/` package of the delegation core, but it is a box of its own: the IM reaches
-it only through the backend port, [`backend/port.py`](../../src/delegation_core/backend/port.py).
+it only through the backend port,
+[`backend/port.py`](../../src/examples/frontend_backend_live/delegation_core/backend/port.py).
 
 Inside the frontend adapter, the cascade (`cascade/`) imports nothing from Pipecat. Its Pipecat speech pipeline
 (`media/`) runs it and corrects its records by what the caller heard. Two hosts build that pipeline around the
@@ -86,7 +87,8 @@ core's builder:
   the gateway's one delegation core.
 - [`pipeline.py`](../../src/examples/frontend_backend_live/pipeline.py) builds the repository UI bot, with a core of
   its own.
-- [`app.py`](../../src/delegation_core/app.py) is the delegation core's builder, `build_core`.
+- [`app.py`](../../src/examples/frontend_backend_live/delegation_core/app.py) is the delegation core's builder,
+  `build_core`.
 - [`src/server.py`](../../src/server.py) mounts the Live routes from the registry's `live:` block.
 
 ## How the Frontend Media Plane Meets the IM
@@ -96,8 +98,9 @@ the IM side, which is the delegation core, over two channels:
 
 - Toward the core, the official Responses API. The gateway's server delegation sends each request through a
   `ResponsesClient` ([`responses_client.py`](../../src/live/server_delegation/responses_client.py)). In process, that
-  client is `LocalResponsesClient` ([`api/local.py`](../../src/delegation_core/api/local.py)), which sends every
-  request, result, and event through a JSON round trip, as HTTP would.
+  client is `LocalResponsesClient`
+  ([`api/local.py`](../../src/examples/frontend_backend_live/delegation_core/api/local.py)), which sends every request,
+  result, and event through a JSON round trip, as HTTP would.
 - Back to the media plane, the official Responses streaming events, plus one transport fact,
   `on_delegation_lost`, when a stream ends with no terminal event ([`live/ports.py`](../../src/live/ports.py),
   `DelegationEvents`).
@@ -227,15 +230,17 @@ client that stops on that event stops there.
 
 ## The Interaction Manager
 
-The IM ([`im/`](../../src/delegation_core/im/)) owns everything that happens to backend work after a delegation. One IM
-session serves one conversation, and the Responses API surface opens one for each conversation.
+The IM ([`im/`](../../src/examples/frontend_backend_live/delegation_core/im/)) owns everything that happens to backend
+work after a delegation. One IM session serves one conversation, and the Responses API surface opens one for each
+conversation.
 
 ### Admission
 
-Admission is one instant step ([`session.py`](../../src/delegation_core/im/session.py), `IMSession.admit`). The IM
-refuses a request before anything changes when the session is closing, when the delegation ID is in use, or when
-`delegation.max_pending_delegations` requests already wait. Otherwise, it records the delegation, opens its response at
-once with `response.created` (status `queued`) and `response.queued`, and keeps the request as an arrival.
+Admission is one instant step ([`session.py`](../../src/examples/frontend_backend_live/delegation_core/im/session.py),
+`IMSession.admit`). The IM refuses a request before anything changes when the session is closing, when the delegation ID
+is in use, or when `delegation.max_pending_delegations` requests already wait. Otherwise, it records the delegation,
+opens its response at once with `response.created` (status `queued`) and `response.queued`, and keeps the request as an
+arrival.
 
 A request that the app makes itself goes through `IMSession.admit_client_request`. Function outputs continue the
 response whose calls they answer, matched by `call_id`, and they must answer every call of that response, or the IM
@@ -283,8 +288,9 @@ with `llm`.
 
 ### Works and Tasks
 
-A Work ([`run.py`](../../src/delegation_core/im/run.py), `WorkRun`) carries one or more requests, oldest first, and the
-newest one carries its response. A Work holds one or more tasks (`TaskRun`), and each task is one worker:
+A Work ([`run.py`](../../src/examples/frontend_backend_live/delegation_core/im/run.py), `WorkRun`) carries one or more
+requests, oldest first, and the newest one carries its response. A Work holds one or more tasks (`TaskRun`), and each
+task is one worker:
 
 - A model conductor can split a request into independent tasks with `Start(tasks=...)`, each with a brief, and can
   steer or cancel one task.
@@ -373,7 +379,7 @@ latte asked for while the work plans, always sends the call to the app.
 The IM stops work only through one door, `WorkRun.stop`. After a stop is asked, nothing more of the task is written,
 and its calls are refused. A queued task leaves the scheduler. A running task gets `await run.stop()`, which the IM
 waits for at most `delegation.stop_timeout_seconds`, and the stop ends `stopped` or `unconfirmed`. The reason writes
-the ending ([`stop.py`](../../src/delegation_core/im/stop.py)):
+the ending ([`stop.py`](../../src/examples/frontend_backend_live/delegation_core/im/stop.py)):
 
 | Reason | Ending |
 | --- | --- |
@@ -440,16 +446,17 @@ still-running progress silent by default, and `progress_after_seconds: null` doe
 
 ### One-Shot Sessions
 
-A request with no conversation is served by a one-shot session ([`oneshot.py`](../../src/delegation_core/im/oneshot.py))
-on an adapter from the source that `backend.one_shot_adapter` names. Its input is used as sent: no placement, no
-records block, no result-format note, no work tool, and no trim, although the voice note still joins the
-instructions. Its response opens in progress. Its round's calls end its response, and nothing waits for their outputs.
-A failure ends it with `response.failed`. The session ends with its response, and nothing of the request is kept.
+A request with no conversation is served by a one-shot session
+([`oneshot.py`](../../src/examples/frontend_backend_live/delegation_core/im/oneshot.py)) on an adapter from the source
+that `backend.one_shot_adapter` names. Its input is used as sent: no placement, no records block, no result-format note,
+no work tool, and no trim, although the voice note still joins the instructions. Its response opens in progress. Its
+round's calls end its response, and nothing waits for their outputs. A failure ends it with `response.failed`. The
+session ends with its response, and nothing of the request is kept.
 
 ### Close
 
-When a conversation is deleted, its IM session closes ([`session.py`](../../src/delegation_core/im/session.py),
-`IMSession.close`):
+When a conversation is deleted, its IM session closes
+([`session.py`](../../src/examples/frontend_backend_live/delegation_core/im/session.py), `IMSession.close`):
 
 1. No new request is accepted.
 2. Queued Works and Works that wait for the app stop at once.
@@ -458,13 +465,14 @@ When a conversation is deleted, its IM session closes ([`session.py`](../../src/
    `response.incomplete`, status `cancelled`, and `incomplete_details: null`.
 5. The backend adapter closes last, whatever happened before.
 
-The work ledger ([`ledger/`](../../src/delegation_core/ledger/)) keeps every record in memory, and nothing is written
-to disk.
+The work ledger ([`ledger/`](../../src/examples/frontend_backend_live/delegation_core/ledger/)) keeps every record in
+memory, and nothing is written to disk.
 
 ## The Backend Port
 
-The backend port, [`backend/port.py`](../../src/delegation_core/backend/port.py), is the only module that both the IM
-and every backend adapter import. Only Responses shapes and the port's types pass between them.
+The backend port, [`backend/port.py`](../../src/examples/frontend_backend_live/delegation_core/backend/port.py), is the
+only module that both the IM and every backend adapter import. Only Responses shapes and the port's types pass between
+them.
 
 ### Three Levels
 
@@ -496,8 +504,9 @@ A `Conductor` has one method, `decide(given, place)`. The decisions are `Start(d
 `Steer(work_id, delegations, task_id)`, `Cancel(work_id, task_id)`, and `Answer(delegation_id, text)`. A model
 conductor reads its instructions (`texts.conductor_prompt`) and its four control tools (`start_work`, `steer_work`,
 `cancel_work`, and `answer_status`, from `texts.control_tools`) through `ControlTools`
-([`control.py`](../../src/delegation_core/backend/control.py)). Its instructions state its adapter's `max_running`,
-which fills the prompt's `{max_running}`. A conductor never runs work and never words a result.
+([`control.py`](../../src/examples/frontend_backend_live/delegation_core/backend/control.py)). Its instructions state
+its adapter's `max_running`, which fills the prompt's `{max_running}`. A conductor never runs work and never words a
+result.
 
 ### The Event Rules
 
@@ -517,13 +526,13 @@ Every `BackendRun.events()` keeps eight rules, and the contract suite checks the
 ## The Three Backend Adapters
 
 Three backend adapters stand behind one port. `backend.adapter` in `core.yaml` chooses one, by name, from the table in
-[`backend/adapters.py`](../../src/delegation_core/backend/adapters.py). The table loads an adapter's package only when a
-core is built with it. The following table compares the three adapters:
+[`backend/adapters.py`](../../src/examples/frontend_backend_live/delegation_core/backend/adapters.py). The table loads
+an adapter's package only when a core is built with it. The following table compares the three adapters:
 
 | | `llm` (the default) | `llm-agent` | `harness` |
 | --- | --- | --- | --- |
 | What it is | The backend LLM, directly connected | The backend LLM agent: a model conductor and LLM workers | An external agent that its operator deploys, over the Agent Client Protocol (ACP): any ACP agent, and Hermes through an agent class of its own |
-| Package | [`backend/llm/`](../../src/delegation_core/backend/llm/) | [`backend/agent/`](../../src/delegation_core/backend/agent/) | [`backend/harness/`](../../src/delegation_core/backend/harness/) |
+| Package | [`backend/llm/`](../../src/examples/frontend_backend_live/delegation_core/backend/llm/) | [`backend/agent/`](../../src/examples/frontend_backend_live/delegation_core/backend/agent/) | [`backend/harness/`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/) |
 | Conductor | A rule, with no model call: `steer` (the default) or `start_each` (`backend.llm.conductor`) | One model call per `decide()`, with the four control tools, `tool_choice: required`, and one call (`parallel_tool_calls: false`); while no Work is open, no model call: the new requests start a Work (`conductor.when_idle: start`); the `steer` rule at `max_running: 1` | Its own agent session, in a process of its own, with exactly the four control tools: one prompt per `decide()`; the `steer` rule, with no conductor process, at `max_running: 1` |
 | Workers | One `LlmRun`: one task per Work | `LlmRun`s; a request can split into parallel tasks | One ACP session per task, in the shared workers' process; with `backend.harness.session: call`, the session of a task that answered can take the next task |
 | `max_running` | 1 | `max_running` (3) | `max_running` (3), at most the agent's turns per process (4 for Hermes) |
@@ -539,9 +548,10 @@ core is built with it. The following table compares the three adapters:
 
 ### The Backend LLM, Directly Connected
 
-`llm` ([`backend/llm/`](../../src/delegation_core/backend/llm/)) is the backend LLM loop on the port. `LlmSource` builds
-it from `backend.llm` (defaults in [`settings.py`](../../src/delegation_core/backend/llm/settings.py)), and each IM
-session gets an `LlmAdapter` with one model provider per model. `LlmRun` runs one task:
+`llm` ([`backend/llm/`](../../src/examples/frontend_backend_live/delegation_core/backend/llm/)) is the backend LLM loop
+on the port. `LlmSource` builds it from `backend.llm` (defaults in
+[`settings.py`](../../src/examples/frontend_backend_live/delegation_core/backend/llm/settings.py)), and each IM session
+gets an `LlmAdapter` with one model provider per model. `LlmRun` runs one task:
 
 - At each safe point, it takes the app's outputs and waiting steering, and settles the steering `applied` at once.
 - Each round reads `request()` and `history()`, sends the whole history, and chains nothing.
@@ -559,7 +569,8 @@ endpoint under its own name, and the server logs it.
 
 ### The Backend LLM Agent
 
-`llm-agent` ([`backend/agent/`](../../src/delegation_core/backend/agent/)) adds a model conductor to LLM workers:
+`llm-agent` ([`backend/agent/`](../../src/examples/frontend_backend_live/delegation_core/backend/agent/)) adds a model
+conductor to LLM workers:
 
 - `AgentSource` parses `backend.llm-agent`: `max_running`, `conductor` (`provider`, `model`, `timeout_seconds` of 20,
   `memory_tokens` of 8,000, `max_output_tokens_per_request` of 256, `temperature` of 0, `reasoning_effort` of `none`,
@@ -585,25 +596,26 @@ with `delegation.result_format: speak_display`.
 
 ### The Harness
 
-`harness` ([`backend/harness/`](../../src/delegation_core/backend/harness/)) runs the backend work on an external
-agent that its operator deploys, such as Hermes. The operator gives the agent its model, key, toolsets, and home, and
-`backend.harness` says only which agent class reads the agent and how to reach it. When the IM asks for the conductor,
-the adapter starts or connects two runtime processes for the IM session: one for the conductor and one for the
-workers. With `max_running: 1`, the conductor is the `steer` rule, and only the workers' process starts. To deploy an
-agent and connect it, refer to [Connect Your Own Harness](#connect-your-own-harness).
+`harness` ([`backend/harness/`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/)) runs the
+backend work on an external agent that its operator deploys, such as Hermes. The operator gives the agent its model,
+key, toolsets, and home, and `backend.harness` says only which agent class reads the agent and how to reach it. When the
+IM asks for the conductor, the adapter starts or connects two runtime processes for the IM session: one for the
+conductor and one for the workers. With `max_running: 1`, the conductor is the `steer` rule, and only the workers'
+process starts. To deploy an agent and connect it, refer to [Connect Your Own Harness](#connect-your-own-harness).
 
 The harness has three layers. Each one is an interface whose classes a key of `backend.harness` names, as the
 following table shows:
 
 | Layer | Package | What it owns | Chosen by |
 | --- | --- | --- | --- |
-| The generic harness | [`harness/`](../../src/delegation_core/backend/harness/) | The conductor session and its control tools, the worker runs and their tasks, the steering policy, the session policy, stops and the commit gate, the tool bridge, the results, and the envelope. It is the same for any protocol. | `protocol`, `steer`, `session`, `permission` |
-| The ACP client | [`harness/acp/`](../../src/delegation_core/backend/harness/acp/) | Initialize, sessions, prompts, cancel, session updates, the MCP servers given at `session/new`, and the transports: `stdio` starts `command`, and `websocket` connects to the `url` that the operator serves. | `transport` |
-| The agent classes | [`acp/agent.py`](../../src/delegation_core/backend/harness/acp/agent.py) and [`acp/hermes/`](../../src/delegation_core/backend/harness/acp/hermes/) | Everything of the connection that is one agent's own. `acp`, the default, is a plain ACP agent, and `hermes` is Hermes. | `agent`, with that agent's own `agents.<name>` block |
+| The generic harness | [`harness/`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/) | The conductor session and its control tools, the worker runs and their tasks, the steering policy, the session policy, stops and the commit gate, the tool bridge, the results, and the envelope. It is the same for any protocol. | `protocol`, `steer`, `session`, `permission` |
+| The ACP client | [`harness/acp/`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/) | Initialize, sessions, prompts, cancel, session updates, the MCP servers given at `session/new`, and the transports: `stdio` starts `command`, and `websocket` connects to the `url` that the operator serves. | `transport` |
+| The agent classes | [`acp/agent.py`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/agent.py) and [`acp/hermes/`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/hermes/) | Everything of the connection that is one agent's own. `acp`, the default, is a plain ACP agent, and `hermes` is Hermes. | `agent`, with that agent's own `agents.<name>` block |
 
 The generic harness reaches the agent through two seams in
-[`harness/protocol.py`](../../src/delegation_core/backend/harness/protocol.py): `HarnessProtocol`, which opens a
-client for each runtime process, and the `Agent` that it holds. The following table compares the two agent classes:
+[`harness/protocol.py`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/protocol.py):
+`HarnessProtocol`, which opens a client for each runtime process, and the `Agent` that it holds. The following table
+compares the two agent classes:
 
 | | `acp` (the default) | `hermes` |
 | --- | --- | --- |
@@ -725,13 +737,14 @@ an adapter whose `hosts_rtvi` is false.
 
 A backend adapter runs the work behind the port. To add one:
 
-1. Write a package under `src/delegation_core/backend/` with an `AdapterSource` whose `from_settings(block, *,
-   endpoints, tools, vocabulary)` validates its block and connects nothing, a `BackendAdapter` with `conductor()` and
-   `max_running`, and a `BackendRun` that keeps the event rules E1 to E8.
+1. Write a package under `src/examples/frontend_backend_live/delegation_core/backend/` with an `AdapterSource` whose
+   `from_settings(block, *, endpoints, tools, vocabulary)` validates its block and connects nothing, a `BackendAdapter`
+   with `conductor()` and `max_running`, and a `BackendRun` that keeps the event rules E1 to E8.
 2. Give it a conductor: a rule, a model through `ControlTools`, or a runtime session. What the conductor leaves
    unplaced goes to the `steer` rule (`SteerOpenWork` in
-   [`conductors.py`](../../src/delegation_core/backend/conductors.py)).
-3. Add one entry to `ADAPTERS` in [`adapters.py`](../../src/delegation_core/backend/adapters.py), which loads the
+   [`conductors.py`](../../src/examples/frontend_backend_live/delegation_core/backend/conductors.py)).
+3. Add one entry to `ADAPTERS` in
+   [`adapters.py`](../../src/examples/frontend_backend_live/delegation_core/backend/adapters.py), which loads the
    package only when a core is built with it.
 4. Bind the contract suites `BackendAdapterContract` and `ConductorContract`
    ([`tests/unit/contracts/backend.py`](../../tests/unit/contracts/backend.py)) to it, and add its group to the import
@@ -740,24 +753,26 @@ A backend adapter runs the work behind the port. To add one:
 
 ### Add an Agent, a Protocol, a Transport, or a Steering Strategy to the Harness
 
-The harness's seams are private to the harness, so each new one stays inside `src/delegation_core/backend/harness/`:
+The harness's seams are private to the harness, so each new one stays inside
+`src/examples/frontend_backend_live/delegation_core/backend/harness/`:
 
 - An agent that keeps to the Agent Client Protocol and meets the conditions in
   [Connect Another ACP Agent](#connect-another-acp-agent) is configuration only: `agent: acp`, a `steer` that it can
   take, and its `command` or `url`. For an agent with ways of its own, such as a file it reads instructions from, a
   mid-turn steer, or replies of its own that must never be spoken, subclass `AcpAgent`
-  ([`acp/agent.py`](../../src/delegation_core/backend/harness/acp/agent.py)) in a package of its own beside
-  `acp/hermes/`. Set its `name`, its key in `AGENTS`, which its error messages name, and its `keys`, the keys that its
-  `agents.<name>` block takes, which the inherited `check_keys` checks. Set `turns_per_process` too when one of its
-  processes runs a limited number of turns at once. Give it a `from_settings(block)` that reads its `agents.<name>`
-  block, add it to `AGENTS` in [`acp/agents.py`](../../src/delegation_core/backend/harness/acp/agents.py), and name it
+  ([`acp/agent.py`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/agent.py)) in a package
+  of its own beside `acp/hermes/`. Set its `name`, its key in `AGENTS`, which its error messages name, and its `keys`,
+  the keys that its `agents.<name>` block takes, which the inherited `check_keys` checks. Set `turns_per_process` too
+  when one of its processes runs a limited number of turns at once. Give it a `from_settings(block)` that reads its
+  `agents.<name>` block, add it to `AGENTS` in
+  [`acp/agents.py`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/agents.py), and name it
   in `backend.harness.agent`.
 - A protocol is a `HarnessProtocol` with a `from_settings(block)`: its `client()` makes a `HarnessClient` with its
   `HarnessSession`, and its `agent` is an `Agent`. Add it to `PROTOCOLS` and name it in `backend.harness.protocol`.
   Its packages load only when a core is built with it.
 - A transport of the ACP client is a `Transport` (`check`, `for_launch`, `open`, and `close`), added to `TRANSPORTS` in
-  [`acp/transports.py`](../../src/delegation_core/backend/harness/acp/transports.py) and named in
-  `backend.harness.transport`.
+  [`acp/transports.py`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/transports.py) and
+  named in `backend.harness.transport`.
 - A steering strategy is a `SteerStrategy` (`native` and `deliver`) with a `from_settings(block)`, added to `STEERING`
   and named in `backend.harness.steer`. A strategy that needs the agent's own mid-turn steer is refused for an agent
   without one.
@@ -767,10 +782,11 @@ The harness's seams are private to the harness, so each new one stays inside `sr
 ### Add a Model Provider
 
 A backend model provider is private to `llm` and `llm-agent`. Subclass `Backend`
-([`providers/base.py`](../../src/delegation_core/backend/providers/base.py)), give it a `name`, implement
-`_events(payload)` to yield one round's Responses events, list the settings it cannot honor in `unsupported()`, add
-it to `BACKENDS` in [`providers/__init__.py`](../../src/delegation_core/backend/providers/__init__.py), and bind
-`ProviderContract`. Then name it in `backend.llm.provider` or `backend.llm-agent.conductor.provider`. The template
+([`providers/base.py`](../../src/examples/frontend_backend_live/delegation_core/backend/providers/base.py)), give it a
+`name`, implement `_events(payload)` to yield one round's Responses events, list the settings it cannot honor in
+`unsupported()`, add it to `BACKENDS` in
+[`providers/__init__.py`](../../src/examples/frontend_backend_live/delegation_core/backend/providers/__init__.py), and
+bind `ProviderContract`. Then name it in `backend.llm.provider` or `backend.llm-agent.conductor.provider`. The template
 `Backend.stream()` adds the retries and the time limits.
 
 A frontend model provider serves the talker, the writer, and the normalizer. Subclass `Frontend`
@@ -782,18 +798,19 @@ A frontend model provider serves the talker, the writer, and the normalizer. Sub
 ### Add a Tool Source
 
 A tool source runs tools on the server for the backend. Write a `ToolSource`
-([`backend/port.py`](../../src/delegation_core/backend/port.py)) with a `label`, `tools()`, an idempotent
-`execute(call_id, name, arguments)`, and `from_settings(block)`, add it to `TOOL_SOURCES` in
-[`backend/tools/__init__.py`](../../src/delegation_core/backend/tools/__init__.py), and name it under `backend.tools`
-with its block. The root makes a fresh set for each IM session, so per-session state, such as a cart, is never
-shared. The cafe tools in [`tools/cafe/`](../../src/delegation_core/backend/tools/cafe/) are the reference, and
+([`backend/port.py`](../../src/examples/frontend_backend_live/delegation_core/backend/port.py)) with a `label`,
+`tools()`, an idempotent `execute(call_id, name, arguments)`, and `from_settings(block)`, add it to `TOOL_SOURCES` in
+[`backend/tools/__init__.py`](../../src/examples/frontend_backend_live/delegation_core/backend/tools/__init__.py), and
+name it under `backend.tools` with its block. The root makes a fresh set for each IM session, so per-session state, such
+as a cart, is never shared. The cafe tools in
+[`tools/cafe/`](../../src/examples/frontend_backend_live/delegation_core/backend/tools/cafe/) are the reference, and
 [`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) turns them on for the UI bot under
 `backend.tools`.
 
 ### Extension Points at a Glance
 
 The following table lists every extension point, its interface, what is built, and the key that chooses it. In its
-module paths, `core/` is `src/delegation_core/`, `harness/` is `src/delegation_core/backend/harness/`, `live/` is
+module paths, `core/` is `FBL/delegation_core/`, `harness/` is `FBL/delegation_core/backend/harness/`, `live/` is
 `src/live/`, and `FBL/` is the example's folder, `src/examples/frontend_backend_live/`:
 
 | Point | Interface (module) | Built | Chosen by |
@@ -1121,7 +1138,7 @@ import it.
 ### The Guard Test
 
 The guard ([`tests/unit/guard/guard.py`](../../tests/unit/guard/guard.py), run by `test_guard.py`) walks `src/live`,
-the example, `src/delegation_core`, and `src/server.py`, and fails on any of four kinds of site:
+the example with its delegation core, and `src/server.py`, and fails on any of four kinds of site:
 
 - `compare`: a kind, such as `.mode`, `.adapter`, `.agent`, or `delegation.type`, compared or matched with a string or
   a constant outside the table modules. `KIND_ATTRIBUTES` and `KIND_NAMES` list the kinds.
@@ -1136,8 +1153,9 @@ Each failure names the file, the line, and the site.
 ### The Import Rules
 
 [`tests/unit/test_import_boundaries.py`](../../tests/unit/test_import_boundaries.py) puts each module in a group by the
-longest prefix of its name, and each group may import only its own modules and the groups it lists. The following
-table summarizes the rules:
+longest prefix of its name, and each group may import only its own modules and the groups it lists. The core's
+groups are named by its packages, so the group `delegation_core.im` holds the modules of
+`examples.frontend_backend_live.delegation_core.im`. The following table summarizes the rules:
 
 | Group | May import |
 | --- | --- |
@@ -1146,7 +1164,7 @@ table summarizes the rules:
 | `live.server_delegation`, `live.client_delegation` | `live.protocol`, `live.ports` |
 | `live.session` | `live.protocol`, `live.events`, `live.ports`, and both delegation parts |
 | `live.gateway`, `live.media`, `live.extras`, `live.mount` | Every gateway group |
-| The frontend adapter (the example's package, except its roots) | `live.ports`, `live.protocol`, `examples.shared`, and `utils` |
+| The frontend adapter (the example's package, except its roots and its delegation core) | `live.ports`, `live.protocol`, `examples.shared`, and `utils` |
 | `delegation_core.api` | `delegation_core.app`, `delegation_core.im`, `delegation_core.config`, and `delegation_core.ids` |
 | `delegation_core.app` | `delegation_core.im`, `delegation_core.ledger`, `delegation_core.backend`, the port, `delegation_core.config`, `delegation_core.ids`, and `delegation_core.tables` |
 | `delegation_core.im` | `delegation_core.ledger`, `delegation_core.backend.port`, `delegation_core.config`, and `delegation_core.ids` |
@@ -1161,9 +1179,9 @@ The same test checks where outside packages may be imported: Pipecat only in the
 the WebRTC peer; `openai` only in the core's providers and the frontend's models; FastAPI and Starlette only at the
 HTTP edges; `mcp`, `websockets`, and `acp` only in the harness. Only `delegation_core.backend` may reach a model
 provider's `stream()`, so every model call stays inside the backend adapter. Only the agents table,
-[`acp/agents.py`](../../src/delegation_core/backend/harness/acp/agents.py), imports an agent class's package, such as
-`acp/hermes/`, so no other module depends on one agent. No module of the boxes imports the tests, and the core's own
-tests import nothing from the gateway or the example.
+[`acp/agents.py`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/agents.py), imports an
+agent class's package, such as `acp/hermes/`, so no other module depends on one agent. No module of the boxes imports
+the tests, and the core's own tests import nothing from the gateway or the frontend adapter.
 
 ## Tests
 

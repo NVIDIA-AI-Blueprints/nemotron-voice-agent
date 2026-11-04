@@ -8,7 +8,7 @@
 import json
 import unittest
 
-from delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from tests.unit.contracts.backend import a_round, call_events, call_round, check_events, message_events, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     IMTask,

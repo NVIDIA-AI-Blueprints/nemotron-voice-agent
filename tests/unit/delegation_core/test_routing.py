@@ -8,9 +8,9 @@
 import asyncio
 import json
 
-from delegation_core.backend.port import Answer, Start, Steer
-from delegation_core.im.results import SpeakDisplay
-from delegation_core.im.stop import ForNewerRequest
+from examples.frontend_backend_live.delegation_core.backend.port import Answer, Start, Steer
+from examples.frontend_backend_live.delegation_core.im.results import SpeakDisplay
+from examples.frontend_backend_live.delegation_core.im.stop import ForNewerRequest
 from tests.unit.delegation_core.helpers import (
     CORE_SETTINGS,
     MENU,

@@ -10,8 +10,8 @@ import json
 import unittest
 from unittest import mock
 
-from delegation_core.im import conversation
-from delegation_core.im.conversation import Conversation, TaskHistory
+from examples.frontend_backend_live.delegation_core.im import conversation
+from examples.frontend_backend_live.delegation_core.im.conversation import Conversation, TaskHistory
 from tests.unit.contracts.backend import a_round, call_events, text_round
 from tests.unit.delegation_core.backend.llm.doubles import RecordingTools, ScriptedProvider
 from tests.unit.delegation_core.backend.llm.doubles import source as llm_source

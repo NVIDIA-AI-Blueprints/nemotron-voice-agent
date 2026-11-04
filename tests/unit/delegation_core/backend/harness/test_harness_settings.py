@@ -11,18 +11,30 @@ import json
 import unittest
 from pathlib import Path
 
-from delegation_core.app import build_core
-from delegation_core.backend.conductors import SteerOpenWork
-from delegation_core.backend.harness import HarnessAdapter, HarnessConductor, HarnessSettings, HarnessSource
-from delegation_core.backend.harness.acp import AcpAgent, AcpProtocol
-from delegation_core.backend.harness.acp.agents import AGENTS
-from delegation_core.backend.harness.acp.hermes import HermesAgent
-from delegation_core.backend.harness.acp.transports import StdioTransport, WebSocketTransport
-from delegation_core.backend.harness.permissions import Reject
-from delegation_core.backend.harness.sessions import PerCall, PerTask
-from delegation_core.backend.harness.steering import CancelReprompt, NativeCommand, NextPrompt
-from delegation_core.config import CoreSettings, ModelEndpoint
-from delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
+from examples.frontend_backend_live.delegation_core.backend.harness import (
+    HarnessAdapter,
+    HarnessConductor,
+    HarnessSettings,
+    HarnessSource,
+)
+from examples.frontend_backend_live.delegation_core.backend.harness.acp import AcpAgent, AcpProtocol
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.agents import AGENTS
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.hermes import HermesAgent
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.transports import (
+    StdioTransport,
+    WebSocketTransport,
+)
+from examples.frontend_backend_live.delegation_core.backend.harness.permissions import Reject
+from examples.frontend_backend_live.delegation_core.backend.harness.sessions import PerCall, PerTask
+from examples.frontend_backend_live.delegation_core.backend.harness.steering import (
+    CancelReprompt,
+    NativeCommand,
+    NextPrompt,
+)
+from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from tests.unit.contracts.backend import FakeTaskContext
 from tests.unit.delegation_core.backend.harness.doubles import (
     AGENT_BLOCKS,

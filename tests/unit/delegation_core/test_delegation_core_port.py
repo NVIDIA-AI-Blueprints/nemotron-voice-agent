@@ -11,12 +11,12 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import ResponsesService
-from delegation_core.app import build_core
-from delegation_core.backend.adapters import ADAPTERS
-from delegation_core.backend.control import ControlVocabulary
-from delegation_core.backend.port import (
+from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.adapters import ADAPTERS
+from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
+from examples.frontend_backend_live.delegation_core.backend.port import (
     Answer,
     Cancel,
     OneShotSource,
@@ -26,9 +26,9 @@ from delegation_core.backend.port import (
     function_call_item,
     message_phase,
 )
-from delegation_core.config import BackendChoice, CoreSettings, ModelEndpoint
-from delegation_core.im.input import BackendTask
-from delegation_core.tables import pick
+from examples.frontend_backend_live.delegation_core.config import BackendChoice, CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.tables import pick
 from tests.unit.contracts.responses import ResponsesClientContract
 from tests.unit.delegation_core.emulator import EmulatorSource
 

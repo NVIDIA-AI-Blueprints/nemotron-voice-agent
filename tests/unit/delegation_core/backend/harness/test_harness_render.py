@@ -7,9 +7,14 @@
 
 import unittest
 
-from delegation_core.backend.harness.render import Renderer
-from delegation_core.backend.harness.settings import HarnessPrompts
-from delegation_core.backend.port import ConductorInput, Steering, TaskSummary, WorkSummary
+from examples.frontend_backend_live.delegation_core.backend.harness.render import Renderer
+from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessPrompts
+from examples.frontend_backend_live.delegation_core.backend.port import (
+    ConductorInput,
+    Steering,
+    TaskSummary,
+    WorkSummary,
+)
 from tests.unit.contracts.backend import a_request, an_ended_work, an_open_work
 from tests.unit.delegation_core.backend.harness.doubles import PROMPTS
 

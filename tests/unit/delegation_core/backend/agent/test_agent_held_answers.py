@@ -12,7 +12,7 @@ so an answer that crosses a request is the answer, and the request starts a foll
 
 import asyncio
 
-from delegation_core.backend.llm import LlmSource
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSource
 from tests.unit.contracts.backend import text_round
 from tests.unit.delegation_core.backend.agent.doubles import (
     FAST_WORKER,

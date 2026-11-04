@@ -16,9 +16,9 @@ from unittest.mock import patch
 
 import yaml
 
-from delegation_core.config import CoreSettings
 from examples.frontend_backend_live import factory
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from live.protocol import SessionConfig
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,

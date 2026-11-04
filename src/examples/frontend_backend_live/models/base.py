@@ -6,7 +6,8 @@
 * ``Frontend``: the cascade's own model, which the talker, the writer and the normalizer call. Each call states what it
   is in a :class:`CallSpec` (its role, the actions its decision may take, its schema hint), and gets one
   ``TalkerDecision``.
-* ``Backend``, the backend model provider, is in the delegation core (``delegation_core.backend.providers``).
+* ``Backend``, the backend model provider, is in the delegation core
+  (``examples.frontend_backend_live.delegation_core.backend.providers``).
 
 Adding a provider is one subclass with its ``name``, one entry in ``FRONTENDS`` (``models/__init__.py``), and the name
 in ``config.yaml``. Prompts, retries and the talker's floor live outside these classes, so every provider

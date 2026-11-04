@@ -15,14 +15,19 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from delegation_core.backend.agent import AgentSettings, AgentSource, ConductorSettings, LlmConductor
-from delegation_core.backend.agent.settings import WHEN_IDLE
-from delegation_core.backend.control import ControlVocabulary
-from delegation_core.backend.llm import LlmSettings
-from delegation_core.backend.port import Request, TaskSummary, WorkSummary
-from delegation_core.backend.providers import Backend, ProviderLimits
-from delegation_core.backend.providers.translation import item_text
-from delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.backend.agent import (
+    AgentSettings,
+    AgentSource,
+    ConductorSettings,
+    LlmConductor,
+)
+from examples.frontend_backend_live.delegation_core.backend.agent.settings import WHEN_IDLE
+from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.port import Request, TaskSummary, WorkSummary
+from examples.frontend_backend_live.delegation_core.backend.providers import Backend, ProviderLimits
+from examples.frontend_backend_live.delegation_core.backend.providers.translation import item_text
+from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
 from tests.unit.contracts.backend import a_round, call_events
 
 FBL = Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live"

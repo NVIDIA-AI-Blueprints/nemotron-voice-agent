@@ -7,7 +7,7 @@
 
 import asyncio
 
-from delegation_core.backend.port import Answer, Start
+from examples.frontend_backend_live.delegation_core.backend.port import Answer, Start
 from tests.unit.delegation_core.helpers import (
     TEXTS,
     IMCase,

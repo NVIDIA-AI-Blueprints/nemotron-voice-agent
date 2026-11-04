@@ -8,8 +8,8 @@
 import json
 import unittest
 
-from delegation_core.backend.providers import BrokenStreamError
-from delegation_core.backend.providers.translation import (
+from examples.frontend_backend_live.delegation_core.backend.providers import BrokenStreamError
+from examples.frontend_backend_live.delegation_core.backend.providers.translation import (
     ChatResponseTranslator,
     responses_items_to_messages,
     to_chat_tool_choice,

@@ -7,7 +7,7 @@
 
 import asyncio
 
-from delegation_core.backend.port import Start, Steer
+from examples.frontend_backend_live.delegation_core.backend.port import Start, Steer
 from tests.unit.delegation_core.helpers import (
     MENU,
     IMCase,

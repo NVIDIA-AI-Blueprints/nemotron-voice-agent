@@ -7,8 +7,14 @@
 
 import unittest
 
-from delegation_core.backend.conductors import StartEach, SteerOpenWork
-from delegation_core.backend.port import ConductorInput, Start, Steer, TaskSummary, WorkSummary
+from examples.frontend_backend_live.delegation_core.backend.conductors import StartEach, SteerOpenWork
+from examples.frontend_backend_live.delegation_core.backend.port import (
+    ConductorInput,
+    Start,
+    Steer,
+    TaskSummary,
+    WorkSummary,
+)
 from tests.unit.contracts.backend import ConductorContract, FakeDecisionTarget, a_request, an_ended_work, an_open_work
 
 

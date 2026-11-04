@@ -7,9 +7,9 @@
 
 import unittest
 
-from delegation_core.backend.providers import Backend
-from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
-from delegation_core.backend.providers.openai_responses import OpenAIResponsesBackend
+from examples.frontend_backend_live.delegation_core.backend.providers import Backend
+from examples.frontend_backend_live.delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
+from examples.frontend_backend_live.delegation_core.backend.providers.openai_responses import OpenAIResponsesBackend
 from tests.unit.contracts.backend import ProviderContract, a_round, call_events, message_events
 from tests.unit.delegation_core.backend.llm.doubles import (
     ENDPOINT,

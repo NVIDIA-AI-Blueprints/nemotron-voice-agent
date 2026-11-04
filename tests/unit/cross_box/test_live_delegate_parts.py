@@ -23,10 +23,10 @@ import yaml
 from fastapi.testclient import TestClient
 
 import server
-from delegation_core.backend.providers import base as providers
-from delegation_core.config import CoreSettings
-from delegation_core.im.input import compose
 from examples.frontend_backend_live import factory
+from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.im.input import compose
 from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import MENU_TOOL, tool_call_round
 from tests.unit.core_helpers import FakeChat, chunk
@@ -217,7 +217,9 @@ class RoundTests(ServedRoute):
         # Opening the round is retried on a transient error, provider_retries times, and nothing on top.
         error = openai.APIConnectionError(request=httpx.Request("POST", "http://backend.test/v1/chat/completions"))
         retries = CoreSettings.load(CORE).backend.blocks["llm"]["provider_retries"]
-        with patch("delegation_core.backend.providers.retry.retry_delay", return_value=0):
+        with patch(
+            "examples.frontend_backend_live.delegation_core.backend.providers.retry.retry_delay", return_value=0
+        ):
             response, chat, _ = self.round({"input": [USER]}, *[error] * (2 * retries + 2), answer("never"))
         self.assertEqual((response.status_code, response.json()["detail"]), FAILED)
         self.assertEqual(len(chat.requests), retries + 1)

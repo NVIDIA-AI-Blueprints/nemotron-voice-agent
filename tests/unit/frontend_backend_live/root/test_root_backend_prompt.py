@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 import yaml
 
-from delegation_core.app import build_core
-from delegation_core.backend.providers import base as providers
 from examples.frontend_backend_live import factory, pipeline
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
 from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.core_helpers import FakeChat, chunk
 from tests.unit.frontend_backend_live.root.root_helpers import CATALOG, StubAdapter, clear_root_caches

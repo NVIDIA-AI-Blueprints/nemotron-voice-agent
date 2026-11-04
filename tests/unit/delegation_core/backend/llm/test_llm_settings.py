@@ -7,8 +7,8 @@
 
 import unittest
 
-from delegation_core.backend.llm import LlmSettings
-from delegation_core.backend.providers import OpenAIResponsesBackend
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.providers import OpenAIResponsesBackend
 from tests.unit.contracts.backend import call_round, text_round
 from tests.unit.delegation_core.backend.llm.doubles import IMTask, RecordingTools, ScriptedProvider, adapter, source
 

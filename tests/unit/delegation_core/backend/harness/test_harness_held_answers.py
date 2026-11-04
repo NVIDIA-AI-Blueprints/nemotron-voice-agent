@@ -12,8 +12,8 @@ and then the request; the worker's own session ended with its answer.
 
 import asyncio
 
-from delegation_core.backend.harness.worker import WorkerRun
-from delegation_core.backend.port import Start, Steer, TaskContext
+from examples.frontend_backend_live.delegation_core.backend.harness.worker import WorkerRun
+from examples.frontend_backend_live.delegation_core.backend.port import Start, Steer, TaskContext
 from tests.unit.delegation_core.backend.harness.doubles import FakeHost, until
 from tests.unit.delegation_core.helpers import IMCase, ask, finished_items, planned, read_all
 

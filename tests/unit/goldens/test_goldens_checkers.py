@@ -40,9 +40,9 @@ from pydantic import BaseModel, ValidationError
 
 import server
 import utils
-from delegation_core.im.session import IMSession
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
 from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
+from examples.frontend_backend_live.delegation_core.im.session import IMSession
 from live.gateway import create_live_router
 from live.mount import mount_live
 from live.protocol import approx_tokens

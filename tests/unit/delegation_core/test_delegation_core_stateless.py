@@ -11,16 +11,20 @@ import unittest
 import weakref
 from dataclasses import replace
 
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import MAX_REQUEST_DEPTH, InvalidRequest, ResponsesService
-from delegation_core.app import build_core
-from delegation_core.backend.adapters import ADAPTERS
-from delegation_core.backend.llm import LlmSettings, LlmSource
-from delegation_core.backend.providers import ProviderLimits
-from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
-from delegation_core.config import CoreSettings, ModelEndpoint
-from delegation_core.im.input import BackendTask, compose
-from delegation_core.im.oneshot import OneShotSession
+from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+from examples.frontend_backend_live.delegation_core.api.service import (
+    MAX_REQUEST_DEPTH,
+    InvalidRequest,
+    ResponsesService,
+)
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.adapters import ADAPTERS
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
+from examples.frontend_backend_live.delegation_core.backend.providers import ProviderLimits
+from examples.frontend_backend_live.delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
+from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask, compose
+from examples.frontend_backend_live.delegation_core.im.oneshot import OneShotSession
 from tests.unit.contracts.backend import a_round, call_events, message_events
 from tests.unit.core_helpers import LIMITS, FakeChat, answer_text, chunk
 from tests.unit.delegation_core.backend.llm.doubles import ScriptedProvider, Sleep

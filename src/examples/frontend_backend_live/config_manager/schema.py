@@ -7,7 +7,7 @@
 (``frontend.adapter``), holds each adapter's own block (``frontend.<name>``), and names the UI bot's core profile
 and channel context (``ui_bot``): :class:`ExampleConfig`. The cascade's block is :class:`LiveConfig`, which the cascade
 adapter's class parses (``LiveConfig.parse``). The delegation core reads its own file (``core.yaml``,
-``delegation_core.config``).
+``examples.frontend_backend_live.delegation_core.config``).
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@
 
 import asyncio
 
-from delegation_core.im.stream import message_text
+from examples.frontend_backend_live.delegation_core.im.stream import message_text
 from tests.unit.delegation_core.helpers import (
     IMCase,
     ScriptedAdapter,

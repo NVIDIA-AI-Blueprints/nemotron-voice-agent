@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from delegation_core.backend.port import (
+from examples.frontend_backend_live.delegation_core.backend.port import (
     Conductor,
     ConductorInput,
     Decision,
@@ -28,12 +28,12 @@ from delegation_core.backend.port import (
     StopOutcome,
     TaskContext,
 )
-from delegation_core.config import CoreSettings, Texts
-from delegation_core.im.input import BackendTask
-from delegation_core.im.oneshot import OneShotSession
-from delegation_core.im.results import CallReports, ResultFormat
-from delegation_core.im.session import IMSession
-from delegation_core.im.stream import ResponseWriter, message_text
+from examples.frontend_backend_live.delegation_core.config import CoreSettings, Texts
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.im.oneshot import OneShotSession
+from examples.frontend_backend_live.delegation_core.im.results import CallReports, ResultFormat
+from examples.frontend_backend_live.delegation_core.im.session import IMSession
+from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter, message_text
 from tests.unit.contracts.endings import normalized
 
 # The core's own settings file: the IM's settings and its texts.

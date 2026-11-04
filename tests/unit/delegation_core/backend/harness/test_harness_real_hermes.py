@@ -25,11 +25,11 @@ import unittest
 from pathlib import Path
 from types import MappingProxyType
 
-from delegation_core.app import build_core
-from delegation_core.backend.harness import HarnessSource
-from delegation_core.backend.port import Start
-from delegation_core.config import CoreSettings, ModelEndpoint
-from delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.harness import HarnessSource
+from examples.frontend_backend_live.delegation_core.backend.port import Start
+from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from tests.unit.contracts.backend import (
     MENU_FUNCTION,
     BackendAdapterContract,

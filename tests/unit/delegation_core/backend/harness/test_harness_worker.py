@@ -10,9 +10,15 @@ import dataclasses
 import json
 import unittest
 
-from delegation_core.backend.conductors import SteerOpenWork
-from delegation_core.backend.harness.protocol import CallRunning, CallSettled, ThoughtChunk, ToolCard, ToolCardEnd
-from delegation_core.backend.harness.worker import HarnessTurnError, WorkerRun
+from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
+from examples.frontend_backend_live.delegation_core.backend.harness.protocol import (
+    CallRunning,
+    CallSettled,
+    ThoughtChunk,
+    ToolCard,
+    ToolCardEnd,
+)
+from examples.frontend_backend_live.delegation_core.backend.harness.worker import HarnessTurnError, WorkerRun
 from tests.unit.contracts.backend import MENU_FUNCTION, FakeTaskContext, check_events
 from tests.unit.delegation_core.backend.harness.doubles import FakeHost, plain, settings, until, wire
 from tests.unit.delegation_core.helpers import IMCase, app_outputs, ask, finished_items, read_all

@@ -11,6 +11,7 @@ The rules are in ``guard.py``, beside this file. A failure names the file, the l
 import unittest
 
 from tests.unit.guard.guard import (
+    CORE,
     module_name,
     sites_in,
     walked_files,
@@ -25,8 +26,9 @@ class GuardTests(unittest.TestCase):
 
     def test_the_walk_reads_the_gateway_the_example_and_the_core(self):
         # The walk reads every tree it guards, so the rules cannot pass by reading nothing.
-        modules = {module_name(path).split(".")[0] for path in walked_files()}
-        self.assertLessEqual({"live", "examples", "delegation_core"}, modules)
+        modules = {module_name(path) for path in walked_files()}
+        self.assertLessEqual({"live", "examples"}, {module.split(".")[0] for module in modules})
+        self.assertTrue(any(module.startswith(f"{CORE}.") for module in modules))
 
 
 class RuleTests(unittest.TestCase):
@@ -100,12 +102,12 @@ class RuleTests(unittest.TestCase):
         )
 
     def test_the_table_modules_may_compare_names(self):
-        self.assertEqual(self.kinds("if table.adapter == 'llm': pass", "delegation_core.tables"), [])
+        self.assertEqual(self.kinds("if table.adapter == 'llm': pass", f"{CORE}.tables"), [])
 
     def test_an_isinstance_against_another_modules_class_is_a_site(self):
         source = "\n".join(
             [
-                "from delegation_core.api.service import StatelessStream",
+                f"from {CORE}.api.service import StatelessStream",
                 "from live.ports import ContextMeter",
                 "from live.protocol import ProtocolError",
                 "class Local: pass",
@@ -115,7 +117,7 @@ class RuleTests(unittest.TestCase):
                 "isinstance(x, (Local, dict))",  # this module's class, a builtin
             ]
         )
-        self.assertEqual(self.kinds(source, "delegation_core.api.local"), [("isinstance", "StatelessStream")])
+        self.assertEqual(self.kinds(source, f"{CORE}.api.local"), [("isinstance", "StatelessStream")])
         self.assertEqual(self.kinds(source, "examples.frontend_backend_live.factory"), [])  # a composition root
 
     def test_a_class_reached_through_its_module_or_by_issubclass_is_a_site_too(self):
@@ -123,7 +125,7 @@ class RuleTests(unittest.TestCase):
             [
                 "import live.session.session as live_session",
                 "import examples.frontend_backend_live.models.chat_completions",
-                "from delegation_core.api import service",
+                f"from {CORE}.api import service",
                 "from live import ports",
                 "isinstance(x, live_session.LiveProtocolSession)",
                 "isinstance(x, examples.frontend_backend_live.models.chat_completions.ChatCompletionsFrontend)",
@@ -133,7 +135,7 @@ class RuleTests(unittest.TestCase):
             ]
         )
         self.assertEqual(
-            self.kinds(source, "delegation_core.im.session"),
+            self.kinds(source, f"{CORE}.im.session"),
             [
                 ("isinstance", "LiveProtocolSession"),
                 ("isinstance", "ChatCompletionsFrontend"),
@@ -172,5 +174,5 @@ class RuleTests(unittest.TestCase):
                 "    def run(self): return pick(TABLE, self.name, 'x')",
             ]
         )
-        self.assertEqual(self.kinds(source, "delegation_core.backend.example"), [("pick", "pick")])
-        self.assertEqual(self.kinds(source, "delegation_core.app"), [])
+        self.assertEqual(self.kinds(source, f"{CORE}.backend.example"), [("pick", "pick")])
+        self.assertEqual(self.kinds(source, f"{CORE}.app"), [])

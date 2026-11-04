@@ -7,7 +7,7 @@
 
 import unittest
 
-from delegation_core.backend.llm.run import RoundFailedError
+from examples.frontend_backend_live.delegation_core.backend.llm.run import RoundFailedError
 from tests.unit.contracts.backend import a_round, check_events, message_events, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     IMTask,

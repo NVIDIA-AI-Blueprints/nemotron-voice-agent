@@ -8,7 +8,7 @@
 import asyncio
 import json
 
-from delegation_core.im.results import RESULT_FORMATS, SpeakDisplay
+from examples.frontend_backend_live.delegation_core.im.results import RESULT_FORMATS, SpeakDisplay
 from tests.unit.delegation_core.helpers import (
     TEXTS,
     IMCase,

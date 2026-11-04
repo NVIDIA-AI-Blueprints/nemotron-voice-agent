@@ -34,17 +34,17 @@ from pipecat.turns.user_start import ExternalUserTurnStartStrategy
 from pipecat.turns.user_stop import ExternalUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import ResponsesService
-from delegation_core.app import DelegationCore, build_core
-from delegation_core.backend.adapters import ADAPTERS
-from delegation_core.backend.llm import LlmSettings, LlmSource
-from delegation_core.config import CoreSettings
-from delegation_core.config import ModelEndpoint as CoreEndpoint
-from delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
 from examples.frontend_backend_live.cascade.session import log_observation
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint, ReliabilityConfig
+from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
+from examples.frontend_backend_live.delegation_core.app import DelegationCore, build_core
+from examples.frontend_backend_live.delegation_core.backend.adapters import ADAPTERS
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.config import ModelEndpoint as CoreEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.models import Frontend
 from examples.frontend_backend_live.prompts import load_prompts
 from live.ports import SessionParts

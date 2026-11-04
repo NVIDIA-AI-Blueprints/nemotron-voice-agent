@@ -15,12 +15,12 @@ from unittest.mock import patch
 import httpx
 from openai import APIConnectionError, RateLimitError
 
-from delegation_core import ids as core_ids
-from delegation_core import tables as core_tables
-from delegation_core.backend.providers import retry as core_retry
-from delegation_core.backend.providers import translation as core_translation
 from examples.frontend_backend_live import tables as frontend_tables
 from examples.frontend_backend_live.cascade import memory as frontend_memory
+from examples.frontend_backend_live.delegation_core import ids as core_ids
+from examples.frontend_backend_live.delegation_core import tables as core_tables
+from examples.frontend_backend_live.delegation_core.backend.providers import retry as core_retry
+from examples.frontend_backend_live.delegation_core.backend.providers import translation as core_translation
 from examples.frontend_backend_live.models import chat_completions as frontend_chat
 from examples.frontend_backend_live.models import retry as frontend_retry
 from live.protocol import errors as gateway_errors

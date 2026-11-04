@@ -6,7 +6,7 @@
 ``FRONTENDS`` maps each provider name ``config.yaml`` may use (``frontend.cascade.provider``) to its class; the agent's
 build method picks from it. To add a provider, subclass ``Frontend`` with its ``name``, add it to ``FRONTENDS``, and
 name it in ``config.yaml``. The backend role (``Backend``, ``BACKENDS``) is in the delegation core
-(``delegation_core.backend.providers``).
+(``examples.frontend_backend_live.delegation_core.backend.providers``).
 """
 
 from .base import CallSpec, Frontend

@@ -8,8 +8,8 @@
 import unittest
 from unittest.mock import patch
 
-from delegation_core.backend.llm import LlmSettings
-from delegation_core.backend.providers import ChatCompletionsBackend
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
+from examples.frontend_backend_live.delegation_core.backend.providers import ChatCompletionsBackend
 from tests.unit.contracts.backend import call_round, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     ENDPOINT,
@@ -77,7 +77,7 @@ class RoundCapTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_what_each_round_was_sent_is_logged_at_debug(self):
         task = IMTask()
-        with patch("delegation_core.backend.llm.run.logger") as logger:
+        with patch("examples.frontend_backend_live.delegation_core.backend.llm.run.logger") as logger:
             await drive(adapter(ScriptedProvider(text_round("Done."))).start(task), task)
         [line] = [
             call.args[0].format(*call.args[1:])

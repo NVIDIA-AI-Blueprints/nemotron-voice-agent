@@ -13,15 +13,15 @@ import asyncio
 import unittest
 from dataclasses import replace
 
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import ResponsesService
-from delegation_core.app import build_core
-from delegation_core.backend.adapters import ADAPTERS
-from delegation_core.backend.agent import AgentSettings, AgentSource
-from delegation_core.backend.conductors import SteerOpenWork
-from delegation_core.config import CoreSettings
-from delegation_core.im.input import BackendTask
-from delegation_core.im.results import SpeakDisplay
+from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.backend.adapters import ADAPTERS
+from examples.frontend_backend_live.delegation_core.backend.agent import AgentSettings, AgentSource
+from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.im.results import SpeakDisplay
 from tests.unit.contracts.backend import call_round, text_round
 from tests.unit.contracts.endings import load
 from tests.unit.delegation_core.backend.agent.doubles import (

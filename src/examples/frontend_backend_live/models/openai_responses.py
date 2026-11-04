@@ -3,7 +3,8 @@
 
 """OpenAI talker: the Responses API with a strict JSON-schema decision.
 
-The OpenAI Responses backend provider is in the delegation core (``delegation_core.backend.providers``).
+The OpenAI Responses backend provider is in the delegation core
+(``examples.frontend_backend_live.delegation_core.backend.providers``).
 """
 
 from __future__ import annotations

@@ -7,9 +7,9 @@
 
 import unittest
 
-from delegation_core.backend.port import ToolSource
-from delegation_core.backend.tools import TOOL_SOURCES, CafeTools
-from delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
+from examples.frontend_backend_live.delegation_core.backend.port import ToolSource
+from examples.frontend_backend_live.delegation_core.backend.tools import TOOL_SOURCES, CafeTools
+from examples.frontend_backend_live.delegation_core.backend.tools.cafe.schemas import CAFE_TOOLS
 
 
 class ToolSourceTests(unittest.TestCase):

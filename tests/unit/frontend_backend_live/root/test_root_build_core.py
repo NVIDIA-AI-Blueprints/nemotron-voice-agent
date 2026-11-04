@@ -15,12 +15,17 @@ from tempfile import TemporaryDirectory
 from types import ModuleType
 from unittest.mock import patch
 
-from delegation_core import app
-from delegation_core.app import DelegationCore, build_core, log_trace
-from delegation_core.backend.control import ControlVocabulary
-from delegation_core.backend.port import Start
-from delegation_core.config import BackendChoice, CoreSettings, DelegationSettings, ModelEndpoint
-from delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core import app
+from examples.frontend_backend_live.delegation_core.app import DelegationCore, build_core, log_trace
+from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
+from examples.frontend_backend_live.delegation_core.backend.port import Start
+from examples.frontend_backend_live.delegation_core.config import (
+    BackendChoice,
+    CoreSettings,
+    DelegationSettings,
+    ModelEndpoint,
+)
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from tests.unit.contracts.base import ContractCase
 
 FBL = Path(__file__).resolve().parents[4] / "src/examples/frontend_backend_live"
@@ -169,7 +174,7 @@ def module(name: str, **attributes) -> dict:
 def im_results(**tables) -> dict:
     """A stand-in of the IM's tables (``im/results.py``), as the builder reads them: ``plain``, ``items`` by default."""
     return module(
-        "delegation_core.im.results",
+        "examples.frontend_backend_live.delegation_core.im.results",
         **{"RESULT_FORMATS": {"plain": Format}, "CALL_REPORTS": {"items": Items}, **tables},
     )
 
@@ -245,7 +250,7 @@ class AdapterChoiceTests(BuilderCase):
             self.build(replace(settings(), delegation=DelegationSettings(backend_calls="logs")))
 
     def test_tool_sources_are_named_by_the_profile_and_fresh_for_each_session(self):
-        tables = module("delegation_core.backend.tools", TOOL_SOURCES={"cafe": CafeLike})
+        tables = module("examples.frontend_backend_live.delegation_core.backend.tools", TOOL_SOURCES={"cafe": CafeLike})
         with patch.dict(sys.modules, tables):
             core = self.build(settings(tools={"cafe": {"currency": "USD"}}))
             first, second = core.source.tools(), core.source.tools()
@@ -272,7 +277,9 @@ class CoreTests(BuilderCase):
 
     def test_each_stateless_request_gets_a_one_shot_session_on_the_one_shot_source(self):
         core = self.build(settings(one_shot_adapter="other", other={}))
-        with patch.dict(sys.modules, module("delegation_core.im.oneshot", OneShotSession=Recorder)):
+        with patch.dict(
+            sys.modules, module("examples.frontend_backend_live.delegation_core.im.oneshot", OneShotSession=Recorder)
+        ):
             session = core.one_shot_session()
         self.assertEqual((core.source.adapters, core.one_shot_source.adapters), ([], [session.args[0]]))
         self.assertEqual(session.args[1:], (DEFAULTS, core.settings.delegation, core.settings.texts))
@@ -332,16 +339,19 @@ class CrossingTests(unittest.TestCase):
 import sys
 from dataclasses import replace
 from pathlib import Path
-from delegation_core.app import build_core
-from delegation_core.config import BackendChoice, CoreSettings, ModelEndpoint
-from delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.delegation_core.config import BackendChoice, CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from tests.unit.frontend_backend_live.root.test_root_build_core import ADAPTERS
 settings = CoreSettings.load(Path({str(FBL / "core.yaml")!r}))
 raw = {{"slot": "s", "prompt": "p", "adapter": "scripted", "one_shot_adapter": "scripted"}}
 settings = replace(settings, backend=BackendChoice.parse(raw))
 endpoint = ModelEndpoint(model="m", base_url="http://localhost:1/v1")
 build_core(settings, endpoints=lambda model: endpoint, defaults=BackendTask("m", "x", []), adapters=ADAPTERS)
-print(sorted(name for name in sys.modules if name.startswith(("examples", "live", "pipecat"))))
+held = ("examples", "examples.frontend_backend_live")  # the packages that hold the core
+core = "examples.frontend_backend_live.delegation_core"
+loaded = (name for name in sys.modules if name.startswith(("examples", "live", "pipecat")))
+print(sorted(name for name in loaded if name not in held and name != core and not name.startswith(core + ".")))
 """
         repo = Path(__file__).resolve().parents[4]
         done = subprocess.run(
@@ -402,8 +412,8 @@ class RealCoreTests(ContractCase, unittest.IsolatedAsyncioTestCase):
         return events
 
     def client(self, core):
-        from delegation_core.api.local import LocalResponsesClient
-        from delegation_core.api.service import ResponsesService
+        from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
+        from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
 
         service = ResponsesService(core.session, stateless_session=core.one_shot_session, backend=core)
         return LocalResponsesClient(service)
