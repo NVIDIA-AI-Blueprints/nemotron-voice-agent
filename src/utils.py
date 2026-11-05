@@ -256,6 +256,7 @@ LOCAL_SPEECH_PORTS: dict[str, dict[str, SpeechPorts]] = {
 }
 
 _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
+    ("nemotron-transcribe", 9000): 9002,
     ("nvidia-llm", 8000): 18000,
     ("nemotron-35-super-vl", 8000): 18001,
     ("nemotron-35-super-vl-vllm", 8000): 18001,

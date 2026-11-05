@@ -1,0 +1,40 @@
+# Add --profile transcribe-asr to generic-assistant/server to use Transcribe.
+services:
+  nemotron-transcribe:
+    image: nvcr.io/nim/nvidia/nemotron-transcribe:1.0.0
+    profiles:
+      - transcribe-asr
+    user: "0:0"
+    ipc: host
+    environment:
+      NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
+      ASR_MULTI_TURN: "on"
+      NIM_TAGS_SELECTOR: precision=nvfp4,concurrency=low
+    ports:
+      - "9002:9000"
+    volumes:
+      - transcribe_cache:/opt/nim/.cache
+    ulimits:
+      nofile: 2048
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import json, urllib.request; data=json.load(urllib.request.urlopen(\"http://127.0.0.1:9000/v1/health/ready\", timeout=5)); raise SystemExit(0 if data.get(\"status\") == \"ready\" or data.get(\"ready\") is True else 1)'"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 2400s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  transcribe_cache:

@@ -740,6 +740,15 @@ class RepositoryCatalogTests(unittest.TestCase):
                     catalog[recipe]["llm"]["nemotron-lightning"]["supported_languages"], lightning_languages
                 )
 
+    def test_transcribe_is_an_optional_generic_asr_without_speaker_labels(self) -> None:
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        entry = catalog["server"]["asr"]["nemotron-transcribe"]
+        self.assertEqual(entry["asr_type"], "transcribe")
+        self.assertEqual(entry["model"], "nvidia-nemotron-3p5-transcribe")
+        self.assertFalse(entry["speaker_diarization_supported"])
+        self.assertIn("nemotron-transcribe", examples_registry.EXAMPLES["generic-assistant"]["services"]["asr"])
+        self.assertNotIn("nemotron-transcribe", examples_registry.EXAMPLES["multilingual-assistant"]["services"]["asr"])
+
     def test_super_is_an_optional_llm_on_every_self_hosted_recipe(self) -> None:
         catalog = utils.load_yaml_file(Path("services.yaml"))
         compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker" / "docker-compose.nemotron35-super-vl.yaml")
@@ -865,6 +874,7 @@ class HostRuntimeRewriteTests(unittest.TestCase):
             ("base_url", "http://nemotron-35-bolt-vllm:8000/v1"): "http://localhost:18003/v1",
             ("server", "magpie-multilingual-tts-service:50051"): "localhost:50151",
             ("server", "parakeet-ctc-asr:50052"): "localhost:50352",
+            ("server", "http://nemotron-transcribe:9000/v1"): "http://localhost:9002/v1",
             ("server", "nemo-speech:50051"): "localhost:50051",
             ("server", "grpc.nvcf.nvidia.com:443"): "grpc.nvcf.nvidia.com:443",
         }

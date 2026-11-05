@@ -9,7 +9,7 @@ import os
 import socket
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import examples_registry
 import server
@@ -24,6 +24,11 @@ class ServiceStatusTest(unittest.TestCase):
     def setUp(self) -> None:
         server._seen_service_targets.clear()
         server._failed_service_targets.clear()
+        self.http_asr_server = "http://speech.invalid:9000/custom/v1/"
+        self.http_asr_health = "http://speech.invalid:9000/v1/health/ready"
+        self.http_asr_entry = _entry("self-hosted:transcribe", server=self.http_asr_server, asr_type="transcribe")
+        self.http_asr_catalog = {"asr": [self.http_asr_entry]}
+        self.http_asr_example = {"services": {"asr": ["asr"]}}
 
     def test_unresolvable_host_is_offline_and_refused_port_is_starting(self) -> None:
         with patch("socket.create_connection", side_effect=socket.gaierror):
@@ -80,6 +85,95 @@ class ServiceStatusTest(unittest.TestCase):
         self.assertEqual([entry.get("status") for entry in result["llm"]], ["starting", None])
         self.assertEqual([entry["selected"] for entry in result["llm"]], [True, False])
         self.assertEqual([entry["status"] for entry in result["asr"]], ["offline"])
+
+    def test_http_asr_missing_health_route_checks_tcp_for_catalog_and_connect(self) -> None:
+        missing = urllib.error.HTTPError(self.http_asr_health, 404, "Not Found", None, None)
+        for error, status in ((None, "ready"), (socket.gaierror(), "offline")):
+            server._seen_service_targets.clear()
+            with (
+                self.subTest(status=status),
+                patch("urllib.request.urlopen", side_effect=missing),
+                patch("socket.create_connection", side_effect=error) as connect,
+                patch.object(server, "load_service_entry_by_id", return_value=self.http_asr_entry),
+            ):
+                result = asyncio.run(server._with_service_status(self.http_asr_catalog))
+                self.assertEqual(result["asr"][0]["status"], status)
+                connect.assert_called_once_with(("speech.invalid", 9000), timeout=server._STATUS_PROBE_TIMEOUT_SECS)
+                connect.reset_mock()
+                check = server._ensure_asr_ready_for_connection(
+                    {"asr_id": "self-hosted:transcribe", "asr_server": self.http_asr_server}, self.http_asr_example
+                )
+                if error:
+                    with self.assertRaisesRegex(RuntimeError, "ASR service is not running"):
+                        asyncio.run(check)
+                else:
+                    asyncio.run(check)
+                connect.assert_called_once_with(("speech.invalid", 9000), timeout=server._CONNECT_HEALTH_TIMEOUT_SECS)
+
+    def test_http_asr_other_health_responses_do_not_fall_back(self) -> None:
+        for body in (401, 403, 429, 500, 503, b'{"ready":true}', b'{"ready":false}', b"invalid"):
+            status = "ready" if body == b'{"ready":true}' else "starting"
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = body
+            error = (
+                urllib.error.HTTPError(self.http_asr_health, body, "Unavailable", None, None)
+                if isinstance(body, int)
+                else None
+            )
+            with (
+                self.subTest(body=body),
+                patch("urllib.request.urlopen", side_effect=error, return_value=response),
+                patch("socket.create_connection") as connect,
+                patch.object(server, "load_service_entry", return_value=self.http_asr_entry),
+            ):
+                result = asyncio.run(server._with_service_status(self.http_asr_catalog))
+                self.assertEqual(result["asr"][0]["status"], status)
+                check = server._ensure_asr_ready_for_connection(
+                    {"asr_server": self.http_asr_server}, self.http_asr_example
+                )
+                if status == "starting":
+                    with self.assertRaisesRegex(RuntimeError, "ASR service is still starting"):
+                        asyncio.run(check)
+                else:
+                    asyncio.run(check)
+                connect.assert_not_called()
+
+    def test_missing_health_route_does_not_fall_back_for_llm_tts_or_grpc_asr(self) -> None:
+        missing = urllib.error.HTTPError(self.http_asr_health, 404, "Not Found", None, None)
+        for label, target in (
+            ("LLM", self.http_asr_server),
+            ("TTS", self.http_asr_server),
+            ("ASR", "nemo-speech:50051"),
+            ("ASR", self.http_asr_server),
+        ):
+            with (
+                self.subTest(label=label),
+                patch("urllib.request.urlopen", side_effect=missing),
+                patch("socket.create_connection") as connect,
+                self.assertRaisesRegex(RuntimeError, f"{label} service is still starting"),
+            ):
+                server._check_http_health(label, target, self.http_asr_health, expects_ready_json=True)
+            connect.assert_not_called()
+
+    def test_non_transcribe_http_asr_uses_tcp_for_catalog_and_connect(self) -> None:
+        entry = _entry("self-hosted:streaming", server=self.http_asr_server)
+        for asr_id in ("self-hosted:streaming", ""):
+            with (
+                self.subTest(asr_id=asr_id),
+                patch.object(server, "load_service_entry_by_id", return_value=entry),
+                patch.object(server, "load_service_entry", return_value=entry),
+                patch("urllib.request.urlopen") as http,
+                patch("socket.create_connection") as connect,
+            ):
+                result = asyncio.run(server._with_service_status({"asr": [entry]}))
+                self.assertEqual(result["asr"][0]["status"], "ready")
+                asyncio.run(
+                    server._ensure_asr_ready_for_connection(
+                        {"asr_id": asr_id, "asr_server": self.http_asr_server}, self.http_asr_example
+                    )
+                )
+                http.assert_not_called()
+                self.assertEqual(connect.call_count, 2)
 
     def test_connect_check_reports_missing_service_as_not_running(self) -> None:
         with (

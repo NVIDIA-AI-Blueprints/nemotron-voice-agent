@@ -44,6 +44,7 @@ from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
+from examples.shared.nvidia_transcribe_stt import NvidiaTranscribeSTTService
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -70,6 +71,7 @@ from utils import (
     load_ipa_dictionary,
     load_prompt_catalog,
     load_service_entry,
+    load_service_entry_by_id,
     normalize_lang_code,
     nvidia_api_key,
     parse_env_int,
@@ -122,6 +124,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
+    asr_entry = load_service_entry_by_id("asr", body["asr_id"]) if body.get("asr_id") else default_asr
+    transcribe_asr = asr_entry.get("asr_type") == "transcribe"
 
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
@@ -154,7 +158,18 @@ async def bot(runner_args: RunnerArguments) -> None:
             f"Speaker diarization enabled: max_speakers={max_speakers or '(default)'}, "
             f"multi_speaker_support={multi_speaker_support}"
         )
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
+    if transcribe_asr:
+        transcribe_language = asr_language_code.split("-", 1)[0].lower() if asr_language_code else None
+        stt = NvidiaTranscribeSTTService(
+            base_url=asr_server,
+            settings=NvidiaTranscribeSTTService.Settings(
+                model=asr_model,
+                language=transcribe_language,
+                prompt=asr_entry.get("transcription_prompt") or None,
+            ),
+        )
+    else:
+        stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
@@ -277,7 +292,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     else:
         context = LLMContext(messages)
     preserve_prompt_messages = len(messages)
-    user_params = build_user_aggregator_params(welcome_enabled)
+    user_params = build_user_aggregator_params(welcome_enabled, vad_only=transcribe_asr)
     if speaker_processor and not multi_speaker_support:
         user_params.user_turn_strategies.start = [TranscriptionUserTurnStartStrategy(use_interim=False)]
     if streaming:
