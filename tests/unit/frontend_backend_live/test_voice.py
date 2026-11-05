@@ -339,7 +339,11 @@ class OwedTests(unittest.IsolatedAsyncioTestCase):
             call.output.pause_at = lambda frame: isinstance(frame, TTSAudioRawFrame)
             call.port.answer("del_1", "Earl Grey.")
             await call.until(lambda: call.tts.spoken == ["We have tea."], "the worded result on its way")
-            await call.say("sorry?")  # the caller talks over it before any of it played
+            await call.stt.push_frame(ProposedUserStartedSpeakingFrame())  # the caller talks over it before any played
+            await call.until(lambda: len(call.chat.requests) == 3, "the result worded again while the caller speaks")
+            words = TranscriptionFrame(text="sorry?", user_id="caller", timestamp=str(time.time()), finalized=True)
+            await call.stt.push_frame(words)
+            await call.stt.push_frame(ProposedUserStoppedSpeakingFrame())
             call.output.pause_at = lambda frame: False
             call.output.playing.set()
             await call.until(lambda: call.said() == ["Tea."], "the result said again")
