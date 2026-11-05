@@ -66,6 +66,8 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             await call.say("Hi")
             await call.until(lambda: call.said() == ["Welcome back."], "the first reply")
             call.voice.thinking("The caller is a regular.")
+            thinking = {"role": "developer", "content": TEXTS.context_label + "The caller is a regular."}
+            await call.until(lambda: thinking in call.context.get_messages(), "the thinking in the context")
             await call.say("yes")
             await call.until(lambda: len(call.said()) == 2, "the reply")
             user = [m["content"] for m in call.request(1)["messages"] if m["role"] == "user"]

@@ -98,6 +98,20 @@ class Acts(FrameProcessor):
             await self.push_frame(frame, direction)
 
 
+class Interruptions(FrameProcessor):
+    """After the output's reader: counts the interruptions that passed it, so each cut they made is settled."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.passed = 0
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, InterruptionFrame) and direction is FrameDirection.DOWNSTREAM:
+            self.passed += 1
+        await self.push_frame(frame, direction)
+
+
 class SentenceTTS(FrameProcessor):
     """Text-to-speech stand-in that speaks per sentence: each sentence's audio (100 ms a word), then its text.
 
@@ -304,6 +318,7 @@ class CallHarness:
         level = pick(RESPONSE_FORMATS, ENDPOINT.response_format, "response_format")
         self.talker = TalkerChat.from_config(ENDPOINT, config.reliability, level, client=self.chat)
         self.stt, self.tts, self.output = FakeSTT(), tts or SentenceTTS(), SpeakingOutput()
+        self.interruptions = Interruptions()
         # A turn with no words ends soon after its speech, as a turn end's silence ends it.
         params = replace(transcript_turns(), user_turn_stop_timeout=0.3)
         spec = FrontendSpec(
@@ -320,9 +335,10 @@ class CallHarness:
             cut_memory=pick(CUT_MEMORIES, config.speech.heard_words, "speech.heard_words"),
             item_text=message_text,
         )
-        built = build_frontend(
-            spec, FrontendEdges(inputs=[Acts()], outputs=[self.output], worker={"idle_timeout_secs": None})
+        edges = FrontendEdges(
+            inputs=[Acts()], outputs=[self.output], after=[self.interruptions], worker={"idle_timeout_secs": None}
         )
+        built = build_frontend(spec, edges)
         self.worker, self.voice, self.context = built.worker, built.voice, built.context
         self.processors = built.processors
         self.errors: list = []
@@ -366,14 +382,26 @@ class CallHarness:
             await self.voice.close()
 
     async def say(self, text: str) -> None:
-        """The caller says ``text``: a turn with its words, proposed as a speech service with turn detection does."""
-        await self.stt.propose(text)
+        """The caller says ``text``: a turn with its words, proposed as a speech service with turn detection does.
+
+        The words and the turn's end come once the cut its start made has reached the output's reader, as in a call,
+        where a turn lasts far longer than the cut takes to get there.
+        """
+        await self._start_turn()
+        words = TranscriptionFrame(text=text, user_id="caller", timestamp=str(time.time()), finalized=True)
+        await self.stt.push_frame(words)
+        await self.stt.push_frame(ProposedUserStoppedSpeakingFrame())
 
     async def noise(self) -> None:
-        """The caller makes a sound with no words: a turn that ends empty."""
-        await self.stt.push_frame(ProposedUserStartedSpeakingFrame())
-        await asyncio.sleep(0.05)
+        """The caller makes a sound with no words: a turn that ends empty once its cut has reached the output."""
+        await self._start_turn()
         await self.stt.push_frame(ProposedUserStoppedSpeakingFrame())
+
+    async def _start_turn(self) -> None:
+        """The caller starts speaking; return once the interruption it makes has passed the output's reader."""
+        passed = self.interruptions.passed
+        await self.stt.push_frame(ProposedUserStartedSpeakingFrame())
+        await self.until(lambda: self.interruptions.passed > passed, "the caller's interruption past the output")
 
     async def until(self, predicate, what: str, timeout: float = 4.0) -> None:
         """Wait until ``predicate()`` holds."""
