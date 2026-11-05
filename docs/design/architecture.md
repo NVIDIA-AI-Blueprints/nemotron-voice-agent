@@ -412,11 +412,13 @@ reads what the steps leave, and the ledger and the records keep the app's origin
 (`POST /v1/live/delegate`) take no steps, because they send the app's outputs back as input. Outputs that arrive after
 their Work has ended take none either: the IM only records them, and no task reads them.
 
-The shipped `core.yaml` names one step, `shape_hints`
+The shipped `core.yaml` names no step (`app_output_steps: {}`), so the tasks read the app's outputs unchanged. One step
+is available, `shape_hints`
 ([`backend/recovery.py`](../../src/examples/frontend_backend_live/delegation_core/backend/recovery.py)), which helps a
-task recover an ID that the app does not know. Speech recognition can write an ID that the caller
+task recover an ID that the app does not know. It is off by default; to turn it on, replace `{}` with the commented
+`shape_hints` block in `core.yaml`, or add that block under `backend.app_output_steps` in a profile. Speech recognition can write an ID that the caller
 spelled correctly in a form the app does not use, such as `Maya_Ross_3817` for `maya_ross_3817`. When the app's
-output for a call matches the step's `not_found_pattern` (in the shipped file,
+output for a call matches the step's `not_found_pattern` (in the commented block,
 `(?i)\b(not found|does not exist|no such)\b`), the step takes the failed string argument: the one the output quotes as
 a whole word, or else the call's only string argument. The step writes that value in the shape the app's IDs take and
 appends its hint (`backend.app_output_steps.shape_hints.hint` in `prompts.yaml`) to the output that the task reads.
@@ -428,8 +430,7 @@ has not sent or been offered that form yet, so a retry of the same failed form g
 reports an error, one whose text starts with `Error` or `Exception` or whose JSON object has a non-empty `error` or
 `errors` key, teaches no shape. A hint never changes a letter or a digit, and it never refuses a call. Server tools and
 harness tools get no hint. Each hint emits the `tools.shape_hint` trace event with the tool, the failed value, the
-suggested value, and its source (`session` or `description`). To pass the app's outputs unchanged, remove the step's
-block from `backend.app_output_steps`.
+suggested value, and its source (`session` or `description`).
 
 ### Stops
 
@@ -898,7 +899,7 @@ module paths, `core/` is `FBL/delegation_core/`, `harness/` is `FBL/delegation_c
 | Backend model provider | `Backend` (`core/backend/providers/base.py`) | `chat-completions`, `openai-responses` | `backend.llm.provider` |
 | Harness seams | `HarnessProtocol`, `Agent`, `SteerStrategy`, `SessionPolicy`, `PermissionAnswer` (`harness/protocol.py`); `AcpAgent`, `Transport` (`harness/acp/`) | `acp`; `acp`, `hermes`; `stdio`, `websocket`; `native_command`, `next_prompt`, `cancel_reprompt`; `task`, `call`; `reject` | `backend.harness.protocol`, `agent`, `transport`, `steer`, `session`, `permission` |
 | Tool source | `ToolSource` (`core/backend/port.py`) | `cafe` | `backend.tools` |
-| App output step | `AppOutputStep` (`core/backend/port.py`) | `shape_hints` | `backend.app_output_steps` |
+| App output step | `AppOutputStep` (`core/backend/port.py`) | `shape_hints` (off by default) | `backend.app_output_steps` |
 | Result format; backend call reports | `ResultFormat`, `CallReports` (`core/im/results.py`) | `plain`, `speak_display`; `items`, `notes` | `delegation.result_format`, `delegation.backend_calls` |
 | Session kind | `IMSession`, `OneShotSession` (`core/im/`) | Both | The official rule: a request with no conversation is one-shot |
 | Frontend adapter | `FrontendAdapter` (`live/ports.py`), `FrontendAdapterClass` (`FBL/adapter/contract.py`) | `cascade` | `frontend.adapter` |

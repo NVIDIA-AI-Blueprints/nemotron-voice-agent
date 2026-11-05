@@ -42,13 +42,17 @@ class CoreSettingsFileTests(unittest.TestCase):
     def test_the_file_words_no_text_and_a_step_it_leaves_out_takes_none(self):
         with self.assertRaisesRegex(ValueError, "the core's texts is missing texts"):
             CoreSettings.load(CORE_YAML, {})  # every text comes from the prompt file
-        self.assertEqual(list(self.settings.backend.app_output_steps), ["shape_hints"])
-        shipped = yaml.safe_load(CORE_YAML.read_text(encoding="utf-8"))
-        shipped["backend"]["app_output_steps"] = {}  # the step removed: its hint's text stays in the prompt file
+        # The shape hints are off by default: no step, and the hint's text stays in the prompt file unused.
+        self.assertEqual(dict(self.settings.backend.app_output_steps), {})
+        steps = {"shape_hints": {"not_found_pattern": r"(?i)\b(not found|does not exist|no such)\b"}}
         with TemporaryDirectory() as folder:
-            bare = Path(folder) / "core.custom.yaml"
-            bare.write_text(yaml.safe_dump(shipped), encoding="utf-8")
-            self.assertEqual(dict(CoreSettings.load(bare, CORE_TEXTS).backend.app_output_steps), {})
+            profile = Path(folder) / "core.custom.yaml"  # a profile turns the step on, and it gets its hint's text
+            profile.write_text(
+                yaml.safe_dump({"extends": str(CORE_YAML), "backend": {"app_output_steps": steps}}), encoding="utf-8"
+            )
+            on = CoreSettings.load(profile, CORE_TEXTS).backend.app_output_steps
+            self.assertEqual(list(on), ["shape_hints"])
+            self.assertEqual(on["shape_hints"]["hint"], CORE_TEXTS["backend.app_output_steps.shape_hints.hint"])
 
     def test_a_profile_that_sets_a_place_of_the_cores_texts_names_where_they_are(self):
         # The core's texts are prompts.yaml's: a profile that sets one of their places stops loading, and no shipped

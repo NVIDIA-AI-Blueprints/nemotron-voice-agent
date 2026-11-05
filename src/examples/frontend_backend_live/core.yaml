@@ -49,14 +49,15 @@ backend:
   prompt: generic                      # the generic backend prompt, with no domain
   tools: {}                            # server tool sources by name
   # The steps the app's function outputs take before the backend reads them, each by name with its block, in this
-  # order (delegation_core/backend/output_steps.py); {}: none.
-  app_output_steps:
-    shape_hints:                       # after an app lookup finds nothing, suggest the failed id in the shape the
-                                       # app's ids take (learned from the tool's description and the session), once
-      not_found_pattern: '(?i)\b(not found|does not exist|no such)\b'  # an app output that names nothing
-      # Added to an app output that found nothing ({value}: the failed value in the shape the app's ids take, a form the
-      # session has not tried).
-      # The hint's words: backend.app_output_steps.shape_hints.hint in prompts.yaml (agent_prompts.Core).
+  # order (delegation_core/backend/output_steps.py); {}: none. Off by default; to turn on the ID-shape hints, replace
+  # {} with the block below (a profile can add it too, since mappings merge key by key).
+  app_output_steps: {}
+  #   shape_hints:                     # after an app lookup finds nothing, suggest the failed id in the shape the
+  #                                    # app's ids take (learned from the tool's description and the session), once
+  #     not_found_pattern: '(?i)\b(not found|does not exist|no such)\b'  # an app output that names nothing
+  #     # Added to an app output that found nothing ({value}: the failed value in the shape the app's ids take, a form
+  #     # the session has not tried).
+  #     # The hint's words: backend.app_output_steps.shape_hints.hint in prompts.yaml (agent_prompts.Core).
   llm:
     provider: chat-completions         # chat-completions | openai-responses
     conductor: steer                   # steer: each request joins the newest open Work | start_each: a queue
