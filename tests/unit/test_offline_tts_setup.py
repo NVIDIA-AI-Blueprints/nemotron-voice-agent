@@ -299,7 +299,7 @@ class OfflineTTSSetupTests(unittest.IsolatedAsyncioTestCase):
         service, _ = self.make_service()
         with (
             patch("examples.generic.offline.native_response.version", return_value="1.13.0"),
-            self.assertRaisesRegex(RuntimeError, "exactly Pipecat 1.12.0"),
+            self.assertRaisesRegex(RuntimeError, "exactly Pipecat 1.15.0"),
         ):
             await service.setup(self.setup)
         self.assertEqual(self.auths, [])

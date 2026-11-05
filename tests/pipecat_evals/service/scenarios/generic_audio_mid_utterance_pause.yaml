@@ -1,0 +1,16 @@
+name: generic_audio_mid_utterance_pause
+user: !include _audio_user_kokoro.yaml
+judge: !include _audio_judge_moonshine.yaml
+turns:
+  - expect:
+      - event: response
+        eval: "the spoken reply is a brief initial greeting or self-introduction"
+        within_ms: 120000
+  - user:
+      - "Reply with exactly"
+      - pause_ms: 300
+      - "blue triangle."
+    expect:
+      - event: response
+        text_matches: "(?i)^\\s*blue triangle[.!]?\\s*$"
+        within_ms: 120000

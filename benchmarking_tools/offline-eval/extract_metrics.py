@@ -301,7 +301,15 @@ def extract(input_dir: Path, output_dir: Path, run_label: str):
     """Produce portable metrics from all successful saved cases under one root."""
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError("Choose an empty metrics output directory")
-    directories = sorted(path.parent for path in input_dir.rglob("result.json") if "diagnostics" not in path.parts)
+    directories = []
+    for path in sorted(input_dir.rglob("result.json")):
+        directory = path.parent
+        if "diagnostics" in path.parts or (directory / "failure.json").exists():
+            continue
+        manifest = directory / "input_manifest.json"
+        if manifest.exists() and read_json(manifest).get("status") != "ok":
+            continue
+        directories.append(directory)
     if not directories:
         raise ValueError("No successful saved cases found")
     report = {

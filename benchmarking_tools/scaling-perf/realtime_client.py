@@ -257,6 +257,8 @@ class RealtimeClient(ProtocolClient):
         metrics: dict[str, list[float]] = {}
         for key in SERVER_METRIC_KEYS:
             value = decoded.get(key)
+            if key == "llm_ttfb" and value is None:
+                value = decoded.get("llm_ttft")
             samples: list[float] = []
             if isinstance(value, list) and len(value) <= MAX_AGGREGATED_METADATA_SAMPLES:
                 samples = [float(sample) for sample in value if _is_finite_number(sample)]

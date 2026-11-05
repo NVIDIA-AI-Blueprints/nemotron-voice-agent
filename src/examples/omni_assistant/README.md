@@ -2,7 +2,7 @@
 
 Cascaded voice pipeline that uses Nemotron 3 Nano Omni as a single model for ASR and the LLM, then hands the text reply to Magpie TTS. Nemotron Omni consumes user audio directly and produces the assistant text that Magpie TTS speaks. This example enables only text and audio inputs. Uploaded media and webcam vision are covered by [`omni-assistant-subagents`](../omni_assistant_subagents/README.md).
 
-The pattern replaces the separate ASR and text LLM stages with one audio-input LLM service while preserving the familiar Pipecat transport, TTS, prompt, and service-catalog flow. It showcases `NvidiaOmniLLMService`, audio-only turn finalization with Pipecat's turn analyzer strategy, and a user transcript taken from the Omni response rather than a separate ASR pipeline.
+The pattern replaces the separate ASR and text LLM stages with one audio-input LLM service while preserving the familiar Pipecat transport, TTS, prompt, and service-catalog flow. It showcases Pipecat's `NvidiaOmniLLMService`, audio-only turn finalization with Pipecat's turn analyzer strategy, and a user transcript taken from the Omni response rather than a separate ASR pipeline.
 
 ![Nemotron Omni Assistant architecture](images/omni-assistant-architecture.png)
 
@@ -72,8 +72,7 @@ To run host-native without Docker, set `selection: omni-assistant` in [`examples
 
 | Path | Role |
 | --- | --- |
-| `pipeline.py` | pipecat entry point for the Omni Assistant example |
-| `nvidia_omni_multimodal_service.py` | `NvidiaOmniLLMService` (upstream-shaped Pipecat `LLMService` for Nemotron Omni) |
+| `pipeline.py` | pipecat entry point for the Omni Assistant example, built on `pipecat.services.nvidia.omni.llm.NvidiaOmniLLMService` |
 | `prompts.yaml` | example-local prompt catalog |
 
 Environment variables read by [`pipeline.py`](pipeline.py):
@@ -84,7 +83,6 @@ Environment variables read by [`pipeline.py`](pipeline.py):
 | `OMNI_TEMPERATURE` | `0.6` | Sampling temperature |
 | `OMNI_TOP_P` | `0.95` | Nucleus sampling top-p |
 | `OMNI_MIN_USER_AUDIO_SECS` | `0.3` | Drop turns shorter than this |
-| `OMNI_EMIT_TRANSCRIPTIONS` | `true` | Ask Omni for `<transcript>`/`<response>` sections so the user's words reach the UI and the conversation history |
 | `TTS_STOP_FRAME_TIMEOUT_S` | `30` | TTS audio-context idle timeout |
 | `AUDIO_OUT_10MS_CHUNKS` | `5` (WebRTC) / `10` (WebSocket) | Outbound audio framing |
 

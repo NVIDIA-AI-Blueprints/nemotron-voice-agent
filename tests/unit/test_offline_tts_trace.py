@@ -26,7 +26,7 @@ from examples.generic.offline.tts_trace import (
     LiveTTSResponder,
     _provider_timing_metrics,
 )
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 
 
 class _Call:
@@ -70,7 +70,7 @@ class _Service(CapturingNvidiaTTSService):
             server="unused:1234",
             use_ssl=False,
             settings=NvidiaTTSSettings(synthesis_mode="stitched"),
-            text_filters=[NemotronSpeechTextFilter()],
+            text_transforms=[("*", nemotron_speech_text_transform)],
             enable_direct_mode=True,
         )
         self.stub = stub
@@ -84,7 +84,7 @@ class _Service(CapturingNvidiaTTSService):
             ),
         )
 
-    def _create_synthesis_config(self):
+    async def _create_synthesis_config(self):
         return object()
 
 
@@ -124,9 +124,11 @@ class LiveTTSResponderTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(frame, TTSAudioRawFrame) for frame in frames))
         self.assertTrue(any(isinstance(frame, TTSTextFrame) for frame in frames))
         self.assertEqual(len(stub.calls), 1)
-        self.assertNotIn("*", "".join(stub.texts))
+        self.assertEqual("Hello world.Next sentence.", "".join(stub.texts))
+        # Native1.15 speech transforms change synthesis without rewriting
+        # the model text retained for assistant context.
         self.assertEqual(
-            "Hello world.Next sentence.",
+            "Hello *world*.Next sentence.",
             "".join(frame.text for frame in frames if isinstance(frame, TTSTextFrame)),
         )
         self.assertEqual(sum(len(chunk.pcm) for chunk in trace.audio), 640 * len(stub.texts))

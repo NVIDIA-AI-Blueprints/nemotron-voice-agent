@@ -7,9 +7,8 @@ import unittest
 from argparse import Namespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
-
-from pipecat.runner.types import EvalRunnerArguments
 
 import eval_bot
 
@@ -41,7 +40,7 @@ class EvalBotAttachmentTests(unittest.TestCase):
 
     def test_preload_eval_attachment_resolves_relative_path_from_runner_body_parent(self) -> None:
         fixture = eval_bot._EVAL_ATTACHMENT_FIXTURE_ROOT / "omni-assistant-architecture.png"
-        runner_args = EvalRunnerArguments()
+        runner_args = SimpleNamespace()
         runner_args.cli_args = Namespace(runner_body=str(fixture.parent / "manual-body.json"))
 
         with (

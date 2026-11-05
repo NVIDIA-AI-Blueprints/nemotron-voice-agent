@@ -84,6 +84,22 @@ def recorded_case(directory, *, instrumented=False, playback=True):
 
 
 class MetricsTests(unittest.TestCase):
+    def test_later_case_failures_are_excluded_from_success_latency_extraction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("ok", "late-failure", "pending", "prepared"):
+                case = root / name
+                case.mkdir()
+                recorded_case(case)
+            (root / "late-failure/failure.json").write_text('{"status":"failed"}')
+            (root / "pending/input_manifest.json").write_text('{"status":"pending"}')
+            (root / "prepared/input_manifest.json").write_text('{"status":"prepared_only"}')
+            (root / "ok/input_manifest.json").write_text('{"status":"ok"}')
+            report = metrics.extract(root, root / "extracted", "case-status")
+            self.assertEqual(len(report["sessions"]), 1)
+            self.assertEqual(report["sessions"][0]["case_id"], "ok")
+            self.assertEqual(len(report["responses"]), 1)
+
     def test_shared_policy_commit_separates_provider_audio_from_output_buffer_wait(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

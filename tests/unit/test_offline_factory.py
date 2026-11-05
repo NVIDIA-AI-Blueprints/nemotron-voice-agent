@@ -65,7 +65,7 @@ class FactoryTests(unittest.TestCase):
             tool_catalog = {"lookup": {"function": {"name": "lookup"}}} if tools else {}
             stack.enter_context(patch(prefix + "load_tools_catalog", return_value=tool_catalog))
             stack.enter_context(patch(prefix + "resolve_tools_available", return_value=["lookup"] if tools else []))
-            stack.enter_context(patch("examples.generic.tool_handlers.TOOL_HANDLERS", {"lookup": Mock()}))
+            stack.enter_context(patch("examples.generic.tools.TOOL_HANDLERS", {"lookup": Mock()}))
             stack.enter_context(patch(prefix + "load_ipa_dictionary", return_value=None))
             stack.enter_context(patch(prefix + "nvidia_api_key", return_value="test-key"))
             stack.enter_context(patch("utils.nvidia_api_key", return_value="test-key"))
@@ -292,7 +292,9 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(llm["settings"].max_tokens, 128)
         self.assertEqual(llm["settings"].extra, {"temperature": 0.8, "max_tokens": 8})
         self.assertEqual(tts["settings"].synthesis_mode, "stitched")
-        self.assertEqual(type(tts["text_filters"][0]).__name__, "NemotronSpeechTextFilter")
+        from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
+
+        self.assertEqual(tts["text_transforms"], [("*", nemotron_speech_text_transform)])
         self.assertNotIn("enable_direct_mode", llm)
         self.assertNotIn("enable_direct_mode", tts)
         self.assertIn("stop_frame_timeout_s", tts)

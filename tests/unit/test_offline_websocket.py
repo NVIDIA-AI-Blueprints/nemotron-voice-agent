@@ -436,6 +436,8 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
         socket = self.prepared_socket(pcm, 65536)
 
         class SilentRuntime:
+            configuration = {"model": "scripted-silence"}
+
             async def run(self, source):
                 return SessionResult((), source.sample_count, (), ())
 
@@ -532,6 +534,69 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(socket.sent[-1]["grpc_status"], "UNAUTHENTICATED")
         self.assertIn("failed: PrivateRpcError grpc_status=UNAUTHENTICATED", logs.output[0])
         self.assertNotIn("secret-private-provider-body", failure + json.dumps(socket.sent) + "".join(logs.output))
+
+    async def test_grouped_rpc_status_is_typed_unambiguous_and_private(self):
+        for statuses, expected in (
+            ((StatusCode.UNAVAILABLE,), "UNAVAILABLE"),
+            ((StatusCode.UNAVAILABLE, StatusCode.UNAVAILABLE), "UNAVAILABLE"),
+            ((StatusCode.UNAVAILABLE, StatusCode.UNAUTHENTICATED), None),
+            ((StatusCode.UNAVAILABLE,) * 257, None),
+        ):
+            with self.subTest(status_count=len(statuses), expected=expected):
+                socket = self.prepared_socket()
+
+                class PrivateRpcError(RpcError):
+                    def __init__(self, status):
+                        self.status = status
+
+                    def code(self):
+                        return self.status
+
+                    def details(self):
+                        raise AssertionError("Provider details must never be accessed")
+
+                error = ExceptionGroup(
+                    "secret-private-group-body",
+                    [ExceptionGroup("secret-private-nested-body", [PrivateRpcError(status)]) for status in statuses],
+                )
+
+                class FailingRuntime:
+                    async def run(self, source, error=error):
+                        raise error
+
+                with tempfile.TemporaryDirectory() as root:
+                    with self.assertLogs("examples.generic.offline.websocket", level="ERROR") as logs:
+                        await serve_offline_session(socket, lambda start: FailingRuntime(), root)
+                    failure = (next(Path(root).iterdir()) / "failure.json").read_text()
+                self.assertEqual(socket.sent[-1].get("grpc_status"), expected)
+                self.assertEqual(json.loads(failure).get("grpc_status"), expected)
+                self.assertEqual(socket.sent[-1]["code"], "session_failed")
+                self.assertNotIn("secret-private", failure + json.dumps(socket.sent) + "".join(logs.output))
+
+    async def test_requested_configuration_cannot_replace_missing_runtime_evidence(self):
+        for completion in ("full_session", "text"):
+            with self.subTest(completion=completion):
+                pcm = b"\0\0" * 64
+                socket = FakeSocket()
+                socket.feed(start_message(pcm, completion=completion, config={"model": "requested-only"}))
+                socket.feed(encode_packet(b"NVAI", 0, 0, pcm))
+                socket.feed(completion_message(pcm, 1))
+
+                class UnresolvedRuntime:
+                    async def run(self, source, *, event_sink=None):
+                        return SessionResult((), source.sample_count, (), ())
+
+                with tempfile.TemporaryDirectory() as root:
+                    await serve_offline_session(socket, lambda start: UnresolvedRuntime(), root)
+                self.assertEqual(socket.sent[-1]["code"], "configuration_unavailable")
+                self.assertFalse(any(isinstance(item, bytes) for item in socket.sent))
+                self.assertFalse(
+                    any(
+                        item.get("type") in {"offline.runtime.configuration", "offline.session.complete"}
+                        for item in socket.sent
+                    )
+                )
+                self.assertNotIn("requested-only", json.dumps(socket.sent))
 
     async def test_rpc_status_extraction_failure_or_untyped_status_stays_private(self):
         for mode in ("raises", "untyped"):

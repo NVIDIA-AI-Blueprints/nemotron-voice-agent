@@ -6,6 +6,7 @@
 import copy
 import struct
 import unittest
+from types import SimpleNamespace
 
 from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
@@ -18,7 +19,7 @@ from pipecat.processors.aggregators.llm_response_universal import LLMUserAggrega
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from examples.generic.offline.causal import CausalSessionEngine
+from examples.generic.offline.causal import CausalSessionEngine, _Session
 from examples.generic.offline.models import (
     RATE,
     AudioSource,
@@ -65,6 +66,24 @@ def vad_stop(decision, acoustic=None):
         "decision_sample": decision,
         "reason": "vad_silence",
     }
+
+
+class CausalMetricBoundsTests(unittest.TestCase):
+    """A transcription-only turn cannot borrow a previous turn's VAD end."""
+
+    def test_vad_end_requires_same_turn_bounds_and_arrived_decision(self):
+        """Keep quiet turns unknown and reject later VAD confirmations."""
+        session = object.__new__(_Session)
+        session.events = [
+            {"type": "user_turn_started", "turn_id": "turn-1", "sample": 0},
+            {"type": "user_turn_started", "turn_id": "turn-2", "sample": 100},
+        ]
+        response = {"turn_id": "turn-2", "sample": 150}
+        session.detection = SimpleNamespace(events=[vad_stop(90, 80)])
+        self.assertIsNone(session._turn_speech_end(response))
+        session.detection.events += [vad_stop(130, 120), vad_stop(170, 140)]
+        self.assertEqual(session._turn_speech_end(response), 120)
+        self.assertIsNone(session._turn_speech_end({"turn_id": "unknown", "sample": 150}))
 
 
 class FakeDetector:

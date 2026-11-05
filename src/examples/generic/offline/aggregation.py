@@ -8,7 +8,7 @@ is an ordered event at the audio prefix the recognizer has processed. The caller
 must establish that prefix using a backend progress contract, not the latest
 uploaded or submitted chunk. The adapter deliberately cannot infer that contract.
 
-Pipecat 1.12's speech-timeout strategy and turn watchdog contain private timer
+Pipecat 1.15's speech-timeout strategy and turn watchdog contain private timer
 coroutines. Only their waits are adapted below; start/stop decisions, transcript
 concatenation, context writes, recovery, and interruption policy remain upstream.
 Smart Turn is explicitly unsupported until its additional waits are adapted.
@@ -254,7 +254,7 @@ class _SampleSpeechTimeout(SpeechTimeoutUserTurnStopStrategy):
         finally:
             self._user_speech_timeout_task = None
         self._user_speech_wait_done = True
-        await self._maybe_trigger_user_turn_stopped()
+        await self._maybe_report_user_turn_stopped()
 
     async def _stt_timeout_handler(self, timeout: float):
         try:
@@ -264,7 +264,7 @@ class _SampleSpeechTimeout(SpeechTimeoutUserTurnStopStrategy):
         finally:
             self._stt_timeout_task = None
         self._stt_wait_done = True
-        await self._maybe_trigger_user_turn_stopped()
+        await self._maybe_report_user_turn_stopped()
 
 
 class _SampleTurnController(UserTurnController):
@@ -275,16 +275,15 @@ class _SampleTurnController(UserTurnController):
         self._sample_clock = clock
 
     async def _user_turn_stop_timeout_task_handler(self):
-        from pipecat.turns.user_stop import UserTurnStoppedParams
-
         while True:
             try:
                 await self._sample_clock.wait_event(self._user_turn_stop_timeout_event, self._user_turn_stop_timeout)
                 self._user_turn_stop_timeout_event.clear()
             except TimeoutError:
-                if self._user_turn and not self._user_speaking:
+                decision_scheduled = any(strategy.decision_scheduled for strategy in self._user_turn_stop_strategies)
+                if self._user_turn and not self._user_speaking and not decision_scheduled:
                     await self._call_event_handler("on_user_turn_stop_timeout")
-                    await self._trigger_user_turn_stop(None, UserTurnStoppedParams(enable_user_speaking_frames=True))
+                    await self._trigger_user_turn_stop(None, self._user_turn_stop_params())
 
 
 class _ObservedUserAggregator(LLMUserAggregator):
@@ -297,9 +296,10 @@ class _ObservedUserAggregator(LLMUserAggregator):
         controller = _SampleTurnController(
             owner.clock,
             user_turn_strategies=previous.user_turn_strategies,
+            user_turn_strategies_params=params.user_turn_strategies_params,
             user_turn_stop_timeout=params.user_turn_stop_timeout,
         )
-        # Constructor injection is not available in pinned Pipecat 1.12. These
+        # Constructor injection is not available in pinned Pipecat 1.15. These
         # are the same controller-to-aggregator bindings as its constructor.
         for name in (
             "on_push_frame",
@@ -308,6 +308,7 @@ class _ObservedUserAggregator(LLMUserAggregator):
             "on_user_turn_started",
             "on_user_turn_inference_triggered",
             "on_user_turn_stopped",
+            "on_user_turn_resumed",
             "on_user_turn_stop_timeout",
             "on_reset_aggregation",
         ):
@@ -381,8 +382,8 @@ class SharedUserAggregation:
         evaluation_trace=None,
     ):
         """Consume fresh shared parameters and adapt their timer waits only."""
-        if version("pipecat-ai") != "1.12.0":
-            raise RuntimeError("Offline aggregation timer adapter requires Pipecat 1.12.0")
+        if version("pipecat-ai") != "1.15.0":
+            raise RuntimeError("Offline aggregation timer adapter requires Pipecat 1.15.0")
         if params is None:
             from examples.shared.pipeline_utils import build_user_aggregator_params
 
@@ -567,8 +568,8 @@ class SharedAssistantAggregation:
         on_event: EventCallback | None = None,
     ):
         """Use stock cascaded assistant context policy with summarization off."""
-        if version("pipecat-ai") != "1.12.0":
-            raise RuntimeError("Offline aggregation adapter requires Pipecat 1.12.0")
+        if version("pipecat-ai") != "1.15.0":
+            raise RuntimeError("Offline aggregation adapter requires Pipecat 1.15.0")
         params = params or LLMAssistantAggregatorParams()
         if params.enable_auto_context_summarization:
             raise ValueError("Offline shared assistant aggregation does not yet support automatic summarization")

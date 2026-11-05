@@ -447,7 +447,7 @@ class OpenAITextStream:
                     _results.append(value)
 
                 params = SimpleNamespace(
-                    arguments=json.loads(call["function"]["arguments"]), result_callback=result_callback
+                    arguments=json.loads(call["function"]["arguments"].strip() or "{}"), result_callback=result_callback
                 )
                 await self._handlers[name](params)
                 if len(result_box) != 1:

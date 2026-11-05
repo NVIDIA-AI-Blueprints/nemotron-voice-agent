@@ -161,9 +161,8 @@ phrase, approved score, locked model support, and framework wiring before changi
 
 ## Omni Pipeline
 
-Confirm the project copied the current upstream
-`nvidia_omni_multimodal_service.py` and instantiates the service class imported by the
-current upstream pipeline, which is currently `NvidiaOmniLLMService`.
+Confirm the project imports `NvidiaOmniLLMService` from `pipecat.services.nvidia.omni.llm`
+on Pipecat 1.15 or later, as the current upstream pipeline does.
 Confirm it uses Pipecat's `TurnAnalyzerUserTurnStopStrategy` with
 `wait_for_transcript=False`. Do not replace the Omni service with a stock text-only
 service or configure Smart Turn to await an upstream transcript.
@@ -173,9 +172,9 @@ the service. If the first greeting races microphone input, confirm
 `MuteUntilFirstBotCompleteUserMuteStrategy` is active and compare the greeting against the
 current upstream pipeline.
 
-If TTS receives JSON or transcript metadata, verify structured-response and
-`emit_transcriptions` settings because the upstream service should emit only the response
-field. If it receives reasoning, keep reasoning off through `models/llm.md`. Return to
+If TTS receives transcript metadata, confirm the project did not override the service's
+audio response instruction, because the service sends only the `<response>` section to
+TTS. If it receives reasoning, keep reasoning off through `models/llm.md`. Return to
 `frameworks/omni.md` before changing the pipeline.
 
 ## TTS and Return Audio

@@ -32,7 +32,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSet
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.utils.asyncio.task_manager import TaskManager
 
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from utils import is_nvcf
 
 from .models import RATE, GeneratedAudio, ResponseTrace
@@ -352,7 +352,7 @@ def create_live_tts_responder(text_stream, settings):
                 language=settings.get("tts_language_code") or "en-US",
                 synthesis_mode="stitched",
             ),
-            text_filters=[NemotronSpeechTextFilter()],
+            text_transforms=[("*", nemotron_speech_text_transform)],
             custom_dictionary=settings.get("custom_dictionary"),
             enable_direct_mode=True,
             **model_map,

@@ -9,7 +9,7 @@ or makes provider requests. PCM is counted rather than retained. Writing happens
 after the worker has stopped, so disk I/O is outside the conversational path.
 
 The optional service subclasses delegate every operation to the pinned Pipecat
-1.12 implementation. Their small private-method compatibility surface observes
+1.15 implementation. Their small private-method compatibility surface observes
 ASR request yields/results and stitched TTS worker completion. Worker completion
 is distinct from output playback completion and may follow cancellation.
 """
@@ -161,6 +161,17 @@ def _finite_number(value) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+def _strict_json_value(value):
+    """Copy trace containers while replacing unsupported numeric values with null."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _strict_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strict_json_value(item) for item in value]
+    return value
 
 
 def _observe(trace, method: str, *args, **kwargs) -> None:
@@ -585,7 +596,8 @@ class EvaluationTrace(BaseObserver):
                 self.record("server_message", data=frame.data, **shared)
         elif isinstance(frame, _LIFECYCLE_FRAMES):
             if isinstance(frame, LLMFullResponseStartFrame):
-                self._llm_request_index += 1
+                with self._lock:
+                    self._llm_request_index += 1
             timestamp = _finite_number(getattr(frame, "timestamp", None))
             vad_frame = isinstance(frame, (VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame))
             self.record(
@@ -638,7 +650,7 @@ class EvaluationTrace(BaseObserver):
             # private regardless of the process's inherited umask.
             descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, "w") as output:
-                json.dump(document, output, indent=2, default=str)
+                json.dump(_strict_json_value(document), output, indent=2, default=str, allow_nan=False)
                 output.write("\n")
             logger.info(f"Evaluation timing trace saved: {self.path}")
         except Exception:
@@ -715,18 +727,18 @@ class EvaluationNvidiaSTTService(NvidiaSTTService):
         super()._initialize_client()
         self._asr_service = _ObservedASRClient(self._asr_service, self._evaluation_trace)
 
-    def _response_handler(self, iterator):
+    def _response_handler(self, iterator, config):
         """Observe the existing ASR worker lifetime, including reconnect attempts."""
         _observe(self._evaluation_trace, "record", "asr_worker_started")
         try:
-            return super()._response_handler(iterator)
+            return super()._response_handler(iterator, config)
         finally:
             _observe(self._evaluation_trace, "record", "asr_worker_finished", iterator_closed=iterator.closed)
 
-    async def _handle_response(self, response):
+    async def _handle_response(self, response, *, speaker_diarization: bool = False):
         """Timestamp the existing event-loop callback without changing its data."""
         _observe(self._evaluation_trace, "asr_response", response)
-        return await super()._handle_response(response)
+        return await super()._handle_response(response, speaker_diarization=speaker_diarization)
 
     async def process_audio_frame(self, frame, direction):
         """Observe actual source ingestion before delegating its unchanged handling."""

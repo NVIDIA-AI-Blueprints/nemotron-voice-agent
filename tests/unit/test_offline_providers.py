@@ -559,6 +559,53 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertEqual(trace.words, ())
 
+    async def test_empty_tool_arguments_reach_handler_as_an_empty_object(self):
+        for raw in ("", "  \n\t"):
+            with self.subTest(raw=raw):
+                await self._check_empty_tool_arguments(raw)
+
+    async def _check_empty_tool_arguments(self, raw):
+        class Stream:
+            def __init__(self, delta):
+                self.delta = delta
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            def __aiter__(self):
+                async def values():
+                    yield SimpleNamespace(choices=[SimpleNamespace(delta=self.delta)])
+
+                return values()
+
+        requests = []
+        arguments = []
+
+        async def create(**kwargs):
+            requests.append(kwargs)
+            if len(requests) == 1:
+                tool = SimpleNamespace(index=0, id="call-1", function=SimpleNamespace(name="lookup", arguments=raw))
+                return Stream(SimpleNamespace(content=None, tool_calls=[tool]))
+            return Stream(SimpleNamespace(content="done", tool_calls=None))
+
+        async def lookup(params):
+            arguments.append(params.arguments)
+            await params.result_callback({"ok": True})
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        events = [
+            event
+            async for event in OpenAITextStream(
+                client, model="test", extra={}, tools=[{"type": "function"}], handlers={"lookup": lookup}
+            ).stream([])
+        ]
+        self.assertEqual(arguments, [{}])
+        self.assertEqual(events[-1], "done")
+        self.assertEqual(len(requests), 2)
+
     async def test_tool_context_does_not_commit_unplayed_spoken_content(self):
         class Stream:
             def __init__(self, deltas):

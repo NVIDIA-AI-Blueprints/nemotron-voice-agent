@@ -5,6 +5,12 @@ accompanies the [Offline Processing for Nemotron Voice Agent proposal](12-offlin
 The [dated progress log](offline-processing-progress.md) preserves earlier
 implementations, experiments, and changes in direction.
 
+The repository pins Pipecat 1.15.0. Historical evaluations below used their
+recorded Pipecat 1.12.0 source and configuration. They are not performance or
+accuracy evidence for the current dependency integration. Refer to the
+[integration checkpoint](offline-processing-progress.md#november-04-2026-pipecat-integration-and-evaluation-scope)
+for the migration scope and outstanding benchmark validation.
+
 The default configuration uses standard continuous speech-to-text (STT) with
 320 ms of stop history and no force-EOU injection. Set the server environment
 variable `ASR_STOP_HISTORY_MS` to override stop history in both Generic online
@@ -17,6 +23,7 @@ Use the following sections for detailed implementation and evaluation work.
 - [Timing and scheduling](#keep-two-explicit-time-domains)
 - [Modules and extension contracts](#implementation-overview)
 - [Configuration and recording protocol](#configuration-and-lifecycle)
+- [Offline evaluation and bounded recovery](#recommended-offline-evaluation-profile)
 - [Server traces and metric scopes](#server-tracing-and-metric-definitions)
 - [Client commands and paired reports](#running-and-reproducing)
 - [Verification and tests](#verification-and-tests)
@@ -42,7 +49,7 @@ The design replaces the following timing dependencies.
 | Existing Behavior | Offline Rule |
 | --- | --- |
 | Silero speech and silence thresholds | Preserve fixed-window audio counting |
-| Periodic Silero state reset | Reset after the corresponding source samples |
+| Silero recurrent-state reset | Preserve the native audio-window/confidence policy and record source offsets |
 | User-turn timeout waits and watchdogs | Run the shared Pipecat policy against a sample clock |
 | Smart Turn retained audio buffers | Require a separate adapter; current runtime supports Silero only |
 | ASR inactivity keepalive | Send only source PCM and explicitly drain the finite request |
@@ -107,10 +114,14 @@ queued output. Recording clips client-buffered PCM using the selected playback
 cancellation policy. Already delivered text/control frames retain their native
 effect on assistant history, including text delivered before audible PCM.
 
-The manifest identifies `serial_chunk_progress_with_incremental_observed_processing`
-for ASR availability and `incremental_source_chunks_plus_observed_bulk_compute`
-for session timing. Observed intervals include transport, queueing, and batching.
-They do not isolate GPU inference or reproduce an independent online run.
+The full-session manifest's `configuration.asr_availability_policy` is
+`serial_chunk_progress_with_incremental_observed_processing`. Its
+`configuration.timing_basis` is
+`observed_provider_elapsed_including_transport_and_queueing`. The incremental
+engine separately reports `metrics.timing_policy` as
+`incremental_source_chunks_plus_observed_bulk_compute`. Observed intervals
+include transport, queueing, and batching. They do not isolate GPU inference
+or reproduce an independent online run.
 
 ## Recording and Conversation Invariants
 
@@ -214,10 +225,11 @@ synthetic streaming-resampler delay to provider readiness. First provider PCM,
 first packed chunk, transport delivery, and presentation remain separate events.
 
 Generic Assistant's stitched WebSocket TTS uses
-`explicit_provider_eof_pipecat_1_12_compat` in both modes. The helper requires
-exactly Pipecat 1.12.0 and supplies `stop_frame_timeout_s=None`, so an idle audio
-gap does not complete a context successfully. This constructor behavior is undocumented;
-a supported upstream API is still needed.
+`explicit_provider_eof_pipecat_1_15_compat` in both modes. The helper requires
+exactly Pipecat 1.15.0 and supplies `stop_frame_timeout_s=None`. The native
+audio-context manager then waits for a queue item without an idle deadline,
+so an audio gap does not complete a context successfully. This constructor
+behavior remains undocumented; a supported upstream API is still needed.
 
 Full offline response completion waits for provider-worker EOF and native
 audio-context drain, then rechecks errors. Its execution watchdog fails stalled
@@ -229,13 +241,16 @@ closure, it closes only that response's owned context, unless native EOF already
 requested closure. It preserves native error frames and recovery for later generations.
 Native provider request loops and request serialization remain inherited.
 
-A provider-inactivity failure bound resets only after a successful append of
-nonempty owned provider PCM. Empty responses do not extend it. Offline sets this
-bound to 60,000 ms; the shared live WebSocket default remains 600,000 ms. Expiry
-uses native RPC cancellation and emits an error frame. It cannot end user speech
-or report silent success. The existing offline total-generation watchdog remains
-600,000 ms, with a separate scope. None of these limits is a benchmark's deadline
-for receiving the first LLM token.
+A provider-inactivity failure bound resets only after native audio alignment
+queues whole owned PCM samples. Empty responses and incomplete sample bytes
+alone do not extend it. Offline and the Generic Assistant's ordinary and traced
+FastAPI WebSocket stitched-TTS paths explicitly set this bound to 60,000 ms.
+Other compatibility-helper callers retain its
+600,000 ms default. Expiry uses native RPC cancellation and emits an error
+frame; it cannot end user speech or report silent success. This is a rolling
+no-progress bound, not a total-generation cap: continued whole-sample production
+refreshes it. The existing offline total-generation watchdog remains 600,000 ms with a
+separate scope. None of these limits is a benchmark's first-LLM-token deadline.
 
 The live path retains native session/evaluator cancellation bounds without adding
 a total-generation watchdog. WebRTC and live per-sentence synthesis bypass this
@@ -245,9 +260,9 @@ Offline configuration records `tts_context_completion_policy`,
 `tts_provider_idle_timeout_seconds=60`, and `tts_config_timeout_seconds=60`.
 The live startup log and optional evaluation trace identify the completion
 policy. The earlier full-audio readiness gates exercise
-explicit EOF with real services, but do not validate the later lifecycle corrections.
-Their focused model-free checks and remaining gates are recorded in the
-[merge-review checkpoint](offline-processing-progress.md#october-30-2026-merge-review-and-validation-gates).
+explicit EOF with real services on their pinned Pipecat 1.12.0 source. They do
+not validate the current dependency integration. Its scope is recorded in the
+[integration checkpoint](offline-processing-progress.md#november-04-2026-pipecat-integration-and-evaluation-scope).
 Refer to the
 [rebased validation checkpoint](offline-processing-progress.md#rebased-source-validation-and-native-policy-contract)
 for the earlier real-service evidence; the compatibility API remains undocumented.
@@ -256,6 +271,14 @@ Source detection uses the shared turn settings.
 `USE_SILERO_VAD_TURN_DETECTION=true` selects the required Silero-only detection;
 `SILERO_VAD_STOP_SECS` then defaults to 500 ms. These environment values accept
 seconds even though reported measurements use milliseconds.
+
+The detector inherits Pipecat 1.15's native Silero recurrent-state reset policy.
+A reset becomes due after 2 seconds of analyzed audio, then waits for quiet
+state and five low-confidence windows. This is separate from the configured
+speech-stop silence threshold. Effective detector settings record
+`model_reset_interval_samples=32000` and
+`model_reset_policy=native_quiet_low_confidence`. Recorded reset offsets observe
+actual native decisions; they do not force the earlier 5-second reset policy.
 
 Tools, Smart Turn, streaming-input LLM URLs, per-sentence synthesis, zero-shot
 TTS models, and zero-shot audio prompts are rejected explicitly. Effective speaker
@@ -269,16 +292,18 @@ failed run into success.
 
 ### Offline Native Service Startup
 
-The offline adapter fetches the native TTS configuration without blocking the
-application event loop. Only the owned `GetRivaSynthesisConfig` RPC and result
-wait run on a worker. Its 60,000 ms deadline includes worker queueing. Cancellation
-retires that setup and cancels its owned RPC; it does not claim to stop a Python
-thread. Late results cannot install a configuration into a retired service.
+Pipecat 1.15 performs its native TTS configuration fetch on a worker. The
+offline adapter bounds that same `GetRivaSynthesisConfig` request and result
+wait, rather than fetching configuration a second time. Its 60,000 ms setup
+deadline includes worker queueing. Cancellation retires setup and cancels the
+owned RPC; it does not claim to stop a Python thread. Late results cannot
+install configuration into a retired service.
 
-The adapter then runs the native setup on its owning event loop using the fetched
-configuration. Native queues, task management, synthesis requests, and response
-loops retain their execution policy. This compatibility boundary requires exactly
-Pipecat 1.12.0. The normal online service setup is unchanged.
+Native setup owns service mutation. Queues, task management, synthesis requests,
+and response loops retain their native execution policy. The temporary bounded
+RPC wrapper is removed before generation. This compatibility boundary requires
+exactly Pipecat 1.15.0. The normal online service setup uses the target
+dependency's existing path.
 
 Text-only collection still initializes the native LLM and TTS services before
 starting the ASR and VAD actors. Returning at LLM completion avoids waiting for
@@ -323,7 +348,10 @@ processes it, publishes committed audio and events, and sends
 Input after EOF is rejected. Failures send `offline.session.error`.
 For an actual gRPC failure, this record and `failure.json` can include optional
 `grpc_status`, a recognized `grpc.StatusCode` name such as `UNAVAILABLE`.
-The field is omitted when no recognized status is available.
+The extractor inspects bounded nested exception groups and emits this field
+only when their recognized typed RPC statuses agree on one enum value.
+Missing, conflicting, or over-limit observations omit it. No provider response
+body or exception text is parsed to invent a status or identify its source.
 
 For native response failures, `provider_source` identifies an owned `llm` or
 `tts` processor only when the error frame supplies that identity.
@@ -349,28 +377,39 @@ failure. A completed call can omit status when no typed value is available.
 These fields describe observed work and context; they do not establish a cause.
 
 `OFFLINE_AUDIO_DUMP_PATH` selects the server-owned recording directory; its
-default is `audio_dumps/offline`. A UUID session directory contains these files.
+default is `audio_dumps/offline`. A UUID session directory can contain the
+following files, depending on completion mode and outcome.
 The session directory uses permissions `0700`; recordings and JSON artifacts
 use `0600`. Publication uses private temporary files and atomic replacement,
 without changing the process umask. These files can contain conversation audio
 and text.
 
-| File | Contents |
+| File | Mode and Contents |
 | --- | --- |
-| `source.wav` | Canonical ingress PCM, including silence |
-| `full_output.wav` | Positioned bot PCM with zero-filled gaps and any final tail |
-| `events.jsonl` | Source, recognition availability, interruption, playback, and context events |
-| `manifest.json` | Extents, configuration fingerprint, messages, compute traces, and metrics |
-| `failure.json` | Explicit failure status when processing does not succeed |
+| `source.wav` | Both modes, after validated input is recorded: canonical ingress PCM, including silence |
+| `full_output.wav` | Completed `full_session` recording: positioned bot PCM with zero-filled gaps and any final tail |
+| `events.jsonl` | Completed `full_session` recording: source, recognition availability, interruption, playback, and context events |
+| `manifest.json` | `full_session` recording: extents, configuration fingerprint, messages, compute traces, and metrics; later publication can still fail |
+| `failure.json` | Either mode, when a session directory exists: explicit processing or publication failure |
+| `cancellation.json` | Text-mode client disconnect: cancellation evidence, not candidate success |
 
-The sample client also writes source-horizon `output.wav` and a stereo
-`comparison.wav`, with user input on the left and bot output on the right.
+Text mode does not write the full-session output, event, or manifest files.
+Its incremental events travel over the WebSocket. A validated source file or
+cancellation record does not establish a successful selected answer.
+
+The full-session sample client also writes source-horizon `output.wav` and a
+stereo `comparison.wav`, with user input on the left and bot output on the right.
 
 The `effective_configuration_v1` capability adds the resolved, redacted runtime
 `configuration` to `offline.session.complete`, beside `configuration_fingerprint`.
 Adapters can verify the fingerprint and required model/settings against this
 public configuration, rather than trusting their requested values. This records
 the application's resolved request settings, not an independent backend attestation.
+The runtime must expose its effective `configuration` as a mapping. If it
+cannot, the session fails with `configuration_unavailable` before publishing
+effective configuration; it does not substitute the requested settings.
+The acknowledgement's capability list remains protocol-support evidence,
+not proof that a later runtime resolved valid configuration.
 The `asr_stop_history_ms` field records the resolved shared STT setting, including
 an explicit `ASR_STOP_HISTORY_MS` override.
 
@@ -433,12 +472,56 @@ records completed real-service text cohorts. The
 records a later matched-source diagnostic. Neither establishes full-session
 completion or benchmark-wide behavioral equivalence.
 
+### Recommended Offline Evaluation Profile
+
+The separate VoiceBench evaluator selects concurrency 3 in
+`configs/ci/voicebench-offline-exclusive-pool-c3-cloud.yaml` and its run
+configuration. This recommended exclusive-pool profile uses 10 backends,
+`completion=text`, negotiated `during_upload`, and the post-upload 10-second
+first-text deadline. The endpoint still defaults to sealed input. The
+evaluator's generic concurrency fallback remains 1; C3 is not a global server
+or online default.
+
+The profile enables one deferred recovery pass with
+`execution.offline_recovery_passes=1`. The evaluator default is `0`, which
+disables it. After the initial sweep, eligible failures can use the remaining
+attempt in the existing `max_attempts=2` budget. The existing immediate retry
+policy and successful cases remain unchanged.
+
+Recovery requires a valid `session_failed` event with typed
+`grpc_status=UNAVAILABLE`, verified session
+configuration and input-mode acknowledgement, a completed upload with matching
+PCM hash, and no retained raw LLM text or selected answer. `UNAVAILABLE` does
+not identify ASR as the failing component by itself. Each retry opens a fresh
+session for the same input, prompt, and configuration. The policy does not retry
+successful cases, replace failed answers with guesses, or add a third attempt.
+
+Before waiting, the evaluator retains the initial outcome in
+`attempts/<encoded-case>/attempt-<N>/retry.json`. Original numeric client timers
+are retained in `initial_client_timings_ms` as named values; the embedded
+`initial_result.timings_ms` is empty. Final diagnostics record recovery, deferred
+wait, backoff, and input/configuration/session checks. Case duration includes
+deferred wait. Sum of waits is not cohort wall time. Pending recovery can delay
+later rows in the ordered case log without losing their completed work.
+
+Recovery finishes before native scoring and `FINALIZED`. All attempts, original
+case denominators, and native incomplete-score withholding remain intact.
+Already finalized runs are never resumed or modified. This is evaluator
+behavior, not a new server-side retry or provider failover mechanism.
+
+The historical Pipecat 1.12.0 recovery run completed all 778 Lite cases in 798
+attempts: 758 first-attempt successes, 17 inline timeout recoveries, and three
+deferred backend recoveries. It does not validate Pipecat 1.15.0 or a full
+VoiceBench cohort. Refer to the
+[dated checkpoint](offline-processing-progress.md#november-04-2026-pipecat-integration-and-evaluation-scope)
+for source pins and the unresolved individual-sample tail.
+
 ### Process Text Input During Upload
 
 The experimental input mode overlaps native service setup and source analysis
-with a finite upload. It is an unbenchmarked prototype; existing scored results
-describe the sealed input path. Select it by adding these fields to an otherwise
-valid session start:
+with a finite upload. Historical evaluations include this mode on Pipecat
+1.12.0; those results do not establish behavior or performance after a dependency
+migration. Select it by adding these fields to an otherwise valid session start:
 
 ```json
 {
@@ -488,8 +571,8 @@ their presence does not establish input validation or case success.
 The mode adds no continuous silence, TTS completion wait, or audio-gap completion
 rule. A client still selects the first eligible native raw LLM response end.
 Record the negotiated input mode and actual setup/upload/analysis timestamps
-with any later comparison. No throughput gain, score equivalence, or latency
-reduction has been established for this prototype.
+with each comparison. The historical C3 result does not establish a mode-only
+throughput gain, score equivalence, or lower individual-sample latency.
 
 Native readiness still precedes ASR and VAD startup. In this mode, engine-relative
 physical timings begin after explicit preparation; WebSocket/session diagnostics
@@ -992,10 +1075,11 @@ Any caller retry is a new attempt and must retain the original failure evidence.
 Client wall time includes admission and forwarding overhead; keep it separate
 from native provider TTFB measurements.
 
-This is a local prototype with fake-provider validation only. Pool readiness
-does not establish real model readiness, production suitability, score
-equivalence, or throughput improvement. Preserve source pins, input hashes,
-lease outcomes, failures, and timing scopes before interpreting later tests.
+The pool remains experimental. Historical real-provider evaluation uses its
+recorded Pipecat 1.12.0 source; it does not validate this dependency integration.
+Pool readiness does not establish model readiness, production suitability,
+score equivalence, or throughput improvement. Preserve source pins, input
+hashes, lease outcomes, failures, and timing scopes before interpreting tests.
 
 ### Reproduce the Paired Comparison
 

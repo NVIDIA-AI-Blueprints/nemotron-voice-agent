@@ -23,13 +23,9 @@ from pipecat.pipeline.job_decorator import job
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService, NvidiaOmniLLMSettings
 from pipecat.workers.base_worker import BaseWorker
 
-from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniLLMService,
-    NvidiaOmniSettings,
-    text_message_part,
-)
 from utils import parse_env_float, parse_env_int
 
 THINKING_TASK_NAME = "think"
@@ -81,11 +77,12 @@ class ThinkerWorker(BaseWorker):
         self._omni = NvidiaOmniLLMService(
             api_key=api_key,
             base_url=base_url,
-            extra=omni_extra,
-            settings=NvidiaOmniSettings(
+            settings=NvidiaOmniLLMSettings(
                 model=model_id,
+                system_instruction=self._system_prompt,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                extra=omni_extra,
             ),
         )
 
@@ -139,12 +136,7 @@ class ThinkerWorker(BaseWorker):
             "Reason carefully about what the user wants and where earlier replies fell short, then give the "
             "complete spoken answer in the length and format the user requested."
         )
-        context = LLMContext(
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {"role": "user", "content": [text_message_part(user_text)]},
-            ]
-        )
+        context = LLMContext(messages=[{"role": "user", "content": [{"type": "text", "text": user_text}]}])
         logger.info(
             f"Thinker Omni request: base_url={self._base_url}, model={self._model_id}, "
             f"max_tokens={self._max_tokens}, transcript_chars={len(transcript)}"

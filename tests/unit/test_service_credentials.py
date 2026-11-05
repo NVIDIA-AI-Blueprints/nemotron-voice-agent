@@ -6,7 +6,7 @@
 import io
 import os
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from loguru import logger
 
@@ -14,6 +14,40 @@ import utils
 
 
 class ServiceCredentialTests(unittest.TestCase):
+    def test_cloud_variant_does_not_inherit_self_hosted_credential(self):
+        entry = {
+            "base_url": "https://self-hosted.example/v1",
+            "api_key_env": "TEST_SERVER_LLM_KEY",
+            "nvcf": {},
+        }
+        for overrides, expected in (({}, "cloud-key"), ({"api_key_env": "TEST_CLOUD_LLM_KEY"}, "explicit-cloud-key")):
+            with self.subTest(overrides=overrides):
+                cloud = utils._nvcf_entry({**entry, "nvcf": overrides})
+                with (
+                    patch.dict(
+                        os.environ,
+                        {
+                            "NVIDIA_API_KEY": "cloud-key",
+                            "TEST_SERVER_LLM_KEY": "server-key",
+                            "TEST_CLOUD_LLM_KEY": "explicit-cloud-key",
+                        },
+                    ),
+                    patch(
+                        "utils.service_catalog_sources",
+                        return_value=[
+                            (utils.SELF_HOSTED_SOURCE, {"llm": {"test": entry}}),
+                            (utils.CLOUD_SOURCE, {"llm": {"test": cloud}}),
+                        ],
+                    ),
+                ):
+                    self.assertEqual(
+                        utils.nvidia_llm_api_key("cloud-nim:test", base_url=utils.NVCF_LLM_BASE_URL), expected
+                    )
+                    self.assertEqual(
+                        utils.nvidia_llm_api_key("self-hosted:test", base_url=entry["base_url"]), "server-key"
+                    )
+                self.assertEqual(entry["api_key_env"], "TEST_SERVER_LLM_KEY")
+
     def test_explicit_catalog_key_is_independent_of_speech_key_and_is_trimmed(self):
         with (
             patch.dict(os.environ, {"NVIDIA_API_KEY": "speech-key", "TEST_NVA_LLM_KEY": "  hub-key  "}),
@@ -146,7 +180,7 @@ class GenericCredentialIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     "base_url": "https://integrate.api.nvidia.com/v1",
                 },
             ),
-            patch.object(pipeline, "create_transport", new=Mock()),
+            patch.object(pipeline, "create_transport", new=AsyncMock()),
             patch.object(pipeline, "create_evaluation_trace", return_value=None),
             patch.object(pipeline, "resolve_prompt", return_value=("custom", "prompt")),
             patch.object(pipeline, "load_service_entry", return_value={}),

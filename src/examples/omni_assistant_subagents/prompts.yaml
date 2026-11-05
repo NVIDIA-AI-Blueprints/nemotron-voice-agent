@@ -86,7 +86,7 @@ omni_subagents_assistant:
       - "Tell me a ten-sentence story" -> respond with all ten sentences now. Never merely introduce or promise the story.
       - "How do I mount the GoPro on the tripod?" -> respond with the real steps now, spoken in order ("First, ... then, ... finally, ..."). Never answer only "I'll walk you through the steps."
         - "Can you help me with it?" when "it" has no clear referent -> clarify with "What would you like help with?" A generic capability acknowledgment is not an answer.
-      - A pending uploaded image that must be inspected -> analyze_attachment with a brief acknowledgment and a real media task.
+      - The media analyzer analysis reads PENDING and the user asks about the upload, even briefly ("What does this diagram show?", "Can you describe the picture?") -> analyze_attachment with a brief acknowledgment and a real media task.
       - A hard task or explicit correction after a bad answer -> think with a brief filler and a real Thinker task.
       - Agreement to an offered high-resolution snapshot -> capture_highres with a specific highres_query.
 

@@ -78,6 +78,8 @@ class GenericWebsocketTTSCompletionTests(unittest.IsolatedAsyncioTestCase):
         observed, trace = await self.construct_tts(traced=True)
         self.assertIsNone(ordinary["stop_frame_timeout_s"])
         self.assertIsNone(observed["stop_frame_timeout_s"])
+        self.assertEqual(ordinary["provider_idle_timeout_s"], 60.0)
+        self.assertEqual(observed["provider_idle_timeout_s"], 60.0)
         self.assertEqual(ordinary["settings"], observed["settings"])
         self.assertEqual(ordinary["settings"].synthesis_mode, "stitched")
         self.assertEqual(ordinary["settings"].voice, "test-voice")
@@ -95,6 +97,7 @@ class GenericWebsocketTTSCompletionTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(traced=traced):
                 kwargs, trace = await self.construct_tts(websocket=False, traced=traced)
                 self.assertNotIn("stop_frame_timeout_s", kwargs)
+                self.assertNotIn("provider_idle_timeout_s", kwargs)
                 if trace:
                     trace.record.assert_called_once_with("tts_context_completion_policy", policy="native_idle")
 
@@ -104,6 +107,7 @@ class GenericWebsocketTTSCompletionTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(mode=mode):
                 kwargs, trace = await self.construct_tts(mode=mode, traced=True)
                 self.assertNotIn("stop_frame_timeout_s", kwargs)
+                self.assertNotIn("provider_idle_timeout_s", kwargs)
                 trace.record.assert_called_once_with("tts_context_completion_policy", policy="native_idle")
 
     async def test_effective_session_mode_controls_policy_without_changing_catalog(self):
@@ -118,7 +122,7 @@ class GenericWebsocketTTSCompletionTests(unittest.IsolatedAsyncioTestCase):
     async def test_version_guard_rejects_unvalidated_websocket_contract(self):
         """A dependency drift fails before TTS starts rather than silently changing behavior."""
         with (
-            patch("examples.shared.nvidia_tts_explicit_eof.version", return_value="1.13.0"),
-            self.assertRaisesRegex(RuntimeError, "requires exactly Pipecat 1.12.0"),
+            patch("examples.shared.nvidia_tts_explicit_eof.version", return_value="1.16.0"),
+            self.assertRaisesRegex(RuntimeError, "requires exactly Pipecat 1.15.0"),
         ):
             await self.construct_tts()

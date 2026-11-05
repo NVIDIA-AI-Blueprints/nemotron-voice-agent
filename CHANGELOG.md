@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
+- **Experimental offline evaluation.** The Generic Assistant accepts finite PCM recordings at `/api/ws/offline`, with explicit input validation, native text completion, optional processing during upload, and a separate exclusive-worker pool. Refer to the [offline implementation reference](docs/offline-processing-reference.md). Historical VoiceBench results use Pipecat 1.12.0; they do not validate the current Pipecat 1.15.0 integration.
+
+### Changed
+
+- **Omni examples use Pipecat's `NvidiaOmniLLMService`.** The blueprint's own `nvidia_omni_multimodal_service.py` is removed. The service always reads the user transcript from the Omni response, so `OMNI_EMIT_TRANSCRIPTIONS` is no longer read.
+- **Pipecat 1.15.** The server moves from Pipecat 1.12 to `pipecat-ai` 1.15.0, including Silero VAD state retention and the current service APIs. The browser packages were updated for compatibility with that server.
+- **Generic WebSocket TTS stall guard.** Ordinary and traced FastAPI WebSocket stitched-TTS sessions now fail after 60 seconds without queued whole PCM samples. Aligned audio progress refreshes the guard; empty responses and incomplete sample bytes alone do not. It is not a total reply limit. WebRTC and per-sentence synthesis retain their existing handling.
+- **Omni vLLM 0.33.0.** The Omni vLLM service moves from 0.20.0 to 0.33.0.
+- **Scaling metric names.** `llm_ttft` is reported as `llm_ttfb`. `vad_smart_turn` is reported as `turn_taking_latency`, measured from the VAD stop to the LLM request for any configured turn strategy. Result files that still contain `llm_ttft` remain readable.
 
 ## [2.3.1] - 2026-10-29
 

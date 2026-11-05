@@ -34,6 +34,26 @@ For NVIDIA's current model and deployment support details, see the [TTS support 
 >
 > **Streaming only.** The real-time pipeline needs a **streaming** TTS model. The streaming-capable TTS NIMs are **Magpie TTS Multilingual**, **Magpie TTS Zeroshot**, and **Chatterbox TTS Multilingual**. Check the [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) for supported request fields and model-specific options.
 
+## Generic WebSocket Completion and Stall Guard
+
+The Generic Assistant's ordinary and traced FastAPI WebSocket sessions use
+explicit provider EOF for stitched TTS. A quiet audio gap does not complete the
+response. If native alignment queues no whole PCM samples for 60 seconds, the
+session reports an error and cancels that RPC rather than reporting success.
+
+Each successful append of whole aligned PCM samples refreshes this guard.
+Empty responses and incomplete sample bytes alone do not. It is a no-progress
+limit, not a total-generation limit, user-turn silence
+threshold, or benchmark first-token deadline. Continued synthesis can exceed
+60 seconds while audio keeps arriving. WebRTC and per-sentence TTS retain their
+native completion handling. Other callers of the shared compatibility helper
+retain its 600-second default.
+
+This behavior requires the pinned Pipecat 1.15.0 compatibility adapter. Refer to
+the [completion and lifecycle contract](../offline-processing-reference.md#configuration-and-lifecycle)
+for its version-specific boundary. Earlier benchmark results retain their
+original source and guard settings; they do not validate this policy change.
+
 ## Hardware Requirements and Deployment Configs
 
 TTS runs one of these ways, and the repo wires the right one per profile:
@@ -211,39 +231,39 @@ The dictionary loads at session start and applies to every TTS request. Restart 
 
 ### TTS Text Filter
 
-LLM output frequently contains Markdown emphasis and characters the Magpie preprocessor reserves for its own markup. Unfiltered, these are spoken literally, make synthesis fail, or produce odd audio. A text filter sits between the LLM and TTS and strips them before synthesis. The default filter removes:
+LLM output frequently contains Markdown emphasis and characters the Magpie preprocessor reserves for its own markup. Unfiltered, these are spoken literally, make synthesis fail, or produce odd audio. A text transform sits between the LLM and TTS and strips them before synthesis. The default transform removes:
 
 - **`*`**: Markdown emphasis markers (for example `**bold**` and `*italic*`).
 - **`{` and `}`**: ARPAbet phoneme tokens such as `{@AW1}`.
 - **`<tag>`**: SSML tags parsed by the TTS engine.
 
-These appear naturally in code, JSON, Markdown, or HTML output. The filter classes live in [`src/examples/shared/nemotron_speech_text_filter.py`](../../src/examples/shared/nemotron_speech_text_filter.py):
+These appear naturally in code, JSON, Markdown, or HTML output. The transforms live in [`src/examples/shared/nemotron_speech_text_filter.py`](../../src/examples/shared/nemotron_speech_text_filter.py):
 
-#### `NemotronSpeechTextFilter` (default)
+#### `nemotron_speech_text_transform` (default)
 
 A single regex pass that strips `*`, `{`, `}`, and tag-opening `<`. Everything else passes through unchanged: comparison operators (`5 < 7`), currency, emoji, and non-Latin scripts. Use it for plain or lightly formatted prose.
 
 ```python
 # src/examples/generic/pipeline.py
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 
 tts = NvidiaTTSService(
     ...
-    text_filters=[NemotronSpeechTextFilter()],  # default
+    text_transforms=[("*", nemotron_speech_text_transform)],  # default
 )
 ```
 
-#### `NemotronSpeechMarkdownTextFilter`
+#### `nemotron_speech_markdown_text_transform`
 
-Extends Pipecat's `MarkdownTextFilter` with the same reserved-character strip. Use it when the LLM streams Markdown. All `MarkdownTextFilter` settings (`filter_code`, `filter_tables`) are inherited.
+Strips Markdown with Pipecat's `strip_markdown`, then applies the same reserved-character cleanup. Use it when the LLM streams Markdown.
 
 ```python
 # src/examples/generic/pipeline.py
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechMarkdownTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_markdown_text_transform
 
 tts = NvidiaTTSService(
     ...
-    text_filters=[NemotronSpeechMarkdownTextFilter()],
+    text_transforms=[("*", nemotron_speech_markdown_text_transform)],
 )
 ```
 

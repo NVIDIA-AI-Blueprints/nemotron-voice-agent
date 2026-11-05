@@ -13,10 +13,9 @@ from collections.abc import AsyncGenerator
 import httpx
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.nvidia.llm import NvidiaLLMService
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
-
-from examples.omni_assistant.nvidia_omni_multimodal_service import NvidiaOmniLLMService
 
 MAGPIE_TTS_ENDPOINT = "https://inference-api.nvidia.com/v1/audio/nvidia/magpie-tts-multilingual-357m/synthesize"
 
@@ -51,7 +50,7 @@ class InferenceMagpieTTSService(TTSService):
         """Indicate that this service reports TTFB and usage metrics."""
         return True
 
-    def __init__(self, *args, settings=None, text_filters=None, text_transforms=None, **kwargs) -> None:
+    def __init__(self, *args, settings=None, text_transforms=None, **kwargs) -> None:
         """Accept the NVIDIA gRPC constructor shape used by the examples."""
         voice = getattr(settings, "voice", None) or "Magpie-Multilingual.EN-US.Aria"
         language = getattr(settings, "language", None) or "en-US"
@@ -64,7 +63,6 @@ class InferenceMagpieTTSService(TTSService):
                 voice=str(voice),
                 language=str(language),
             ),
-            text_filters=text_filters,
             text_transforms=text_transforms,
             stop_frame_timeout_s=float(kwargs.get("stop_frame_timeout_s", 3.0)),
         )

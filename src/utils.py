@@ -410,6 +410,9 @@ def _nvcf_entry(entry: dict) -> dict | None:
     if not isinstance(overrides, dict):
         raise RuntimeError(f"services.yaml nvcf must be a mapping (got {overrides!r})")
     out = _strip_nvcf(entry)
+    # Credentials bind to one catalog endpoint. A cloud variant must opt in
+    # separately instead of inheriting the self-hosted endpoint's credential.
+    out.pop("api_key_env", None)
     if "server" in out:
         out["server"] = NVCF_GRPC_SERVER
     if "base_url" in out:

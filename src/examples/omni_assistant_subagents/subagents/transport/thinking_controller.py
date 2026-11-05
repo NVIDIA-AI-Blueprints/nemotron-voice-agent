@@ -28,6 +28,7 @@ from examples.omni_assistant_subagents.subagents.thinker import THINKING_TASK_NA
 
 _MAX_THINKER_TURNS = 40
 _MAX_THINKER_CONVERSATION_CHARS = 8000
+_USER_TURN_WAIT_SECS = 8.0
 
 
 class ThinkingController:
@@ -40,12 +41,16 @@ class ThinkingController:
         request_job: Callable[..., Awaitable[str]],
         queue_frame: Callable[[Any], Awaitable[None]],
         followup_delay_secs: float,
+        cancel_job: Callable[..., Awaitable[None]],
+        user_turn_open: Callable[[], bool],
     ) -> None:
         """Initialize deliberate-thinking dispatch state for one session."""
         self._context = context
         self._request_job = request_job
         self._queue_frame = queue_frame
         self._followup_delay_secs = followup_delay_secs
+        self._cancel_job = cancel_job
+        self._user_turn_open = user_turn_open
         self._pending: dict[str, str] | None = None
         self._active = False
         self._generation = 0
@@ -71,6 +76,38 @@ class ThinkingController:
         self._active = False
         self._active_task_id = ""
 
+    async def cancel_active(self, reason: str) -> None:
+        """Drop the in-flight Thinker pass after the user moved on, so its answer is never spoken.
+
+        A pass still being dispatched has no task id yet, so ``start_pending`` cancels it once the id arrives.
+        """
+        if not self._active:
+            return
+        task_id = self._active_task_id
+        self._generation += 1
+        self._active = False
+        self._active_task_id = ""
+        logger.info(f"Cancelled deliberate thinking: task_id={task_id or 'dispatching'}, reason={reason}")
+        if task_id:
+            await self._cancel_dispatched(task_id, reason)
+
+    async def _cancel_dispatched(self, task_id: str, reason: str) -> None:
+        try:
+            await self._cancel_job(task_id, reason=reason)
+        except Exception as exc:
+            logger.warning(f"Failed to cancel deliberate thinking job {task_id}: {exc}")
+        await self._emit_update(task_id=task_id, status="cancelled", detail="Cancelled: the user asked something new.")
+
+    async def _wait_for_user_turn(self) -> None:
+        """Hold a finished answer while a user turn is still being heard, so that turn can cancel it.
+
+        The wait is bounded because a turn too short for the Speaker to transcribe never reports back.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _USER_TURN_WAIT_SECS
+        while self._user_turn_open() and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+
     async def start_pending(self) -> None:
         """Dispatch the queued thinking pass after the stall turn has completed."""
         pending = self._pending
@@ -92,6 +129,7 @@ class ThinkingController:
             logger.warning(f"Failed to dispatch deliberate thinking: {exc}")
             return
         if generation != self._generation:
+            await self._cancel_dispatched(task_id, "superseded during dispatch")
             return
         self._active_task_id = task_id
         logger.info(
@@ -104,18 +142,21 @@ class ThinkingController:
         if message.job_id != self._active_task_id:
             return True
         generation = self._generation
-        self._active = False
-        self._active_task_id = ""
         response = message.response or {}
         answer = str(response.get("response") or "").strip()
         reasoning = str(response.get("reasoning") or "").strip()
         agent = str(getattr(message, "source", "") or ThinkerWorker.AGENT_NAME)
         if not answer:
+            self._active = False
+            self._active_task_id = ""
             await self._emit_update(task_id=message.job_id, status="error", detail="Thinking failed.", agent=agent)
             return True
         await asyncio.sleep(self._followup_delay_secs)
+        await self._wait_for_user_turn()
         if generation != self._generation:
             return True
+        self._active = False
+        self._active_task_id = ""
         await self._queue_frame(LLMFullResponseStartFrame())
         await self._queue_frame(LLMTextFrame(text=answer))
         await self._queue_frame(LLMFullResponseEndFrame())

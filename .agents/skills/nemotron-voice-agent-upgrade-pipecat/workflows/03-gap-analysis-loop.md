@@ -77,8 +77,6 @@ smoke → lint → tests → client build. Max 5 code passes + 3 test cycles, el
 ## Deliverables
 
 1. **Gap report**: passes, gaps found/fixed/advisories, per-example + cross-cutting + client status, advisory list.
-2. **Change log** `docs/pipecat-upgrade-changelog.md`: per change: file:symbol, old→new, why (CHANGELOG/docs
-   ref), examples affected. Plus: `pipecat-ai` old→new, every server + client dependency decision
-   (bumped/renamed/removed + migrated-to-core), extras changes, files changed, removed/renamed APIs,
-   server↔client RTVI contract notes,
-   advisories.
+2. **Changelog** `CHANGELOG.md`: record the Pipecat version change, dependency decisions, removed or
+   renamed APIs, and user-visible metric or protocol changes under the target release. Do not add a
+   separate upgrade changelog.

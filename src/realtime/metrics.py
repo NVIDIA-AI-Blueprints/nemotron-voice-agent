@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from pipecat.frames.frames import MetricsFrame
-from pipecat.metrics.metrics import LLMUsageMetricsData, ProcessingMetricsData, TTFBMetricsData
+from pipecat.metrics.metrics import (
+    LLMUsageMetricsData,
+    ProcessingMetricsData,
+    TTFAMetricsData,
+    TTFATMetricsData,
+    TTFBMetricsData,
+)
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 
 _METADATA_KEY = "nvidia_metrics"
@@ -52,6 +58,11 @@ def _metric_value(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _positive_metric_value(value: Any) -> float | None:
+    number = _metric_value(value)
+    return number if number is not None and number > 0 else None
+
+
 class RealtimeMetricsAccumulator:
     """Passively accumulate metrics observed between response completion events."""
 
@@ -59,10 +70,15 @@ class RealtimeMetricsAccumulator:
         """Create an empty stream accumulator."""
         self._samples: dict[str, list[float]] = {
             "asr_ttfb": [],
-            "llm_ttft": [],
+            "llm_ttfb": [],
+            "llm_thinking_time": [],
+            "llm_ttfat": [],
             "tts_ttfb": [],
+            "tts_leading_silence": [],
+            "tts_ttfa": [],
             "server_e2e": [],
-            "vad_smart_turn": [],
+            "turn_taking_latency": [],
+            "text_aggregation": [],
             "llm_processing_time": [],
         }
         self._token_totals: dict[str, int] = {
@@ -121,15 +137,31 @@ class RealtimeMetricsAccumulator:
 
     def _consume_metrics_frame(self, frame: MetricsFrame) -> None:
         for item in frame.data:
-            if isinstance(item, TTFBMetricsData):
+            if isinstance(item, TTFAMetricsData):
+                if _processor_category(item.processor) == "tts":
+                    value = _positive_metric_value(item.ttfa)
+                    if value is not None:
+                        self._samples["tts_ttfa"].append(value)
+                    leading_silence = _metric_value(item.leading_silence)
+                    if leading_silence is not None:
+                        self._samples["tts_leading_silence"].append(leading_silence)
+            elif isinstance(item, TTFATMetricsData):
+                if _processor_category(item.processor) == "llm":
+                    value = _positive_metric_value(item.ttfat)
+                    if value is not None:
+                        self._samples["llm_ttfat"].append(value)
+                    thinking_time = _metric_value(item.thinking_time)
+                    if thinking_time is not None:
+                        self._samples["llm_thinking_time"].append(thinking_time)
+            elif isinstance(item, TTFBMetricsData):
                 category = _processor_category(item.processor)
-                key = {"asr": "asr_ttfb", "llm": "llm_ttft", "tts": "tts_ttfb"}.get(category or "")
-                value = _metric_value(item.value)
+                key = {"asr": "asr_ttfb", "llm": "llm_ttfb", "tts": "tts_ttfb"}.get(category or "")
+                value = _positive_metric_value(item.value)
                 if key and value is not None:
                     self._samples[key].append(value)
             elif isinstance(item, ProcessingMetricsData):
                 if _processor_category(item.processor) == "llm":
-                    processing_time = _metric_value(item.value)
+                    processing_time = _positive_metric_value(item.value)
                     if processing_time is None:
                         continue
                     self._samples["llm_processing_time"].append(processing_time)
@@ -163,13 +195,22 @@ class RealtimeMetricsAccumulator:
 
         message_type = message.get("type")
         if message_type == "user-bot-latency" and not bool(message.get("first", False)):
-            latency = _metric_value(message.get("latency"))
+            latency = _positive_metric_value(message.get("latency"))
             if latency is not None:
                 self._samples["server_e2e"].append(latency)
-        elif message_type == "latency-breakdown":
-            latency = _metric_value(message.get("vad_smart_turn"))
-            if latency is not None:
-                self._samples["vad_smart_turn"].append(latency)
+        elif message_type == "metric-group":
+            for item in message.get("metrics", []):
+                if not isinstance(item, dict):
+                    continue
+                metric_key = {
+                    "text_aggregation_ms": "text_aggregation",
+                    "turn_taking_latency_ms": "turn_taking_latency",
+                }.get(item.get("key"))
+                if metric_key is None:
+                    continue
+                value = _positive_metric_value(item.get("value"))
+                if value is not None:
+                    self._samples[metric_key].append(value / 1000)
 
     def _build_usage(self) -> dict[str, Any] | None:
         if not self._token_fields_seen:

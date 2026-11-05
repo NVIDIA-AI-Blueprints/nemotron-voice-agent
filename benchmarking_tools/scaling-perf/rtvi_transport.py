@@ -15,6 +15,7 @@ from typing import Any
 
 import websockets
 from pipecat.frames.protobufs import frames_pb2
+from pipecat.processors.frameworks.rtvi import models as RTVI
 from websockets.exceptions import ConnectionClosed
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class RTVITransport:
                 "label": "rtvi-ai",
                 "type": "client-ready",
                 "id": f"{self.stream_id}-client-ready",
-                "data": {"version": "0.1.0", "about": {"name": "scaling-perf-benchmark"}},
+                "data": {"version": RTVI.PROTOCOL_VERSION, "about": {"name": "scaling-perf-benchmark"}},
             }
             message = frames_pb2.MessageFrame(data=json.dumps(ready_payload))
             await self.websocket.send(frames_pb2.Frame(message=message).SerializeToString())

@@ -19,7 +19,7 @@ import sys
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -53,6 +53,14 @@ from .recorder import create_private_directory, write_private_text
 
 class _ClientDisconnected(Exception):
     """A disconnect cancels evaluation and never acts as source EOF."""
+
+
+def _resolved_configuration(runtime) -> dict:
+    """Require runtime evidence for the effective-configuration capability."""
+    configuration = getattr(runtime, "configuration", None)
+    if not isinstance(configuration, Mapping):
+        raise OfflineProtocolError("configuration_unavailable", "Runtime did not resolve its effective configuration")
+    return redact_private(dict(configuration))
 
 
 class _LiveEventWriter:
@@ -128,11 +136,11 @@ async def _execute_text(websocket, receiver, runtime_factory, start, source, lim
             nonlocal runtime
             value = runtime_factory(start)
             runtime = await value if inspect.isawaitable(value) else value
+            configuration = _resolved_configuration(runtime)
             if publication_ready is not None and hasattr(runtime, "prepare"):
                 # Warmup is explicit in the opt-in path. The sealed default
                 # retains native initialization inside its existing engine.
                 await runtime.prepare()
-            configuration = redact_private(getattr(runtime, "configuration", start.get("config", {})))
             _check_client(receiver)
             diagnostics = current_diagnostics()
             payload = {
@@ -484,14 +492,29 @@ async def _send_result(
 
 
 def _grpc_status_name(error: Exception) -> str | None:
-    """Return only a typed gRPC status enum, excluding provider diagnostics."""
-    if not isinstance(error, RpcError):
-        return None
-    try:
-        status = error.code()
-    except Exception:
-        return None
-    return status.name if isinstance(status, StatusCode) else None
+    """Return one unambiguous typed status from bounded nested task failures."""
+    pending = [error]
+    seen = set()
+    statuses = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        if len(seen) >= 256:
+            return None
+        seen.add(id(current))
+        if isinstance(current, BaseExceptionGroup):
+            if len(current.exceptions) > 256 - len(seen):
+                return None
+            pending.extend(current.exceptions)
+        elif isinstance(current, RpcError):
+            try:
+                status = current.code()
+            except Exception:
+                continue
+            if isinstance(status, StatusCode):
+                statuses.add(status.name)
+    return next(iter(statuses)) if len(statuses) == 1 else None
 
 
 def _public_failure_diagnostics(error: Exception) -> dict[str, str]:
@@ -660,7 +683,7 @@ async def _serve_offline_session(
                     receiver, runtime_factory, start, source, milestones=milestones, clock=clock
                 )
             validate_result(result, source, limits)
-            configuration = getattr(runtime, "configuration", start.get("config", {}))
+            configuration = _resolved_configuration(runtime)
             fingerprint = configuration_fingerprint(configuration)
             async with asyncio.timeout(limits.output_timeout_seconds):
                 result = replace(result, metrics=redact_private(result.metrics))

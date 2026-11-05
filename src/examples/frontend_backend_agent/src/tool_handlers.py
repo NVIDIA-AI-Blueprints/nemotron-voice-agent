@@ -53,6 +53,12 @@ class ThinkerBackend(Protocol):
     def cancel_pending_booking(self) -> bool:
         """Cancel pending domain work that has no active task."""
 
+    def cancellation_warning(self) -> dict[str, Any] | None:
+        """Return a warning for side effects that local cancellation cannot undo."""
+
+    def acknowledge_cancellation_warning(self) -> None:
+        """Mark the cancellation warning as delivered."""
+
 
 def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float = 0.8) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent."""
@@ -178,6 +184,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
         await params.result_callback(payload)
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
+        """Stop local Thinker work and say whether a submitted booking may already exist."""
         nonlocal consecutive_planner_errors
         consecutive_planner_errors = 0
         cancelled = thinker.cancel_active("user_cancelled")
@@ -190,11 +197,16 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
             "context": "cancel_backend",
         }
+        warning = thinker.cancellation_warning()
+        if warning is not None:
+            payload = {**warning, "context": "cancel_backend"}
         if _direct_tool_response_enabled():
             await _emit_talker_response(params.llm, str(payload["response_text"]))
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
-            return
-        await params.result_callback(payload)
+        else:
+            await params.result_callback(payload)
+        if warning is not None:
+            thinker.acknowledge_cancellation_warning()
 
     return {"call_backend": handle_call_backend, "cancel_backend": handle_cancel_backend}
 

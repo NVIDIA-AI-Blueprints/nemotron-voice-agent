@@ -9,6 +9,7 @@ the status of earlier implementation claims.
 Append dated findings and test results here. Distinguish a proposed decision,
 implemented behavior, and verified behavior. Benchmark audio integrity does not
 establish behavioral equivalence or accuracy.
+Test counts describe only their dated source checkpoint, not the current suite.
 
 ## October 21, 2026: Transcript Ownership And Streaming Behavior
 
@@ -323,8 +324,9 @@ response-event counts.
 | `750` | 17,704.00 | 1,743.27 | 3 | 3 |
 
 Together, 141,685.50 ms of source audio takes 15,514.46 ms to process offline,
-about 9.13 times faster than source duration in this run. This ratio describes
-bulk execution on this deployment; it is not a realtime response-latency result.
+an aggregate rate of approximately 9.13 times real time in this run. This ratio
+describes bulk execution on this deployment; it is not a realtime
+response-latency result.
 
 The complete backend ASR final-segment sequence matches in all five pairs.
 User-message grouping also matches at every actual language-model request.
@@ -636,7 +638,8 @@ Another exercises the full engine, queued native LLM/TTS, and output chain with
 model I/O replaced. Additional tests cover provider lifecycle, actor/ASR
 contracts, and output handling.
 
-The full local suite passes with 888 tests, 3 skipped tests, and 178 subtests.
+At this October 23 checkpoint, the full local suite passes with 888 tests,
+3 skipped tests, and 178 subtests.
 Ruff lint passes, and formatting checks pass for 289 Python files. These are
 local controlled checks, not fresh ASR/LLM/TTS benchmark inference results.
 
@@ -665,8 +668,8 @@ five offline sessions succeed at concurrency 1 for samples `2`, `3`, `250`,
 the source duration, contain nonoverlapping spans, and retain exact-zero gaps.
 
 The 141,685.5 ms of source audio takes 11,580.49 ms across offline client
-completions, approximately 12.23 times faster than source duration. This includes
-upload, setup, processing, and client output handling; it is not isolated
+completions, an aggregate rate of approximately 12.23 times real time. This
+includes upload, setup, processing, and client output handling; it is not isolated
 inference latency or reconstructed online response latency.
 
 Each offline session explicitly drains its continuous ASR response stream.
@@ -770,8 +773,9 @@ offsets, not bulk-upload completion or socket arrival time.
 Raw-text provenance and stale-generation regression tests accompany this change,
 with assertions through the complete incremental engine. Validation of the new
 instrumentation passes 49 targeted tests and 40 subtests. The complete suite
-passes 890 tests and 178 subtests, with 3 tests skipped. Ruff lint passes, and
-formatting checks pass for 290 Python files. These results extend the earlier
+passes 890 tests and 178 subtests at this October 23 checkpoint, with 3 tests
+skipped. Ruff lint passes, and formatting checks pass for 290 Python files.
+These results extend the earlier
 888-test production baseline without changing its recorded benchmark evidence.
 VoiceBench GitLab CI execution at offline concurrency 1 with Lightning thinking
 disabled remains planned; this checkpoint reports no VoiceBench score.
@@ -1081,3 +1085,94 @@ The legacy `session_returned` metric precedes diagnostics persistence. It is
 distinct from the private worker wrapper's actual handler return. Refer to
 [timing attribution](offline-processing-reference.md#attribute-offline-client-and-server-waits)
 for stage definitions, source-clock limits, and observation overhead.
+
+## November 04, 2026: Pipecat Integration and Evaluation Scope
+
+### Current Dependency Integration
+
+The offline branch integrates the current `develop` baseline, including
+Pipecat 1.15.0 and its native NVIDIA service APIs. The browser pins
+`@pipecat-ai/client-js` 1.16.0, `client-react` 1.11.0,
+`small-webrtc-transport` 1.11.2, and `websocket-transport` 1.8.2 together.
+The transport peer requirements match the selected JavaScript client version.
+
+The migration reviews the cumulative
+[Pipecat 1.13](https://github.com/pipecat-ai/pipecat/releases/tag/v1.13.0),
+[1.14](https://github.com/pipecat-ai/pipecat/releases/tag/v1.14.0), and
+[1.15](https://github.com/pipecat-ai/pipecat/releases/tag/v1.15.0)
+release notes and each changed client package's notes. The current APIs use
+`pipecat.adapters.llm` imports, TTS `text_transforms`, and RTVI `output_type`.
+A TTS transform changes spoken text; moving it to `LLMTextProcessor` would also
+change context and client text. That placement requires an explicit policy
+decision rather than an import-only migration.
+
+The offline detector follows the native Pipecat 1.15 Silero model, analysis
+window, and reset behavior. Resets become due after 2 seconds of analyzed audio
+and wait for quiet state with five low-confidence windows. Source-offset
+observation hooks do not substitute the earlier copied reset algorithm.
+Native VAD changes can alter recorded turn
+boundaries. Passing local compatibility tests cannot transfer older scores or
+prove identical turns, provider timing, or requests on the new dependency.
+
+The current implementation still relies on version-specific TTS completion
+and lifecycle APIs. Model-free validation and real-provider evaluation remain
+separate gates. No new Pipecat 1.15 benchmark or deployment is recorded here.
+
+The Generic Assistant's ordinary and traced FastAPI WebSocket stitched-TTS
+composition now selects a 60,000 ms provider-inactivity guard, matching offline's
+bound. Native alignment must queue whole PCM samples to refresh it; empty
+responses and incomplete sample bytes alone do not. A provider that stalls
+without EOF fails and cancels its RPC. This is not a total
+generation cap, a turn endpoint, or silent successful completion. WebRTC and
+per-sentence synthesis retain native handling, and other compatibility-helper
+callers keep the 600,000 ms default. This live policy change is another source
+difference from the historical benchmarks, not a measured latency improvement.
+
+### Historical C3 Recovery Result
+
+VoiceBench Lite job `525914013` used NVA `da74a72` with Pipecat 1.12.0 and
+evaluator `ba298bb`. It processed the frozen 778-case selection with exclusive
+worker admission, early input processing, and concurrency 3. The pool contained
+10 single-worker backends. The result completed all 778 cases in 798 attempts.
+
+There were 758 first-attempt successes, 17 recovered inline timeouts, and three
+typed backend `UNAVAILABLE` failures recovered after the initial sweep. These
+20 original failures remain recorded. Deferred recovery shares the two-attempt
+budget, uses a fresh session, and finishes before native finalization. It does
+not modify older finalized runs or rejudge successful answers.
+
+The inference cohort wall span was 1,498,331 ms. That span is not individual
+sample latency. Matched clean-case client p95 was about 12% above the historical
+C1 reference. Source, dependency, input-processing, instrumentation, and provider
+load differences prevent a concurrency-only attribution. The full VoiceBench
+run remains on hold while the individual-sample tail is investigated.
+
+Concurrency 3 is the recommended external evaluator profile for this lane,
+not a new global server default. The endpoint keeps sealed input as its default,
+and the evaluator's generic concurrency fallback remains 1. Native scoring
+preserves all case denominators and incomplete-score withholding. Any internal
+nine-dataset mean is not an official VoiceBench overall score.
+
+Historical Pipecat 1.12.0 source pins, artifacts, and scores remain unchanged.
+This integration does not certify their reproduction on Pipecat 1.15.0. Refer
+to the [evaluation profile](offline-processing-reference.md#recommended-offline-evaluation-profile)
+for recovery boundaries and the [metric definitions](offline-processing-reference.md#attribute-offline-client-and-server-waits)
+for observation limits.
+
+## November 05, 2026: Local Integration Validation
+
+The Pipecat 1.15 integration passes 1,261 local tests and 415 subtests, with
+three opt-in live SDK tests skipped. Required Ruff 0.15.6 checks and formatting
+pass. Imports pass for the server and all five examples, client lint and build
+pass, and both service-free evaluation checks pass.
+
+A local fixture starts the front door and 10 backend processes, completes six
+synthetic cases at concurrency 3, and verifies that the owned process group is
+gone after cleanup. Fake providers isolate process, protocol, and lifecycle
+behavior. Native tests also check that incomplete PCM sample bytes do not
+refresh the provider-inactivity guard before alignment queues whole samples.
+
+These are local, model-free validation results. Live service CI remains a
+separate gate after publication. No fresh VoiceBench score, real-provider
+latency result, or online/offline equivalence claim is established for this
+Pipecat 1.15 source. The full VoiceBench run remains on hold.

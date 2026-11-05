@@ -322,14 +322,7 @@ class _Session:
                 "first_packed_audio_ready_ns": (
                     samples_to_ns(response["spans"][0].start_sample - response["sample"]) if response["spans"] else None
                 ),
-                "latest_vad_speech_end_sample": next(
-                    (
-                        event["sample"]
-                        for event in reversed(self.detection.events)
-                        if event["type"] == "speech_end" and event["decision_sample"] <= response["sample"]
-                    ),
-                    None,
-                ),
+                "latest_vad_speech_end_sample": self._turn_speech_end(response),
                 "end_sample": sample,
                 "compute_ns": response["trace"].compute_ns,
                 "generated_samples": sum(len(a.pcm) // 2 for a in response["trace"].audio),
@@ -338,6 +331,29 @@ class _Session:
                 "provider": response["trace"].metrics,
                 "request_messages": response["request_messages"],
             }
+        )
+
+    def _turn_speech_end(self, response):
+        """Report only observed VAD ends within this response's own user turn."""
+        start = next(
+            (
+                event["sample"]
+                for event in reversed(self.events)
+                if event["type"] == "user_turn_started" and event.get("turn_id") == response["turn_id"]
+            ),
+            None,
+        )
+        if start is None:
+            return None
+        return next(
+            (
+                event["sample"]
+                for event in reversed(self.detection.events)
+                if event["type"] == "speech_end"
+                and start <= event["sample"]
+                and start <= event["decision_sample"] <= response["sample"]
+            ),
+            None,
         )
 
     async def run(self):

@@ -263,6 +263,9 @@ class SpeakerDiarizationProcessor(FrameProcessor):
             is_final = isinstance(frame, TranscriptionFrame)
             await self._publish_interim("" if is_final else frame.text.strip(), frame.timestamp)
             mapped_speaker = getattr(frame, "nvidia_speaker_tag", None)
+            native_speaker = _numeric_speaker_tag(frame.user_id) if is_final else None
+            if mapped_speaker is None and native_speaker is not None:
+                mapped_speaker = self._number_speakers([(native_speaker, frame.text)])[0][0]
             runs = (
                 [(mapped_speaker, frame.text)]
                 if mapped_speaker is not None
@@ -274,7 +277,7 @@ class SpeakerDiarizationProcessor(FrameProcessor):
 
             continues_word = False
             continues_speaker: int | None = None
-            if is_final and mapped_speaker is None:
+            if is_final:
                 continues_word = continues_previous_word(frame.result, self._previous_final_end_s)
                 if continues_word:
                     runs = reassign_first_word(runs, self._previous_final_speaker_id)
@@ -327,7 +330,7 @@ class SpeakerDiarizationProcessor(FrameProcessor):
                         frame.timestamp,
                     )
 
-            if self.multi_speaker_support and mapped_speaker is None and len(runs) > 1:
+            if self.multi_speaker_support and len(runs) > 1:
                 for run_index, (speaker_id, text) in enumerate(runs):
                     copied = _copy_transcription_frame(frame, text=text)
                     copied.nvidia_speaker_tag = speaker_id
@@ -364,6 +367,17 @@ class SpeakerDiarizationProcessor(FrameProcessor):
         self.has_final_text = True
         if speaker_id is not None:
             self.last_final_speaker_id = speaker_id
+
+
+def _numeric_speaker_tag(user_id: object) -> int | None:
+    """Return Pipecat's native per-speaker tag when ``user_id`` is numeric."""
+    if isinstance(user_id, bool):
+        return None
+    if isinstance(user_id, int):
+        return user_id
+    if isinstance(user_id, str) and user_id.strip().isdigit():
+        return int(user_id.strip())
+    return None
 
 
 def _set_llm_spacing(frame, *, glued: bool) -> None:

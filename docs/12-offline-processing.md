@@ -8,6 +8,10 @@
 > [native policy acceptance contract](#october-30-2026-native-policy-acceptance-contract)
 > for fidelity requirements. The [progress log](offline-processing-progress.md)
 > records implementation changes, measured results, and remaining limitations.
+> The current integration pins Pipecat 1.15.0. Earlier measurements retain their
+> original Pipecat 1.12.0 scope; refer to the
+> [integration checkpoint](offline-processing-progress.md#november-04-2026-pipecat-integration-and-evaluation-scope)
+> for the historical C3 result and current validation boundary.
 
 ## Aim and Background
 
@@ -81,8 +85,9 @@ Two time domains keep conversation placement independent of processing speed.
 | Execution time: monotonic durations | Provider availability, processing measurements, and failure watchdogs |
 
 At 16 kHz, 512 analysis samples always represent 32 ms. Upload speed and network
-pauses do not change that duration. Watchdogs can fail stalled work; they cannot
-end user turns or advance the audio timeline.
+pauses do not change that duration. Execution watchdogs can fail stalled work;
+they cannot end user turns or advance the audio timeline. Native turn-policy
+watchdogs use the sample clock and can end a nonspeaking turn.
 
 ### Timing Rules
 
@@ -170,9 +175,10 @@ settings, and a configuration fingerprint. Automatic introductions are disabled.
 Both modes request the same native TTS rate before converting to canonical
 16 kHz PCM. Unsupported provider modes fail explicitly.
 
-The server saves `source.wav`, `full_output.wav`, `events.jsonl`, and
-`manifest.json`. The client also saves a source-horizon `output.wav` and
-`comparison.wav`, with user input on the left and bot output on the right.
+For full-session completion, the server saves `source.wav`, `full_output.wav`,
+`events.jsonl`, and `manifest.json`. The client also saves a source-horizon
+`output.wav` and `comparison.wav`, with user input on the left and bot output
+on the right.
 Failures produce explicit status instead of successful-looking recordings.
 
 For packet layouts, configuration restrictions, module mappings, and executable
@@ -495,3 +501,25 @@ The prototype has no production-readiness, throughput, or score-equivalence
 claim. Local fake-provider checks do not establish behavior under real model
 load. Existing scored and in-progress evaluations remain pinned to their
 original application versions.
+
+## November 04, 2026: Dependency Integration and Historical Results
+
+The current integration targets Pipecat 1.15.0 and the matching browser package
+set from `develop`. It follows the native Silero VAD and service behavior of
+that dependency. Earlier Pipecat 1.12.0 results do not establish unchanged
+turn boundaries, request contents, scores, or performance after this migration.
+
+The historical exclusive-pool C3 recovery evaluation completed all 778 Lite
+cases in 798 attempts. Its 17 inline timeout recoveries and three deferred
+backend recoveries remain in the original evidence. The full VoiceBench run
+remains on hold pending investigation of individual-sample latency tails.
+The C3 recommendation applies to the external offline evaluation profile with
+10 backends; it does not change global concurrency or the sealed-input default.
+
+Refer to the [dated integration and evaluation checkpoint](offline-processing-progress.md#november-04-2026-pipecat-integration-and-evaluation-scope)
+for source pins and limitations, and the
+[evaluation profile](offline-processing-reference.md#recommended-offline-evaluation-profile)
+for the bounded recovery contract. No new benchmark or provider validation is
+claimed for Pipecat 1.15.0.
+The [November 05 local integration validation](offline-processing-progress.md#november-05-2026-local-integration-validation)
+records the model-free test and process-lifecycle gates separately.

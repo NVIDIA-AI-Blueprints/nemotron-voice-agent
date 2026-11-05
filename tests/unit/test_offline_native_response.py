@@ -23,7 +23,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
 from pipecat.processors.frame_processor import FrameDirection
-from pipecat.services.nvidia.tts import NvidiaTTSSettings
+from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.utils.errors import ErrorCategory
 
 from examples.generic.offline.native_response import (
@@ -78,7 +78,7 @@ class ScriptedTTS(CapturingNativeNvidiaTTSService):
     def _initialize_client(self):
         """The scripted provider has no gRPC channel or remote configuration."""
 
-    def _create_synthesis_config(self):
+    async def _create_synthesis_config(self):
         """Do not query a real service during native setup."""
         return None
 
@@ -272,6 +272,25 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(self.session.aclose)
         await self.session.start()
+
+    async def test_session_failure_timeout_fails_stalled_generation_without_outer_timeout_substitution(self):
+        """The actual session watchdog, not a service-fixture guard, must fail."""
+        await self.session.aclose()
+        self.session = NativeResponseSession(
+            self.llm_factory, self.tts_factory, sample_rate=22050, failure_timeout=0.02
+        )
+        self.addAsyncCleanup(self.session.aclose)
+        await self.session.start()
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "stalled", self.changed)
+        await self.wait_event(self.llm.entered)
+        result = asyncio.create_task(actor.result())
+        done, _ = await asyncio.wait((result,), timeout=1)
+        self.assertIn(result, done, "The native session watchdog did not complete the actor")
+        with self.assertRaises(TimeoutError):
+            result.result()
+        self.assertFalse(self.llm.release.is_set())
+        self.assertFalse(self.tts.release.is_set())
+        self.assertNotIn("tts_rpc_eof_drained", self.session._generations["stalled"].metrics)
 
     async def test_uncorrelated_idle_service_failure_blocks_the_next_dispatch(self):
         """A background failure after startup is not lost while no turn is active."""
@@ -852,15 +871,23 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(actor.result(), 1)
 
     async def test_feedback_uses_native_upstream_speaking_state(self):
-        """Sender feedback reaches the normal TTS bot-speaking state machine."""
+        """Sender feedback reaches native processing in its upstream direction."""
         started = BotStartedSpeakingFrame()
         stopped = BotStoppedSpeakingFrame()
-        for frame, expected in ((started, True), (stopped, False)):
-            await self.session.feedback(frame)
-            async with asyncio.timeout(1):
-                while self.tts._bot_speaking != expected:
-                    await asyncio.sleep(0)
-        self.assertFalse(self.tts._bot_speaking)
+        received = []
+        native_process = NvidiaTTSService.process_frame
+
+        async def observe(service, frame, direction):
+            received.append((frame, direction))
+            await native_process(service, frame, direction)
+
+        with patch.object(NvidiaTTSService, "process_frame", observe):
+            for frame in (started, stopped):
+                await self.session.feedback(frame)
+                async with asyncio.timeout(1):
+                    while not any(value is frame for value, _ in received):
+                        await asyncio.sleep(0)
+        self.assertEqual(received, [(started, FrameDirection.UPSTREAM), (stopped, FrameDirection.UPSTREAM)])
 
     async def test_serialized_end_waits_for_provider_worker_drain(self):
         """Serialized EOF alone does not abandon a still-running provider worker."""

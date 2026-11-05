@@ -25,12 +25,16 @@ HARD_DEADLINE_BUFFER = 60
 REALTIME_TURN_RESPONSE_TIMEOUT = 45.0
 TURN_RESPONSE_TIMEOUT = 10.0
 SERVER_METRIC_KEYS = (
-    "llm_ttft",
-    "tts_ttfb",
+    "llm_ttfb",
+    "llm_thinking_time",
     "llm_ttfat",
+    "tts_ttfb",
+    "tts_leading_silence",
+    "tts_ttfa",
     "asr_ttfb",
     "server_e2e",
-    "vad_smart_turn",
+    "turn_taking_latency",
+    "text_aggregation",
     "llm_processing_time",
     "llm_tokens_per_sec",
 )

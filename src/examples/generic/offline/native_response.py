@@ -62,7 +62,6 @@ _ERROR_DIAGNOSTIC_KEY = "_nva_native_provider_error_diagnostic"
 _PROVIDER_OBSERVATION_LIMIT = 64
 OFFLINE_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS = 60.0
 OFFLINE_TTS_CONFIG_TIMEOUT_SECONDS = 60.0
-_NO_CONFIG = object()
 
 
 def _diagnose(diagnostics, event, **scalars):
@@ -102,7 +101,7 @@ def native_metric_values(frame) -> list[dict[str, str | float]]:
 
 
 class _SynthesisConfigStub:
-    """Bound one owned config RPC, then serve its result to real native setup.
+    """Bound the owned config RPC used by native asynchronous setup.
 
     Only the blocking RPC/result wait runs on a worker. Native service mutation,
     setup, queues and final config assignment remain on their owning loop.
@@ -118,7 +117,6 @@ class _SynthesisConfigStub:
         self._lock = threading.Lock()
         self._cancelled = False
         self._call = None
-        self._value = _NO_CONFIG
 
     def __getattr__(self, name):
         return getattr(self.original, name)
@@ -137,8 +135,6 @@ class _SynthesisConfigStub:
         with self._lock:
             if self._cancelled:
                 raise RuntimeError("Offline TTS configuration fetch was retired")
-            if self._value is not _NO_CONFIG:
-                return self._value
         if threading.get_ident() == self.loop_thread:
             raise RuntimeError("Offline TTS configuration RPC must be prefetched off the event loop")
         started = time.monotonic_ns()
@@ -163,7 +159,6 @@ class _SynthesisConfigStub:
             with self._lock:
                 if self._cancelled:
                     raise RuntimeError("Offline TTS configuration fetch was retired")
-                self._value = value
             outcome = "completed"
             return value
         except TimeoutError:
@@ -351,16 +346,15 @@ class CapturingNativeNvidiaTTSService(ExplicitEOFCompletionMixin, NvidiaTTSServi
         self._native_rpc_states: dict[str, list[_NativeRpcStateRegistration]] = {}
 
     async def setup(self, setup):
-        """Prefetch only the blocking native config RPC, then run native setup."""
-        if version("pipecat-ai") != "1.12.0":
-            raise RuntimeError("Offline TTS configuration adapter requires exactly Pipecat 1.12.0")
+        """Keep native threaded config setup, with an owned RPC deadline."""
+        if version("pipecat-ai") != "1.15.0":
+            raise RuntimeError("Offline TTS configuration adapter requires exactly Pipecat 1.15.0")
         if self._offline_setup_started:
             raise RuntimeError("Offline TTS service setup can only run once")
         self._offline_setup_started = True
         started = time.monotonic_ns()
         proxy = None
         service = None
-        worker = None
         outcome = "error"
         try:
             self._initialize_client()
@@ -374,21 +368,12 @@ class CapturingNativeNvidiaTTSService(ExplicitEOFCompletionMixin, NvidiaTTSServi
                 )
                 service.stub = proxy
             _diagnose(self._diagnostics, "tts_config_fetch_queued")
-            worker = asyncio.create_task(asyncio.to_thread(self._create_synthesis_config))
-
-            def consume_result(task):
-                if not task.cancelled():
-                    with suppress(BaseException):
-                        task.result()
-
-            worker.add_done_callback(consume_result)
-            async with asyncio.timeout(self._offline_config_timeout_s):
-                await asyncio.shield(worker)
             native_started = time.monotonic_ns()
             _diagnose(self._diagnostics, "tts_native_setup_start")
-            # Native setup still sets sample rate/task manager and assigns the
-            # config on-loop. Its helper reads the completed cache, not an RPC.
-            await super().setup(setup)
+            # Pipecat owns the one asynchronous config fetch and all service
+            # mutation. Its to_thread call invokes only the bounded RPC stub.
+            async with asyncio.timeout(self._offline_config_timeout_s):
+                await super().setup(setup)
             _diagnose(
                 self._diagnostics,
                 "tts_native_setup_end",
@@ -401,8 +386,6 @@ class CapturingNativeNvidiaTTSService(ExplicitEOFCompletionMixin, NvidiaTTSServi
                 outcome = "timeout"
             if proxy is not None:
                 proxy.cancel()
-            if worker is not None and not worker.done():
-                worker.cancel()
             # A worker cannot install _config. Closing this exact owned channel
             # also retires a late/noncooperative result without closing another
             # session's service. Cancelling a thread itself is never claimed.
@@ -992,7 +975,7 @@ class NativeResponseSession:
             if service is not None:
                 await release(lambda service=service: service.cancel(CancelFrame()))
                 await release(service.cleanup)
-        # Pipecat 1.12's NVIDIA/OpenAI cleanup does not close its AsyncOpenAI
+        # Pipecat's NVIDIA/OpenAI cleanup does not close its AsyncOpenAI
         # client. This session created the native service and owns that client;
         # retain it across interruptions and release it only here.
         client = getattr(self._llm, "_client", None)

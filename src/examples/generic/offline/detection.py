@@ -10,7 +10,7 @@ used exclusively to measure model work, never to decide a conversational event.
 An open upload waits for more samples; only its validated seal supplies EOF.
 
 The two mixins deliberately isolate the small compatibility surface with pinned
-Pipecat 1.12.0. Model loading is lazy so scripted runtime tests need no model files.
+Pipecat 1.15.0. Model loading is lazy so scripted runtime tests need no model files.
 """
 
 from dataclasses import dataclass
@@ -79,12 +79,11 @@ class TurnAnalyzerPort(Protocol):
 
 
 class SampleTimedSileroMixin:
-    """Replace Silero's periodic wall-clock reset with source sample positions."""
+    """Observe native audio-window reset decisions at source sample positions."""
 
     def __init__(self, *args, **kwargs):
-        """Initialize a source-local reset schedule before loading the model."""
+        """Initialize source-local observations before loading the model."""
         self._offline_source_end_sample = 0
-        self._offline_next_reset_sample: int | None = None
         self._offline_model_reset_offsets: list[int] = []
         self._offline_diagnostics = current_diagnostics()
         super().__init__(*args, **kwargs)
@@ -104,26 +103,19 @@ class SampleTimedSileroMixin:
 
     @observe_vad_model()
     def voice_confidence(self, buffer: bytes) -> float:
-        """Retain native first-window reset and five seconds since each reset."""
-        import numpy as np
-
+        """Retain native confidence and its audio-counted quiet-reset policy."""
         observed_start = perf_counter_ns() if self._offline_diagnostics is not None else None
-        audio = np.frombuffer(buffer, dtype=np.int16).astype(np.float32) / 32768.0
-        confidence = float(np.asarray(self._model(audio, self.sample_rate)).reshape(-1)[0])
-        period_samples = 5 * self.sample_rate
-        # Native Silero starts _last_reset_time at zero and resets after its
-        # first inference. Later periods start at the actual reset window,
-        # rather than fixed absolute multiples of five seconds.
-        if (
-            self._offline_next_reset_sample is None
-            or self._offline_source_end_sample >= self._offline_next_reset_sample
-        ):
-            self._model.reset_states()
+        try:
+            return super().voice_confidence(buffer)
+        finally:
+            if observed_start is not None:
+                duration(self._offline_diagnostics, "vad_model", perf_counter_ns() - observed_start)
+
+    def _maybe_reset_model(self, confidence: float):
+        """Retain the native reset decision; record only its source boundary."""
+        super()._maybe_reset_model(confidence)
+        if self._windows_since_reset == 0:
             self._offline_model_reset_offsets.append(self._offline_source_end_sample)
-            self._offline_next_reset_sample = self._offline_source_end_sample + period_samples
-        if observed_start is not None:
-            duration(self._offline_diagnostics, "vad_model", perf_counter_ns() - observed_start)
-        return confidence
 
     async def analyze_audio(self, buffer):
         """Observe exact native executor stages without replacing native analysis."""
@@ -252,7 +244,8 @@ class AudioOffsetDetector:
             "vad": vad.model_dump() if hasattr(vad, "model_dump") else vars(vad),
             "smart_turn": (turn.model_dump() if hasattr(turn, "model_dump") else vars(turn)) if turn else None,
             "window_samples": 512,
-            "model_reset_samples": 5 * RATE,
+            "model_reset_interval_samples": 2 * RATE,
+            "model_reset_policy": "native_quiet_low_confidence",
         }
 
     async def detect(self, source: AudioSource, *, on_checkpoint=None) -> DetectionTrace:

@@ -32,6 +32,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.utils.asyncio.task_manager import TaskManager
 
 from examples.shared.nvidia_tts_explicit_eof import (
+    _RESPONSE_COMPLETION,
     EXPLICIT_EOF_COMPLETION_POLICY,
     ExplicitEOFNvidiaTTSService,
     explicit_eof_tts_options,
@@ -103,7 +104,7 @@ class _ObservedNative:
             auth=SimpleNamespace(channel=self.channel, get_auth_metadata=lambda: []),
         )
 
-    def _create_synthesis_config(self):
+    async def _create_synthesis_config(self):
         return None
 
     def _open_rpc(self, requests, *, metadata):
@@ -418,6 +419,54 @@ class ExplicitEOFContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.errors(service), [])
         self.assertEqual(self.audio(service), pcm * 3)
 
+    async def test_native_partial_sample_only_refreshes_guard_after_remainder_forms_queued_pcm(self):
+        """Native1.15 buffers incomplete samples; buffered bytes are not audio progress."""
+        for channels in (1, 2):
+            with self.subTest(channels=channels):
+                service = CandidateTTS(provider_idle_timeout_s=0.1)
+                context_id = "native-sample-alignment"
+                await service.create_audio_context(context_id)
+                deadline = Mock()
+                deadline.expired.return_value = False
+                scope = SimpleNamespace(
+                    owner=service, context_id=context_id, deadline=deadline, closure_requested=False
+                )
+                token = _RESPONSE_COMPLETION.set(scope)
+                try:
+                    incomplete = b"\x25" * (2 * channels - 1)
+                    partial = TTSAudioRawFrame(incomplete, 22050, channels, context_id=context_id)
+                    await service.append_to_audio_context(context_id, partial)
+                    self.assertEqual(partial.num_frames, 0)
+                    self.assertTrue(service._audio_context_manager._contexts[context_id].empty())
+                    deadline.reschedule.assert_not_called()
+
+                    completion = TTSAudioRawFrame(b"\x26", 22050, channels, context_id=context_id)
+                    await service.append_to_audio_context(context_id, completion)
+                    self.assertEqual(completion.num_frames, 1)
+                    queued = service._audio_context_manager._contexts[context_id].get_nowait()
+                    self.assertIs(queued, completion)
+                    self.assertEqual(queued.audio, incomplete + b"\x26")
+                    deadline.reschedule.assert_called_once()
+                finally:
+                    _RESPONSE_COMPLETION.reset(token)
+
+    async def test_provider_stall_after_pcm_without_eof_fails_without_discarding_received_audio(self):
+        service = await self.make(provider_idle_timeout_s=0.1)
+        stalled = await self.request(service)
+        pcm = b"\x23\x24" * 64
+        stalled.responses.put(pcm)
+        await self.until(service, lambda: self.audio(service) == pcm)
+        await self.until(service, lambda: bool(service.outcomes))
+        self.assertTrue(stalled.cancelled)
+        self.assertEqual(self.audio(service), pcm)
+        self.assertTrue(service.outcomes[0][1])
+        self.assertTrue(any(isinstance(frame.exception, TimeoutError) for frame in self.errors(service)))
+        fresh = await self.request(service)
+        fresh.responses.put(pcm)
+        fresh.responses.put(_EOF)
+        await self.until(service, lambda: len(service.outcomes) == 2)
+        self.assertEqual(self.audio(service), pcm * 2)
+
     async def test_empty_provider_responses_cannot_keep_a_zero_audio_stream_alive(self):
         service = await self.make(provider_idle_timeout_s=0.1)
         call = await self.request(service)
@@ -475,8 +524,8 @@ class ExplicitEOFContracts(unittest.IsolatedAsyncioTestCase):
 
     def test_candidate_refuses_other_versions_modes_and_idle_overrides(self):
         with (
-            patch("examples.shared.nvidia_tts_explicit_eof.version", return_value="1.13.0"),
-            self.assertRaisesRegex(RuntimeError, "exactly Pipecat 1.12.0"),
+            patch("examples.shared.nvidia_tts_explicit_eof.version", return_value="1.16.0"),
+            self.assertRaisesRegex(RuntimeError, "exactly Pipecat 1.15.0"),
         ):
             CandidateTTS()
         with self.assertRaisesRegex(ValueError, "stitched synthesis"):
@@ -485,7 +534,7 @@ class ExplicitEOFContracts(unittest.IsolatedAsyncioTestCase):
             CandidateTTS(stop_frame_timeout_s=20)
 
     def test_shared_options_validate_without_changing_service_inheritance_or_global_state(self):
-        self.assertEqual(EXPLICIT_EOF_COMPLETION_POLICY, "explicit_provider_eof_pipecat_1_12_compat")
+        self.assertEqual(EXPLICIT_EOF_COMPLETION_POLICY, "explicit_provider_eof_pipecat_1_15_compat")
         options = explicit_eof_tts_options("stitched")
         self.assertEqual(options, {"stop_frame_timeout_s": None})
         options.clear()
@@ -493,7 +542,7 @@ class ExplicitEOFContracts(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "stitched synthesis"):
             explicit_eof_tts_options("per_sentence")
         with (
-            patch("examples.shared.nvidia_tts_explicit_eof.version", return_value="1.12.1"),
-            self.assertRaisesRegex(RuntimeError, "exactly Pipecat 1.12.0"),
+            patch("examples.shared.nvidia_tts_explicit_eof.version", return_value="1.15.1"),
+            self.assertRaisesRegex(RuntimeError, "exactly Pipecat 1.15.0"),
         ):
             explicit_eof_tts_options("stitched")

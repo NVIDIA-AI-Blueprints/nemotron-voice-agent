@@ -14,7 +14,11 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_agent.airline.backend import BookingBackend
-from examples.frontend_backend_agent.airline.booking_tool import BookingTool
+from examples.frontend_backend_agent.airline.booking_tool import (
+    BookingTool,
+    booking_dropped_unverified,
+    booking_outcome_unknown,
+)
 from examples.frontend_backend_agent.airline.flight_search import flight_search
 from examples.frontend_backend_agent.airline.plan_parsing import (
     combine_parallel_payloads,
@@ -61,6 +65,7 @@ class ThinkerBackend:
         self._planner = planner
         self._tool_delay_seconds = tool_delay_seconds
         self._tool_delay_min_seconds = tool_delay_min_seconds
+        self._cancel_warning: dict[str, Any] | None = None
 
     async def call(
         self,
@@ -116,17 +121,34 @@ class ThinkerBackend:
         return True
 
     def cancel_pending_booking(self) -> bool:
-        """Clear pending search/booking context if one exists."""
+        """Clear pending search/booking context if one exists.
+
+        An unverified booking attempt is dropped too, so the caller is not stuck
+        reconfirming a booking that may never have reached the server. The next
+        ``cancellation_warning`` call reports that the outcome is unknown.
+        """
         has_pending_work = (
             bool(self.state.search_context)
             or bool(self.state.search_results)
             or self.state.booking_draft is not None
+            or self.state.booking_attempt is not None
             or self.state.waiting_for_preferences
             or self.state.waiting_for_confirmation
         )
+        if self.state.booking_attempt is not None:
+            self._cancel_warning = booking_dropped_unverified()
+            self.state.booking_attempt = None
         if has_pending_work:
             self.state.reset_search_and_booking()
         return has_pending_work
+
+    def cancellation_warning(self) -> dict[str, Any] | None:
+        """Return the pending warning for a booking dropped without a receipt."""
+        return self._cancel_warning
+
+    def acknowledge_cancellation_warning(self) -> None:
+        """Clear the warning after the caller has received it."""
+        self._cancel_warning = None
 
     async def _run_call(self, call_id: str, query: str, slots: dict[str, Any]) -> dict[str, Any]:
         """Dispatch the query to internal Thinker tools."""
@@ -232,6 +254,7 @@ class ThinkerBackend:
             return _tool_exception_hint(tool_call, exc)
 
     async def _dispatch_tool_call(self, slots: dict[str, Any], tool_call: dict[str, Any]) -> dict[str, Any]:
+        """Run one planned tool; block new searches while a submitted booking is unverified."""
         tool_name = str(tool_call.get("tool", "") or "").strip()
         planned_params = tool_call.get("params") if isinstance(tool_call.get("params"), dict) else {}
         planned_slots = {**slots, **planned_params}
@@ -240,6 +263,8 @@ class ThinkerBackend:
         if tool_name == "pnr_status":
             return await pnr_status(backend=self._backend, slots=planned_slots)
         if tool_name == "flight_search":
+            if self.state.booking_attempt is not None:
+                return booking_outcome_unknown()
             return await flight_search(state=self.state, backend=self._backend, slots=planned_slots)
         if tool_name == "response_hint":
             return self._planner_response_hint(tool_call)
@@ -251,7 +276,8 @@ class ThinkerBackend:
         )
 
     def _planner_state(self) -> dict[str, Any]:
-        draft = self.state.booking_draft
+        """Summarize session state for the planner, exposing an unverified attempt as pending confirmation."""
+        draft = self.state.booking_attempt or self.state.booking_draft
         return {
             "search_context": self.state.search_context,
             "search_results": self.state.search_results,
@@ -264,7 +290,7 @@ class ThinkerBackend:
             if draft
             else None,
             "waiting_for_preferences": self.state.waiting_for_preferences,
-            "waiting_for_confirmation": self.state.waiting_for_confirmation,
+            "waiting_for_confirmation": self.state.waiting_for_confirmation or self.state.booking_attempt is not None,
         }
 
     def _planner_response_hint(self, plan: dict[str, Any]) -> dict[str, Any]:

@@ -145,14 +145,14 @@ class NvidiaStreamingLLMService(NvidiaLLMService):
         if not isinstance(frame, StreamingLLMInputFrame):
             return
         try:
-            await self._sync_session(self._session_request_for(frame.context), frame.text)
+            await self._sync_session(await self._session_request_for(frame.context), frame.text)
         except Exception as e:
             logger.warning(f"{self}: streaming prefill failed, so the turn is sent at commit instead: {e}")
             await self._disconnect()
 
     async def get_chat_completions(self, context: LLMContext) -> AsyncIterator[ChatCompletionChunk]:
         """Commit the user turn on the session and stream back its chat completion chunks."""
-        request = self._session_request_for(context)
+        request = await self._session_request_for(context)
         text = ""
         last = request["messages"][-1] if request["messages"] else {}
         if last.get("role") == "user" and isinstance(last.get("content"), str):
@@ -177,10 +177,10 @@ class NvidiaStreamingLLMService(NvidiaLLMService):
         await self._disconnect()
         await super().cancel(frame)
 
-    def _session_request_for(self, context: LLMContext) -> dict:
+    async def _session_request_for(self, context: LLMContext) -> dict:
         """Build the chat completion request ``NvidiaLLMService`` would send for ``context``."""
         params = self.build_chat_completion_params(
-            self.get_llm_adapter().get_llm_invocation_params(
+            await self.get_llm_adapter().get_llm_invocation_params(
                 context,
                 system_instruction=assert_given(self._settings.system_instruction),
                 convert_developer_to_user=not self.supports_developer_role,

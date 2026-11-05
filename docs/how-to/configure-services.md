@@ -35,6 +35,11 @@ must resolve to a nonempty credential; otherwise session setup fails
 without falling back to another key. Session requests cannot select a credential
 variable through `api_key_env`.
 
+An NVIDIA Cloud variant does not inherit the self-hosted entry's `api_key_env`.
+Set `api_key_env` explicitly inside its `nvcf` block if that cloud endpoint needs
+a separate credential. Otherwise the cloud variant uses the normal
+`NVIDIA_API_KEY` behavior.
+
 With `api_key_env` configured, the resolved LLM URL must match the selected
 catalog's `base_url` or `streaming_url`, allowing a trailing slash. A mismatch
 fails before any provider is created.

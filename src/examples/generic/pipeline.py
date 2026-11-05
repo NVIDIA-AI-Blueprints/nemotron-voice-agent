@@ -51,7 +51,7 @@ from examples.shared.evaluation_trace import (
     create_evaluation_trace,
 )
 from examples.shared.llm_request_trace import LLMRequestTraceMixin
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
 from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
 from examples.shared.nvidia_tts_explicit_eof import (
@@ -67,6 +67,7 @@ from examples.shared.pipeline_utils import (
     create_transport,
     latency_metric_group,
     register_session_start_handlers,
+    turn_taking_latency_secs,
     with_realtime_observers,
 )
 from examples.shared.speaker import (
@@ -111,6 +112,7 @@ class AddressedEvaluationNvidiaLLMService(LLMRequestTraceMixin, AddressedNvidiaL
 
 GENERIC_INTRO_PROMPT = "Greet the user warmly, introduce yourself, and ask how you can help."
 MULTI_SPEAKER_INTRO_PROMPT = "Nemotron, greet the user warmly, introduce yourself, and ask how you can help."
+GENERIC_WEBSOCKET_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS = 60.0
 
 
 def session_intro_prompt(multi_speaker_support: bool) -> str:
@@ -126,7 +128,7 @@ def session_intro_prompt(multi_speaker_support: bool) -> str:
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
-    transport = create_transport(runner_args)
+    transport = await create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     evaluation_trace = create_evaluation_trace(body)
     evaluation_kwargs = {"evaluation_trace": evaluation_trace} if evaluation_trace else {}
@@ -275,7 +277,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
-        "text_filters": [NemotronSpeechTextFilter()],
+        "text_transforms": [("*", nemotron_speech_text_transform)],
         "custom_dictionary": custom_dictionary,
     }
     if tts_function_id or tts_model:
@@ -290,6 +292,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         # Match finite WebSocket processing: a live RPC completes through its
         # response EOF and drained audio queue, rather than an audio idle gap.
         tts_kwargs.update(explicit_eof_tts_options(tts_synthesis_mode))
+        tts_kwargs["provider_idle_timeout_s"] = GENERIC_WEBSOCKET_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS
         tts_context_completion_policy = EXPLICIT_EOF_COMPLETION_POLICY
     tts_service = EvaluationNvidiaTTSService if evaluation_trace else NvidiaTTSService
     if not evaluation_trace and tts_context_completion_policy == EXPLICIT_EOF_COMPLETION_POLICY:
@@ -304,7 +307,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"language={tts_language_code or '(pipecat default)'}, "
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
-        f"text_filters=[NemotronSpeechTextFilter], "
+        f"text_transforms=[nemotron_speech_text_transform], "
         f"context_completion_policy={tts_context_completion_policy}"
     )
 
@@ -422,8 +425,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(
                 data={
                     "type": "latency-breakdown",
-                    "vad_smart_turn": round(breakdown.user_turn_secs, 3)
-                    if breakdown.user_turn_secs is not None
+                    "turn_taking_latency": round(turn_taking_latency, 3)
+                    if (turn_taking_latency := turn_taking_latency_secs(breakdown)) is not None
                     else None,
                     "events": events,
                 }

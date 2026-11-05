@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import itertools
 import json
+import math
 import os
 import stat
 import tempfile
@@ -197,6 +198,57 @@ class EvaluationTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metrics[0]["metrics"][0]["value_ms"], 12.5)
         self.assertIn("inferred user speech end", document["timing_scopes"]["asr_ttfb"])
 
+    async def test_nonfinite_metric_and_nested_values_are_null_in_strict_json_without_mutating_frames(self):
+        """Preserve finite data while keeping nonfinite provider metrics out of JSON."""
+        values = [float("nan"), float("inf"), float("-inf"), 1e308]
+        metrics = [TTFBMetricsData(processor="native-llm", value=value) for value in values]
+        await self.push(MetricsFrame(data=metrics))
+        nested = {"values": [float("nan"), {"infinity": float("inf")}], "finite": 1.5}
+        self.trace.record("nested_numeric_metadata", data=nested)
+        self.trace.close()
+
+        def reject_constant(value):
+            raise ValueError(f"Invalid JSON numeric literal: {value}")
+
+        document = json.loads(self.trace.path.read_text(), parse_constant=reject_constant)
+        retained = next(event for event in document["events"] if event["event"] == "pipecat_metrics")["metrics"]
+        self.assertEqual([item["value"] for item in retained], [None, None, None, 1e308])
+        self.assertEqual([item["value_ms"] for item in retained], [None, None, None, None])
+        metadata = next(event for event in document["events"] if event["event"] == "nested_numeric_metadata")
+        self.assertEqual(metadata["data"], {"values": [None, {"infinity": None}], "finite": 1.5})
+        self.assertTrue(math.isnan(metrics[0].value))
+        self.assertEqual([metric.value for metric in metrics[1:]], values[1:])
+        self.assertTrue(math.isnan(nested["values"][0]))
+        self.assertEqual(self.trace._observation_errors, 0)
+
+    async def test_concurrent_llm_start_observations_preserve_both_request_indices(self):
+        """Expose a lost increment if request-start writers bypass the reader lock."""
+        rendezvous = threading.Barrier(2)
+        trace = self.trace
+
+        class YieldingCounter(int):
+            def __add__(self, other):
+                # Force unprotected read/modify/write operations to overlap.
+                # A protected writer cannot rendezvous with another writer.
+                if not trace._lock._is_owned():
+                    rendezvous.wait(timeout=1)
+                return int(self) + other
+
+        trace._llm_request_index = YieldingCounter(0)
+        workers = [
+            threading.Thread(target=lambda: asyncio.run(self.push(LLMFullResponseStartFrame()))) for _ in range(2)
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            await asyncio.to_thread(worker.join, 2)
+            self.assertFalse(worker.is_alive())
+        document = self.saved()
+        starts = [event for event in document["events"] if event["event"] == "LLMFullResponseStartFrame"]
+        self.assertEqual(trace._llm_request_index, 2)
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(document["observation_errors"], 0)
+
     async def test_post_write_audio_is_separate_from_first_frame_observation(self):
         """Observe the transport's second push once without losing its sent edge."""
         frame = OutputAudioRawFrame(audio=b"\0" * 320, sample_rate=16000, num_channels=1)
@@ -257,7 +309,7 @@ class EvaluationTraceTests(unittest.IsolatedAsyncioTestCase):
     async def test_tts_text_first_observation_and_native_output_delivery_are_separate(self):
         """Queued sentence text must not be mistaken for LLM tokens or output delivery."""
         await self.push(LLMTextFrame(text="Hello"))
-        frame = TTSTextFrame(text="Hello there.", aggregated_by="sentence", context_id="context-one")
+        frame = TTSTextFrame(text="Hello there.", text_type="sentence", context_id="context-one")
         await self.push(frame)
         output = MagicMock(spec=BaseOutputTransport)
         await self.push(frame, source=output)
@@ -535,8 +587,11 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
         """The observation adapter must not break Pipecat's iterator identity guard."""
         service = EvaluationNvidiaSTTService(evaluation_trace=self.trace, use_ssl=False)
         service._sample_rate = 16000
-        service._config = service._create_recognition_config()
-        self.asr_client(service)
+        config = service._create_recognition_config()
+        # A replacement stream can already have installed another config; the
+        # running worker must retain the snapshot supplied by its native owner.
+        service._config = object()
+        requests = self.asr_client(service)
 
         class Iterator:
             closed = False
@@ -556,9 +611,11 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(service, "get_event_loop", return_value=asyncio.get_running_loop()),
             patch.object(service, "_request_reconnect", reconnect),
         ):
-            await asyncio.to_thread(service._response_handler, iterator)
+            await asyncio.to_thread(service._response_handler, iterator, config)
             await asyncio.wait_for(reconnect_completed.wait(), timeout=2)
         reconnect.assert_awaited_once_with()
+        self.assertEqual(requests[0].streaming_config, config)
+        self.assertIs(service._audio_iterator, iterator)
 
     async def test_asr_response_callback_and_worker_delegate_without_reinterpretation(self):
         """Observe original result objects and preserve the parent's worker return."""
@@ -570,14 +627,17 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
         )
-        parent = AsyncMock()
-        with patch.object(NvidiaSTTService, "_handle_response", parent):
-            await service._handle_response(response)
-        parent.assert_awaited_once_with(response)
+        for speaker_diarization in (False, True):
+            with self.subTest(speaker_diarization=speaker_diarization):
+                parent = AsyncMock()
+                with patch.object(NvidiaSTTService, "_handle_response", parent):
+                    await service._handle_response(response, speaker_diarization=speaker_diarization)
+                parent.assert_awaited_once_with(response, speaker_diarization=speaker_diarization)
         iterator = SimpleNamespace(closed=False)
+        config = object()
         with patch.object(NvidiaSTTService, "_response_handler", return_value="parent-result") as worker:
-            self.assertEqual(service._response_handler(iterator), "parent-result")
-        worker.assert_called_once_with(iterator)
+            self.assertEqual(service._response_handler(iterator, config), "parent-result")
+        worker.assert_called_once_with(iterator, config)
         events = self.events()
         self.assertEqual(
             next(event for event in events if event["event"] == "asr_provider_result")["results"][0]["transcript"],

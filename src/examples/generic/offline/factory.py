@@ -19,7 +19,7 @@ from pipecat.services.nvidia.llm import NvidiaLLMSettings
 from pipecat.services.nvidia.tts import NvidiaTTSSettings, NvidiaTTSSynthesisMode
 
 from examples.shared.evaluation_trace import _observe, create_evaluation_trace
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
 from examples.shared.nvidia_tts_explicit_eof import (
     EXPLICIT_EOF_COMPLETION_POLICY,
@@ -218,7 +218,7 @@ class GenericOfflineRuntime:
 
 def build_runtime(config: dict, *, diagnostics=None) -> GenericOfflineRuntime:
     """Use the same generic prompt, service entries, text filter, and tool schemas."""
-    from examples.generic.tool_handlers import TOOL_HANDLERS
+    from examples.generic.tools import TOOL_HANDLERS
 
     from .diagnostics import current_diagnostics
     from .incremental import IncrementalSessionEngine
@@ -358,7 +358,7 @@ def build_runtime(config: dict, *, diagnostics=None) -> GenericOfflineRuntime:
                 language=settings["tts_language_code"],
                 synthesis_mode=synthesis_mode,
             ),
-            text_filters=[NemotronSpeechTextFilter()],
+            text_transforms=[("*", nemotron_speech_text_transform)],
             custom_dictionary=settings["custom_dictionary"],
             **explicit_eof_tts_options(synthesis_mode),
             provider_idle_timeout_s=OFFLINE_TTS_PROVIDER_IDLE_TIMEOUT_SECONDS,

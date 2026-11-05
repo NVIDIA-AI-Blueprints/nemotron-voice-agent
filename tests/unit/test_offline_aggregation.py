@@ -6,6 +6,7 @@
 import asyncio
 import copy
 import unittest
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -21,6 +22,7 @@ from pipecat.frames.frames import (
     STTMetadataFrame,
     TranscriptionFrame,
     TTSTextFrame,
+    UserTurnResponseCancelFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -31,8 +33,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
+from pipecat.turns.types import UserTurnResumedParams
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.turns.user_turn_strategies import StrategyMode, UserTurnStrategies, UserTurnStrategiesParams
 from pipecat.utils.asyncio.task_manager import TaskManager
 
 from examples.generic.offline.aggregation import (
@@ -197,6 +200,52 @@ class OfflineAggregationTests(unittest.IsolatedAsyncioTestCase):
         watchdogs = [event for event in adapter.events if event["type"] == "user_turn_stop_timeout"]
         self.assertEqual(watchdogs, [{"type": "user_turn_stop_timeout", "sample": 32512}])
 
+    async def test_watchdog_waits_for_native_scheduled_strategy_decision(self):
+        """The sample-clock wait preserves the native1.15 scheduled-decision guard."""
+        adapter = await self.make(watchdog=2)
+        await adapter.feed(ChunkPositionedFrame(512, interim("uncommitted")))
+        strategy = adapter._aggregator._user_turn_controller.user_turn_strategies.stop[0]
+        with patch.object(type(strategy), "decision_scheduled", new_callable=PropertyMock, return_value=True):
+            await adapter.advance_to(512 + 2 * RATE)
+        self.assertFalse(any(event["type"] == "user_turn_stop_timeout" for event in adapter.events))
+        await adapter.advance_to(512 + 4 * RATE)
+        self.assertEqual(
+            [event for event in adapter.events if event["type"] == "user_turn_stop_timeout"],
+            [{"type": "user_turn_stop_timeout", "sample": 64512}],
+        )
+
+    async def test_native_resume_event_keeps_response_cancel_and_interruption_handlers(self):
+        """The injected controller retains both upstream resume cancellation paths."""
+        for interrupting in (False, True):
+            with self.subTest(interrupting=interrupting):
+                adapter = await self.make()
+                await adapter.start()
+                aggregator = adapter._aggregator
+                with (
+                    patch.object(
+                        aggregator, "broadcast_frame", AsyncMock(wraps=aggregator.broadcast_frame)
+                    ) as broadcast,
+                    patch.object(
+                        aggregator, "broadcast_interruption", AsyncMock(wraps=aggregator.broadcast_interruption)
+                    ) as interruption,
+                ):
+                    await aggregator._user_turn_controller._call_event_handler(
+                        "on_user_turn_resumed",
+                        UserTurnResumedParams(enable_interruptions=interrupting, inference_triggered=True),
+                    )
+                if interrupting:
+                    interruption.assert_awaited_once()
+                else:
+                    broadcast.assert_awaited_once_with(UserTurnResponseCancelFrame)
+
+    async def test_strategy_combination_params_survive_controller_injection(self):
+        selected = UserTurnStrategiesParams(start_mode=StrategyMode.ALL, stop_mode=StrategyMode.FIRST)
+        configuration = params()
+        configuration.user_turn_strategies_params = selected
+        adapter = SharedUserAggregation(params=configuration)
+        self.addAsyncCleanup(adapter.close)
+        self.assertIs(adapter._aggregator._user_turn_controller._user_turn_strategies_params, selected)
+
     async def test_eof_flushes_pending_final_once_and_cleanup_cancels_deadlines(self):
         adapter = await self.make(0.6)
         await adapter.feed(ChunkPositionedFrame(512, final("At EOF")))
@@ -329,7 +378,7 @@ class OfflineAssistantAggregationTests(unittest.IsolatedAsyncioTestCase):
     async def test_completed_response_commits_at_output_ordered_response_end(self):
         adapter, clock, context = await self.make()
         await self.deliver(adapter, clock, 512, LLMFullResponseStartFrame())
-        await self.deliver(adapter, clock, 1024, TTSTextFrame(text="The answer is four.", aggregated_by="sentence"))
+        await self.deliver(adapter, clock, 1024, TTSTextFrame(text="The answer is four.", text_type="sentence"))
         self.assertEqual(context.get_messages(), [{"role": "user", "content": "Question"}])
         await self.deliver(adapter, clock, 4096, LLMFullResponseEndFrame())
         self.assertEqual(context.get_messages()[-1], {"role": "assistant", "content": "The answer is four."})
@@ -347,8 +396,8 @@ class OfflineAssistantAggregationTests(unittest.IsolatedAsyncioTestCase):
     async def test_interruption_commits_delivered_text_once_without_unreleased_remainder(self):
         adapter, clock, context = await self.make()
         await self.deliver(adapter, clock, 512, LLMFullResponseStartFrame())
-        await self.deliver(adapter, clock, 1024, TTSTextFrame(text="The", aggregated_by="word"))
-        await self.deliver(adapter, clock, 1536, TTSTextFrame(text="answer", aggregated_by="word"))
+        await self.deliver(adapter, clock, 1024, TTSTextFrame(text="The", text_type="word"))
+        await self.deliver(adapter, clock, 1536, TTSTextFrame(text="answer", text_type="word"))
         await self.deliver(adapter, clock, 2048, InterruptionFrame())
         await self.deliver(adapter, clock, 2560, LLMFullResponseEndFrame())
         self.assertEqual(context.get_messages()[-1], {"role": "assistant", "content": "The answer"})
@@ -379,12 +428,12 @@ class OfflineAssistantAggregationTests(unittest.IsolatedAsyncioTestCase):
         frames = [
             LLMFullResponseStartFrame(),
             BotStartedSpeakingFrame(),
-            TTSTextFrame(text="First", aggregated_by="word"),
-            TTSTextFrame(text="answer", aggregated_by="word"),
+            TTSTextFrame(text="First", text_type="word"),
+            TTSTextFrame(text="answer", text_type="word"),
             InterruptionFrame(),
             BotStoppedSpeakingFrame(),
             LLMFullResponseStartFrame(),
-            TTSTextFrame(text="Next answer.", aggregated_by="sentence"),
+            TTSTextFrame(text="Next answer.", text_type="sentence"),
             LLMFullResponseEndFrame(),
         ]
         for index, frame in enumerate(frames, 1):

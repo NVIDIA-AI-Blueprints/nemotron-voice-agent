@@ -3,9 +3,9 @@
 
 """Pinned options for explicit-EOF NVIDIA stitched TTS context completion.
 
-This compatibility adapter is deliberately limited to Pipecat 1.12.0. That
-version forwards ``stop_frame_timeout_s=None`` to ``asyncio.wait_for``, which
-waits for an actual queue item without an idle deadline. Pipecat does not
+This compatibility adapter is deliberately limited to Pipecat 1.15.0. Its
+AudioContextManager forwards ``stop_frame_timeout_s=None`` to
+``asyncio.wait_for``, which waits for an actual queue item without an idle deadline. Pipecat does not
 document ``None`` for this constructor argument; the behavior must become an
 upstream contract before this adapter can be considered generally supported.
 
@@ -13,9 +13,10 @@ Native NVIDIA request generation, RPC responses, queue serialization, empty
 result errors, interruption and cleanup are inherited unchanged. Generic
 Assistant's live and offline WebSocket compositions select this policy for
 stitched synthesis. Offline response completion waits for worker EOF and native
-audio-context drain under its execution watchdog. The response consumer also has
-a 600-second provider-inactivity failure bound,
-refreshed by actual provider audio. It fails stalled work, not conversational
+audio-context drain under its execution watchdog. The response consumer has a
+shared default 600-second provider-inactivity failure bound, which callers can
+override. It is refreshed by queued whole PCM samples after native alignment.
+It fails stalled work, not conversational
 silence, and closes terminal-error contexts so later requests can drain.
 WebRTC and per-sentence synthesis retain their existing policy.
 """
@@ -29,8 +30,8 @@ from importlib.metadata import version
 from pipecat.frames.frames import ErrorFrame, TTSAudioRawFrame
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings, NvidiaTTSSynthesisMode
 
-PINNED_PIPECAT_VERSION = "1.12.0"
-EXPLICIT_EOF_COMPLETION_POLICY = "explicit_provider_eof_pipecat_1_12_compat"
+PINNED_PIPECAT_VERSION = "1.15.0"
+EXPLICIT_EOF_COMPLETION_POLICY = "explicit_provider_eof_pipecat_1_15_compat"
 TTS_PROVIDER_IDLE_TIMEOUT_SECONDS = 600.0
 
 
@@ -53,7 +54,7 @@ def explicit_eof_tts_options(synthesis_mode: str | NvidiaTTSSynthesisMode) -> di
     their existing inheritance and all native provider/queue operations.
     """
     if version("pipecat-ai") != PINNED_PIPECAT_VERSION:
-        raise RuntimeError("Explicit EOF TTS candidate requires exactly Pipecat 1.12.0")
+        raise RuntimeError("Explicit EOF TTS candidate requires exactly Pipecat 1.15.0")
     if synthesis_mode != NvidiaTTSSynthesisMode.STITCHED:
         raise ValueError("Explicit EOF TTS candidate requires stitched synthesis")
     return {"stop_frame_timeout_s": None}
@@ -86,7 +87,7 @@ class ExplicitEOFCompletionMixin:
         super().__init__(*args, **kwargs)
 
     async def append_to_audio_context(self, context_id, frame):
-        """Refresh provider activity only after this response appends nonempty PCM."""
+        """Refresh activity after native alignment appends at least one PCM sample."""
         scope = _RESPONSE_COMPLETION.get()
         result = await super().append_to_audio_context(context_id, frame)
         if (
@@ -94,7 +95,7 @@ class ExplicitEOFCompletionMixin:
             and scope.owner is self
             and scope.context_id == context_id
             and isinstance(frame, TTSAudioRawFrame)
-            and bool(frame.audio)
+            and frame.num_frames > 0
             and not scope.closure_requested
             and self.audio_context_available(context_id)
             and not scope.deadline.expired()
@@ -143,7 +144,7 @@ class ExplicitEOFCompletionMixin:
             raise
         finally:
             try:
-                # Pipecat1.12 closes on EOF, but not on its terminal exception
+                # Pipecat1.15 closes on EOF, but not on its terminal exception
                 # branch. Complete that exact old context without touching a new
                 # active stream, and never enqueue duplicate EOF sentinels.
                 if (

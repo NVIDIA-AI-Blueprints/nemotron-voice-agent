@@ -157,7 +157,7 @@ class ControlledResponses:
         number = len(self.contexts)
         frames = [
             (0, LLMFullResponseStartFrame()),
-            (50, TTSTextFrame(text=f"Answer {number}.", aggregated_by="sentence", context_id=generation_id)),
+            (50, TTSTextFrame(text=f"Answer {number}.", text_type="sentence", context_id=generation_id)),
             (
                 100,
                 TTSAudioRawFrame(audio=b"\x01\x02" * 640, sample_rate=16000, num_channels=1, context_id=generation_id),
@@ -330,7 +330,7 @@ class IncrementalEngineTests(unittest.IsolatedAsyncioTestCase):
         await input_frame(TranscriptionFrame("First question", "", "", finalized=True))
         await input_frame(VADUserStoppedSpeakingFrame(stop_secs=0.5))
         await assistant.queue_frame(LLMFullResponseStartFrame())
-        await assistant.queue_frame(TTSTextFrame("Answer 1.", aggregated_by="sentence"))
+        await assistant.queue_frame(TTSTextFrame("Answer 1.", text_type="sentence"))
         await assistant.queue_frame(BotStartedSpeakingFrame())
         await input_frame(BotStartedSpeakingFrame())
         await input_frame(VADUserStartedSpeakingFrame(start_secs=0.2))
@@ -339,7 +339,7 @@ class IncrementalEngineTests(unittest.IsolatedAsyncioTestCase):
         await input_frame(TranscriptionFrame("Second question", "", "", finalized=True))
         await input_frame(VADUserStoppedSpeakingFrame(stop_secs=0.5))
         await assistant.queue_frame(LLMFullResponseStartFrame())
-        await assistant.queue_frame(TTSTextFrame("Answer 2.", aggregated_by="sentence"))
+        await assistant.queue_frame(TTSTextFrame("Answer 2.", text_type="sentence"))
         await assistant.queue_frame(LLMFullResponseEndFrame())
         self.assertEqual(responder.contexts, user.contexts)
         self.assertEqual(list(result.messages), context.get_messages())

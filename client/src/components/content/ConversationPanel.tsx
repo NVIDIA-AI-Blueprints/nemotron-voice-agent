@@ -120,7 +120,8 @@ function attachmentNameFromMessage(message: Record<string, unknown>) {
 
 function AgentTaskCard({ task }: Readonly<{ task: AgentTask }>) {
   const status = task.status || task.stage || "running";
-  const statusTone = status === "done" ? "done" : status === "failed" || status === "error" ? "failed" : "running";
+  const statusTone =
+    status === "done" || status === "cancelled" ? "done" : status === "failed" || status === "error" ? "failed" : "running";
   return (
     <li className={`agent-task-card agent-task-card-${statusTone}`}>
       <details open={task.status !== "done"}>

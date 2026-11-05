@@ -79,3 +79,10 @@ CREATE TABLE IF NOT EXISTS confirmation_codes (
     action     TEXT NOT NULL,
     issued_at  TEXT NOT NULL
 );
+
+-- Replay the original create response without repeating any booking side effects.
+CREATE TABLE IF NOT EXISTS booking_requests (
+    idempotency_key TEXT PRIMARY KEY,
+    request_json    TEXT NOT NULL,
+    response_json   TEXT
+);

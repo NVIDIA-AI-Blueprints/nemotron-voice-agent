@@ -117,6 +117,8 @@ class _MagpieWordCommitSequencer(AggregatedFrameSequencer):
 
     def force_complete(self, context_id: str, last_word_pts: int) -> list[Frame]:
         """Finish a context's slots without committing unspoken remainder."""
+        if self._streaming:
+            super()._discard_buffered_words(context_id)
         for slot in self._slots:
             if slot.spoken and not slot.complete and slot.context_id == context_id:
                 slot.complete = True
