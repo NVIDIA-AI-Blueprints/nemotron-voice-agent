@@ -21,6 +21,7 @@ from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
+from pipecat.turns.user_start import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import (
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
@@ -237,9 +238,9 @@ def register_session_start_handlers(
             await _maybe_start_session("rtvi-client-ready+pipeline-started")
 
 
-def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
+def build_user_aggregator_params(welcome_enabled: bool, *, vad_only: bool = False) -> LLMUserAggregatorParams:
     """Return user-turn configuration, defaulting to Pipecat smart turn."""
-    if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
+    if not vad_only and not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             user_mute_strategies=build_user_mute_strategies(welcome_enabled),
@@ -247,12 +248,13 @@ def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorPara
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
+    strategies = UserTurnStrategies(stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)])
+    if vad_only:
+        strategies.start = [VADUserTurnStartStrategy()]
     return LLMUserAggregatorParams(
-        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(start_secs=0.1 if vad_only else 0.2, stop_secs=stop_secs)),
         user_mute_strategies=build_user_mute_strategies(welcome_enabled),
-        user_turn_strategies=UserTurnStrategies(
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
-        ),
+        user_turn_strategies=strategies,
     )
 
 

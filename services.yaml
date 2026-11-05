@@ -80,6 +80,14 @@ server:
       settings: magpie-tts
       language_code: en-US
   asr:
+    nemotron-transcribe:
+      name: Nemotron 3.5 Transcribe
+      asr_type: transcribe
+      # Set transcription_prompt to an official template from docs/how-to/configure-asr.md.
+      server: http://nemotron-transcribe:9000/v1
+      model: nvidia-nemotron-3p5-transcribe
+      language_code: en-US
+      speaker_diarization_supported: false
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
       server: "nemotron-asr-streaming-english:50052"

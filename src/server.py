@@ -427,8 +427,11 @@ def _service_starting_message(label: str) -> str:
     return f"Selected {label} service is still starting. Wait for it to become ready, then try again."
 
 
-def _local_speech_ready_url(label: str, server: str) -> str:
+def _local_speech_ready_url(label: str, server: str, asr_type: str = "") -> str:
     """Return the NIM HTTP readiness URL for built-in local ASR/TTS endpoints."""
+    if label.lower() == "asr" and asr_type == "transcribe":
+        parsed = urlparse(server)
+        return f"{parsed.scheme}://{parsed.netloc}{_NIM_READY_PATH}"
     host, port = _service_host_port(server)
     normalized_host = host.strip("[]").lower()
     for service, ports in LOCAL_SPEECH_PORTS.get(label.lower(), {}).items():
@@ -470,11 +473,17 @@ def _unreachable_status(host: str, exc: BaseException) -> ServiceStatus:
     return "starting"
 
 
-def _probe_http(health_url: str, expects_ready_json: bool, timeout: float) -> ServiceStatus:
-    """Probe a health URL; see ``_unreachable_status`` for when a failure means offline."""
+def _probe_http(
+    health_url: str, expects_ready_json: bool, timeout: float, *, fallback_server: str = ""
+) -> ServiceStatus:
+    """Probe readiness and fall back to TCP when an HTTP ASR health route is missing."""
     try:
         with urllib.request.urlopen(health_url, timeout=timeout) as response:
             body = response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404 and fallback_server:
+            return _probe_tcp(fallback_server, timeout)
+        return "starting"
     except urllib.error.URLError as exc:
         return _unreachable_status(urlparse(health_url).hostname or "", exc.reason)
     except (OSError, http.client.HTTPException):
@@ -524,29 +533,43 @@ def _raise_unless_ready(label: str, target: str, status: ServiceStatus) -> None:
         )
 
 
-def _check_http_health(label: str, target: str, health_url: str, expects_ready_json: bool = False) -> None:
-    status = _remembered_status(health_url, _probe_http(health_url, expects_ready_json, _CONNECT_HEALTH_TIMEOUT_SECS))
+def _check_http_health(
+    label: str, target: str, health_url: str, expects_ready_json: bool = False, asr_type: str = ""
+) -> None:
+    fallback_server = target if label.lower() == "asr" and asr_type == "transcribe" else ""
+    status = _remembered_status(
+        health_url,
+        _probe_http(health_url, expects_ready_json, _CONNECT_HEALTH_TIMEOUT_SECS, fallback_server=fallback_server),
+    )
     if status != "ready":
         logger.warning(f"{label} health check for {target} via {health_url}: {status}")
     _raise_unless_ready(label, target, status)
 
 
-def _status_probe(slot: str, entry: dict) -> tuple[str, bool] | None:
-    """Return ``(target, expects_ready_json)`` for a self-hosted entry; targets without a scheme use TCP."""
+def _status_probe(slot: str, entry: dict) -> tuple[str, bool | None] | tuple[str, bool, str] | None:
+    """Return the target, HTTP response format (None for TCP), and optional Transcribe fallback."""
     if entry.get("source") != SELF_HOSTED_SOURCE:
         return None
     if base_url := entry.get("base_url"):
         health_url = _llm_health_url(str(base_url))
         return (health_url, False) if health_url else None
     if server := entry.get("server"):
-        ready_url = _local_speech_ready_url(slot, str(server))
-        return (ready_url, True) if ready_url else (str(server), False)
+        server = str(server)
+        asr_type = entry.get("asr_type", "")
+        ready_url = _local_speech_ready_url(slot, server, asr_type)
+        if slot == "asr" and asr_type == "transcribe":
+            return ready_url, True, server
+        return (ready_url, True) if ready_url else (server, None)
     return None
 
 
-def _probe_status(target: str, expects_ready_json: bool) -> ServiceStatus:
+def _probe_status(target: str, expects_ready_json: bool | None, fallback_server: str = "") -> ServiceStatus:
     timeout = _STATUS_PROBE_TIMEOUT_SECS
-    status = _probe_http(target, expects_ready_json, timeout) if "://" in target else _probe_tcp(target, timeout)
+    status = (
+        _probe_http(target, expects_ready_json, timeout, fallback_server=fallback_server)
+        if expects_ready_json is not None
+        else _probe_tcp(target, timeout)
+    )
     return _remembered_status(target, status)
 
 
@@ -577,6 +600,7 @@ async def _run_http_readiness_check(
     target: str,
     health_url: str,
     expects_ready_json: bool = False,
+    asr_type: str = "",
 ) -> None:
     try:
         await _run_blocking(
@@ -585,6 +609,7 @@ async def _run_http_readiness_check(
             target,
             health_url,
             expects_ready_json,
+            asr_type,
             timeout=_CONNECT_HEALTH_TIMEOUT_SECS + 1,
         )
     except TimeoutError as exc:
@@ -611,10 +636,14 @@ async def _ensure_asr_ready_for_connection(config: dict, example: dict) -> None:
     if "asr" not in example["services"]:
         return
 
+    asr_entry = (
+        load_service_entry_by_id("asr", config["asr_id"]) if config.get("asr_id") else load_service_entry("asr", "")
+    )
+    asr_type = asr_entry.get("asr_type", "")
     asr_server = config.get("asr_server", "") or _get_default_asr_selection()
-    ready_url = _local_speech_ready_url("ASR", asr_server)
+    ready_url = _local_speech_ready_url("ASR", asr_server, asr_type)
     if ready_url:
-        await _run_http_readiness_check("ASR", asr_server, ready_url, expects_ready_json=True)
+        await _run_http_readiness_check("ASR", asr_server, ready_url, expects_ready_json=True, asr_type=asr_type)
         return
 
     try:

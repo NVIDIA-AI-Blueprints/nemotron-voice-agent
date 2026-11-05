@@ -52,6 +52,7 @@ include:
   - path: docker/docker-compose.nemotron35-bolt-e4b.yaml
   - path: docker/docker-compose.nemotron3-omni-nim.yaml
   - path: docker/docker-compose.nemotron-asr.yaml
+  - path: docker/docker-compose.nemotron-transcribe.yaml
   - path: docker/docker-compose.parakeet-asr.yaml
   - path: docker/docker-compose.magpie-tts.yaml
   - path: docker/docker-compose.chatterbox-tts.yaml
