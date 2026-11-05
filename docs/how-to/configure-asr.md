@@ -1,6 +1,6 @@
 # ASR Models
 
-The cascaded pipeline transcribes user speech with a streaming **ASR** service. (The **Omni** examples handle ASR using the Omni model itself. See [LLM Models](configure-llm.md).) The ASR models are NVIDIA **Parakeet / Nemotron** speech models, served from the cloud (NVIDIA-hosted NVCF endpoints) or self-hosted next to the pipeline as an [**NVIDIA NIM for Speech**](https://docs.nvidia.com/nim/speech/latest/asr/index.html) sidecar.
+The cascaded pipeline transcribes user speech with an **ASR** service. (The **Omni** examples handle ASR using the Omni model itself. See [LLM Models](configure-llm.md).) The ASR models are NVIDIA **Parakeet / Nemotron** speech models, served from the cloud (NVIDIA-hosted NVCF endpoints) or self-hosted next to the pipeline as an [**NVIDIA NIM for Speech**](https://docs.nvidia.com/nim/speech/latest/asr/index.html) sidecar.
 
 ASR services are declared in the root [`services.yaml`](../../services.yaml), and each example lists the keys it offers in [`examples_registry.yaml`](../../examples_registry.yaml). This page is the **model reference**: what's available, how to size it, how to customize speech recognition, and known failure modes. For how the catalog is loaded, switched in the UI, and overridden, see [Configure Services](configure-services.md).
 
@@ -12,6 +12,7 @@ ASR services are declared in the root [`services.yaml`](../../services.yaml), an
 | **Nemotron ASR Streaming (Multilingual)**: cache-aware streaming multilingual ASR covering 40 language locales | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
 | **Parakeet CTC 1.1B**: English-only ASR, self-hosted only | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
 | **Parakeet 1.1B RNNT Multilingual**: multilingual ASR (25+ languages)  | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) |
+| **Nemotron 3.5 Transcribe**: whole-turn ASR in Generic Assistant, self-hosted only | [`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml) | [NGC container catalog](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/nemotron-transcribe) |
 
 Each model is exposed as a **catalog key** in `services.yaml`:
 
@@ -21,8 +22,29 @@ Each model is exposed as a **catalog key** in `services.yaml`:
 | Nemotron ASR Streaming (Multilingual) | `nemotron-asr-streaming-multilingual` |
 | Parakeet CTC 1.1B | `parakeet-ctc` (self-hosted only) |
 | Parakeet 1.1B RNNT Multilingual | `parakeet-rnnt` |
+| Nemotron 3.5 Transcribe | `nemotron-transcribe` (self-hosted only) |
 
 > The active default per slot is the first available key under the example's `services` in [`examples_registry.yaml`](../../examples_registry.yaml).
+
+### Transcribe ASR
+
+Use the optional `transcribe-asr` profile with Generic Assistant's server recipe:
+
+```bash
+docker compose --profile generic-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-english=0
+```
+
+The sidecar uses GPU `1` and exposes `http://localhost:9002/v1`. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting.
+
+For an external NIM, set `server.asr.nemotron-transcribe.server` to its HTTP API URL, including `/v1`. Keep `asr_type: transcribe` on the entry to select the Transcribe integration. Entries without this field use streaming ASR. The entry's `language_code` sets the transcription language.
+
+Optionally set `transcription_prompt` to the text of an official NIM transcription template. Leave it unset for standard transcription. Transcribe produces final transcripts without speaker labels.
+
+Stop the app and sidecar with the same profiles:
+
+```bash
+docker compose --profile generic-assistant/server --profile transcribe-asr down
+```
 
 ### Choosing a multilingual ASR model
 

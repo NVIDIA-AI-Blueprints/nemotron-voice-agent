@@ -5,19 +5,82 @@
 
 import asyncio
 import json
+import os
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from pipecat.evals.fastapi_transport import EvalFastAPIWebsocketTransport
 from pipecat.frames.frames import InterruptionFrame, OutputTransportMessageFrame
 from pipecat.runner.types import WebSocketRunnerArguments
+from pipecat.turns.user_start import VADUserTurnStartStrategy
 
+from examples.generic import pipeline as generic_pipeline
 from examples.shared.pipeline_utils import (
     WebClientFrameSerializer,
+    build_user_aggregator_params,
     create_transport,
     latency_metric_group,
     turn_taking_latency_secs,
 )
+
+
+class GenericASRSelectionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_catalog_type_selects_stt_and_vad_independently_of_http_url(self):
+        transcribe = {"asr_type": "transcribe"}
+        for asr_id, default, selected, expected in (
+            ("self-hosted:transcribe", {}, transcribe, True),
+            ("", transcribe, {}, True),
+            ("self-hosted:streaming", transcribe, {}, False),
+            ("", {}, {}, False),
+        ):
+            body = {"asr_server": "http://speech.invalid:9000/v1", "asr_model": "test-asr", "asr_id": asr_id}
+            with (
+                self.subTest(asr_id=asr_id, default=default, selected=selected),
+                patch.object(generic_pipeline, "create_transport", new_callable=AsyncMock),
+                patch.object(generic_pipeline, "resolve_prompt", return_value=("test", "test prompt")),
+                patch.object(generic_pipeline, "load_prompt_catalog", return_value={}),
+                patch.object(
+                    generic_pipeline,
+                    "load_service_entry",
+                    side_effect=lambda slot, _, default=default: default if slot == "asr" else {},
+                ),
+                patch.object(generic_pipeline, "load_service_entry_by_id", return_value=selected) as lookup,
+                patch.object(generic_pipeline, "nvidia_api_key", return_value=""),
+                patch.object(generic_pipeline, "NvidiaSTTService") as streaming_stt,
+                patch.object(generic_pipeline, "OpenAISTTService") as transcribe_stt,
+                patch.object(generic_pipeline, "NvidiaLLMService"),
+                patch.object(generic_pipeline, "NvidiaTTSService"),
+                patch.object(generic_pipeline, "build_tools_schema", return_value=(None, [])),
+                patch.object(
+                    generic_pipeline, "build_user_aggregator_params", side_effect=RuntimeError("params built")
+                ) as params,
+                self.assertRaisesRegex(RuntimeError, "params built"),
+            ):
+                await generic_pipeline.bot(SimpleNamespace(body=body))
+            self.assertEqual(transcribe_stt.call_count, int(expected))
+            self.assertEqual(streaming_stt.call_count, int(not expected))
+            params.assert_called_once_with(True, vad_only=expected)
+            if asr_id:
+                lookup.assert_called_once_with("asr", asr_id)
+            else:
+                lookup.assert_not_called()
+
+
+class UserAggregatorParamsTest(unittest.TestCase):
+    def test_vad_only_defaults_and_override_preserve_streaming_settings(self):
+        for override, vad_mode, expected, streaming_stop in (("", "false", 0.5, 0.2), ("0.8", "true", 0.8, 0.8)):
+            with (
+                self.subTest(override=override),
+                patch.dict(os.environ, {"SILERO_VAD_STOP_SECS": override, "USE_SILERO_VAD_TURN_DETECTION": vad_mode}),
+            ):
+                params = build_user_aggregator_params(False, vad_only=True)
+                streaming = build_user_aggregator_params(False)
+                self.assertEqual(params.vad_analyzer.params.start_secs, 0.1)
+                self.assertEqual(params.vad_analyzer.params.stop_secs, expected)
+                self.assertIsInstance(params.user_turn_strategies.start[0], VADUserTurnStartStrategy)
+                self.assertEqual(streaming.vad_analyzer.params.start_secs, 0.2)
+                self.assertEqual(streaming.vad_analyzer.params.stop_secs, streaming_stop)
 
 
 def _breakdown(**overrides):

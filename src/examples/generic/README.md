@@ -68,6 +68,10 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
 
 To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.
 
+## Transcribe ASR
+
+Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting. The catalog entry's `asr_type: transcribe` field selects this integration. Refer to [Transcribe ASR](../../../docs/how-to/configure-asr.md#transcribe-asr) for deployment, configuration, and known limits.
+
 ## Customization
 
 | Path | Role |

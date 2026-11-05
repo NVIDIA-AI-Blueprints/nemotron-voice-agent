@@ -19,6 +19,7 @@ import asyncio
 
 from dotenv import load_dotenv
 from loguru import logger
+from openai import omit
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
@@ -34,6 +35,7 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
+from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy
 from pipecat.workers.runner import WorkerRunner
 
@@ -63,6 +65,7 @@ from examples.shared.speaker import (
     send_rtvi_payloads,
     speaker_diarization_enabled,
 )
+from examples.shared.transcribe_chat_stt import TranscribeChatSTTService
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -70,6 +73,7 @@ from utils import (
     load_ipa_dictionary,
     load_prompt_catalog,
     load_service_entry,
+    load_service_entry_by_id,
     normalize_lang_code,
     nvidia_api_key,
     parse_env_int,
@@ -122,6 +126,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
+    asr_entry = load_service_entry_by_id("asr", body["asr_id"]) if body.get("asr_id") else default_asr
+    transcribe_asr = asr_entry.get("asr_type") == "transcribe"
 
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
@@ -154,7 +160,26 @@ async def bot(runner_args: RunnerArguments) -> None:
             f"Speaker diarization enabled: max_speakers={max_speakers or '(default)'}, "
             f"multi_speaker_support={multi_speaker_support}"
         )
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
+    if transcribe_asr:
+        transcribe_language = asr_language_code.split("-", 1)[0].lower() if asr_language_code else None
+        transcription_prompt = asr_entry.get("transcription_prompt", "")
+        if transcription_prompt:
+            stt = TranscribeChatSTTService(
+                base_url=asr_server,
+                model=asr_model,
+                transcription_prompt=transcription_prompt,
+                language=transcribe_language,
+            )
+        else:
+            stt = OpenAISTTService(
+                api_key="not-needed",
+                base_url=asr_server,
+                # Use omit because Pipecat rejects None for the language field.
+                settings=OpenAISTTService.Settings(model=asr_model, language=transcribe_language or omit),
+                trailing_silence_secs=0,
+            )
+    else:
+        stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
@@ -277,7 +302,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     else:
         context = LLMContext(messages)
     preserve_prompt_messages = len(messages)
-    user_params = build_user_aggregator_params(welcome_enabled)
+    user_params = build_user_aggregator_params(welcome_enabled, vad_only=transcribe_asr)
     if speaker_processor and not multi_speaker_support:
         user_params.user_turn_strategies.start = [TranscriptionUserTurnStartStrategy(use_interim=False)]
     if streaming:

@@ -30,7 +30,7 @@ examples:
     label: Generic Assistant
     services:
       llm: [nemotron-lightning, nemotron-super, nemotron-bolt-74b, nemotron-bolt-4b]
-      asr: [nemotron-asr-streaming-english, parakeet-ctc, parakeet-rnnt]
+      asr: [nemotron-asr-streaming-english, parakeet-ctc, parakeet-rnnt, nemotron-transcribe]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     capabilities: [streaming_input, speaker_labels]
     activity_check:
