@@ -14,7 +14,7 @@ wire order: the agent's updates, each prompt's :class:`PromptEnded`, the bridge'
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -78,7 +78,7 @@ class MessageChunk:
 
 @dataclass(frozen=True)
 class ThoughtChunk:
-    """Reasoning of a model call. The text is not kept: the id proves a model call streamed that message."""
+    """Reasoning of a model call. The text is not kept: the id names the message that the reasoning begins."""
 
     message_id: str | None
 
@@ -306,14 +306,6 @@ class HarnessClient(Protocol):
         """Close the connection and end the process; every prompt still outstanding ends with an error."""
 
 
-class MessageFacts(Protocol):
-    """How one assistant message of a turn arrived, as the run saw it."""
-
-    chunks: int  # the text chunks it came in
-    thought: bool  # a reasoning chunk carried its id
-    after_text: bool  # its turn had streamed text before it began
-
-
 class Agent(Protocol):
     """The agent behind the protocol (``backend.harness.agent``), as the harness reads it."""
 
@@ -326,9 +318,6 @@ class Agent(Protocol):
 
     def prepare(self, folder: Path, instructions: str) -> tuple[str, ...]:
         """Ready a session's folder (its ``cwd``) with its instructions; return what opens its first prompt."""
-
-    def model_text(self, message: MessageFacts) -> bool:
-        """Whether a message was written by a model call, rather than by the agent itself."""
 
     def no_answer(self, total: int | None, total_before: int | None) -> str | None:
         """Why a turn that ended ``end_turn`` gave no answer the run may pass on (``None``: it gave one).
@@ -448,7 +437,6 @@ class PermissionAnswer(Protocol):
 
 
 # A conductor's ``place``, as the bridge's conductor door calls it.
-Placer = Callable[[Any], Awaitable[str]]
 
 # --------------------------------------------------------------------------------------------- the tables
 # Each name in backend.harness to its class, loaded only when the core is built with it (the protocol's packages too).

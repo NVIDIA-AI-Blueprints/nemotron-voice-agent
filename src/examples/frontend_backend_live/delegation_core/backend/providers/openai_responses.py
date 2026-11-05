@@ -14,8 +14,9 @@ from collections.abc import AsyncIterator
 from loguru import logger
 from openai import AsyncOpenAI
 
-from ...config import ModelEndpoint
-from ...ids import uid
+from examples.shared.delegation_contract import ModelEndpoint
+from examples.shared.ids import uid
+
 from .base import DEFAULT_LIMITS, Backend, ProviderLimits, make_client
 
 # The round's settings a Responses request takes as they are.

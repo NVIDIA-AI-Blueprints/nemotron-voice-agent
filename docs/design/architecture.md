@@ -3,7 +3,7 @@
 This page describes how the [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md) is
 built: the four boxes, the contract between the frontend media plane and the interaction manager, how the interaction
 manager handles work, the backend port and its three backend adapters, the extension recipes, the configuration files,
-the deployment, and the rules that the tests enforce. It is written for engineers who change or
+the deployment, the core's import rule, and the tests. It is written for engineers who change or
 extend the example. To run and use the example, refer to its README.
 
 The live session protocol is the Live API's. Every event and item inside the pipeline uses the Live API's schema and the
@@ -17,11 +17,11 @@ The following terms have a fixed meaning on this page and in the code:
 
 | Term | Meaning |
 | --- | --- |
-| The app | The client application on the Live wire: a benchmark client or your own app. It declares function tools and runs the calls that the backend routes to it. |
+| The app | The client application on the Live wire: a Pipecat app or your own app. It declares function tools and runs the calls that the backend routes to it. |
 | Client mode, Responses mode | The resolved `delegation.type` of a session. In client mode, the gateway only announces each delegation, and the app does the work. An omitted, `null`, or `{}` delegation is client mode. In Responses mode, the delegation core does the work. |
 | Backend LLM | The backend large language model (LLM), directly connected: the default backend adapter, `llm`. |
-| Talker | The frontend model call that decides each caller turn: speak a reply, delegate, or wait. |
-| Writer | The frontend model call that words ready results into one spoken line (`result_wording: writer`). `as_written` says them as the backend wrote them, as plain sentences without list markers, heading marks, asterisks, or backticks. |
+| Talker | Pipecat's LLM service in the frontend's pipeline. Its routing call decides each caller turn: speak a reply, delegate, or wait. |
+| Writer | The talker's call that words ready results into one spoken line, with the prompt set's writer frame and rules (`result_wording: writer`). `as_written` says them as the backend wrote them, as plain sentences without list markers, heading marks, asterisks, or backticks. |
 | Delegation, request | One `delegate()` call, sent as one `POST /v1/responses`, with its responses. The request is what it asks for. |
 | Work | One piece of backend work. One request, or several joined requests, is one Work. A Work holds one or more tasks. |
 | Task, worker | A task is one worker: one run of the backend (`BackendRun`). |
@@ -45,10 +45,10 @@ diagram shows a call from the caller to the backend and back:
                                        |                                    |
                                        | frontend part                      | delegation part, by delegation.type
                                        v                                    v
-              FRONTEND ADAPTER (Live to Pipecat), hosting the cascade        client: announce only; the app works
+              FRONTEND ADAPTER (Live to Pipecat), a Pipecat pipeline         client: announce only; the app works
                 talker: speak | delegate | wait                              responses: the server delegation
                 heard log -> the next request's input                          ordered sender -> POST /v1/responses
-                presenter's inbox: every ready result at idle                  paced relay of official events
+                voice: results into the context, said at idle                  paced relay of official events
                 display -> the screen at once                                       |
                                        ^ official events                            | Responses API (in process)
                                        |                                            v
@@ -68,8 +68,8 @@ The following table lists the boxes, what each owns, and what each never knows:
 
 | Box | Path | Owns | Never knows |
 | --- | --- | --- | --- |
-| Live gateway | [`src/gateways/live/`](../../src/gateways/live/) | Sessions, the order of commands and of the close, the wire schema, the relay of delegation events, and the choice of the delegation part by the resolved `delegation.type` | Pipecat, the cascade, and the IM's records |
-| Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/), [`cascade/`](../../src/examples/frontend_backend_live/cascade/), and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `models/`, `prompts.py`, `tables.py`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
+| Live gateway | [`src/gateways/live/`](../../src/gateways/live/) | Sessions, the answer to a WebRTC offer, the order of commands and of the close, the wire schema, the relay of delegation events, and the choice of the delegation part by the resolved `delegation.type` | Pipecat, the frontend's pipeline, and the IM's records |
+| Frontend adapter (Live to Pipecat), a Pipecat pipeline | [`adapter/`](../../src/examples/frontend_backend_live/adapter/) and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `frontend.py`, `talker.py`, `voice.py`, `handoffs.py`, `spoken.py`, `delegations.py`, `worknote.py`, `heard_log.py`, `display.py`, `normalizer.py`, `models/`, `prompts.py`, and `config_manager/` | The WebRTC peer connection (Pipecat's SmallWebRTC), speech, caller turns, the talker and its context, playout, when a line may start, the heard log, what is said at idle, and the display | The IM's records, the backend's kind, and backend model calls |
 | Delegation core: the IM, the work ledger, and the Responses API surface | [`im/`](../../src/examples/frontend_backend_live/delegation_core/im/), [`ledger/`](../../src/examples/frontend_backend_live/delegation_core/ledger/), and [`api/`](../../src/examples/frontend_backend_live/delegation_core/api/) of the example's [`delegation_core/`](../../src/examples/frontend_backend_live/delegation_core/) | Admission, placement through the conductor, Works and their tasks, steering, the commit gate, stops, progress notes, results, endings, one-shot sessions, every record, and the official endpoints | Speech, playout, and backend protocols |
 | Backend adapter | [`backend/`](../../src/examples/frontend_backend_live/delegation_core/backend/) of the delegation core | Model rounds, model providers, tool sources, conductors, worker sessions, and harness protocols | Speech and the voice wire |
 
@@ -77,16 +77,31 @@ The backend adapter lives in the `backend/` package of the delegation core, but 
 it only through the backend port,
 [`backend/port.py`](../../src/examples/frontend_backend_live/delegation_core/backend/port.py).
 
-Inside the frontend adapter, the cascade (`cascade/`) imports nothing from Pipecat. Its Pipecat speech pipeline
-(`media/`) runs it and corrects its records by what the caller heard. Two hosts build that pipeline around the
-cascade: the cascade adapter (`adapter/`), which translates between the Live protocol and the cascade, and the
-repository UI bot (`pipeline.py`).
+Inside the frontend adapter, the frontend is one Pipecat pipeline in the generic example's order: speech-to-text, the
+user aggregator, the talker, text-to-speech, the pre-roll, the output, and the edge that reads each line's playout,
+then the assistant aggregator, so the talker's context records only what played. The talker
+([`talker.py`](../../src/examples/frontend_backend_live/talker.py)) is Pipecat's `NvidiaLLMService` with a decision
+mixin, built as the generic example builds its addressed reply: each run in the pipeline asks for one
+`{action, speech}` decision, in a strict JSON schema unless the talker's services entry sets another
+`response_format`. A routing `speak` streams its words to speech once its action has decoded, a `delegate` keeps its
+words as the lead-in, and a `wait` says nothing. A relay worded early and the normalizer run out of band through
+Pipecat's `run_inference`, with the call's messages as the context and system instruction and its decision schema
+as `response_schema`, not streamed.
+Above `compact_at` of `memory.context_tokens`, the oldest whole turn groups leave the talker's context, never the
+newest, with no model call. The voice ([`voice.py`](../../src/examples/frontend_backend_live/voice.py)) chooses the
+call of each run and acts on its decision. Its records, which are the delegation reader, the work note, the heard log, the spoken lines, and the
+hand-offs, import nothing from Pipecat. One build, [`frontend.py`](../../src/examples/frontend_backend_live/frontend.py),
+puts that pipeline between the edges of two hosts: the cascade adapter (`adapter/`), which translates between the Live
+protocol and the pipeline, and the repository UI bot (`pipeline.py`). Only the transport edges, the start, the
+delegation part, and the display sink differ by host.
+Both speak in the text-to-speech's synthesis mode, which the example's `settings` in `examples_registry.yaml` set to
+`per_sentence` for its Magpie entries, behind the pre-roll that `frontend.cascade.tts_preroll_ms` sets.
 
 Four places turn names into objects, and none of them is a box. They are the three composition roots and the delegation
 core's builder:
 
-- [`factory.py`](../../src/examples/frontend_backend_live/factory.py) builds each live session's frontend adapter and
-  the gateway's one delegation core.
+- [`factory.py`](../../src/examples/frontend_backend_live/factory.py) builds each live session's frontend adapter, a
+  WebRTC session's peer connection, and the gateway's one delegation core.
 - [`pipeline.py`](../../src/examples/frontend_backend_live/pipeline.py) builds the repository UI bot, with a core of
   its own.
 - [`app.py`](../../src/examples/frontend_backend_live/delegation_core/app.py) is the delegation core's builder,
@@ -95,8 +110,8 @@ core's builder:
 
 ## How the Frontend Media Plane Meets the IM
 
-The frontend media plane is the gateway's media and session handling, the frontend adapter, and the cascade. It meets
-the IM side, which is the delegation core, over two channels:
+The frontend media plane is the gateway's media and session handling and the frontend adapter's pipeline. It meets the
+IM side, which is the delegation core, over two channels:
 
 - Toward the core, the official Responses API. The gateway's server delegation sends each request through a
   `ResponsesClient` ([`responses_client.py`](../../src/gateways/live/server_delegation/responses_client.py)). In
@@ -117,20 +132,21 @@ the part of each side that handles it:
 | 1. A delegation creates work | Media to IM | `POST /v1/responses`; its response opens `response.created` (status `queued`), then `response.queued` | The caller's turns and the server delegation's ordered sender | Admission, then the conductor |
 | 1b. A request joins open work | IM to media | The taker's `response.in_progress` names the older response in `previous_response_id`; then the older response gets one `commentary` message, which names the taker's delegation ID, and `response.completed` | The reader moves the older delegation's words, lead-in, clock, and unheard results to the taker | `WorkRun`, when the steering lands |
 | 2. Short status | IM to media | `message` items with `phase: commentary`; `mcp_call` items for the tools the backend runs | The work note keeps the newest line of each delegation and the tool calls of its latest response: a backend call runs from its `response.output_item.added` and ends with the official status of its `response.output_item.done` | `ProgressNotes`, at most one note per delegation per `progress_note_seconds` |
-| 3. A ready result | IM to media | One `message` with `phase: final_answer` per task; `show` items before it; then the terminal event | The inbox, then idle, then memory and speech together; the display at once | `WorkRun` writes it at once, and the IM never waits for speech |
+| 3. A ready result | IM to media | One `message` with `phase: final_answer` per task; `show` items before it; then the terminal event | The talker's context at once, said at idle; the display at once | `WorkRun` writes it at once, and the IM never waits for speech |
 | 3b. A wait for the app | Both | `function_call` items end the response; the app answers with `function_call_output` items and `response.create` | The app-wait clock and its line | The task waits, matched by `call_id` |
 | 3c. Endings | IM to media | `response.failed` with an official error code; `response.incomplete` at close; an empty `response.completed` for a late continuation | The voice's own fixed lines | The stop door and the failure path |
-| 4. Playback | None | Nothing crosses | Playout facts correct what the cascade wrote; heard words go into the next request | None |
+| 4. Playback | None | Nothing crosses | The assistant aggregator records what played; heard words go into the next request | None |
 
 Nothing crosses at point 4, because the Live API has no receipt event that confirms what the caller heard. Playout facts
-stay in the frontend: they correct the talker's memory and the heard log, and the heard words reach the backend in the
+stay in the frontend: they settle the talker's context and the heard log, and the heard words reach the backend in the
 next request.
 
 Each request's input is one user message, which the heard log
-([`heard_log.py`](../../src/examples/frontend_backend_live/cascade/heard_log.py)) words with the prompt set's
+([`heard_log.py`](../../src/examples/frontend_backend_live/heard_log.py)) words with the prompt set's
 `transcript` texts: a header, then one labeled line for each caller turn, line of the voice, and app context or
-instruction append since the last request, the newest within 6,000 characters. A line that said results stays out when
-the caller heard it in full, because the backend holds its own answer.
+instruction append since the last request, the newest within 6,000 characters. A line of the voice enters the heard log
+when it goes to speech, so a request made while the line plays carries it. A line that says results stays out unless the
+caller cut it, because the backend holds its own answer.
 
 Instruction appends stay outside that limit. The first request that the core accepts after an append carries it in its
 place, and every later request carries it again before the header, under the `earlier` line, so it never reads as new
@@ -154,24 +170,28 @@ when it can speak. A WebRTC input reads the caller while the processors after it
 that audio until the pipeline has started. A processor that cannot set up fails the session's start.
 
 The talker decides the caller's turns one decision at a time. When the caller speaks again while the talker decides on
-their turns, that decision says, sends, and records nothing, and the turns wait for the next decision, which covers
-them together with the newer words. If that speech brings no words, the next decision comes when the caller is silent
-again and covers the waiting turns alone. A result that arrives while the talker decides on the caller's turns cuts
-that decision off at once, because the talker read the work note before the result, and the turns wait the same way.
-The next decision comes when the caller is silent. A decision on an instruction append alone is never dropped this way.
-A reply, the `holding` line, and the `refusal` line wait until the caller is silent.
+their turns, the user aggregator's interruption cancels that decision. A decision that has said nothing leaves its
+turns undecided, even when the interruption came in the middle of its JSON, and the next decision covers them together
+with the newer words. A `speak` whose words already went to speech answers its turns, and the interruption cuts that
+line. A result that arrives while the talker decides on the caller's turns cuts that decision off when it has said
+nothing, because the talker read the work note before the result. The run that the result brings decides the turns
+again, with the work note that marks the answer ready. A decision on an instruction append alone is never cut this way.
+Every line but a streamed reply is said in a run of the talker of its own, which the assistant aggregator holds while
+the bot speaks and owes while the caller speaks.
 
 When the caller's words cut a line and the talker waits on them, such as a bare "Okay," the voice says the unheard rest
-of that line once, as it does after a turn with no words, unless another line came since. Set
-`frontend.cascade.speech.resume_after_noise` to `false` to turn both off.
+of that line once, as it does after a turn with no words, unless another line came since. A turn with no words that
+cut a line runs the talker with the prompt set's `resume_note`, Pipecat's `EmptyUserTurnConfig`, and the voice says the
+rest word for word, with no model call. Set `frontend.cascade.speech.resume_after_noise` to `false` to turn both off.
 
 The Live API requests a spoken acknowledgement for each delegation and lets its model word it. The talker words it in the
 decision that delegates the turn: its lead-in is the acknowledgement, which the voice says after the session's
 `delegation.acknowledgement_delay_ms`, and not while the caller speaks
-([`turns.py`](../../src/examples/frontend_backend_live/cascade/turns.py), `Acknowledgements`). A result, the
-delegation's end, the caller starting to speak after the turn was delegated, or commentary or thinking that comes first
-drops it, and a delegation without a lead-in says nothing. `Utterances.told` keeps what the caller was told
-about each delegation: its lead-in and its progress lines, less any line that nobody heard.
+([`handoffs.py`](../../src/examples/frontend_backend_live/handoffs.py), `Acknowledgements`). The lead-in is said in a
+run of the talker of its own. A result, the delegation's end, or commentary or thinking that comes while it waits for
+its delay drops it, and so does the caller starting to speak before it is said. A delegation without a lead-in says
+nothing. `SpokenLines.told` ([`spoken.py`](../../src/examples/frontend_backend_live/spoken.py)) keeps what the caller
+was told about each delegation: its lead-in and its progress lines, less any line that nobody heard.
 
 Naming the taker of point 1b in `previous_response_id` of its `response.in_progress` is this server's convention. The
 IM names it on every join, so the reader never guesses which delegation took the work.
@@ -183,38 +203,47 @@ result from the backend to the caller:
 
 1. The core writes the task's `final_answer` item into the carrier's open response. While that response waits for the
    app, the item waits in order and is written when the next response opens.
-2. The cascade's reader ([`delegations.py`](../../src/examples/frontend_backend_live/cascade/delegations.py)) reads the
-   item. The display sink shows each completed `show` item at once, and the presenter's inbox keeps every ready result
-   in arrival order.
-3. As soon as results are ready, even while the caller speaks or a turn is decided, the presenter words every ready
-   result in one call. When the caller is silent, no turn waits, and no line is playing, it says that line if nothing
-   that the wording read has changed since. A turn that the talker decides changes nothing, so after a turn that the
-   talker waited on, the line plays at once. A line of the voice, an instruction or thinking append, a request opened
-   after the results' delegations, or anything new in the inbox, such as another result, changes it. A change while
-   the writer call runs cancels that call. The presenter then words everything again after no caller turn waits or is
-   being decided, so after a reply or a lead-in, it words again while that line plays. The results and the spoken line
-   enter the talker's memory and the heard log together, and speech starts.
-4. The playout facts settle the line. A cut line keeps what played and ends with `[cut off]`. A line that nobody heard
-   leaves the memory and the heard log, and its results go back to the inbox.
-   With `frontend.cascade.speech.heard_words: estimated`, the talker's memory also keeps the words that the line's
+2. The voice's reader ([`delegations.py`](../../src/examples/frontend_backend_live/delegations.py)) reads the item.
+   The display sink shows each completed `show` item at once. The voice owes each ready result and runs the talker as
+   Pipecat's backend connector delivers one: an uninterruptible `LLMMessagesAppendFrame` queued at the talker with
+   `run_llm`. The assistant aggregator holds it while the bot speaks, owes it while the caller speaks, and bundles the
+   appends queued behind it, so results that arrive together run the talker once. The result goes into the talker's
+   context as a developer message under the prompt set's `result_label` with the line that says it, right before it.
+3. As soon as results are owed, even while the caller speaks, a turn is decided, or a line plays, the voice words
+   everything owed, every ready result and any commentary, in one relay of the talker with the writer's frame and
+   rules. The relay runs out of band and reads the lines in flight as said. The run at idle says that line with no
+   request if nothing that the wording read has changed since. A turn that the talker decides changes nothing, so
+   after a turn that the talker waited on, the line plays at once. A line of the voice, an instruction or thinking
+   append, a cut, a request opened after the results' delegations, or anything new that is owed, such as another
+   result, changes it. A change while the relay runs cancels it. The voice then words everything again after no
+   caller turn waits or is being decided, so after a reply or a lead-in, it words again while that line plays. If the
+   run at idle finds no line that still holds, its relay words the results then. Any of those changes, such as a result
+   or commentary, that comes before that relay lets its line out cuts it, and the next one words everything. Caller
+   turns that wait for a decision and lines that wait to be said, such as a lead-in, go first, and the result's line
+   comes in the run after them. A result stays out of the talker's routing requests until a line says it, so no routing
+   call reads a result that the caller has not heard. A relay that an interruption cancels owes its results again.
+4. The edge after the output ([`silent_lines.py`](../../src/examples/frontend_backend_live/media/silent_lines.py))
+   reports each line's playout, and the assistant aggregator records what played. A cut line keeps what played and
+   ends with `[cut off]`. A line that nobody heard leaves the heard log and gives back its results to be said next.
+   With `frontend.cascade.speech.heard_words: estimated`, the talker's context also keeps the words that the line's
    audio likely carried past what played, estimated at the call's speaking rate. A cut line of stitched speech, which
-   the heard log keeps whole, keeps only the estimated words in the memory. The heard log does not take the estimate.
+   the heard log keeps whole, keeps only the estimated words in the context. The heard log does not take the estimate.
    A delegation leaves the talker's work note after it ends and the caller hears its results, even in part, so results
-   back in the inbox keep it listed with the `answer_ready_label`.
+   owed again keep it listed with the `answer_ready_label`.
 
-The writer reads the talker's instructions inside the prompt set's writer frame, so it keeps any limits that they set
+The relay reads the talker's instructions inside the prompt set's writer frame, so it keeps any limits that they set
 on what the caller may be told. `as_written` (`frontend.cascade.delegation.result_wording`) says each result as the
-backend wrote it, cleaned only for speech. So does every writer fallback: a writer call that fails, times out
+backend wrote it, cleaned only for speech. So does every relay fallback: a relay that fails, times out
 (`reliability.talker_attempt_timeout_seconds`), or returns unusable output, no words, the update unchanged, or a line
 that the voice already said. Those limits do not apply to that text, so also put them in the backend's instructions:
 `delegation.responses.instructions`, or, in client mode, the prompt of the app's own backend. A
-`session.commentary.append` is worded with the results, so under `as_written` or a writer fallback, the voice says it
+`session.commentary.append` is worded with the results, so under `as_written` or a relay fallback, the voice says it
 word for word.
 
 ### Endings
 
-A delegation ends in one of the following ways. The cascade reads each ending by structure, never by text, and says
-its own fixed line from `agent_prompts.Lines` in the example's
+A delegation ends in one of the following ways. The voice's reader reads each ending by structure, never by text, and
+the voice says its own fixed line from `agent_prompts.Lines` in the example's
 [`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml) where one applies:
 
 | Ending | What the core writes | What the voice says |
@@ -376,24 +405,31 @@ from a change, so an identical second call that changes state, such as adding th
 the app when no request came after the first one ran. A Work that has taken more than one request, such as a second
 latte asked for while the work plans, always sends the call to the app.
 
-The IM also helps a task recover an ID that the app does not know
-([`recovery.py`](../../src/examples/frontend_backend_live/delegation_core/im/recovery.py)). Speech recognition can write an ID that the caller
+Before the tasks read the app's outputs that a continuation brings, the IM runs them through the app output steps that
+`backend.app_output_steps` names, in order, each one the session's own (`AppOutputStep` in
+[`backend/port.py`](../../src/examples/frontend_backend_live/delegation_core/backend/port.py)). Every backend adapter
+reads what the steps leave, and the ledger and the records keep the app's original outputs. One-shot requests
+(`POST /v1/live/delegate`) take no steps, because they send the app's outputs back as input. Outputs that arrive after
+their Work has ended take none either: the IM only records them, and no task reads them.
+
+The shipped `core.yaml` names one step, `shape_hints`
+([`backend/recovery.py`](../../src/examples/frontend_backend_live/delegation_core/backend/recovery.py)), which helps a
+task recover an ID that the app does not know. Speech recognition can write an ID that the caller
 spelled correctly in a form the app does not use, such as `Maya_Ross_3817` for `maya_ross_3817`. When the app's
-output for a call matches `delegation.not_found_pattern` (the default is
-`(?i)\b(not found|does not exist|no such)\b`), the IM takes the failed string argument: the one the output quotes as a
-whole word, or else the call's only string argument. The IM writes that value in the shape the app's IDs take and appends
-`texts.shape_hint` to the output that the task reads. The shape covers letter case, the separator between groups, a
-leading mark such as `#`, and digit grouping. The IM learns it from values that worked earlier in the session for the
+output for a call matches the step's `not_found_pattern` (in the shipped file,
+`(?i)\b(not found|does not exist|no such)\b`), the step takes the failed string argument: the one the output quotes as
+a whole word, or else the call's only string argument. The step writes that value in the shape the app's IDs take and
+appends its hint (`backend.app_output_steps.shape_hints.hint` in `prompts.yaml`) to the output that the task reads.
+The shape covers letter case, the separator between groups, a
+leading mark such as `#`, and digit grouping. The step learns it from values that worked earlier in the session for the
 same tool parameter, from string fields of the same name in earlier app outputs, and from the first quoted example in
-the parameter's description, such as `The user id, such as 'lee_park_42'`. The IM adds a hint only when the session
+the parameter's description, such as `The user id, such as 'lee_park_42'`. The step adds a hint only when the session
 has not sent or been offered that form yet, so a retry of the same failed form gets no second hint. An output that
-reports an error, one whose text starts with `Error` or `Exception` or whose JSON object has an `error` key, teaches
-no shape. A hint never changes a letter or a digit, and it never refuses a call. The ledger and the
-records keep the app's original output, and server tools and harness tools get no hint. Each hint emits the
-`tools.shape_hint` trace event with the tool, the failed value, the suggested value, and its source (`session` or
-`description`). One-shot requests (`POST /v1/live/delegate`) get no hints, because they send the app's
-outputs back as input. Outputs that arrive after their Work has ended get none either: the IM only records them, and no
-task reads them. Set `delegation.shape_hints: false` to pass the app's outputs unchanged.
+reports an error, one whose text starts with `Error` or `Exception` or whose JSON object has a non-empty `error` or
+`errors` key, teaches no shape. A hint never changes a letter or a digit, and it never refuses a call. Server tools and
+harness tools get no hint. Each hint emits the `tools.shape_hint` trace event with the tool, the failed value, the
+suggested value, and its source (`session` or `description`). To pass the app's outputs unchanged, remove the step's
+block from `backend.app_output_steps`.
 
 ### Stops
 
@@ -454,13 +490,14 @@ question takes one of three paths:
 
 #### Spoken Progress
 
-After `progress_after_seconds` of quiet while work runs, the presenter's quiet task
-([`presenter.py`](../../src/examples/frontend_backend_live/cascade/presenter.py)) asks the writer for one short progress
-line about the oldest quiet delegation. The writer reads the session's `instructions`, the talker's memory, and the work
-note's line for that delegation alone: the request, how long it has run, its steps, and the newest progress note, which
-is a fact and never said as written. It can answer with no words, for example when the instructions ask for silence
-while the backend works. The wording runs beside the inbox, and any change of the floor, any item queued, or a moved
-memory drops the line, so no line is said over a result. A later line needs news in the work note, which is a backend
+After `progress_after_seconds` of quiet while work runs, the voice's quiet task
+([`voice.py`](../../src/examples/frontend_backend_live/voice.py)) asks the talker for one short progress line about the
+oldest quiet delegation, in a run that comes after every other call. The talker words it with the writer's frame and
+the progress rules from the session's `instructions`, its context, and the work note's line for that delegation alone:
+the request, how long it has run, its steps, and the newest progress note, which is a fact and never said as written.
+It can answer with no words, for example when the instructions ask for silence while the backend works. A result that
+arrives while the line is worded cuts it off, and a line said or a message appended meanwhile drops it, so no line is
+said over a result. A later line needs news in the work note, which is a backend
 step that ended or a new progress note, and every offer counts against `progress_max_per_delegation`. A progress line is
 never resumed or said again, and a wording that fails says nothing. `as_written` words no progress line. The Live API keeps
 still-running progress silent by default, and `progress_after_seconds: null` does the same.
@@ -578,6 +615,10 @@ gets an `LlmAdapter` with one model provider per model. `LlmRun` runs one task:
 
 - At each safe point, it takes the app's outputs and waiting steering, and settles the steering `applied` at once.
 - Each round reads `request()` and `history()`, sends the whole history, and chains nothing.
+- On a `chat-completions` endpoint, the round takes the model's reasoning from the server's reasoning parser
+  (`reasoning_content` or `reasoning`) and never passes it on. A server without a reasoning parser leaves `<think>`
+  text in the answer. To set the parser, refer to
+  [Configure LLM → Parser and Tool Calling](../how-to/configure-llm.md#reasoning-parser--tool-calling-self-hosted).
 - The round's tools are the request's function tools, then each server tool source's, then the IM's work tools.
 - In a round with calls, every message is `commentary`, and the IM routes each call before the round is passed on.
   Calls that the backend runs start at once after the round, and a call cut at its time limit is `unclear`.
@@ -648,7 +689,7 @@ compares the two agent classes:
 | A prompt's text | As written | A prompt that starts with `/` gets `Request: ` first, so it never runs as a Hermes command. A steer's text gets the same guard after `/steer `, because an idle Hermes runs that text as a prompt |
 | A message chunk with no message ID | Part of the message being streamed, until a tool call, a plan, or a prompt comes between; reasoning does not end it | Hermes's own reply, such as an acknowledgment, which is never output |
 | Tool cards | Every card is a call of the session's bridged tools, which the bridge reports | A card named `mcp__<server>__<tool>` is a bridged call; any other card is a Hermes tool, reported with `runtime_label` |
-| A turn's answer | The last message of a turn that ended `end_turn` | Also needs the turn's usage to be reported and to move, and the message to be streamed by a model call |
+| A turn's answer | The last message of a turn that ended `end_turn` | Also needs the turn's usage to be reported and to move, that is, a model call of the turn completed |
 | Turns per process | No limit | 4 |
 | A started process's environment | Nothing more | `HERMES_ACP_SKIP_CONFIGURED_MCP=1`: Hermes then starts the MCP servers that its home lists at its first session instead of at its startup |
 
@@ -671,7 +712,7 @@ calls in a row. The following table shows how ACP maps onto the port:
 
 | ACP | Port |
 | --- | --- |
-| `agent_message_chunk` | Held: `commentary` when tool activity follows, `final_answer` at the turn's end. Only text that the agent class reads as its model's is passed on. A reply that the agent wrote itself, such as a provider error, is logged and never spoken, and as a turn's answer it fails the task. |
+| `agent_message_chunk` | Held: `commentary` when tool activity follows, `final_answer` at the turn's end. When the agent class finds that no model call of the turn completed, as `hermes` does from the turn's usage, the turn's last message is the agent's own reply, such as a provider error. It is logged and never spoken, and the turn gives no answer. |
 | The agent's own `tool_call` and `tool_call_update` | With an agent class that tells its own tools apart, such as `hermes`: `tool_started` and `tool_outcome`, as `mcp_call` items labeled with `runtime_label` (`hermes` in `core.yaml`). With `acp`, every card counts as a call of the session's own MCP server, so the agent's own tool calls are not reported at all. The bridge reports the calls of the session's own MCP server. |
 | `plan` | `progress()` |
 | An app function called through the bridge | Held by the bridge, one app call per round; the round's `function_call` and terminal follow after every other call of the turn has reported, and `resume()` answers the held MCP request |
@@ -702,8 +743,8 @@ servers of one user on one machine, containers included, can therefore share a `
 
 The harness has the following limits:
 
-- With Hermes, a one-chunk reply that is a turn's only text fails the task, because on the wire it cannot be told
-  apart from Hermes's own text.
+- With Hermes, once a model call of the turn completed, Hermes's own reply is the turn's answer, because ACP does not
+  mark who wrote a message. Such a reply is an `Error: ...` or the model's reasoning when the model wrote no answer.
 - The commit gate cannot hold the agent's own tools, such as Hermes toolsets that its operator turns on. They run
   inside the agent. With `hermes`, they are reported after the fact, and with `acp`, they are not reported at all.
   Give the agent no tools of its own where the gate matters, and connect a plain agent only with its own tools turned
@@ -727,7 +768,7 @@ The envelope is the speak and display shape of a result. `delegation.result_form
 3. The backend answers with speakable sentences, the `final_answer` message.
 
 On the voice side, the display sink shows a completed `show` item at once and never speaks it, and the `final_answer`
-waits in the inbox and is said at idle, together with every other ready result. The instructions reach every worker
+goes into the talker's context and is said at idle, together with every other ready result. The instructions reach every worker
 where its backend takes a system prompt (every round for `llm` and `llm-agent`, and where the agent class puts a
 session's instructions for `harness`), and never the conductor. The UI bot's profile, `core.agent.yaml`, and the
 harness profile turn it on. The default is `plain`, because a Live client can be voice only.
@@ -736,8 +777,7 @@ harness profile turn it on. The default is `plain`, because a Live client can be
 
 Each extension point is an interface in its box's port module, its implementations sit in one plain table, and the
 composition root picks one by the name in the configuration. Adding one is one class, one table entry, and the name in
-config. No code compares a kind against a name: the guard test fails on such a branch (refer to
-[Guard Test and Import Rules](#guard-test-and-import-rules)).
+config. No code compares a kind against a name.
 
 ### Add a Frontend Adapter
 
@@ -745,8 +785,8 @@ A frontend adapter serves a live session's voice. To add one:
 
 1. Write a class with the class contract `FrontendAdapterClass`
    ([`adapter/contract.py`](../../src/examples/frontend_backend_live/adapter/contract.py)): `Settings.parse(block)`,
-   `readiness(settings, catalog)`, `from_config(session, transport, connection, settings, catalog)`,
-   `describe(settings, catalog)`, and `hosts_rtvi`. Each instance is a `FrontendAdapter`
+   `readiness(settings, catalog)`, `from_config(session, transport, connection, settings, catalog)`, and
+   `describe(settings, catalog)`. Each instance is a `FrontendAdapter`
    ([`live/ports.py`](../../src/gateways/live/ports.py)): `start`, `close`, `set_muted`, `feed_audio`, and the three
    appends, each of which returns quickly and never waits on a model.
 2. Add the class to `FRONTEND_ADAPTERS` in
@@ -754,16 +794,15 @@ A frontend adapter serves a live session's voice. To add one:
 3. Set `frontend.adapter` to its name in `config.yaml`, and give it its own `frontend.<name>` block.
 
 It delegates through the `DelegationPort` that the session hands it and learns about its delegations only from the
-official events (`DelegationEvents`). It decides by `reports_events`, never by comparing `target`. The UI bot refuses
-an adapter whose `hosts_rtvi` is false.
+official events (`DelegationEvents`). It decides by `reports_events`, never by comparing `target`.
 
-[`src/server.py`](../../src/server.py) reads the `live:` block of the serving example's entry in
-[`examples_registry.yaml`](../../examples_registry.yaml) and passes its hooks to `mount_live`
+[`src/server.py`](../../src/server.py) reads the `live:` block of the selected example's entry in
+[`examples_registry.yaml`](../../examples_registry.yaml) and passes its hooks and its `settings` to `mount_live`
 ([`mount.py`](../../src/gateways/live/mount.py)). The block names the following hooks:
 
 | Hook | What it does |
 | --- | --- |
-| `factory` | Builds each session's frontend adapter. It is an async function of the session's settings (`SessionConfig`), its transport (`webrtc` or `websocket`), and its WebRTC peer (`None` on a WebSocket) that returns `SessionParts`. It raises `ProtocolError` to refuse a session. `LIVE_ADAPTER_FACTORY` names another factory, as `module:function`. |
+| `factory` | Builds each session's parts. It is an async function of the session's settings (`SessionConfig`), its transport (`webrtc` or `websocket`), and the Interactive Connectivity Establishment (ICE) servers of a WebRTC session's peer as plain `{urls, username, credential}` objects (`None` on a WebSocket). It returns `SessionParts`: the frontend adapter and, for a WebRTC session, the peer connection that it makes on those ICE servers. The gateway answers the client's offer with that connection and carries the session's events on its data channel. The factory raises `ProtocolError` to refuse a session. |
 | `core` | Builds the gateway's one delegation core client, a `ResponsesClient`, on the first Responses-mode session or `POST /v1/live/delegate` round. At shutdown, after every session has closed, the gateway releases it with `aclose()`. |
 | `describe` | Describes the example for `GET /v1/live/info`. |
 
@@ -784,8 +823,7 @@ A backend adapter runs the work behind the port. To add one:
    [`adapters.py`](../../src/examples/frontend_backend_live/delegation_core/backend/adapters.py), which loads the
    package only when a core is built with it.
 4. Bind the contract suites `BackendAdapterContract` and `ConductorContract`
-   ([`tests/unit/contracts/backend.py`](../../tests/unit/contracts/backend.py)) to it, and add its group to the import
-   rules.
+   ([`tests/unit/contracts/backend.py`](../../tests/unit/contracts/backend.py)) to it.
 5. Name it in `backend.adapter` and give it its block in a `core.yaml` profile.
 
 ### Add an Agent, a Protocol, a Transport, or a Steering Strategy to the Harness
@@ -826,11 +864,13 @@ A backend model provider is private to `llm` and `llm-agent`. Subclass `Backend`
 bind `ProviderContract`. Then name it in `backend.llm.provider` or `backend.llm-agent.conductor.provider`. The template
 `Backend.stream()` adds the retries and the time limits.
 
-A frontend model provider serves the talker, the writer, and the normalizer. Subclass `Frontend`
-([`models/base.py`](../../src/examples/frontend_backend_live/models/base.py)) with its `name`, implement
-`complete_once(instructions, history, spec)`, add it to `FRONTENDS` in
-[`models/__init__.py`](../../src/examples/frontend_backend_live/models/__init__.py), and set
-`frontend.cascade.provider`.
+The talker is a Pipecat LLM service with the decision mixin, `DecisionReplyMixin` in
+[`talker.py`](../../src/examples/frontend_backend_live/talker.py), which serves its routing, relay, and progress calls,
+and, out of band through `run_call`, the relays worded early and the normalizer's one-shot inference. To run it on
+another Pipecat service, subclass that service with the mixin, as `TalkerChat` subclasses `NvidiaLLMService`, give it
+a `from_config(endpoint, reliability, response_format, client=None)`, add it to `LLM_SERVICES` in `talker.py`, and set
+`frontend.cascade.provider`. The mixin uses the hooks of Pipecat's OpenAI-compatible services:
+`build_chat_completion_params`, `get_chat_completions`, and `run_inference`.
 
 ### Add a Tool Source
 
@@ -858,15 +898,17 @@ module paths, `core/` is `FBL/delegation_core/`, `harness/` is `FBL/delegation_c
 | Backend model provider | `Backend` (`core/backend/providers/base.py`) | `chat-completions`, `openai-responses` | `backend.llm.provider` |
 | Harness seams | `HarnessProtocol`, `Agent`, `SteerStrategy`, `SessionPolicy`, `PermissionAnswer` (`harness/protocol.py`); `AcpAgent`, `Transport` (`harness/acp/`) | `acp`; `acp`, `hermes`; `stdio`, `websocket`; `native_command`, `next_prompt`, `cancel_reprompt`; `task`, `call`; `reject` | `backend.harness.protocol`, `agent`, `transport`, `steer`, `session`, `permission` |
 | Tool source | `ToolSource` (`core/backend/port.py`) | `cafe` | `backend.tools` |
+| App output step | `AppOutputStep` (`core/backend/port.py`) | `shape_hints` | `backend.app_output_steps` |
 | Result format; backend call reports | `ResultFormat`, `CallReports` (`core/im/results.py`) | `plain`, `speak_display`; `items`, `notes` | `delegation.result_format`, `delegation.backend_calls` |
 | Session kind | `IMSession`, `OneShotSession` (`core/im/`) | Both | The official rule: a request with no conversation is one-shot |
 | Frontend adapter | `FrontendAdapter` (`live/ports.py`), `FrontendAdapterClass` (`FBL/adapter/contract.py`) | `cascade` | `frontend.adapter` |
 | Delegation part | `DelegationPart` (`live/ports.py`) | `client`, `responses` | The resolved `delegation.type` of each session |
-| TTS mode | `SpeechMode` (`FBL/media/services.py`) | `per_sentence`, `stitched` | `frontend.cascade.speech.tts_mode` |
+| TTS mode | `SpeechMode` (`FBL/media/services.py`) | `per_sentence`, `stitched` | The text-to-speech's synthesis mode, from its catalog entry and the session's settings |
 | Turn end | `TurnEnd` (`FBL/media/turns.py`) | `smart_turn`, `silence`, `shared` | `frontend.cascade.speech.turn_end` |
-| Cut memory | `CutMemory` (`FBL/cascade/utterances.py`) | `as_recorded`, `estimated` | `frontend.cascade.speech.heard_words` |
-| Frontend model provider | `Frontend` (`FBL/models/base.py`) | `chat-completions`, `openai-responses` | `frontend.cascade.provider` |
-| Result wording; display sink | `ResultWording`, `DisplaySink` (`FBL/cascade/ports.py`) | `writer`, `as_written`; `NullDisplay`, `RtviTaskCards` | `frontend.cascade.delegation.result_wording`; the root |
+| Cut memory | `CutMemory` (`FBL/spoken.py`) | `as_recorded`, `estimated` | `frontend.cascade.speech.heard_words` |
+| Talker service | `DecisionReplyMixin` on a Pipecat LLM service (`FBL/talker.py`) | `chat-completions` | `frontend.cascade.provider` |
+| Decision format | `ResponseFormat` (`FBL/talker.py`) | `json_schema`, `none` | The talker's services entry's `response_format` |
+| Result wording; display sink | `ResultWording` (`FBL/voice.py`), `DisplaySink` (`FBL/display.py`) | `writer`, `as_written`; `NullDisplay`, `RtviTaskCards` | `frontend.cascade.delegation.result_wording`; the root |
 | Live example | The registry's `live:` block | `frontend-backend-live` | `examples_registry.yaml` |
 
 ## Configuration
@@ -881,25 +923,32 @@ The following table lists the files in the example's folder:
 | File | Holds | Selected by |
 | --- | --- | --- |
 | [`config.yaml`](../../src/examples/frontend_backend_live/config.yaml) | The frontend only: `frontend.adapter`, each adapter's block (`frontend.cascade`), and `ui_bot` (`core_config` and `channel`) | The default; `LIVE_CONFIG_PATH` names another file |
-| [`core.yaml`](../../src/examples/frontend_backend_live/core.yaml) | The delegation core: `delegation` (the IM's settings), `texts` (the lines that the IM and the backend write or add to a model's input; a harness words its own prompts in `backend.harness.prompts`), and `backend` (the adapter, the default model's slot and prompt, the tool sources, and each adapter's block) | The default; `CORE_CONFIG_PATH` names another file |
+| [`core.yaml`](../../src/examples/frontend_backend_live/core.yaml) | The delegation core: `delegation` (the IM's settings) and `backend` (the adapter, the default model's slot and prompt, the tool sources, the app output steps, and each adapter's block) | The default; `CORE_CONFIG_PATH` names another file |
 | [`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) | `core.yaml` with the envelope and the cafe's `backend.prompt` and `backend.tools`, for the repository UI bot | `ui_bot.core_config` in `config.yaml` |
 | [`core.agent.yaml`](../../src/examples/frontend_backend_live/core.agent.yaml) | `core.yaml` with `backend.adapter: llm-agent` and the envelope | `CORE_CONFIG_PATH` |
 | [`core.harness.yaml`](../../src/examples/frontend_backend_live/core.harness.yaml) | `core.agent.yaml` with `backend.adapter: harness`. The `backend.harness` block of `core.yaml` names the Hermes agent class, starts `hermes acp` over stdio, and binds the bridge on `127.0.0.1:8791` | `CORE_CONFIG_PATH` |
 
-The model behind each role comes from a services slot of the example's registry entry: the talker's and the writer's
-model from `frontend.cascade.slot` (`llm`), and the backend's default model from `backend.slot` (`thinker-llm`). The
+The model behind each role comes from a services slot of the example's registry entry: the talker's model from
+`frontend.cascade.slot` (`llm`), and the backend's default model from `backend.slot` (`thinker-llm`). The
 prompts come from the example's [`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml), each used as
 written: the `agent_prompts.Talker` entry that `frontend.cascade.prompt` names (`generic`) when a session sets no
 instructions or blank ones, and the `agent_prompts.Backend` entry that `backend.prompt` names (`generic`) when a request
 sets none. The `generic` prompts name no domain, and the talker follows the Live API's Live prompt template.
-`agent_prompts.Cascade` holds the prompt set: the text of the cascade's own model calls, the labels and the cut mark in
-the talker's memory, and each delegation's input, each used exactly as written. `agent_prompts.Lines` holds the lines
-that the voice says word for word, except `intro`, from which the writer words the UI bot's greeting. The UI bot takes
+`agent_prompts.Cascade` holds the prompt set: the text of the talker's calls, with the decision rules (`json_rules`)
+after every call's instructions, the labels, the cut mark, and the resume note in the talker's context, and each
+delegation's input, each used exactly as written. `agent_prompts.Lines` holds the lines that the voice says word for
+word, except `intro`, from which the talker words the UI bot's greeting. `agent_prompts.Core` holds the delegation
+core's texts, the lines that the IM and the backend write or add to a model's input, each used exactly as written and
+named by its place in the core's settings: `texts.<key>` for the core's own, such as `texts.conductor_prompt`, and
+`backend.<block>.<key>` for a backend block's, such as `backend.harness.prompts.user`. A root reads them with the
+core's file and hands them to `CoreSettings.load`, and a block's texts join it only when the core's settings have the
+block. A core file that sets one of those places stops the load. The UI bot takes
 its talker from the top-level entry that the UI selects, `cafe` by default, and its backend prompt and tools from
 `core.ui-bot.yaml`; it adds the `agent_prompts.Channel` context that `ui_bot.channel` names after each prompt. Each
-session reads `prompts.yaml` when it starts, and the Live core reads its default backend prompt when it is built. When
-the talker's services entry sets a `system_prompt`, the bot puts it before the talker's prompt, and the talker's memory
-keeps both as its instructions through compaction.
+session reads `prompts.yaml` when it starts, the Live core reads its default backend prompt when it is built, and a
+root reads the core's texts with the core's file, once. When
+the talker's services entry sets a `system_prompt`, the bot puts it before the talker's prompt. Both are the talker's
+instructions, which stay outside its context, so compaction keeps them.
 
 ### How Profiles Extend
 
@@ -909,23 +958,22 @@ profile can turn a limit off. Both files follow the same rule.
 
 ### Environment Variables
 
-The following variables configure the example's files and its frontend adapter:
+The following variables configure the example's files:
 
 | Variable | What it sets |
 | --- | --- |
 | `LIVE_CONFIG_PATH`, `CORE_CONFIG_PATH` | Another `config.yaml` or `core.yaml`, such as a profile. |
-| `LIVE_ADAPTER_FACTORY` | Another factory of each session's frontend adapter, as `module:function`: an async function of the session's settings, transport, and WebRTC peer that returns `SessionParts` (`live/ports.py`). |
 
-For the Live gateway's variables, such as `LIVE_ENABLED`, `LIVE_API_TOKEN`, and the session limits, refer to
-[Use the Live Gateway → Server Settings](../how-to/use-live-gateway.md#server-settings).
+For the Live gateway's variables, `LIVE_ENABLED` and `LIVE_API_TOKEN`, and its limits in the `live.settings` block,
+refer to [Use the Live Gateway → Server Settings](../how-to/use-live-gateway.md#server-settings).
 
 ## Deployment
 
 ### Compose Profiles and Processes
 
 Each recipe profile runs one container with one server process and one uvicorn worker. The example has three Compose
-profiles, and each one serves the Live routes by default (refer to
-[When the Routes Are Served](../how-to/use-live-gateway.md#when-the-routes-are-served)):
+profiles, and each one serves the Live routes when `.env` sets `LIVE_API_TOKEN`, or without a token when it sets
+`LIVE_ENABLED=true` (refer to [When the Routes Are Served](../how-to/use-live-gateway.md#when-the-routes-are-served)):
 
 ```bash
 docker compose --profile frontend-backend-live up -d              # NVIDIA cloud endpoints
@@ -952,14 +1000,19 @@ The server has three ways in for this example:
 - The Live API (`/v1/live/...`) serves live sessions through the Live gateway, and the client-mode rounds of
   `POST /v1/live/delegate`.
 
-The following table lists where each recipe's default models run. The talker and the writer use the same model with
+The following table lists where each recipe's default models run. Every call of the talker uses the same model with
 the same settings:
 
 | Recipe | ASR | Talker LLM | Backend LLM | TTS |
 | --- | --- | --- | --- | --- |
 | `frontend-backend-live` | NVIDIA cloud endpoints | Nemotron 3.5 Lightning, NVIDIA cloud endpoint | Nemotron 3.5 Super VL, public NVIDIA API | NVIDIA cloud endpoints |
-| `frontend-backend-live/server` | Nemotron ASR NIM | Nemotron 3.5 Lightning NIM | Nemotron 3.5 Super VL, public NVIDIA API | Magpie TTS NIM |
+| `frontend-backend-live/server` | Nemotron ASR NIM | Nemotron 3.5 Lightning NIM | Nemotron 3.5 Super VL NIM, on GPUs `1` and `2` | Magpie TTS NIM |
 | `frontend-backend-live/single-gpu` | NeMo-Speech.cpp | Nemotron 3.5 Lightning through vLLM | Nemotron 3.5 Lightning through vLLM | NeMo-Speech.cpp |
+
+Each slot's default is its first listed model whose service is up, as the repository UI picks it. The server reads the
+catalog for the `live` hooks once, at the first hook call, as `GET /api/services` lists it, without the self-hosted
+entries whose service is offline unless a slot has nothing else. A model whose service starts later becomes a default at
+the next restart. The single-GPU profile does not start Super VL, so its backend runs on Lightning.
 
 For the slot order and the sampling settings, refer to the example's
 [Default Models](../../src/examples/frontend_backend_live/README.md#default-models).
@@ -970,59 +1023,21 @@ directory: the repository root on the host, and `/app` in the container, where `
 deployment. The harness also needs an agent that you deploy yourself. To deploy Hermes or another ACP agent and
 connect the core to it, refer to [Connect an Agent Harness](../how-to/connect-an-agent-harness.md).
 
-## Guard Test and Import Rules
+## The Core's Import Rule
 
-Two tests keep the boxes apart and the extension points honest. Both read the code with Python's `ast` module and never
-import it.
-
-### The Guard Test
-
-The guard ([`tests/unit/guard/guard.py`](../../tests/unit/guard/guard.py), run by `test_guard.py`) walks
-`src/gateways/live`, the example with its delegation core, and `src/server.py`, and fails on any of four kinds of site:
-
-- `compare`: a kind, such as `.mode`, `.adapter`, `.agent`, or `delegation.type`, compared or matched with a string or
-  a constant outside the table modules. `KIND_ATTRIBUTES` and `KIND_NAMES` list the kinds.
-- `isinstance`: an `isinstance` or `issubclass` check against a class of another module of the repository, unless the
-  class is a port type or an exception, or the check sits in a composition root or the core's builder.
-- `flag`: a flag name that `BANNED_FLAGS` bans, as an attribute, an argument, a keyword, or a field.
-- `pick`: a `pick()` from a table outside the composition roots, the core's builder, and a `from_settings`,
-  `from_config`, or `parse` method.
-
-Each failure names the file, the line, and the site.
-
-### The Import Rules
-
-[`tests/unit/test_import_boundaries.py`](../../tests/unit/test_import_boundaries.py) puts each module in a group by the
-longest prefix of its name, and each group may import only its own modules and the groups it lists. The gateway's and
-the core's groups are named by their packages, so the group `live.session` holds the modules of `gateways.live.session`,
-and the group `delegation_core.im` those of `examples.frontend_backend_live.delegation_core.im`. The following table
-summarizes the rules:
-
-| Group | May import |
-| --- | --- |
-| `live.protocol` | Nothing else of the gateway |
-| `live.events`, `live.ports` | `live.protocol` |
-| `live.server_delegation`, `live.client_delegation` | `live.protocol`, `live.ports` |
-| `live.session` | `live.protocol`, `live.events`, `live.ports`, and both delegation parts |
-| `live.gateway`, `live.media`, `live.extras`, `live.mount` | Every gateway group |
-| The frontend adapter (the example's package, except its roots and its delegation core) | `live.ports`, `live.protocol`, `examples.shared`, and `utils` |
-| `delegation_core.api` | `delegation_core.app`, `delegation_core.im`, `delegation_core.config`, and `delegation_core.ids` |
-| `delegation_core.app` | `delegation_core.im`, `delegation_core.ledger`, `delegation_core.backend`, the port, `delegation_core.config`, `delegation_core.ids`, and `delegation_core.tables` |
-| `delegation_core.im` | `delegation_core.ledger`, `delegation_core.backend.port`, `delegation_core.config`, and `delegation_core.ids` |
-| `delegation_core.backend.port` | `delegation_core.config` and `delegation_core.ids` |
-| `delegation_core.backend` | The port, the three adapter packages, `delegation_core.config`, `delegation_core.ids`, and `delegation_core.tables` |
-| Each adapter package (`backend.llm`, `backend.agent`, `backend.harness`) | The shared backend, the port, `delegation_core.config`, `delegation_core.ids`, and `delegation_core.tables`; `backend.agent` also imports `backend.llm` |
-| `delegation_core.ledger` | `delegation_core.ids` |
-| `delegation_core.config`, `delegation_core.ids`, `delegation_core.tables` | Nothing else of the core |
-| The composition roots | Anything |
-
-The same test checks where outside packages may be imported: Pipecat only in the frontend adapter's Pipecat modules and
-the WebRTC peer; `openai` only in the core's providers and the frontend's models; FastAPI and Starlette only at the
-HTTP edges; `mcp`, `websockets`, and `acp` only in the harness. Only `delegation_core.backend` may reach a model
-provider's `stream()`, so every model call stays inside the backend adapter. Only the agents table,
-[`acp/agents.py`](../../src/examples/frontend_backend_live/delegation_core/backend/harness/acp/agents.py), imports an
-agent class's package, such as `acp/hermes/`, so no other module depends on one agent. No module of the boxes imports
-the tests, and the core's own tests import nothing from the gateway or the frontend adapter.
+The delegation core imports nothing from Pipecat, the Live gateway, or the frontend adapter, so it stays a piece of its
+own. Only the two composition roots, `factory.py` and `pipeline.py`, import it. They build it, and they hand the
+frontend adapter the helpers that the two share: the one copy of `pick` (`delegation_core.tables`), the profile loader
+(`delegation_core.profiles`), and `message_text` (`delegation_core.items`). The frontend adapter's settings pick its
+classes with that `pick`, its config loader reads `config.yaml` with that loader, and the voice reads results with that
+`message_text`. The core, the Live gateway, and the frontend adapter share one copy of their common helpers, in modules
+of `src/examples/shared/` that load no Pipecat. [`ids.py`](../../src/examples/shared/ids.py) holds the ids and the
+token estimate. [`delegation_contract.py`](../../src/examples/shared/delegation_contract.py) holds the terminal events
+of a response, the request options, the metadata keys that the core reads, the progress phase of a message, and the
+model endpoint type. [`observe.py`](../../src/examples/shared/observe.py) holds the default observation hook.
+[`test_core_boundary.py`](../../tests/unit/delegation_core/test_core_boundary.py) checks the core's side
+of the rule: in a fresh interpreter, it imports every module of the core and fails when any Pipecat, gateway, or
+frontend module was loaded.
 
 ## Tests
 
@@ -1030,23 +1045,20 @@ The tests run offline with scripted models. The following table lists the comman
 
 | What | Command |
 | --- | --- |
-| Every Live box, the contracts, the guard, the goldens, and the import rules | `uv run pytest tests/unit/live tests/unit/frontend_backend_live tests/unit/delegation_core tests/unit/cross_box tests/unit/contracts tests/unit/guard tests/unit/goldens tests/unit/test_import_boundaries.py -q` |
+| Every Live box and the contracts | `uv run pytest tests/unit/live tests/unit/frontend_backend_live tests/unit/delegation_core tests/unit/cross_box tests/unit/contracts -q` |
 | One box | `uv run pytest tests/unit/delegation_core -q`, and the same for the box's own folder |
-| Re-record a golden after an intended behavior change | `LIVE_GOLDEN_RECORD=1 uv run pytest tests/unit/goldens/<test file> -q -p no:cacheprovider` |
 | The whole suite, as CI runs it | `uv run pytest tests/unit -v` |
 
 Each box has its own test folder: `tests/unit/live/` for the gateway, `tests/unit/frontend_backend_live/` for the
-frontend adapter, the cascade, and the composition roots, and `tests/unit/delegation_core/` for the core, with each
+frontend adapter and the composition roots, and `tests/unit/delegation_core/` for the core, with each
 backend adapter under `backend/`. Tests that join boxes sit in `tests/unit/cross_box/`.
 
 Each port has one contract suite in [`tests/unit/contracts/`](../../tests/unit/contracts/), which the tests of every
-implementation bind. The goldens play whole calls through the real gateway, the cascade, and the core, and compare
-them with the recordings in `tests/unit/goldens/recordings/`.
-
-The harness also has a module that runs against a real `hermes acp`, deployed the way an operator would deploy it:
-`test_harness_real_hermes.py`. It gives Hermes a home of its own, as
-[Deploy Hermes](../how-to/connect-an-agent-harness.md#deploy-hermes) describes, on a scripted model endpoint, and
-connects to it through the core's settings, so it runs the contracts and the core's flows with no model cost. It is
-skipped unless `HARNESS_HERMES_BIN` names the Hermes executable. `HARNESS_TRANSPORT=websocket` serves Hermes over
-WebSocket instead of starting it over stdio, and `HARNESS_HERMES_HOME`, a home that you configured with a real model and
-its key, adds one run on that model.
+implementation bind, except the harness's. The harness's tests run its parts on doubles and on recorded Hermes wire
+logs. Whole-call tests run on scripted model output:
+`tests/unit/frontend_backend_live/test_whole_calls.py` plays calls through the frontend's own pipeline with Pipecat's
+`run_test`, `tests/unit/cross_box/test_frontend_backend_live_engine.py` plays live sessions through the real gateway,
+the cascade adapter, and the core, and `tests/unit/frontend_backend_live/root/test_frontend_backend_live_bot.py` plays
+calls through the UI bot as it runs, on its own core. `tests/unit/cross_box/test_live_close_order.py` closes live
+sessions on every close path and checks the order: the pipeline stops, the conversation's IM session closes, and then
+`session.closed` comes once and last, before the client's socket closes.

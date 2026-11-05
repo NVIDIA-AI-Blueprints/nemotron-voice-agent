@@ -19,7 +19,9 @@ from examples.frontend_backend_live.config_manager.schema import (
     SpeechConfig,
 )
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.profiles import load_profile
 from examples.frontend_backend_live.prompts import load_prompts
+from tests.unit.core_helpers import CORE_TEXTS
 
 CASCADE = {"provider": "chat-completions", "slot": "llm"}
 
@@ -42,7 +44,7 @@ def write(folder: str, name: str, text: str) -> Path:
 
 class ShippedFileTests(unittest.TestCase):
     def test_the_shipped_file_names_the_cascade_and_its_settings(self):
-        config = load_live_config(CONFIG_PATH)
+        config = load_live_config(load_profile, CONFIG_PATH)
         self.assertEqual((config.adapter, list(config.blocks)), ("cascade", ["cascade"]))
         self.assertEqual((config.ui_bot.core_config, config.ui_bot.channel), ("core.ui-bot.yaml", "cafe"))
         cascade = cascade_of(config)
@@ -52,7 +54,6 @@ class ShippedFileTests(unittest.TestCase):
         self.assertEqual((delegation.app_wait_seconds, delegation.result_wording), (50.0, "writer"))
         self.assertEqual((delegation.progress_after_seconds, delegation.progress_max_per_delegation), (8.0, 3))
         self.assertEqual((cascade.memory.context_tokens, cascade.memory.compact_at), (16000, 0.8))
-        self.assertEqual(cascade.speech.tts_mode, "per_sentence")
         turn_end = ("smart_turn", 0.2, 1.2)
         speech, default = cascade.speech, SpeechConfig()
         self.assertEqual((speech.turn_end, speech.vad_stop_seconds, speech.turn_silence_seconds), turn_end)
@@ -66,8 +67,10 @@ class ShippedFileTests(unittest.TestCase):
         self.assertTrue(prompts.text("Channel", config.ui_bot.channel))
 
     def test_the_app_wait_line_comes_before_the_cores_deadline_for_the_apps_outputs(self):
-        deadline = CoreSettings.load(CONFIG_PATH.with_name("core.yaml")).delegation.client_tool_timeout_seconds
-        shipped = cascade_of(load_live_config(CONFIG_PATH)).delegation.app_wait_seconds
+        deadline = CoreSettings.load(
+            CONFIG_PATH.with_name("core.yaml"), CORE_TEXTS
+        ).delegation.client_tool_timeout_seconds
+        shipped = cascade_of(load_live_config(load_profile, CONFIG_PATH)).delegation.app_wait_seconds
         self.assertLess(shipped, deadline)
         self.assertEqual(DelegationConfig().app_wait_seconds, shipped)  # the schema's default is the shipped value
 
@@ -75,7 +78,8 @@ class ShippedFileTests(unittest.TestCase):
         quiet = "{cascade: {delegation: {app_wait_seconds: null, progress_after_seconds: null}}}"
         with TemporaryDirectory() as folder:
             profile = write(folder, "config.custom.yaml", f"extends: {CONFIG_PATH}\nfrontend: {quiet}\n")
-            shipped, bench = cascade_of(load_live_config(CONFIG_PATH)), cascade_of(load_live_config(profile))
+            shipped = cascade_of(load_live_config(load_profile, CONFIG_PATH))
+            bench = cascade_of(load_live_config(load_profile, profile))
         self.assertIsNone(bench.delegation.app_wait_seconds)
         self.assertIsNone(bench.delegation.progress_after_seconds)
         self.assertEqual(bench.delegation.result_wording, shipped.delegation.result_wording)
@@ -85,7 +89,7 @@ class ShippedFileTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             other = write(folder, "other.yaml", "frontend: {adapter: cascade, cascade: {provider: p, slot: s}}\n")
             with patch.dict(os.environ, {"LIVE_CONFIG_PATH": str(other)}):
-                self.assertEqual(cascade_of(load_live_config()).slot, "s")
+                self.assertEqual(cascade_of(load_live_config(load_profile)).slot, "s")
 
     def test_a_server_prompt_file_replaces_the_examples_whole_prompt_file(self):
         with TemporaryDirectory() as folder:
@@ -124,10 +128,10 @@ class CheckTests(unittest.TestCase):
             ({"reliability": {"nope": 1}}, "frontend.cascade.reliability has unknown keys: nope"),
             ({"normalizer": {"enabled": "yes"}}, "true or false"),
             ({"memory": {"context_tokens": 0.5}}, "memory.context_tokens must be a positive whole number"),
+            ({"memory": {"compact_at": None}}, "compact_at must be a positive number"),
+            ({"memory": {"compact_at": 1.5}}, "memory.compact_at must be a number above 0 and at most 1"),
             ({"delegation": {"progress_max_per_delegation": 1.5}}, "must be a positive whole number"),
             ({"delegation": {"app_wait_seconds": -1}}, "app_wait_seconds must be a positive number"),
-            ({"memory": {"compact_at": None}}, "compact_at must be a positive number"),
-            ({"speech": {"tts_mode": ""}}, "tts_mode must be a name"),
             ({"speech": {"turn_end": ""}}, "turn_end must be a name"),
             ({"speech": {"vad_start_seconds": 0}}, "vad_start_seconds must be a positive number"),
             ({"speech": {"vad_stop_seconds": 0}}, "vad_stop_seconds must be a positive number"),
@@ -169,7 +173,7 @@ class ProfileTests(unittest.TestCase):
                 "profile.yaml",
                 "extends: base.yaml\nfrontend: {cascade: {delegation: {app_wait_seconds: null}}}\n",
             )
-            cascade = cascade_of(load_live_config(profile))
+            cascade = cascade_of(load_live_config(load_profile, profile))
             self.assertEqual((cascade.provider, cascade.slot, cascade.prompt), ("p", "s", "talker"))
             self.assertIsNone(cascade.delegation.app_wait_seconds)
 
@@ -178,10 +182,10 @@ class ProfileTests(unittest.TestCase):
             write(folder, "a.yaml", "extends: b.yaml\n")
             write(folder, "b.yaml", "extends: a.yaml\n")
             with self.assertRaisesRegex(ConfigError, "extends itself"):
-                load_live_config(Path(folder) / "a.yaml")
+                load_live_config(load_profile, Path(folder) / "a.yaml")
             missing = write(folder, "c.yaml", "extends: nowhere.yaml\n")
             with self.assertRaisesRegex(ConfigError, "Cannot read .*nowhere.yaml"):
-                load_live_config(missing)
+                load_live_config(load_profile, missing)
 
 
 if __name__ == "__main__":

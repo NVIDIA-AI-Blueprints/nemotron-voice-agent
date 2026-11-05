@@ -23,13 +23,14 @@ from examples.frontend_backend_live.delegation_core.config import (
     BackendChoice,
     CoreSettings,
     DelegationSettings,
-    ModelEndpoint,
 )
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.shared.delegation_contract import ModelEndpoint
 from tests.unit.contracts.base import ContractCase
+from tests.unit.core_helpers import CORE_TEXTS
 
 FBL = Path(__file__).resolve().parents[4] / "src/examples/frontend_backend_live"
-SHIPPED = CoreSettings.load(FBL / "core.yaml")
+SHIPPED = CoreSettings.load(FBL / "core.yaml", CORE_TEXTS)
 DEFAULT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")
 DEFAULTS = BackendTask("test/model", "Take orders.", [])
 
@@ -272,7 +273,12 @@ class CoreTests(BuilderCase):
         self.assertEqual(first.args[1:], (DEFAULTS, core.settings.delegation, core.settings.texts))
         self.assertEqual(
             first.kwargs,
-            {"result_format": core.result_format, "call_reports": core.call_reports, "observe": log_trace},
+            {
+                "result_format": core.result_format,
+                "call_reports": core.call_reports,
+                "output_steps": (),  # the settings name no app output step
+                "observe": log_trace,
+            },
         )
 
     def test_each_stateless_request_gets_a_one_shot_session_on_the_one_shot_source(self):
@@ -340,15 +346,18 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from examples.frontend_backend_live.delegation_core.app import build_core
-from examples.frontend_backend_live.delegation_core.config import BackendChoice, CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.config import BackendChoice, CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.shared.delegation_contract import ModelEndpoint
 from tests.unit.frontend_backend_live.root.test_root_build_core import ADAPTERS
-settings = CoreSettings.load(Path({str(FBL / "core.yaml")!r}))
+from tests.unit.core_helpers import CORE_TEXTS
+settings = CoreSettings.load(Path({str(FBL / "core.yaml")!r}), CORE_TEXTS)
 raw = {{"slot": "s", "prompt": "p", "adapter": "scripted", "one_shot_adapter": "scripted"}}
 settings = replace(settings, backend=BackendChoice.parse(raw))
 endpoint = ModelEndpoint(model="m", base_url="http://localhost:1/v1")
 build_core(settings, endpoints=lambda model: endpoint, defaults=BackendTask("m", "x", []), adapters=ADAPTERS)
 held = ("examples", "examples.frontend_backend_live")  # the packages that hold the core
+held += ("examples.shared", "examples.shared.delegation_contract", "examples.shared.ids")  # and the helpers it shares
 core = "examples.frontend_backend_live.delegation_core"
 loaded = (name for name in sys.modules if name.startswith(("examples", "gateways", "pipecat")))
 print(sorted(name for name in loaded if name not in held and name != core and not name.startswith(core + ".")))
@@ -369,7 +378,7 @@ print(sorted(name for name in loaded if name not in held and name != core and no
 # ------------------------------------------------------------------------------------------------ the profiles
 class ProfileTests(unittest.TestCase):
     def test_the_ui_bot_profile_writes_the_envelope_and_runs_the_cafes_tools_and_prompt(self):
-        ui_bot = CoreSettings.load(FBL / "core.ui-bot.yaml")
+        ui_bot = CoreSettings.load(FBL / "core.ui-bot.yaml", CORE_TEXTS)
         self.assertEqual({name: dict(block) for name, block in ui_bot.backend.tools.items()}, {"cafe": {}})
         self.assertEqual((ui_bot.backend.prompt, SHIPPED.backend.prompt), ("cafe", "generic"))
         self.assertEqual(replace(ui_bot.backend, prompt="generic", tools=SHIPPED.backend.tools), SHIPPED.backend)
@@ -386,7 +395,7 @@ class ProfileTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             profile = Path(folder) / "core.custom.yaml"
             profile.write_text(f"extends: {FBL / 'core.yaml'}\n{changes}", encoding="utf-8")
-            bench = CoreSettings.load(profile)
+            bench = CoreSettings.load(profile, CORE_TEXTS)
         delegation = bench.delegation
         self.assertIsNone(delegation.client_tool_timeout_seconds)
         self.assertEqual((delegation.progress_note_seconds, delegation.result_format), (0.0, "plain"))

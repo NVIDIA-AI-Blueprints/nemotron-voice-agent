@@ -52,18 +52,20 @@ def mount_live(
 
     Args:
         app: The server's app.
-        factory: Builds each session's frontend adapter; without it, no live route is served.
+        factory: Builds each session's parts (its frontend adapter, and a WebRTC session's peer connection);
+            without it, no live route is served.
         core: Builds the one delegation core client of the gateway, on first use (``responses`` sessions and delegate
             rounds); without it they are refused.
         describe: What ``GET /v1/live/info`` adds about the example.
-        settings: The operator settings; read from the environment when omitted.
+        settings: The operator settings; when omitted, the defaults, with the token and the worker count from the
+            environment.
         ice_servers: The ICE servers, TURN credentials included, of each WebRTC session's peer, for its request.
 
     Returns:
         The gateway, or ``None`` when no live route is served.
 
     Raises:
-        ValueError: A ``LIVE_*`` limit or ``UVICORN_WORKERS`` is not a whole number of at least 1.
+        ValueError: ``UVICORN_WORKERS`` is not a whole number of at least 1.
     """
     if factory is None:
         add_not_found(app)

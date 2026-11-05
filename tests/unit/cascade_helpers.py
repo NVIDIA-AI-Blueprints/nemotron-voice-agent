@@ -5,20 +5,21 @@
 
 """Shared doubles of the frontend adapter's tests and of whole calls.
 
-Pipecat stand-ins, the cascade session's doubles, and what a whole call is served by, as the roots build it: a
-session's parts (:func:`cascade_parts`) and the gateway's one core (:func:`chat_core`), its backend LLM on a scripted
-model client.
+Pipecat stand-ins, and what a whole call is served by, as the roots build it: a session's parts (:func:`cascade_parts`)
+and the gateway's one core (:func:`chat_core`), its backend LLM on a scripted model client.
 """
 
 import asyncio
-import json
 import time
 from dataclasses import replace
 from pathlib import Path
 
 from pipecat.frames.frames import (
+    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMTextFrame,
+    ProposedUserStartedSpeakingFrame,
+    ProposedUserStoppedSpeakingFrame,
     TextType,
     TranscriptionFrame,
     TTSAudioRawFrame,
@@ -35,7 +36,7 @@ from pipecat.turns.user_stop import ExternalUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
-from examples.frontend_backend_live.cascade.session import log_observation
+from examples.frontend_backend_live.adapter.connection import LiveWebRTCConnection
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint, ReliabilityConfig
 from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
 from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
@@ -43,13 +44,14 @@ from examples.frontend_backend_live.delegation_core.app import DelegationCore, b
 from examples.frontend_backend_live.delegation_core.backend.adapters import ADAPTERS
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint as CoreEndpoint
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
-from examples.frontend_backend_live.models import Frontend
+from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.prompts import load_prompts
+from examples.shared.delegation_contract import ModelEndpoint as CoreEndpoint
+from examples.shared.observe import log_observation
 from gateways.live.ports import SessionParts
 from gateways.live.server_delegation import ServerDelegation
-from tests.unit.core_helpers import chunk, tool_fragment
+from tests.unit.core_helpers import CORE_TEXTS, chunk, tool_fragment
 
 CORE_YAML = Path(__file__).resolve().parents[2] / "src/examples/frontend_backend_live/core.yaml"
 
@@ -68,83 +70,58 @@ class FakeSTT(FrameProcessor):
         )
         await self.push_frame(UserStoppedSpeakingFrame())
 
+    async def propose(self, text):
+        """The caller says ``text`` in a turn proposed as a speech service with turn detection proposes it.
+
+        The user aggregator resolves the proposal: it starts the turn and broadcasts the interruption, as it does for
+        a turn its own strategies detect, so a turn said over the bot cuts what it was doing.
+        """
+        await self.push_frame(ProposedUserStartedSpeakingFrame())
+        await asyncio.sleep(0.02)
+        await self.push_frame(
+            TranscriptionFrame(text=text, user_id="caller", timestamp=str(time.time()), finalized=True)
+        )
+        await self.push_frame(ProposedUserStoppedSpeakingFrame())
+
 
 class FakeTTS(FrameProcessor):
-    """Text-to-speech stand-in: 100 ms of tone per word, with the word frames a real TTS emits."""
+    """Text-to-speech stand-in: 100 ms of tone per word, with the word frames a real TTS emits.
+
+    A word the streamed text has not finished yet waits for the rest of it, or for the response's end.
+    """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.spoken: list[str] = []
         self._started = False
+        self._partial = ""
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         if isinstance(frame, LLMTextFrame):
+            text = self._partial + frame.text
+            words = text.split()
+            self._partial = words.pop() if words and not text[-1].isspace() else ""
+            await self._speak(words)
+            return
+        if isinstance(frame, InterruptionFrame):
+            self._partial = ""
+        if isinstance(frame, LLMFullResponseEndFrame):
+            words, self._partial = self._partial.split(), ""
+            await self._speak(words)
+            if self._started:
+                self._started = False
+                await self.push_frame(TTSStoppedFrame())
+        await self.push_frame(frame, direction)
+
+    async def _speak(self, words):
+        for word in words:
             if not self._started:
                 self._started = True
                 await self.push_frame(TTSStartedFrame())
-            for word in frame.text.split():
-                self.spoken.append(word)
-                await self.push_frame(TTSAudioRawFrame(audio=b"\x10\x10" * 2400, sample_rate=24000, num_channels=1))
-                await self.push_frame(TTSTextFrame(text=word, text_type=TextType.WORD))
-            return
-        if isinstance(frame, LLMFullResponseEndFrame) and self._started:
-            self._started = False
-            await self.push_frame(TTSStoppedFrame())
-        await self.push_frame(frame, direction)
-
-
-# The model endpoint and limits of the cascade's tests, in the example's own settings types. The delegation core's
-# tests have the same values in the core's types (tests/unit/core_helpers.py).
-CASCADE_ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")
-FAST = ReliabilityConfig(provider_retries=1, talker_attempt_timeout_seconds=1.0, client_timeout_seconds=2.0)
-
-
-def _config(**changes) -> LiveConfig:
-    """The cascade's settings (the ``frontend.cascade`` block) of the cascade's tests, with ``changes``."""
-    return replace(LiveConfig(provider="scripted", slot="llm", reliability=FAST), **changes)
-
-
-class ScriptedFrontend(Frontend):
-    """A talker model that plays a script: each call pops the next decision, or raises it, or waits for it.
-
-    A future in the script is a slow model: the call waits for the future's decision, or until it is cancelled.
-    """
-
-    def __init__(self, script, endpoint=CASCADE_ENDPOINT, reliability=FAST):
-        super().__init__(endpoint, reliability)
-        self.script = list(script)
-        self.calls: list[dict] = []
-
-    async def complete_once(self, instructions, history, spec):
-        self.calls.append(
-            {
-                "instructions": instructions,
-                "history": json.loads(json.dumps(history)),
-                "actions": spec.actions,
-                "role": spec.role,
-            }
-        )
-        step = self.script.pop(0)
-        if isinstance(step, Exception):
-            raise step
-        if isinstance(step, asyncio.Future):
-            return await step
-        return step
-
-
-class ListConversation:
-    def __init__(self, messages):
-        self._messages = list(messages)
-
-    def messages(self):
-        return list(self._messages)
-
-    def add(self, message):
-        self._messages.append(message)
-
-    def trim(self, limit):
-        pass
+            self.spoken.append(word)
+            await self.push_frame(TTSAudioRawFrame(audio=b"\x10\x10" * 2400, sample_rate=24000, num_channels=1))
+            await self.push_frame(TTSTextFrame(text=word, text_type=TextType.WORD))
 
 
 def _delegation(backend, *, tools=(), observe=log_observation, **delegation):
@@ -163,7 +140,7 @@ def _delegation(backend, *, tools=(), observe=log_observation, **delegation):
             settings = LlmSettings.parse(block)
             return cls(settings, endpoints=endpoints, tools=lambda: list(sources), make_provider=lambda _: make())
 
-    settings = CoreSettings.load(CORE_YAML)
+    settings = CoreSettings.load(CORE_YAML, CORE_TEXTS)
     settings = replace(settings, delegation=replace(settings.delegation, **{"close_grace_seconds": 0.01, **delegation}))
     core = build_core(
         settings,
@@ -183,19 +160,6 @@ def core_client(core: DelegationCore) -> LocalResponsesClient:
 def core_session(delegation):
     """The IM session that serves the server delegation's conversation in its in-process core."""
     return delegation.client.service.sessions[delegation.conversation]
-
-
-def _messages(*turns):
-    out = [{"role": "system", "content": "You are Remy."}]
-    out += [{"role": role, "content": text} for role, text in turns]
-    return out
-
-
-async def _settle(session, spoken, count, timeout=2.0):
-    """Wait until ``count`` utterances were spoken."""
-    async with asyncio.timeout(timeout):
-        while len(spoken) < count:
-            await asyncio.sleep(0.005)
 
 
 def _decision_chunks(text, finish="stop"):
@@ -231,7 +195,7 @@ def transcript_turns() -> LLMUserAggregatorParams:
 def cascade_parts(
     config,
     transport,
-    connection,
+    ice_servers,
     *,
     chat,
     stt,
@@ -241,9 +205,11 @@ def cascade_parts(
 ) -> SessionParts:
     """One session's parts as the root builds them: the cascade adapter, here with fake speech and a scripted talker.
 
-    ``chat`` is the talker's and the writer's model client; ``instructions`` are the talker's when the session sets
+    ``chat`` is the talker's model client; ``instructions`` are the talker's when the session sets
     none. The gateway reaches the backend through its one core (:func:`chat_core`), never through the parts.
+    A WebRTC session's peer connection is made on the gateway's ``ice_servers``, as the root makes it.
     """
+    connection = None if ice_servers is None else LiveWebRTCConnection.from_ice_servers(ice_servers)
     adapter = CascadeAdapter(
         config,
         transport,
@@ -254,10 +220,11 @@ def cascade_parts(
         prompts=load_prompts(),
         stt=stt,
         tts=tts,
+        item_text=message_text,
         user_params=transcript_turns(),
         frontend_client=chat,
     )
-    return SessionParts(frontend=adapter)
+    return SessionParts(frontend=adapter, connection=connection)
 
 
 def chat_adapters(chat) -> dict:
@@ -297,7 +264,7 @@ def chat_core(chat, *, instructions=STATIC_BACKEND, models=(), path=CORE_YAML, *
             raise LookupError(f"The catalog lists no model {model!r}")
         return CoreEndpoint(model=model or ENDPOINT.model, base_url=ENDPOINT.base_url)
 
-    settings = CoreSettings.load(path)
+    settings = CoreSettings.load(path, CORE_TEXTS)
     settings = replace(settings, delegation=replace(settings.delegation, **{"close_grace_seconds": 0.01, **delegation}))
     return build_core(
         settings,
@@ -327,10 +294,3 @@ def tool_call_round(call_id="call_1", arguments='{"category":"tea"}'):
         chunk(tool_calls=[tool_fragment(0, call_id, "get_menu", arguments[:8])]),
         chunk(tool_calls=[tool_fragment(0, arguments=arguments[8:])], finish="tool_calls"),
     ]
-
-
-def result_item(call_id, output="{}"):
-    return {
-        "type": "response.item.create",
-        "item": {"type": "function_call_output", "call_id": call_id, "output": output},
-    }

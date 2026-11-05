@@ -15,8 +15,9 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from examples.shared.ids import approx_tokens
 from gateways.live.ports import TypedReader
-from gateways.live.protocol import ProtocolError, approx_tokens
+from gateways.live.protocol import ProtocolError
 
 if TYPE_CHECKING:
     from gateways.live.session.session import LiveProtocolSession

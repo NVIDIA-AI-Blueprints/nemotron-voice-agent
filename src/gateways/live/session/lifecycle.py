@@ -20,8 +20,9 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from examples.shared.ids import approx_tokens
 from gateways.live.ports import ContextMeter
-from gateways.live.protocol import ProtocolError, approx_tokens
+from gateways.live.protocol import ProtocolError
 
 if TYPE_CHECKING:
     from gateways.live.session.session import LiveProtocolSession

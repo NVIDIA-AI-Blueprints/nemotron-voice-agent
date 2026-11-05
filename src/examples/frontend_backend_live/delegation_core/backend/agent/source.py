@@ -19,7 +19,7 @@ from examples.frontend_backend_live.delegation_core.backend.llm import LlmSource
 from examples.frontend_backend_live.delegation_core.backend.llm.source import ProviderMaker
 from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, EndpointLookup, ToolSources
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
+from examples.shared.delegation_contract import ModelEndpoint
 
 from .adapter import AgentAdapter
 from .settings import AgentSettings

@@ -19,7 +19,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from gateways.live.protocol import ProtocolError, approx_tokens
+from examples.shared.ids import approx_tokens
+from gateways.live.protocol import ProtocolError
 
 if TYPE_CHECKING:
     from gateways.live.session.session import LiveProtocolSession

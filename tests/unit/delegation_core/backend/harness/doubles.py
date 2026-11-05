@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103, D105, D107
 
-"""Doubles of the harness's own seams for its unit tests; the real runtime runs in ``test_harness_real_hermes``.
+"""Doubles of the harness's own seams for its unit tests.
 
 Session events come from the real Hermes wire logs in ``fixtures/``, read through the Hermes agent class.
 """
@@ -33,15 +33,19 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
 from examples.frontend_backend_live.delegation_core.backend.harness.render import Renderer
 from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessSettings
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from tests.unit.core_helpers import CORE_TEXTS
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SHIPPED = CoreSettings.load(Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live/core.yaml")
-# The harness's prompts as core.yaml words them: every harness block carries them.
+SHIPPED = CoreSettings.load(
+    Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live/core.yaml", CORE_TEXTS
+)
+# The harness's prompts as prompts.yaml words them: every harness block carries them.
 PROMPTS = dict(SHIPPED.backend.blocks["harness"]["prompts"])
-# The agent classes' blocks as core.yaml words them: Hermes's holds its command guard, which has no default.
+# The agent classes' blocks as core.yaml and prompts.yaml word them: Hermes's holds its command guard, which has no
+# default.
 AGENT_BLOCKS = {name: dict(block) for name, block in SHIPPED.backend.blocks["harness"]["agents"].items()}
 
-# The core's own control tools and conductor prompt, as core.yaml words them.
+# The core's own control tools and conductor prompt, as prompts.yaml words them.
 CONTROL_TOOLS = {
     "start_work": {
         "description": "Start new work.",
@@ -92,7 +96,7 @@ def wire(scenario: str) -> list[dict]:
 
 
 def settings(**block: Any) -> HarnessSettings:
-    """Test settings: core.yaml's prompts and agent blocks; Hermes and its steer unless ``block`` names others."""
+    """Test settings: the shipped prompts and agent blocks; Hermes and its steer unless ``block`` names others."""
     base = {
         "prompts": PROMPTS,
         "agents": AGENT_BLOCKS,

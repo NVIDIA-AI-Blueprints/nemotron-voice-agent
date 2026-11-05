@@ -10,7 +10,6 @@ more round with the newer request; placed elsewhere, it is written once the deci
 """
 
 import asyncio
-import re
 import unittest
 
 from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
@@ -19,7 +18,6 @@ from examples.frontend_backend_live.delegation_core.config import DelegationSett
 from tests.unit.contracts.endings import load
 from tests.unit.delegation_core.helpers import (
     CORE_SETTINGS,
-    CORE_YAML,
     TEXTS,
     IMCase,
     ScriptedAdapter,
@@ -311,8 +309,6 @@ class HeldAnswerTests(IMCase):
 
 class SettingTests(unittest.TestCase):
     def test_it_is_off_in_core_yaml_and_takes_true_or_false_only(self):
-        line = re.compile(r"^  hold_answers_while_deciding: false +# \S", re.MULTILINE)
-        self.assertRegex(CORE_YAML.read_text(), line)  # written out, with its comment
         self.assertFalse(CORE_SETTINGS.delegation.hold_answers_while_deciding)
         self.assertTrue(DelegationSettings.parse({"hold_answers_while_deciding": True}).hold_answers_while_deciding)
         for value in ("yes", 1, None):

@@ -4,7 +4,7 @@
 """The agent interface the ACP client talks to (``backend.harness.agent``), and a plain ACP agent by default.
 
 ACP leaves agent-specific behavior to each agent: where a session's instructions go, mid-turn steering, tool call
-titles, which text its model wrote, and turns per process. On its own, :class:`AcpAgent` keeps to the protocol
+titles, when a turn answered, and turns per process. On its own, :class:`AcpAgent` keeps to the protocol
 (``agent: acp``): instructions open the first prompt, a newer request goes as the next prompt or by a cancel and a fresh
 session, a chunk with no message id belongs to the message being streamed (message ids are not stable ACP), a tool
 call's title is its name, and a turn that ended ``end_turn`` answered. A subclass lives in its own package, is named in
@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from ..protocol import MessageFacts
     from .updates import SessionUpdates
 
 
@@ -97,10 +96,6 @@ class AcpAgent:
     def unnamed_message(self, updates: SessionUpdates) -> str | None:
         """The id of a message chunk that came with none: the message being streamed (ids are not stable ACP)."""
         return updates.continued()
-
-    def model_text(self, message: MessageFacts) -> bool:
-        """Whether a message was written by a model call: every message of a plain agent is."""
-        return True
 
     def no_answer(self, total: int | None, total_before: int | None) -> str | None:
         """Why a turn that ended ``end_turn`` gave no answer: a plain agent's always gave one."""

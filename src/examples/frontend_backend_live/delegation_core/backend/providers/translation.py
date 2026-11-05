@@ -4,16 +4,17 @@
 """Conversion between the Responses vocabulary and OpenAI-compatible chat completions, with no I/O.
 
 The request helpers build a stateless chat request from Responses input items and the round's settings, and
-``ChatResponseTranslator`` turns chat-completion chunks into Responses stream events. Hidden reasoning
-(``reasoning_content``, ``<think>`` spans) is counted but never emitted. Every call gets its own id, so a provider that
-reuses an id cannot break a tool answer, and a call cut off mid-stream is never emitted to run.
+``ChatResponseTranslator`` turns chat-completion chunks into Responses stream events. Reasoning, which the server's
+reasoning parser returns apart from the answer (``reasoning_content`` or ``reasoning``), is counted but never emitted.
+Every call gets its own id, so a provider that reuses an id cannot break a tool answer, and a call cut off mid-stream is
+never emitted to run.
 """
 
-import re
 import time
 from dataclasses import dataclass, field
 
-from ...ids import uid
+from examples.shared.ids import uid
+
 from .base import BrokenStreamError
 
 TEXT_PART_TYPES = {"input_text", "output_text", "text"}
@@ -153,26 +154,6 @@ def to_chat_response_format(text_format) -> dict | None:
     return {"type": "json_schema", "json_schema": schema}
 
 
-THINK_SPAN = re.compile(r"<think>.*?</think>", re.S)
-
-
-def split_reasoning(text: str) -> tuple[str, str]:
-    """Return (answer, reasoning). Handles templates that open `<think>` in the prompt."""
-    if "</think>" in text:
-        reasoning, answer = text.rsplit("</think>", 1)
-        return answer.strip(), reasoning.replace("<think>", "").strip()
-    if "<think>" in text:  # reasoning was cut off before it closed; no answer exists
-        before, _, reasoning = text.partition("<think>")
-        return before.strip(), reasoning.strip()
-    return text, ""
-
-
-def strip_reasoning(text: str) -> str:
-    """Return ``text`` without hidden reasoning (``<think>`` spans)."""
-    answer, _ = split_reasoning(THINK_SPAN.sub("", text))
-    return answer
-
-
 def _extra(obj, name: str):
     """Fields such as `reasoning_content` are extensions, present as SDK extras."""
     value = getattr(obj, name, None)
@@ -200,24 +181,19 @@ CUT_SHORT = {"length": "max_output_tokens", "content_filter": "content_filter"}
 class ChatResponseTranslator:
     """Chat-completion chunks in, Responses stream events out.
 
-    `buffer_text` holds answer text until the end. Use it when the model may emit
-    `<think>` reasoning inline: the visible answer is only known once it finishes.
     `single_call` keeps only the first tool call of the reply: the request said
     `parallel_tool_calls: false`, and the endpoint may still return several. The reply
     ends once a second call starts (`first_call_whole`), so a later call that the output
     cap cuts never costs the first one, and the provider stops reading the stream there.
     """
 
-    def __init__(
-        self, model: str, buffer_text: bool = False, response_id: str | None = None, *, single_call: bool = False
-    ):
-        """Start a translation for ``model``; ``buffer_text`` holds answer text until the stream ends."""
-        self.model, self.buffer_text, self.single_call = model, buffer_text, single_call
+    def __init__(self, model: str, response_id: str | None = None, *, single_call: bool = False):
+        """Start a translation for ``model``."""
+        self.model, self.single_call = model, single_call
         self.response_id = response_id or uid("resp")
         self.created_at = int(time.time())
         self.sequence = 0
         self.next_output_index = 0
-        self.text_parts: list[str] = []
         self.message_index: int | None = None
         self.message_id = uid("msg")
         self.live_text = ""
@@ -226,7 +202,6 @@ class ChatResponseTranslator:
         self.finish_reason: str | None = None
         self.usage: dict | None = None
         self.reasoning_chars = 0
-        self.saw_reasoning_field = False
         self.output: list[dict] = []
 
     # ------------------------------------------------------------------ events
@@ -310,14 +285,11 @@ class ChatResponseTranslator:
         reasoning = _extra(delta, "reasoning_content") or _extra(delta, "reasoning")
         if reasoning:
             self.reasoning_chars += len(reasoning)
-            self.saw_reasoning_field = True
         if delta.content:
-            self.text_parts.append(delta.content)
-            if not self.buffer_text:
-                if self.message_index is None:
-                    events += self._start_message()
-                self.live_text += delta.content
-                events.append(self._text_delta(delta.content))
+            if self.message_index is None:
+                events += self._start_message()
+            self.live_text += delta.content
+            events.append(self._text_delta(delta.content))
         for fragment in delta.tool_calls or []:
             if self.single_call and self.calls and fragment.index not in self.calls:
                 # parallel_tool_calls is false: a second call starts, so the first is whole and ends the reply
@@ -378,16 +350,8 @@ class ChatResponseTranslator:
         if self.finish_reason in CUT_SHORT:
             calls = []
         events: list[dict] = []
-        raw_text = "".join(self.text_parts)
-        answer = self.answer_text
-        if self.buffer_text and answer.strip():
-            events += self._start_message()
-            events.append(self._text_delta(answer))
-        elif self.buffer_text:
-            self.reasoning_chars += len(raw_text)
         if self.message_index is not None:
-            if not self.buffer_text:
-                answer = self.live_text
+            answer = self.live_text
             part = {"type": "output_text", "text": answer, "annotations": [], "logprobs": []}
             message = {
                 "id": self.message_id,
@@ -447,22 +411,3 @@ class ChatResponseTranslator:
         else:
             events.append(self._event("response.completed", response=self._response("completed", self.output)))
         return events
-
-    @property
-    def answer_text(self) -> str:
-        """The visible answer so far, without hidden reasoning."""
-        text = "".join(self.text_parts)
-        if not self.buffer_text:
-            return text
-        # The template opens `<think>` in the prompt, so a reply cut off by the token limit
-        # before `</think>` is reasoning only. Unless the server already split reasoning
-        # into its own field, nothing in it is safe to show.
-        if self.finish_reason == "length" and "</think>" not in text and not self.saw_reasoning_field:
-            return ""
-        return strip_reasoning(text)
-
-
-def thinking_enabled(extra: dict) -> bool:
-    """Return True when the request enables the model's reasoning mode."""
-    kwargs = (extra.get("extra_body") or {}).get("chat_template_kwargs") or {}
-    return bool(kwargs.get("enable_thinking"))

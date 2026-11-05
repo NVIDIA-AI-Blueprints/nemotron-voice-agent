@@ -143,28 +143,8 @@ class TurnParseTests(Harness):
         self.assertTrue(session.retired)  # released once answered
         self.assertEqual(len(self.host.bridge.closed), 1)
 
-    async def test_a_lone_chunk_after_reasoning_in_a_turn_that_streamed_no_text_is_never_spoken(self):
-        # Hermes sends this when the model only reasoned (its reasoning as the reply) or a model call failed after
-        # reasoning (its error copy, under the reasoning's id). A real one-chunk answer, as the "pong" of the wire
-        # fixture, looks the same on the wire, so the run fails closed.
-        session = await self.open()
-        session.say("m1", "I should check the balance first, then answer.")  # one chunk, under the reasoning's id
-        session.end(1, usage=USAGE)
-        error = await self.failure()
-        self.assertIn("not streamed", str(error))
-        self.assertEqual(items(self.seen), [])
-
-    async def test_a_lone_chunk_after_reasoning_once_the_turn_streamed_text_is_an_answer(self):
-        session = await self.open()
-        session.say("m1", "Let me ", "check.")  # text streamed: the runtime sends no text of its own in this turn
-        session.put(ToolCard("tc1", "mcp__w1__lookup", {}))
-        session.put(ToolCardEnd("tc1", False, "ok"))
-        session.say("m2", "Done.")
-        session.end(1, usage=USAGE)
-        events = await self.rest()
-        self.assertEqual(said(events, "final_answer"), ["Done."])
-
-    async def assert_refused(self, scenario):
+    async def replay(self, scenario):
+        """Replay one recorded turn of the real Hermes wire on a new session."""
         session = await self.open()
         steps = wire(scenario)
         for step in steps:
@@ -172,6 +152,16 @@ class TurnParseTests(Harness):
                 session.replay(step["update"]["update"])
         result = next(step["result"] for step in steps if "end" in step)
         session.end(1, result["stopReason"], result.get("usage"))
+
+    async def test_a_one_chunk_answer_after_reasoning_is_the_answer(self):
+        # The real Hermes's "pong": the model reasons, then answers in one chunk under the reasoning's message id.
+        await self.replay("pong")
+        events = await self.rest()
+        self.assertEqual(check_events(events), [])
+        self.assertEqual(said(events, "final_answer"), ["pong"])
+
+    async def assert_refused(self, scenario):
+        await self.replay(scenario)
         error = await self.failure()
         self.assertEqual(self.seen[-1]["type"], "response.failed")
         self.assertEqual(self.seen[-1]["response"]["error"]["code"], "server_error")
@@ -184,15 +174,6 @@ class TurnParseTests(Harness):
         for scenario in ("provider_error", "idle_cancel_poison"):
             with self.subTest(scenario):
                 self.assertIn("no usage", str(await self.assert_refused(scenario)))
-
-    async def test_the_runtimes_own_one_chunk_text_after_a_tool_is_never_spoken(self):
-        session = await self.open()
-        session.put(ToolCard("tc1", "mcp__w1__lookup", {}))
-        session.put(ToolCardEnd("tc1", False, "ok"))
-        session.say("m9", "No reply: the turn stopped while a tool result was still pending.", thought=False)
-        session.end(1, usage=USAGE)
-        error = await self.failure()
-        self.assertIn("not streamed", str(error))
 
     async def test_a_turn_whose_usage_did_not_move_is_no_answer(self):
         session = await self.open()
@@ -332,7 +313,7 @@ class AppCallTests(Harness):
     async def test_an_app_function_the_im_routes_to_the_backend_fails_with_the_cores_misrouted_output(self):
         session = await self.open(task=MisroutingTask(declared=[MENU_FUNCTION]))
         collector = self.collecting()
-        misrouted = json.dumps({"error": "get_menu belongs to the app."})  # the task's own template, not core.yaml's
+        misrouted = json.dumps({"error": "get_menu belongs to the app."})  # the task's own template, not prompts.yaml's
         self.assertEqual(await self.run.door.call("get_menu", {}), misrouted)
         session.say("m2", "I could ", "not.")
         session.end(1, usage=USAGE)
@@ -415,16 +396,16 @@ class SteeringTests(Harness):
         self.assertEqual(len(session.texts("prompt")), 1)
 
     async def test_the_runtimes_own_text_is_never_commentary_while_a_steer_waits(self):
-        # A model call that reasoned and then failed: Hermes ends the turn with its own text (here the model's reasoning
-        # as its reply) under the reasoning's id. A steer waits, so the turn's text would become commentary, which the
-        # voice may speak as progress: it is dropped instead.
+        # A model call that reasoned and then failed: Hermes ends the turn with its own text under the reasoning's id,
+        # and no model call completed, so it reports no usage. A steer waits, so the turn's text would become
+        # commentary, which the voice may speak as progress: it is dropped instead.
         session = await self.open()
         collector = self.collecting()
         await self.steer(session)  # the turn began with reasoning under m0
         session.end(2)  # acked
-        own = "I should check the account balance first, then answer."
-        session.say("m0", own, thought=False)  # one chunk, the turn's only text
-        session.end(1, usage=USAGE)
+        own = "Error: the provider refused the request."
+        session.say("m0", own, thought=False)  # the turn's only text
+        session.end(1)  # no usage
         await until(lambda: len(session.texts("prompt")) == 2)  # the steer goes as the next prompt
         session.say("m2", "Two ", "done.")
         session.end(3, usage={"totalTokens": 200})

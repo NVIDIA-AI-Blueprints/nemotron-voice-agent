@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, EndpointLookup, ToolSources
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
+from examples.shared.delegation_contract import ModelEndpoint
 
 from .adapter import HarnessAdapter
 from .bridge import McpBridge

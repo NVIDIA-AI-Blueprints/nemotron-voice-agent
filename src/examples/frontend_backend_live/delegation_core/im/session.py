@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,6 +26,7 @@ from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.backend.port import (
     Answer,
+    AppOutputStep,
     BackendAdapter,
     Cancel,
     Conductor,
@@ -37,7 +38,6 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     Steer,
 )
 from examples.frontend_backend_live.delegation_core.config import DelegationSettings, Texts
-from examples.frontend_backend_live.delegation_core.ids import uid
 from examples.frontend_backend_live.delegation_core.im.conversation import Conversation, TaskHistory
 from examples.frontend_backend_live.delegation_core.im.input import (
     BackendTask,
@@ -47,12 +47,13 @@ from examples.frontend_backend_live.delegation_core.im.input import (
     with_parts,
 )
 from examples.frontend_backend_live.delegation_core.im.notes import ProgressNotes
-from examples.frontend_backend_live.delegation_core.im.recovery import ShapeHints
 from examples.frontend_backend_live.delegation_core.im.results import CallReports, ResultFormat
 from examples.frontend_backend_live.delegation_core.im.run import Parked, TaskRun, WorkRun, brief_message
 from examples.frontend_backend_live.delegation_core.im.stop import AtClose, ForNewerRequest
-from examples.frontend_backend_live.delegation_core.im.stream import ResponseBook, ResponseStream, message_text
+from examples.frontend_backend_live.delegation_core.im.stream import ResponseBook, ResponseStream
+from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.delegation_core.ledger.records import WorkLedger
+from examples.shared.ids import uid
 
 # The official code of a continuation that leaves function calls without their outputs.
 FUNCTION_CALL_OUTPUTS_REQUIRED = "function_call_outputs_required"
@@ -138,6 +139,7 @@ class IMSession:
         *,
         result_format: ResultFormat | None = None,
         call_reports: CallReports | None = None,
+        output_steps: Sequence[AppOutputStep] = (),
         observe: Callable[..., None] = _noop,
     ):
         """Wire the session; nothing runs until :meth:`start`.
@@ -152,6 +154,8 @@ class IMSession:
                 picks it from ``im/results.RESULT_FORMATS`` (default ``plain``).
             call_reports: The class ``delegation.backend_calls`` names, picked from ``im/results.CALL_REPORTS``
                 (default ``items``).
+            output_steps: The steps the app's outputs take before the tasks read them (``backend.app_output_steps``),
+                this session's own, in order; none by default.
             observe: Optional ``observe(kind, **fields)`` hook for traces.
         """
         self.backend, self.defaults, self.settings, self.texts = backend, defaults, settings, texts
@@ -160,9 +164,7 @@ class IMSession:
         self.observe = observe
         self.caller_note = texts.caller_notes[settings.caller_note]
         self.voice_note = texts.voice_notes[settings.voice_note]
-        self.shape_hints = (
-            ShapeHints(settings.not_found_pattern, texts.shape_hint, observe) if settings.shape_hints else None
-        )
+        self.output_steps = tuple(output_steps)
         self.ledger = WorkLedger(uid("conv"))
         self.book = ResponseBook(self.ledger)
         self.notes = ProgressNotes(self.book, settings.progress_note_seconds)
@@ -701,9 +703,9 @@ class IMSession:
         self.book.open(waiting.delegation_id, stream, *self.response_settings(brings))
         for call_id, output in outputs.items():
             self.call_ended(call_id, output.get("output"), "done")
-        if self.shape_hints is not None:  # the ledger keeps the app's outputs; the tasks read them with any hint
+        for step in self.output_steps:  # the ledger keeps the app's outputs; the tasks read what the steps leave
             calls = [(call, outputs[call_id]) for call_id, (_task, call) in waiting.calls.items()]
-            outputs = self.shape_hints.outputs(calls, settings_for(brings, self.defaults).tools)
+            outputs = step.outputs(calls, settings_for(brings, self.defaults).tools)
         if messages:  # the caller's typed messages with the outputs ask anew
             self.admitted += 1
         waiting.work.continue_with(waiting, outputs, messages, brings)

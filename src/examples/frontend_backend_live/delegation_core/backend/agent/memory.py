@@ -16,7 +16,7 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
 
-from examples.frontend_backend_live.delegation_core.ids import approx_tokens
+from examples.shared.ids import approx_tokens
 
 
 @dataclass

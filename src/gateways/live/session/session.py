@@ -24,11 +24,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from loguru import logger
 
+from examples.shared.ids import uid
 from gateways.live.client_delegation import ClientDelegation
 from gateways.live.events import Fanout, Timeline, client_event_allowed, error_event, event
 from gateways.live.events.fanout import Close, Send
 from gateways.live.ports import Inspectable
-from gateways.live.protocol import BackendConfig, ProtocolError, SessionConfig, uid
+from gateways.live.protocol import BackendConfig, ProtocolError, SessionConfig
 from gateways.live.server_delegation import ServerDelegation
 from gateways.live.session import appends, audio_input, lifecycle, tool_calling, updates
 
@@ -135,7 +136,7 @@ class LiveProtocolSession:
         Args:
             config: The validated startup configuration.
             transport: ``webrtc`` or ``websocket``.
-            parts: What serves this session: its frontend adapter.
+            parts: What serves this session: its frontend adapter and, on WebRTC, its peer connection.
             core: The gateway's hook to its one delegation core client. A ``responses`` session builds its server
                 delegation on that client; a client-mode session builds a client delegation and never asks for it.
             codec: A primary WebSocket's wire audio codec, from the WebSocket edge; ``None`` on WebRTC.

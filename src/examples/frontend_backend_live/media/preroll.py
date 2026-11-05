@@ -23,7 +23,7 @@ class SpeechPreroll(FrameProcessor):
     Synthesis runs several times faster than playback but delivers audio in uneven chunks; without a head start,
     playback runs dry between chunks and the caller hears a stutter. Every downstream frame of the reply is held in
     order (so word timings stay with their audio) until enough audio is buffered or the reply ends. An interruption
-    drops what is held. System frames pass at once.
+    drops what is held, but the frames no interruption may drop, which follow it. System frames pass at once.
     """
 
     def __init__(self, preroll_ms: int, **kwargs):
@@ -41,8 +41,11 @@ class SpeechPreroll(FrameProcessor):
             await self.push_frame(frame, direction)
             return
         if isinstance(frame, (InterruptionFrame, CancelFrame)):
+            kept = [held for held in self._held if not held.interruptible]
             self._drop()
             await self.push_frame(frame, direction)
+            for held in kept:
+                await self.push_frame(held, direction)
             return
         if isinstance(frame, SystemFrame):
             await self.push_frame(frame, direction)

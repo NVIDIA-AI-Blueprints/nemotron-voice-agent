@@ -117,7 +117,7 @@ class InputGateTests(unittest.IsolatedAsyncioTestCase):
 class ObserverTests(unittest.IsolatedAsyncioTestCase):
     async def observed(self, session, frames):
         gate, stt, tts = SimpleNamespace(input_ms=500), object(), object()
-        observer = LiveEventObserver(session.adapter_view, gate, stt, tts)
+        observer = LiveEventObserver(session.adapter_view, gate, stt)
         sources = {"stt": stt, "tts": tts, "other": object()}
         for source, frame in frames:
             await observer.on_push_frame(
@@ -130,26 +130,6 @@ class ObserverTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
         await asyncio.sleep(0.05)
-
-    async def test_a_frontend_that_is_both_speech_in_and_out_still_reports_when_speech_started(self):
-        session, collector = await started_session()
-        self.addAsyncCleanup(session.close)
-        gate, frontend = SimpleNamespace(input_ms=300), object()
-        observer = LiveEventObserver(session.adapter_view, gate, frontend, frontend)
-
-        async def push(frame):
-            await observer.on_push_frame(
-                FramePushed(
-                    source=frontend, frame=frame, destination=None, direction=FrameDirection.DOWNSTREAM, timestamp=0
-                )
-            )
-
-        await push(UserStartedSpeakingFrame())
-        gate.input_ms = 900
-        await push(TranscriptionFrame(text="hello", user_id="u", timestamp="t", finalized=True))
-        await asyncio.sleep(0.05)
-        delta = next(e for e in collector.events if e["type"] == "session.input_transcript.delta")
-        self.assertEqual((delta["start_ms"], delta["end_ms"]), (300, 900))
 
     async def test_transcripts_become_deltas_with_the_input_clock_and_ignore_other_sources(self):
         session, collector = await started_session()
@@ -187,23 +167,24 @@ class ObserverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("info", collector.kinds())
 
     async def test_an_error_each_processor_pushes_on_is_reported_once(self):
-        # The observer sees every push of a frame, and an error crosses the pipeline processor by
-        # processor; it is one error for the client. Another error with the same text is reported again.
+        # An error crosses the pipeline processor by processor; the observer is told of a frame at its first push only,
+        # so it is one error for the client. Another error with the same text is reported again.
         session, collector = await started_session()
         self.addAsyncCleanup(session.close)
+        self.assertFalse(LiveEventObserver(session.adapter_view, None, None).observe_every_push)
         first, again = ErrorFrame(error="TTS hiccup", fatal=False), ErrorFrame(error="TTS hiccup", fatal=False)
-        await self.observed(session, [("tts", first), ("stt", first), ("other", first), ("tts", again)])
+        await self.observed(session, [("tts", first), ("tts", again)])
         errors = [e["message"] for e in collector.events if e["type"] == "info"]
         self.assertEqual(errors, ["TTS hiccup", "TTS hiccup"])
 
-    async def test_one_silent_tts_context_is_not_reported_but_a_run_of_them_is(self):
+    async def test_a_silent_tts_context_is_reported_as_a_notice_like_any_recoverable_error(self):
         session, collector = await started_session()
         self.addAsyncCleanup(session.close)
         silent = ErrorFrame(error="TTS context 418dbda7-d63e-4c92-809d-144a06adf57c completed with no audio")
-        run = ErrorFrame(error="3 consecutive TTS contexts completed with no audio")
-        await self.observed(session, [("other", silent), ("other", run)])
-        errors = [e["message"] for e in collector.events if e["type"] == "info"]
-        self.assertEqual(errors, ["3 consecutive TTS contexts completed with no audio"])
+        await self.observed(session, [("other", silent)])
+        notices = [e["message"] for e in collector.events if e["type"] == "info"]
+        self.assertEqual(notices, [silent.error])
+        self.assertNotIn("error", collector.kinds())
 
 
 class WebSocketOutputTests(unittest.IsolatedAsyncioTestCase):

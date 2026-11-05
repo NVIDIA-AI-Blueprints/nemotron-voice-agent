@@ -23,7 +23,8 @@ deployment profiles when changing shared behavior.
   behavior and configuration. Shared runtime behavior lives in `src/examples/shared/`,
   `src/server.py`, and the other root modules in `src/`.
 - For the Frontend/Backend Live example, also use its `config.yaml` and
-  `core.yaml` with their profiles, its `factory.py`, the Live gateway in
+  `core.yaml` with their profiles, its `factory.py`, its `frontend.py`, which
+  builds the pipeline for the UI bot and live sessions, the Live gateway in
   `src/gateways/live/`, and the delegation core in
   `src/examples/frontend_backend_live/delegation_core/`.
   `docs/design/architecture.md` describes how they fit together.

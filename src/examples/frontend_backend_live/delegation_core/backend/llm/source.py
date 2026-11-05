@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 
 from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, EndpointLookup, ToolSources
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
+from examples.shared.delegation_contract import ModelEndpoint
 
 from .adapter import LlmAdapter
 from .settings import LlmSettings

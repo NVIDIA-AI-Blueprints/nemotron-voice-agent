@@ -20,14 +20,13 @@ from loguru import logger
 
 from gateways.live.gateway import security
 from gateways.live.gateway.settings import LiveSettings
-from gateways.live.ports import AdapterFactory, CoreHook
+from gateways.live.ports import AdapterFactory, CoreHook, MediaConnection, SessionParts
 from gateways.live.protocol import ProtocolError, SessionConfig
 from gateways.live.session import LiveProtocolSession
 from gateways.live.session.session import no_core
 
 if TYPE_CHECKING:
     from gateways.live.media.audio import WireCodec
-    from gateways.live.media.connection import LiveWebRTCConnection
     from gateways.live.server_delegation.responses_client import ResponsesClient
 
 # The ICE servers of a WebRTC session's peer, for the request that creates it: ``{urls, username?, credential?}``
@@ -131,8 +130,9 @@ class LiveGateway:
         """Create the gateway.
 
         Args:
-            factory: Builds each session's frontend adapter.
-            settings: The operator settings; read from the environment when omitted.
+            factory: Builds each session's parts: its frontend adapter, and a WebRTC session's peer connection.
+            settings: The operator settings; when omitted, the defaults, with the token and the worker count from the
+                environment.
             core: The root's hook that builds the one client of the delegation core every ``responses`` session and
                 every delegate round uses; a coroutine function or a plain one, run on first use (:class:`CoreClient`).
                 Without it, ``responses`` sessions and delegate rounds are refused.
@@ -143,12 +143,12 @@ class LiveGateway:
         self.ice_servers = ice_servers
         self._core = CoreClient(core) if core is not None else None
         self.sessions: dict[str, LiveProtocolSession] = {}
-        self.connections: dict[str, LiveWebRTCConnection] = {}
+        self.connections: dict[str, MediaConnection] = {}
         self.starting = 0  # sessions whose parts are being built: they count against the limit
 
     # ------------------------------------------------------------------------------ security
     def authorize(self, connection) -> None:
-        """Check the bearer token (when configured) and reject cross-site browser origins."""
+        """Check the bearer token (when configured), reject cross-site browser origins, then check the host name."""
         security.authorize(self.settings, connection)
 
     async def body(self, request: Request, limit: int = security.MAX_BODY_BYTES) -> dict:
@@ -177,15 +177,15 @@ class LiveGateway:
         self,
         config: SessionConfig,
         transport: str,
-        connection: LiveWebRTCConnection | None,
+        ice_servers: list[dict] | None,
         *,
         codec: WireCodec | None = None,
     ) -> LiveProtocolSession:
         """Build the parts and the session for a new connection, within the concurrent-session limit.
 
         A place is taken before the parts are built, and the parts are built with no lock held, so a slow factory never
-        holds up another connection. ``connection`` is a WebRTC session's peer, and ``codec`` a primary WebSocket's
-        wire audio codec.
+        holds up another connection. ``ice_servers`` are a WebRTC session's, for the peer connection the factory makes
+        and the parts carry (``None`` on a WebSocket), and ``codec`` is a primary WebSocket's wire audio codec.
 
         Raises:
             ProtocolError: A full server (``rate_limit_exceeded``), a factory's own refusal, a factory that failed
@@ -199,7 +199,7 @@ class LiveGateway:
         self.starting += 1
         try:
             try:
-                parts = await self.factory(config, transport, connection)
+                parts = await self.factory(config, transport, ice_servers)
             except ProtocolError:
                 raise
             except Exception as exc:
@@ -219,14 +219,14 @@ class LiveGateway:
                     max_appends_per_minute=self.settings.max_appends_per_minute,
                     on_closed=self._on_closed,
                 )
-            except BaseException:  # no core for a responses session: the adapter built for it is released
-                await _release(parts.frontend)
+            except BaseException:  # no core for a responses session: the parts built for it are released
+                await _release(parts)
                 raise
         finally:
             self.starting -= 1
         self.sessions[session.id] = session
-        if connection is not None:
-            self.connections[session.id] = connection
+        if parts.connection is not None:
+            self.connections[session.id] = parts.connection
         return session
 
     async def close_all(self) -> None:
@@ -246,9 +246,11 @@ class LiveGateway:
                 logger.exception("The delegation core could not be closed at server shutdown")
 
 
-async def _release(frontend) -> None:
-    """Close a frontend adapter that no session took; its failure is logged."""
+async def _release(parts: SessionParts) -> None:
+    """Close the parts that no session took: the frontend adapter, whose failure is logged, then the peer."""
     try:
-        await frontend.close()
+        await parts.frontend.close()
     except Exception:
         logger.exception("A frontend adapter that no session took could not be closed")
+    if parts.connection is not None:
+        await parts.connection.close_after_drain()

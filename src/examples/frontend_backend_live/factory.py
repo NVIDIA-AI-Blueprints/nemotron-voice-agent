@@ -4,16 +4,19 @@
 """The composition root of live sessions: the hooks that the registry's ``live:`` block names for this example.
 
 * :func:`create_frontend_adapter` (``live.factory``) builds one session's frontend adapter, of the class that
-  ``frontend.adapter`` names, once the class's services are ready. It builds no delegation core, so a client-mode
-  session never needs one.
+  ``frontend.adapter`` names, once the class's services are ready, and a WebRTC session's peer connection
+  (``adapter/connection.py``). It builds no delegation core, so a client-mode session never needs one.
 * :func:`core` (``live.core``) gives the client of the process's one delegation core, built on first use.
 * :func:`describe` (``live.describe``) describes the example for ``GET /v1/live/info``.
 
-The root reads ``config.yaml`` (``LIVE_CONFIG_PATH``), the core's ``core.yaml`` (``CORE_CONFIG_PATH``) and the
-example's catalog once, off the event loop (:func:`root`), and resolves what the core names by reference
-(``backend.slot``, and ``backend.prompt``: an ``agent_prompts.Backend`` entry of ``prompts.yaml``). Nothing of the
-frontend goes into the core. The repository UI bot (``pipeline.py``) builds a core of its own with these functions,
-from ``ui_bot.core_config``, with the channel context after its backend prompt (:func:`ui_bot_instructions`).
+The root reads ``config.yaml`` (``LIVE_CONFIG_PATH``), the core's ``core.yaml`` (``CORE_CONFIG_PATH``) with its texts
+(the ``agent_prompts.Core`` entries of ``prompts.yaml``) and the example's catalog once, off the event loop
+(:func:`root`), and resolves what the core names by reference (``backend.slot``, and ``backend.prompt``: an
+``agent_prompts.Backend`` entry of ``prompts.yaml``). Nothing of the frontend goes into the core. The repository UI bot
+(``pipeline.py``) builds a core of its own with these functions, from ``ui_bot.core_config``, with the channel context
+after its backend prompt (:func:`ui_bot_instructions`). The two roots are the only modules that import the core, and
+each hands the frontend the helpers the two share: the core's one copy of ``pick``, its profile loader and
+``message_text``.
 """
 
 from __future__ import annotations
@@ -38,11 +41,13 @@ from examples.frontend_backend_live.delegation_core.api.service import Responses
 from examples.frontend_backend_live.delegation_core.app import DelegationCore, build_core
 from examples.frontend_backend_live.delegation_core.backend.port import EndpointLookup
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint as CoreEndpoint
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.items import message_text
+from examples.frontend_backend_live.delegation_core.profiles import load_profile
+from examples.frontend_backend_live.delegation_core.tables import pick
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import Prompts, load_prompts
-from examples.frontend_backend_live.tables import pick
+from examples.shared.delegation_contract import ModelEndpoint as CoreEndpoint
 from gateways.live.ports import SessionParts
 from gateways.live.protocol import ProtocolError, SessionConfig
 
@@ -52,6 +57,7 @@ if TYPE_CHECKING:
         FrontendAdapterClass,
         ServiceReadiness,
     )
+    from gateways.live.ports import MediaConnection
 
 # The delegation core's own file, beside config.yaml; CORE_CONFIG_PATH names another.
 CORE_CONFIG = EXAMPLE_DIR / "core.yaml"
@@ -81,7 +87,7 @@ def once[T](build: Callable[[], T]) -> Callable[[], T]:
 # ------------------------------------------------------------------------------------------------- the root's files
 @dataclass(frozen=True)
 class Root:
-    """What the root reads once: the example's settings, the core's, the frontend adapter's class and the catalog."""
+    """What the root reads once: the example's settings, the core's and its texts, the adapter's class, the catalog."""
 
     config: ExampleConfig
     core: CoreSettings
@@ -96,13 +102,24 @@ def core_config_path() -> Path:
     return Path(os.environ.get("CORE_CONFIG_PATH") or CORE_CONFIG)
 
 
+def core_settings(path: Path) -> CoreSettings:
+    """The core's settings from its file at ``path``, with the core's texts from the example's prompt file.
+
+    Raises:
+        ValueError: The file or a text is malformed.
+        RuntimeError: The prompt file is missing or malformed (:func:`load_prompts`).
+        KeyError: The prompt file lacks a group or an entry that the example reads (:func:`load_prompts`).
+    """
+    return CoreSettings.load(path, load_prompts().core)
+
+
 def ui_bot_core(config: ExampleConfig) -> CoreSettings:
     """The UI bot's core profile: the file ``ui_bot.core_config`` names, in the example's folder.
 
     Raises:
         ValueError: The profile is malformed.
     """
-    return CoreSettings.load(EXAMPLE_DIR / config.ui_bot.core_config)
+    return core_settings(EXAMPLE_DIR / config.ui_bot.core_config)
 
 
 def frontend_adapters() -> Mapping[str, FrontendAdapterClass]:
@@ -110,6 +127,13 @@ def frontend_adapters() -> Mapping[str, FrontendAdapterClass]:
     from examples.frontend_backend_live.adapter.registry import FRONTEND_ADAPTERS
 
     return FRONTEND_ADAPTERS
+
+
+def webrtc_peer(ice_servers: list[dict]) -> MediaConnection:
+    """A WebRTC session's peer connection, on the ICE servers the gateway hands over (``adapter/connection.py``)."""
+    from examples.frontend_backend_live.adapter.connection import LiveWebRTCConnection
+
+    return LiveWebRTCConnection.from_ice_servers(ice_servers)
 
 
 def adapter_block(config: ExampleConfig) -> Mapping[str, Any]:
@@ -129,12 +153,15 @@ def root() -> Root:
     Raises:
         ValueError: A file is malformed (``ConfigError`` for ``config.yaml``), ``frontend.adapter`` names no frontend
             adapter, or the adapter's class refuses its block.
+        RuntimeError: The prompt file is missing or malformed.
+        KeyError: The prompt file lacks a group or an entry that the example reads.
     """
-    config = load_live_config()
-    core = CoreSettings.load(core_config_path())
+    config = load_live_config(load_profile)
+    core = core_settings(core_config_path())
     catalog = ExampleCatalog.read()
     adapter = pick(frontend_adapters(), config.adapter, "frontend adapter")
-    settings = adapter.Settings.parse(with_display_label(adapter_block(config), core))
+    block = with_display_label(adapter_block(config), core)
+    settings = adapter.Settings.parse(block, pick=pick, message_text=message_text)
     return Root(config, core, adapter, settings, adapter.readiness(settings, catalog), catalog)
 
 
@@ -219,8 +246,13 @@ def responses_client() -> LocalResponsesClient:
 
 
 # --------------------------------------------------------------------------------------------------- the hooks
-async def create_frontend_adapter(config: SessionConfig, transport: str, connection) -> SessionParts:
-    """``live.factory``: one session's parts, its frontend adapter, once the adapter's services are ready.
+async def create_frontend_adapter(
+    config: SessionConfig, transport: str, ice_servers: list[dict] | None
+) -> SessionParts:
+    """``live.factory``: one session's parts, once the adapter's services are ready: its frontend adapter and peer.
+
+    A WebRTC session's peer connection is made on the ``ice_servers`` that the gateway hands over (:func:`webrtc_peer`),
+    and the adapter gets it; a WebSocket session's ``ice_servers`` are ``None``, and it has no peer.
 
     The adapter is built by its class (``from_config``) and connects nothing until the session starts it. No delegation
     core is built here: the gateway reaches the one core through :func:`core`, and a client-mode session never does.
@@ -235,8 +267,14 @@ async def create_frontend_adapter(config: SessionConfig, transport: str, connect
         await state.readiness.ensure_ready()
     except ServiceStarting as exc:
         raise ProtocolError(f"{exc}. Try again in a moment.", "server_error") from exc
-    adapter = state.adapter.from_config(config, transport, connection, state.settings, state.catalog)
-    return SessionParts(frontend=adapter)
+    connection = None if ice_servers is None else webrtc_peer(ice_servers)
+    try:
+        adapter = state.adapter.from_config(config, transport, connection, state.settings, state.catalog)
+    except BaseException:
+        if connection is not None:  # the peer was never negotiated: closing it releases what it holds
+            await connection.close_after_drain()
+        raise
+    return SessionParts(frontend=adapter, connection=connection)
 
 
 async def core() -> LocalResponsesClient:

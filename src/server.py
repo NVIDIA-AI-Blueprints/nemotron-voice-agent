@@ -90,6 +90,7 @@ from utils import (
     parse_endpoint,
     service_catalog_sources,
     set_active_services,
+    set_listed_services,
     set_service_context,
 )
 from webcam_frame_store import store_webcam_frame, webcam_client_config
@@ -109,8 +110,6 @@ _TURN_LISTEN_PORT = 3478
 # Each LLM slot an example may use: the session field that holds its base URL (filled from the UI's choice of entry,
 # as utils' catalog hydration writes it) and its name in readiness messages.
 _LLM_SLOTS = {"llm": ("base_url", "LLM"), "thinker-llm": ("thinker_base_url", "Thinker LLM")}
-# The setting that names another factory of a live session's parts (module:function).
-_LIVE_FACTORY_SETTING = "LIVE_ADAPTER_FACTORY"
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
@@ -699,62 +698,78 @@ async def _ensure_services_ready_for_connection(config: dict, example: dict) -> 
     await _ensure_tts_ready_for_connection(config, example)
 
 
-def _live_served(example: dict) -> bool:
-    """Return whether to serve the Live API (``/v1/live``) of ``example``, the example that serves it.
+def _live_served() -> bool:
+    """Return whether to serve the Live API (``/v1/live``).
 
-    Its routes are open to anyone who can reach the server unless ``LIVE_API_TOKEN`` is set, so they are not added to
-    a deployment of another example. ``LIVE_ENABLED`` decides when it is set (``1``, ``true``, ``yes`` or ``on`` serve
-    them); otherwise they are served when a token is set or when the deployment is pinned to that example.
+    Its routes are open to anyone who can reach the server unless ``LIVE_API_TOKEN`` is set, so without a token they
+    are served only on request. ``LIVE_ENABLED`` decides when it is set (``1``, ``true``, ``yes`` or ``on`` serve
+    them); otherwise they are served when a token is set.
     """
     explicit = os.getenv("LIVE_ENABLED", "").strip().lower()
     if explicit:
         return explicit in {"1", "true", "yes", "on"}
-    if os.getenv("LIVE_API_TOKEN", "").strip():
-        return True
-    return examples_registry.visible_example_keys() == (example["key"],)
+    return bool(os.getenv("LIVE_API_TOKEN", "").strip())
 
 
-def _live_factory_spec(example: dict) -> str:
-    """Return the factory of a live session's parts: ``LIVE_ADAPTER_FACTORY``, else the example's ``live.factory``."""
-    return os.getenv(_LIVE_FACTORY_SETTING, "").strip() or example["live"]["factory"]
+def _live_listing():
+    """Return a reader of the services as ``GET /api/services`` lists them, which reads them at its first call only.
+
+    The Live hooks share one. Their root reads its catalog once per process, so a later hook call probes nothing.
+    """
+    listed: dict | None = None
+
+    async def listing() -> dict:
+        nonlocal listed
+        if listed is None:
+            listed = await _with_service_status(build_services_api_response())
+        return listed
+
+    return listing
 
 
-def _live_hook(example: dict, spec: str, what: str):
+def _live_hook(example: dict, spec: str, what: str, listing):
     """Return the Live hook ``spec`` names, imported on its first call and called with ``example``'s services bound.
 
-    The hook reads the catalog of the example that serves Live, whatever example the UI is locked to.
+    The hook reads the catalog of the example that serves Live as ``GET /api/services`` lists it (``listing``, from
+    :func:`_live_listing`): each slot's default is the one the repository UI selects.
     """
 
     async def hook(*args):
         set_service_context(example)
+        set_listed_services(await listing())
         return await examples_registry.resolve_hook(spec, what)(*args)
 
     return hook
 
 
 def _mount_live(app: FastAPI) -> None:
-    """Mount the Live API's routes for the example whose ``live:`` block names its hooks, when they are served.
+    """Mount the Live API's routes when the selected example's ``live:`` block names its hooks and they are served.
 
     The hooks are imported on first use, so the server starts without loading the example. When the routes are not
     served, the mount adds only its last route under ``/v1/live``, which answers 404.
 
     Raises:
-        RuntimeError: The factory setting names a module that does not exist.
+        ValueError: ``UVICORN_WORKERS`` is not a whole number of at least 1.
     """
     from gateways.live.gateway import LiveSettings
     from gateways.live.mount import mount_live
 
     example = examples_registry.live_example()
-    if example is None or not _live_served(example):
+    if example is None or not _live_served():
+        if example is not None:  # the selected example offers Live, and the settings leave it off
+            logger.info(
+                "The Live routes under /v1/live are not served. Set LIVE_API_TOKEN to serve them, or LIVE_ENABLED=true "
+                "to serve them without a token on a trusted network; when LIVE_ENABLED is set, it decides."
+            )
         mount_live(app)
         return
-    hooks = example["live"]
+    hooks, listing = example["live"], _live_listing()
     mount_live(
         app,
-        factory=_live_hook(example, _live_factory_spec(example), "live.factory"),
-        core=_live_hook(example, hooks["core"], "live.core"),
-        describe=_live_hook(example, hooks["describe"], "live.describe"),
-        settings=LiveSettings.from_env(),
+        factory=_live_hook(example, hooks["factory"], "live.factory", listing),
+        core=_live_hook(example, hooks["core"], "live.core", listing),
+        describe=_live_hook(example, hooks["describe"], "live.describe", listing),
+        settings=LiveSettings.from_env(hooks["settings"]),
         ice_servers=_build_ice_servers,
     )
 

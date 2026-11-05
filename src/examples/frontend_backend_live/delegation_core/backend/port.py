@@ -23,8 +23,8 @@ connected, always has exactly one task per Work.
 **The event rules**, which every :meth:`BackendRun.events` keeps (the contract suite checks them):
 
 * **E1 Rounds and attempts.** Each attempt opens with its own ``response.created`` and ends with exactly one terminal
-  (:data:`TERMINALS`). ``response.completed`` ends the round; ``response.failed`` or ``response.incomplete`` ends only
-  the attempt. Nothing of an attempt follows its terminal.
+  (:data:`examples.shared.delegation_contract.TERMINALS`). ``response.completed`` ends the round; ``response.failed``
+  or ``response.incomplete`` ends only the attempt. Nothing of an attempt follows its terminal.
 * **E2 Items.** Each item is announced by ``response.output_item.added`` and finished by ``response.output_item.done``.
   The IM reads items only from ``output_item.done``; deltas are optional.
 * **E3 Phase.** Every message carries ``phase``: ``commentary`` is progress and never the answer, ``final_answer`` is
@@ -55,10 +55,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, runtime_checkable
+
+from examples.shared.delegation_contract import is_progress
 
 if TYPE_CHECKING:
-    from examples.frontend_backend_live.delegation_core.config import ModelEndpoint, Texts
+    from examples.frontend_backend_live.delegation_core.config import Texts
+    from examples.shared.delegation_contract import ModelEndpoint
 
 # Who runs a call: ``app`` for a function the request declared (the round ends and the task waits), ``backend`` for any
 # other, ``refused`` for one the IM will not run (after a stop, on a name clash, while newer input waits to land, so
@@ -80,15 +83,6 @@ WorkState = OpenState | EndedState
 # What a message is: progress beside the work, or the task's answer.
 Phase = Literal["commentary", "final_answer"]
 
-# The terminal events of a response (and of a backend attempt).
-TERMINALS: Final = frozenset({"response.completed", "response.failed", "response.incomplete"})
-
-
-def calls_a_function(raw: dict) -> bool:
-    """Whether a backend event belongs to a function call: an item of that type, or its arguments."""
-    kind = raw.get("type", "")
-    return raw.get("item", {}).get("type") == "function_call" or kind.startswith("response.function_call")
-
 
 def function_call_item(raw: dict) -> dict | None:
     """The ``function_call`` item that a ``response.output_item.done`` event finishes, or ``None`` for any other."""
@@ -99,7 +93,7 @@ def function_call_item(raw: dict) -> dict | None:
 
 def message_phase(item: dict) -> Phase:
     """A message item's phase: ``commentary`` or ``final_answer``; a message with no phase counts as the answer."""
-    return "commentary" if item.get("phase") == "commentary" else "final_answer"
+    return "commentary" if is_progress(item) else "final_answer"
 
 
 # --------------------------------------------------------------------------------------------- tools
@@ -124,6 +118,27 @@ class ToolSource(Protocol):
 
 # A fresh set of the session's server tool sources, made by the root for each IM session.
 ToolSources = Callable[[], Sequence[ToolSource]]
+
+
+class AppOutputStep(Protocol):
+    """A step the app's function outputs take before the backend reads them (``backend.app_output_steps``).
+
+    One instance serves one IM session, so what it learns stays in the session. A step class builds an instance from its
+    YAML block with ``from_settings(block, observe=...)``; the core's builder makes a fresh set for each IM session
+    (:data:`AppOutputSteps`). The IM runs every step, in order, on the outputs a continuation brings; the ledger and the
+    records keep the app's own outputs.
+    """
+
+    def outputs(self, calls: Sequence[tuple[dict, dict]], tools: Sequence[Mapping] | None) -> dict[str, dict]:
+        """The outputs of the app's ``calls`` (call, output item) as the backend reads them, by call id.
+
+        ``tools`` are the app's functions of the request that brought the outputs. An output the step leaves as it is
+        is returned as given; one it changes is a copy.
+        """
+
+
+# A fresh set of the session's app output steps, made by the core's builder for each IM session with its trace hook.
+AppOutputSteps = Callable[[Callable[..., Any]], Sequence[AppOutputStep]]
 # A model name to its endpoint, resolved by the root from the catalog; ``None`` gives the configured default.
 EndpointLookup = Callable[[str | None], "ModelEndpoint"]
 
@@ -150,7 +165,7 @@ class TaskContext(Protocol):
 
     work_id: str
     task_id: str
-    # The core's texts (texts in the core's file): they word the error outputs, not-run outputs and notes a run adds,
+    # The core's texts (texts in its settings): they word the error outputs, not-run outputs and notes a run adds,
     # such as texts.unknown_tool_output, texts.failed_output and texts.round_cap_note.
     texts: Texts
 

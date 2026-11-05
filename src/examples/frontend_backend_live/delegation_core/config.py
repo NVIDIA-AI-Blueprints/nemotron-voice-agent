@@ -3,13 +3,13 @@
 
 """Typed settings of the delegation core: pure data, with no provider imported.
 
-:class:`CoreSettings` is the core's own file (the example's ``core.yaml``, or the file ``CORE_CONFIG_PATH`` names),
-which a composition root reads once and hands to ``app.build_core``.
+:class:`CoreSettings` is the core's own file (the example's ``core.yaml``, or the file ``CORE_CONFIG_PATH`` names) and
+the core's texts (the ``agent_prompts.Core`` entries of the example's prompt file), which a composition root reads once
+and hands to ``app.build_core``.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
@@ -19,20 +19,7 @@ from typing import Any
 
 import yaml
 
-
-@dataclass(frozen=True)
-class ModelEndpoint:
-    """The backend's model endpoint, resolved from a ``services.yaml`` entry and the session body.
-
-    ``extra_params`` are passed to the client verbatim (``temperature``, ``max_tokens``, ``extra_body``,
-    ``stream_options`` ...), so settings written there by ``settings.yaml`` take effect unchanged.
-    """
-
-    model: str
-    base_url: str
-    api_key: str = "not-needed"
-    extra_params: dict = field(default_factory=dict)
-
+from examples.frontend_backend_live.delegation_core.profiles import load_profile
 
 # ------------------------------------------------------------------------------------------------ the core's own file
 
@@ -63,7 +50,6 @@ TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "failed_output": ("name", "error"),
         "misrouted_output": ("name",),
         "repeated_call_output": ("output",),
-        "shape_hint": ("value",),
         "cut_output": ("chars",),
         "conductor_prompt": ("max_running",),
     }
@@ -71,6 +57,8 @@ TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 # The IM's work tools a task may be offered (texts.work_tools): show, with the speak_display format; cancel_work, when
 # delegation.work_tools lists it (it stops the task after its current step).
 WORK_TOOL_KEYS = ("show", "cancel_work")
+# Where the core's texts are written: the message that refuses a key of the core's file at one of their places names it.
+TEXTS_SOURCE = "agent_prompts.Core in the example's prompts.yaml"
 
 
 def _keys(where: str, raw: Any, allowed: Iterable[str], required: Iterable[str] = ()) -> Mapping[str, Any]:
@@ -110,16 +98,6 @@ def _flag(where: str, value: Any) -> bool:
     return value
 
 
-def _pattern(where: str, value: Any) -> str:
-    """A regular expression Python compiles, kept as written."""
-    text = _text(where, value)
-    try:
-        re.compile(text)
-    except re.error as error:
-        raise ValueError(f"{where} is not a valid regular expression: {error}") from None
-    return text
-
-
 def _text(where: str, value: Any, *, empty: bool = False) -> str:
     """A string, non-empty unless ``empty``."""
     if not isinstance(value, str) or (not empty and not value.strip()):
@@ -146,16 +124,58 @@ def _template(where: str, text: str, names: Iterable[str]) -> str:
 
 
 def _tools(where: str, raw: Any, names: Iterable[str]) -> Mapping[str, Mapping[str, Any]]:
-    """Tool schemas by name: each with a description and JSON-schema parameters."""
+    """Tool schemas by name: each with a description and JSON-schema parameters, as a mapping or as its YAML text."""
     mapping = _keys(where, raw, names, names)
     tools = {}
     for name, schema in mapping.items():
+        if isinstance(schema, str):
+            try:
+                schema = yaml.safe_load(schema)
+            except yaml.YAMLError as exc:
+                raise ValueError(f"{where}.{name} is not a schema in YAML: {exc}") from None
         entry = _keys(f"{where}.{name}", schema, ("description", "parameters"), ("description", "parameters"))
         _text(f"{where}.{name}.description", entry["description"])
         if not isinstance(entry["parameters"], Mapping) or entry["parameters"].get("type") != "object":
             raise ValueError(f"{where}.{name}.parameters must be a JSON schema of type object")
         tools[name] = MappingProxyType(deepcopy(dict(entry)))
     return MappingProxyType(tools)
+
+
+def _placed(texts: Any) -> dict[str, Any]:
+    """The core's texts as blocks: each text at the place its dotted name gives (``texts.outcomes.started``).
+
+    Raises:
+        ValueError: ``texts`` is not a mapping, or two of its names give one place.
+    """
+    if not isinstance(texts, Mapping):
+        raise ValueError("the core's texts must map each text's place to the text")
+    blocks: dict[str, Any] = {}
+    for name, text in texts.items():
+        *path, key = str(name).split(".")
+        block = blocks
+        for part in path:
+            block = block.setdefault(part, {})
+            if not isinstance(block, dict):
+                break
+        if not isinstance(block, dict) or key in block:
+            raise ValueError(f"the core's text {name} names a place that another text holds")
+        block[key] = text
+    return blocks
+
+
+def _joined(where: str, block: Any, texts: Any) -> dict[str, Any]:
+    """The core file's ``block`` at ``where``, with the core's ``texts`` at their places, which the file may not set.
+
+    Raises:
+        ValueError: The file sets a place of a text, or of a block of texts; the message names it and where the core's
+            texts are.
+    """
+    if not isinstance(block, Mapping) or not isinstance(texts, Mapping):
+        raise ValueError(f"{where} comes from {TEXTS_SOURCE}")
+    joined = deepcopy(dict(block))
+    for key, text in texts.items():
+        joined[key] = _joined(f"{where}.{key}", block[key], text) if key in block else deepcopy(text)
+    return joined
 
 
 @dataclass(frozen=True)
@@ -181,10 +201,6 @@ class DelegationSettings:
     context_tokens: int = 24_000  # the backend history's budget (fits a 32,768-token local window)
     tool_output_chars: int = 8_000  # a longer tool output enters the backend history cut to its head and tail
     caller_note: str = "default"  # a name in texts.caller_notes: the note on how to work with the caller
-    # After an app call's output matches not_found_pattern, add texts.shape_hint with the failed value written in the
-    # shape the app's ids take, when the session has not tried that form (im/recovery.py).
-    shape_hints: bool = True
-    not_found_pattern: str = r"(?i)\b(not found|does not exist|no such)\b"  # an output that names nothing
     voice_note: str = "default"  # a name in texts.voice_notes: the note that describes the voice channel
 
     @classmethod
@@ -204,10 +220,8 @@ class DelegationSettings:
                 values[key] = _seconds(where, value)
             elif key == "progress_note_seconds":
                 values[key] = _seconds(where, value, zero=True)
-            elif key in ("hold_answers_while_deciding", "shape_hints"):
+            elif key == "hold_answers_while_deciding":
                 values[key] = _flag(where, value)
-            elif key == "not_found_pattern":
-                values[key] = _pattern(where, value)
             elif key == "work_tools":
                 if not isinstance(value, list):
                     raise ValueError(f"{where} must be a list of work tool names")
@@ -219,11 +233,11 @@ class DelegationSettings:
 
 @dataclass(frozen=True)
 class Texts:
-    """The lines the IM and the backend write or add to a model's input (``texts`` in the core's file).
+    """The lines the IM and the backend write or add to a model's input: the core's texts under ``texts``.
 
-    Two kinds of text come from elsewhere: a harness's own block words its prompt templates
-    (``backend.harness.prompts``) and its agent class's values (``backend.harness.agents``), and an error's message (an
-    exception's, a timed-out call's) comes from the code that reports it.
+    The texts of a backend block, such as a harness's prompt templates (``backend.harness.prompts``) or what an app
+    output step adds (``backend.app_output_steps``), join that block instead (:meth:`BackendChoice.parse`). An error's
+    message (an exception's, a timed-out call's) comes from the code that reports it.
     """
 
     # By name: what the IM adds to every task's instructions about working with the caller, before the voice note.
@@ -247,8 +261,6 @@ class Texts:
     # The output of an app call that repeats the newest call that ran, which its task made and the app answered, with
     # no request since: holds {output}, that answer, which the IM gives instead of sending the call again.
     repeated_call_output: str
-    # Added to an app output that found nothing ({value}: the failed value in the shape the app's ids take).
-    shape_hint: str
     cut_output: str  # between the head and the tail of a tool output cut to its size cap: holds {chars}, those left out
     none: str  # how an empty list of names reads in these texts: no tool offered, no request named
     records_block: str  # what the Works have done, on every Work's input and every steer: holds {records}
@@ -314,8 +326,10 @@ class BackendChoice:
     """Which backend adapter the core runs, and the blocks its source parses (``backend``).
 
     ``slot`` and ``prompt`` name the default model and instructions by reference; the composition root resolves them
-    (the core does not read the example's catalog). Every other key is one adapter's own block, kept as written: its
-    source validates it in ``from_settings``, and the core's builder refuses a block that names no adapter it has.
+    (the core does not read the example's catalog). ``tools`` and ``app_output_steps`` name the server tool sources and
+    the steps the app's outputs take, each with its block. Every other key is one adapter's own block, kept as written
+    with its texts: its source validates it in ``from_settings``, and the core's builder refuses a block that names no
+    adapter it has.
     """
 
     slot: str
@@ -323,14 +337,22 @@ class BackendChoice:
     adapter: str = "llm"  # a name in backend/adapters.py: llm (default), llm-agent or harness
     one_shot_adapter: str = "llm"  # the adapter that serves stateless requests (a port.OneShotSource)
     tools: Mapping[str, Mapping[str, Any]] = field(default_factory=lambda: MappingProxyType({}))  # name -> block
+    # The steps the app's outputs take before the backend reads them: name -> block, in order.
+    app_output_steps: Mapping[str, Mapping[str, Any]] = field(default_factory=lambda: MappingProxyType({}))
     blocks: Mapping[str, Mapping[str, Any]] = field(default_factory=lambda: MappingProxyType({}))  # adapter -> block
 
     @classmethod
-    def parse(cls, raw: Any) -> BackendChoice:
-        """Validate the ``backend`` block's own keys; keep each adapter's block for its source."""
+    def parse(cls, raw: Any, texts: Mapping[str, Any] | None = None) -> BackendChoice:
+        """Validate the ``backend`` block's own keys; keep each adapter's block for its source.
+
+        ``texts`` are the texts of its blocks, at their places (``harness.prompts``, ``app_output_steps.shape_hints``).
+        Each joins its block, an adapter's or an app output step's, when the settings have that block, so a block left
+        out needs no change to the texts; a block that sets a place of a text itself is refused.
+        """
         if not isinstance(raw, Mapping):
             raise ValueError("backend must be a mapping")
-        own = ("adapter", "one_shot_adapter", "slot", "prompt", "tools")
+        texts = texts or {}
+        own = ("adapter", "one_shot_adapter", "slot", "prompt", "tools", "app_output_steps")
         for key in ("slot", "prompt"):
             if key not in raw:
                 raise ValueError(f"backend is missing {key}")
@@ -339,10 +361,18 @@ class BackendChoice:
             if key not in own:
                 if not isinstance(value, Mapping):
                     raise ValueError(f"backend.{key} must be a mapping: an adapter's block")
-                blocks[str(key)] = MappingProxyType(deepcopy(dict(value)))
+                blocks[str(key)] = MappingProxyType(_joined(f"backend.{key}", value, texts.get(key, {})))
         tools = raw.get("tools", {})
         if not isinstance(tools, Mapping) or not all(isinstance(block, Mapping) for block in tools.values()):
             raise ValueError("backend.tools must map each tool source's name to its block")
+        steps = raw.get("app_output_steps", {})
+        if not isinstance(steps, Mapping) or not all(isinstance(block, Mapping) for block in steps.values()):
+            raise ValueError("backend.app_output_steps must map each step's name to its block")
+        step_texts = texts.get("app_output_steps", {})
+        step_blocks = {
+            str(name): MappingProxyType(_joined(f"backend.app_output_steps.{name}", block, step_texts.get(name, {})))
+            for name, block in steps.items()
+        }
         return cls(
             slot=_text("backend.slot", raw["slot"]),
             prompt=_text("backend.prompt", raw["prompt"]),
@@ -351,30 +381,38 @@ class BackendChoice:
             tools=MappingProxyType(
                 {str(name): MappingProxyType(deepcopy(dict(block))) for name, block in tools.items()}
             ),
+            app_output_steps=MappingProxyType(step_blocks),
             blocks=MappingProxyType(blocks),
         )
 
 
 @dataclass(frozen=True)
 class CoreSettings:
-    """Everything the core's own file sets: the IM's settings, its texts, and the backend it runs."""
+    """Everything the core's own file and its texts set: the IM's settings, its texts, and the backend it runs."""
 
     delegation: DelegationSettings
     texts: Texts
     backend: BackendChoice
 
     @classmethod
-    def parse(cls, data: Any) -> CoreSettings:
-        """Validate a parsed file. Names that point into ``texts`` must be there.
+    def parse(cls, data: Any, texts: Mapping[str, Any]) -> CoreSettings:
+        """Validate a parsed file and the core's texts as blocks. Names that point into ``texts`` must be there.
+
+        ``texts`` holds the core's own texts under ``texts``, and the texts of backend blocks under ``backend``, each at
+        its place in the settings (``backend.harness.prompts``): they join their blocks (:meth:`BackendChoice.parse`).
 
         Raises:
-            ValueError: An unknown key, a missing one, a value of the wrong kind, or a name ``texts`` does not hold.
+            ValueError: An unknown key, a missing one, a value of the wrong kind, a name ``texts`` does not hold, or a
+                place of the texts that the file sets too (``texts``, or one in a backend block).
         """
-        top = _keys("the core's settings", data, ("delegation", "texts", "backend"), ("texts", "backend"))
+        if isinstance(data, Mapping) and "texts" in data:
+            raise ValueError(f"the core's settings has unknown keys: texts, which comes from {TEXTS_SOURCE}")
+        top = _keys("the core's settings", data, ("delegation", "backend"), ("backend",))
+        words = _keys("the core's texts", texts, ("texts", "backend"), ("texts",))
         settings = cls(
             delegation=DelegationSettings.parse(top.get("delegation", {})),
-            texts=Texts.parse(top["texts"]),
-            backend=BackendChoice.parse(top["backend"]),
+            texts=Texts.parse(words["texts"]),
+            backend=BackendChoice.parse(top["backend"], words.get("backend", {})),
         )
         delegation, texts = settings.delegation, settings.texts
         if delegation.caller_note not in texts.caller_notes:
@@ -391,46 +429,19 @@ class CoreSettings:
         return settings
 
     @classmethod
-    def load(cls, path: Path) -> CoreSettings:
+    def load(cls, path: Path, texts: Mapping[str, str]) -> CoreSettings:
         """Read and validate the core's file at ``path`` (the root picks it: ``CORE_CONFIG_PATH`` or its default).
 
         A profile names the file it builds on with ``extends`` (a path relative to the profile's own folder) and sets
         only what differs: a mapping is merged key by key into the one it extends, and any other value replaces it
         (``null`` included, so a profile can turn a limit off).
 
+        ``texts`` are the core's texts, each named by its place in the settings (``texts.handover_line``,
+        ``backend.harness.prompts.user``): the root reads them from the example's prompt file (``agent_prompts.Core``),
+        and the file may not set their places.
+
         Raises:
-            ValueError: A file cannot be read or parsed, ``extends`` loops or names no file, or :meth:`parse` refuses
-                the merged settings.
+            ValueError: A file cannot be read or parsed, ``extends`` loops or names no file, two texts name one place,
+                or :meth:`parse` refuses the merged settings.
         """
-        return cls.parse(_profile(Path(path), ()))
-
-
-def _profile(path: Path, seen: tuple[Path, ...]) -> dict[str, Any]:
-    """The settings of the file at ``path``, merged over the file it ``extends`` (``seen``: the files extending it)."""
-    resolved = path.resolve()
-    if resolved in seen:
-        raise ValueError(f"The core's settings {path} extend themselves: {' -> '.join(map(str, (*seen, resolved)))}")
-    try:
-        data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise ValueError(f"Cannot read the core's settings {path}: {exc}") from exc
-    if not isinstance(data, dict) or "extends" not in data:
-        return data
-    data = dict(data)
-    base = data.pop("extends")
-    if not isinstance(base, str) or not base.strip():
-        raise ValueError(f"extends in {path} must name a file")
-    extended = _profile(resolved.parent / base, (*seen, resolved))
-    if not isinstance(extended, dict):
-        raise ValueError(f"The core's settings {resolved.parent / base}, which {path} extends, must be a mapping")
-    return _merged(extended, data)
-
-
-def _merged(base: Any, changes: Any) -> Any:
-    """``changes`` over ``base``: mappings merge key by key, anything else replaces."""
-    if not isinstance(base, Mapping) or not isinstance(changes, Mapping):
-        return deepcopy(changes)
-    merged = {key: deepcopy(value) for key, value in base.items()}
-    for key, value in changes.items():
-        merged[key] = _merged(merged[key], value) if key in merged else deepcopy(value)
-    return merged
+        return cls.parse(load_profile(Path(path)), _placed(texts))

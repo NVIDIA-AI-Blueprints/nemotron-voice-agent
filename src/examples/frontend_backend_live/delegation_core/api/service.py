@@ -18,14 +18,12 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any, Protocol
 
-from examples.frontend_backend_live.delegation_core.ids import approx_tokens
 from examples.frontend_backend_live.delegation_core.im.input import request_settings
 from examples.frontend_backend_live.delegation_core.im.session import IMSession
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
+from examples.shared.delegation_contract import DELEGATION_ID, TYPED_RUN
+from examples.shared.ids import approx_tokens
 
-# The metadata key that names a request's delegation, and the one that marks a typed run, with its value.
-DELEGATION_ID = "live_delegation_id"
-TYPED_RUN = "live_typed_run"
 # Who owns the models the core serves, as the model object names it.
 MODEL_OWNER = "delegation_core"
 # How deep a request may nest objects and lists: the IM copies a request, and Python's copy recurses.

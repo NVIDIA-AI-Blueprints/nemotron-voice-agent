@@ -6,20 +6,20 @@
 ``frontend.adapter`` in ``config.yaml`` names an entry of ``FRONTEND_ADAPTERS``. The root reads the
 example's catalog once, waits until the class's services are ready, then builds one adapter per session:
 
-1. ``Settings.parse(block)``: the class's own block (``frontend.<name>``), unknown keys refused, when the root starts;
+1. ``Settings.parse(block, pick=..., message_text=...)``: the class's own block (``frontend.<name>``), unknown keys
+   refused, when the root starts. The root hands in the helpers the frontend shares with the delegation core, whose one
+   copy only the composition roots import: ``pick`` reads a name table, ``message_text`` a message item's text;
 2. ``readiness(settings, catalog).ensure_ready()``: off the event loop and cached; a service still starting refuses
    the session with ``ServiceStarting`` (the root's "still starting" answer);
 3. ``from_config(session, transport, connection, settings, catalog)``: builds the session's ``FrontendAdapter``
    (``gateways.live.ports``) and connects nothing; ``start()`` connects.
 
-``describe(settings, catalog)`` is the adapter's half of ``GET /v1/live/info``. ``hosts_rtvi`` says whether the
-repository UI bot can host the class in its own RTVI pipeline: the bot refuses one that cannot, with no class compare.
-Types only.
+``describe(settings, catalog)`` is the adapter's half of ``GET /v1/live/info``. Types only.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self
 
 if TYPE_CHECKING:
@@ -41,8 +41,8 @@ class AdapterSettings(Protocol):
     """A frontend adapter class's own settings: a frozen dataclass of its ``frontend.<name>`` block."""
 
     @classmethod
-    def parse(cls, block: Mapping[str, Any]) -> Self:
-        """Validate the block; unknown keys and wrong kinds are refused."""
+    def parse(cls, block: Mapping[str, Any], *, pick: Callable[..., Any], message_text: Callable[[dict], str]) -> Self:
+        """Validate the block, picking what it names with ``pick``; unknown keys and wrong kinds are refused."""
 
 
 class ServiceCatalog(Protocol):
@@ -66,7 +66,6 @@ class FrontendAdapterClass(Protocol):
     """A frontend adapter class, as ``FRONTEND_ADAPTERS`` holds it."""
 
     Settings: ClassVar[type[AdapterSettings]]
-    hosts_rtvi: ClassVar[bool]  # whether the repository UI bot can host it in its own RTVI pipeline (the bot reads it)
 
     @classmethod
     def from_config(

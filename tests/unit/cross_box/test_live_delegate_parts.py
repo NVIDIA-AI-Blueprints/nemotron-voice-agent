@@ -22,6 +22,7 @@ import openai
 import yaml
 from fastapi.testclient import TestClient
 
+import examples_registry
 import server
 from examples.frontend_backend_live import factory
 from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
@@ -29,7 +30,7 @@ from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import compose
 from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import MENU_TOOL, tool_call_round
-from tests.unit.core_helpers import FakeChat, chunk
+from tests.unit.core_helpers import CORE_TEXTS, FakeChat, chunk
 from tests.unit.frontend_backend_live.root.root_helpers import clear_root_caches
 from utils import clear_service_context, set_active_services
 
@@ -45,7 +46,7 @@ def answer(text):
 
 def notes(name="default"):
     """The notes the core adds to every task's instructions: the caller note, then the voice note."""
-    texts = CoreSettings.load(CORE).texts
+    texts = CoreSettings.load(CORE, CORE_TEXTS).texts
     return texts.caller_notes[name], texts.voice_notes[name]
 
 
@@ -75,14 +76,20 @@ class ServedRoute(unittest.TestCase):
     """The route as the server serves it, on a core the root builds fresh for each ``served`` block."""
 
     def setUp(self):
-        # The bundled files and the registry's hooks; the catalog's self-hosted section, named outright, and no NVIDIA
-        # Cloud key, so no reachability probe picks another. The test client sends Host: testserver, which the delegate
-        # route answers with no token only when it is allowed.
-        live = {"LIVE_ENABLED": "true", "LIVE_API_TOKEN": "", "LIVE_ALLOWED_HOSTS": "testserver"}
+        # The bundled files and the registry's hooks; the catalog's self-hosted section, named outright, every service
+        # in it up and no NVIDIA Cloud key, so no probe picks another. The test client sends Host: testserver, which
+        # the delegate route answers with no token only when it is allowed.
+        live = {"LIVE_ENABLED": "true", "LIVE_API_TOKEN": ""}
         env = patch.dict(os.environ, {**live, "SERVICE_RECIPE": "server", "NVIDIA_API_KEY": ""})
         env.start()
         self.addCleanup(env.stop)
-        for name in ("SERVICES_PATH", "LIVE_CONFIG_PATH", "CORE_CONFIG_PATH", "LIVE_ADAPTER_FACTORY"):
+        self.enterContext(patch.object(server, "_probe_status", lambda address, expects_ready_json: "ready"))
+        example = "frontend-backend-live"  # a deployment of the example: only the selected example serves Live
+        locked = examples_registry.Selection(example, True, (example,), example)
+        self.enterContext(patch.object(examples_registry, "_SELECTION", locked))
+        hosts = {"allowed_hosts": ["testserver"]}
+        self.enterContext(patch.dict(examples_registry.EXAMPLES["frontend-backend-live"]["live"]["settings"], hosts))
+        for name in ("SERVICES_PATH", "LIVE_CONFIG_PATH", "CORE_CONFIG_PATH"):
             os.environ.pop(name, None)
         # create_app binds the selected example's services process-wide; leave no binding behind.
         self.addCleanup(clear_service_context)
@@ -218,7 +225,7 @@ class RoundTests(ServedRoute):
     def test_a_transient_failure_gets_the_providers_own_retries_and_no_more(self):
         # Opening the round is retried on a transient error, provider_retries times, and nothing on top.
         error = openai.APIConnectionError(request=httpx.Request("POST", "http://backend.test/v1/chat/completions"))
-        retries = CoreSettings.load(CORE).backend.blocks["llm"]["provider_retries"]
+        retries = CoreSettings.load(CORE, CORE_TEXTS).backend.blocks["llm"]["provider_retries"]
         with patch(
             "examples.frontend_backend_live.delegation_core.backend.providers.retry.retry_delay", return_value=0
         ):

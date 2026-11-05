@@ -2,7 +2,7 @@
 
 ## Goals
 
-`/v1/live` lets live session clients, such as Pipecat apps and benchmark clients, talk to the [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply.
+`/v1/live` lets live session clients, such as Pipecat apps or your own app, talk to the [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply.
 
 The Live gateway serves the live session protocol at `/v1/live`. It owns each session: the order of its commands and of its close, the wire schema, and the relay of each delegation's events. It knows nothing about Pipecat or the cascade, and it reaches the frontend adapter and the delegation core only through the ports in [`ports.py`](../../src/gateways/live/ports.py). The Frontend/Backend Live example plugs its own parts into it. For the design, refer to the [Frontend/Backend Live Architecture](../design/architecture.md) page.
 
@@ -19,19 +19,23 @@ The gateway serves the following routes:
 | `GET /v1/live/info` | The server's voices and session limit, plus what the example's `describe` hook adds |
 | `POST /v1/live/delegate` | One backend round for a client app that does its own delegated work |
 
-Any other path under `/v1/live` answers 404.
+An HTTP request to any other path under `/v1/live` answers 404, and a WebSocket connection there is refused with HTTP 403.
 
 ### When the Routes Are Served
 
-The server serves the Live routes when `LIVE_ENABLED` is `1`, `true`, `yes`, or `on`, and any other value turns them off. When `LIVE_ENABLED` is unset, the server serves them when `LIVE_API_TOKEN` is set or when the deployment runs the Frontend/Backend Live example alone. The example runs alone with `EXAMPLE_SELECTION=frontend-backend-live`, or with `selection: frontend-backend-live` in `examples_registry.yaml`. The example's Compose profiles default `LIVE_ENABLED` to `true`. A server with more than one worker (`UVICORN_WORKERS`) serves no Live route, because a session lives in one process.
+The server serves the Live routes only when its selected example has a `live` block in [`examples_registry.yaml`](../../examples_registry.yaml), as `frontend-backend-live` does. The `frontend-backend-live` profiles select that example. A deployment of another example serves no Live route, whatever its settings. With `EXAMPLE_SELECTION=all`, the selected example is the first one listed, so that deployment serves no Live route either.
+
+On a `frontend-backend-live` deployment, the server serves the Live routes when `LIVE_API_TOKEN` is set. Without a token, it serves them only when you set `LIVE_ENABLED=true`, for example on a trusted network. When `LIVE_ENABLED` is set, it decides: `1`, `true`, `yes`, or `on` serve the routes, and any other value turns them off. A server with more than one worker (`UVICORN_WORKERS`) serves no Live route, because a session lives in one process.
 
 ### Authentication
 
-Set `LIVE_API_TOKEN` to require a bearer token on every Live route. Without one, anyone who can reach the server can use the routes. The routes refuse a browser page from another origin with `403 Unexpected browser origin`. A browser cannot send the token on a WebSocket, so a page that this server serves uses WebRTC when a token is set.
+Set `LIVE_API_TOKEN` to require a bearer token on every Live route. The routes refuse a browser page from another origin with `403 Unexpected browser origin`.
+
+Without a token, the routes answer only requests addressed to an IP address, `localhost`, or a host name in the `allowed_hosts` [server setting](#server-settings). This check stops a webpage on another website from using the routes through a host name that resolves to your server.
 
 ### Client-Mode Rounds
 
-`POST /v1/live/delegate` runs one stateless backend round for a client app that does its own delegated work. At most `LIVE_MAX_DELEGATE_ROUNDS` (2) rounds run at once. With no token, the route answers only a `Host` that is an IP address, `localhost`, or a name in `LIVE_ALLOWED_HOSTS`.
+`POST /v1/live/delegate` runs one stateless backend round for a client app that does its own delegated work. The `max_delegate_rounds` [server setting](#server-settings) (2) caps the rounds that run at once.
 
 ## Connect a Pipecat App
 
@@ -54,7 +58,7 @@ llm = OpenAILiveLLMService(
 
 A live session client sends its `instructions`, which are the talker's prompt (a session that sets none, or blank ones, gets the `generic` talker prompt of the example's [`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml), which names no domain), and a `delegation` block. The block's `type` selects the delegation mode for the whole session:
 
-- **Responses mode** (`delegation.type: responses`). The server delegation ([`server_delegation/`](../../src/gateways/live/server_delegation/)) passes each delegation to the [delegation core](../../src/examples/frontend_backend_live/delegation_core/README.md), as [Server Delegation](#server-delegation) describes. The server runs the backend work with the settings in `delegation.responses`: the backend `model`, which is required, and optional `instructions` and function `tools`. The backend's function calls stream to the client as `response.event`. The client returns each result as a `function_call_output` item with `response.item.create`, and then sends `response.create` to continue. The results must arrive within `delegation.client_tool_timeout_seconds` in `core.yaml`, or the core stops the work. When a backend task repeats its newest call with the same function and arguments after the client answered it, the core answers the repeat with that output and a note (`texts.repeated_call_output` in `core.yaml`) instead of sending it again, unless a request was admitted since or the work has taken more than one request.
+- **Responses mode** (`delegation.type: responses`). The server delegation ([`server_delegation/`](../../src/gateways/live/server_delegation/)) passes each delegation to the [delegation core](../../src/examples/frontend_backend_live/delegation_core/README.md), as [Server Delegation](#server-delegation) describes. The server runs the backend work with the settings in `delegation.responses`: the backend `model`, which is required, and optional `instructions` and function `tools`. The backend's function calls stream to the client as `response.event`. The client returns each result as a `function_call_output` item with `response.item.create`, and then sends `response.create` to continue. The results must arrive within `delegation.client_tool_timeout_seconds` in `core.yaml`, or the core stops the work. When a backend task repeats its newest call with the same function and arguments after the client answered it, the core answers the repeat with that output and a note (`texts.repeated_call_output`, an `agent_prompts.Core` entry of the example's `prompts.yaml`) instead of sending it again, unless a request was admitted since or the work has taken more than one request.
 - **Client mode** (`delegation.type: client`, or no `delegation` block). The server runs no backend. The client delegation ([`client_delegation.py`](../../src/gateways/live/client_delegation.py)) announces each delegation with `session.delegation.created`. The client app does the work and answers with appends that name the delegation, and it sends the result back as a `session.commentary.append`. The server builds no delegation core for the session, which refuses `response.item.create` and `response.create`.
 
 When the talker delegates a turn, the lead-in that it words in the same decision is the delegation's spoken acknowledgement. The voice says it after the session's `delegation.acknowledgement_delay_ms` (`0`, at once, by default), unless a result, the delegation's end, the caller starting to speak after the turn was delegated, or commentary or thinking comes first. A delegation without a lead-in says nothing. The voice never starts a reply, a lead-in, or the `holding` or `refusal` line while the caller speaks.
@@ -77,7 +81,7 @@ During the call, the client can steer the cascade with three appends. Each one c
 
 - `session.instructions.append` cuts the line in progress, joins the talker's instructions, and has the talker decide again. Every later delegation also carries it, so each request repeats every instruction append.
 - `session.thinking.append` adds silent context, which the talker sees and the next delegation carries.
-- `session.commentary.append` adds a fact that the writer words and the voice says when the caller is idle. Under `as_written` or a writer fallback, the voice says the fact word for word.
+- `session.commentary.append` adds a fact that the talker words and the voice says when the caller is idle. Under `as_written` or a fallback of that wording, the voice says the fact word for word.
 
 ## Server Information and History
 
@@ -97,21 +101,26 @@ The following settings apply to a live session:
 
 ### Server Settings
 
+The `live.settings` block of the `frontend-backend-live` entry in [`examples_registry.yaml`](../../examples_registry.yaml) sets the following keys. The server reads them when it starts, and a key that the block leaves out keeps its default:
+
+| Key | Default | What it sets |
+| --- | --- | --- |
+| `max_sessions`, `max_session_seconds` | `8`, `1800` | The sessions at once and the length of one session, in seconds. |
+| `max_appends_per_minute` | `64` | The appends that one session accepts in any 60 seconds, counting `session.instructions.append`, `session.thinking.append`, and `session.commentary.append` together. An append over the limit gets a `rate_limit_exceeded` error, and the gateway neither passes it to the frontend adapter nor acknowledges it. |
+| `ice_urls` | `[]` | More ICE servers for the WebRTC peer, for example `stun:stun.l.google.com:19302`, beside the TURN server that `TURN_USERNAME`, `TURN_PASSWORD`, and `TURN_URL` configure. |
+| `max_delegate_rounds`, `allowed_hosts` | `2`, `[]` | The `POST /v1/live/delegate` rounds at once, and, with no token, the host names besides IP addresses and `localhost` that the routes answer to. An `allowed_hosts` entry is a host name only, without a port. An entry with a port never matches. |
+
+An unknown key, a limit that is not a whole number of at least 1, or a list that is not a list of strings stops the server at startup.
+
 The server reads the following environment variables when it starts:
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
 | `LIVE_ENABLED` | Unset | Whether the routes are served, as [When the Routes Are Served](#when-the-routes-are-served) describes. |
-| `LIVE_API_TOKEN` | Unset | The bearer token that every route requires. Without one, the server logs a warning at startup, and anyone who can reach it can use the routes. |
-| `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS` | `8`, `1800` | The sessions at once and the length of one session, in seconds. |
-| `LIVE_MAX_APPENDS_PER_MINUTE` | `64` | The appends that one session accepts in any 60 seconds, counting `session.instructions.append`, `session.thinking.append`, and `session.commentary.append` together. An append over the limit gets a `rate_limit_exceeded` error, and the gateway neither passes it to the frontend adapter nor acknowledges it. |
-| `LIVE_ICE_URLS` | Unset | More ICE servers for the WebRTC peer, comma-separated, beside the TURN server that `TURN_USERNAME`, `TURN_PASSWORD`, and `TURN_URL` configure. |
-| `LIVE_MAX_DELEGATE_ROUNDS`, `LIVE_ALLOWED_HOSTS` | `2`, unset | The `POST /v1/live/delegate` rounds at once, and, with no token, the host names besides IP addresses and `localhost` that the route answers to. |
-| `UVICORN_WORKERS` | `1` | The server's workers. The Live routes need one, as [When the Routes Are Served](#when-the-routes-are-served) describes. |
+| `LIVE_API_TOKEN` | Unset | The bearer token that every route requires. When it is set, the server serves the routes unless `LIVE_ENABLED` turns them off. When `LIVE_ENABLED=true` serves them without a token, the server logs a warning at startup, and anyone who can reach it by an IP address, `localhost`, or a host name in `allowed_hosts` can use the routes. |
+| `UVICORN_WORKERS` | `1` | The server's workers. The Live routes need one, as [When the Routes Are Served](#when-the-routes-are-served) describes. For a value that is not a whole number of at least 1, the server logs a warning and runs one worker. |
 
-When the Live routes are served, a value of `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS`, `LIVE_MAX_APPENDS_PER_MINUTE`, or `LIVE_MAX_DELEGATE_ROUNDS` that is not a whole number of at least 1 stops the server at startup. `UVICORN_WORKERS` is read before that check: for a value that is not a whole number of at least 1, the server logs a warning and runs one worker.
-
-For the example's own variables, refer to [Environment Variables](../design/architecture.md#environment-variables).
+For the example's own variables, `LIVE_CONFIG_PATH` and `CORE_CONFIG_PATH`, refer to [Environment Variables](../design/architecture.md#environment-variables).
 
 ## Errors and Limits
 

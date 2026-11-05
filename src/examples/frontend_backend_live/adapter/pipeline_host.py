@@ -6,7 +6,8 @@
 The pipeline runs at the shared rates (``examples.shared.pipeline_utils``): caller audio at 16 kHz, reply audio at
 ``PIPELINE_AUDIO_OUT_SAMPLE_RATE``, which every Magpie deployment accepts. The edges convert: the input gate hands the
 frontend 16 kHz audio, and both outputs send the caller reply audio at the exchange rate
-(``gateways.live.ports.EXCHANGE_RATE``). Each transport is a class of :data:`MEDIA_EDGES`.
+(``gateways.live.ports.EXCHANGE_RATE``). Each transport is a class of :data:`MEDIA_EDGES`, and the host gives the
+frontend's build (``examples.frontend_backend_live.frontend``) the session's edges.
 """
 
 from __future__ import annotations
@@ -16,8 +17,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from loguru import logger
 from pipecat.frames.frames import InputAudioRawFrame
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.transports.base_transport import TransportParams
 from pipecat.workers.runner import WorkerRunner
 
@@ -27,12 +27,14 @@ from examples.frontend_backend_live.adapter.bridge import (
     LiveOutputTranscript,
     LiveWebSocketAudioOutput,
 )
-from examples.frontend_backend_live.media.playout import PlayoutTracker
+from examples.frontend_backend_live.frontend import FrontendEdges
 from examples.shared.pipeline_utils import build_pipeline_params
 from gateways.live.ports import EXCHANGE_RATE
 from utils import parse_env_bool, parse_env_int
 
 if TYPE_CHECKING:
+    from pipecat.processors.frame_processor import FrameProcessor
+
     from gateways.live.ports import MediaConnection, SessionPort
 
 START_TIMEOUT_SECONDS = 30
@@ -47,15 +49,19 @@ WEBRTC_AUDIO_OUT_CHUNKS = 5
 class MediaEdges(Protocol):
     """Where a session's caller audio enters its pipeline and where the reply audio leaves it, for one transport."""
 
-    def wrap(self, inner: list, session: SessionPort, connection: MediaConnection | None, audio_in_rate: int) -> list:
-        """``inner`` (the input gate, then the frontend's processors) between this transport's input and output."""
+    def ends(
+        self, session: SessionPort, connection: MediaConnection | None, audio_in_rate: int
+    ) -> tuple[list[FrameProcessor], list[FrameProcessor]]:
+        """This transport's processors before the input gate, and after the frontend's speech output."""
 
 
 class WebRtcEdges:
     """A WebRTC peer: Pipecat's transport takes the caller's audio from the peer's track and plays the reply on it."""
 
-    def wrap(self, inner: list, session: SessionPort, connection: MediaConnection | None, audio_in_rate: int) -> list:
-        """Pipecat's WebRTC input, ``inner``, then its output, which writes reply audio at the exchange rate."""
+    def ends(
+        self, session: SessionPort, connection: MediaConnection | None, audio_in_rate: int
+    ) -> tuple[list[FrameProcessor], list[FrameProcessor]]:
+        """Pipecat's WebRTC input, and its output, which writes reply audio at the exchange rate."""
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
         webrtc = SmallWebRTCTransport(
@@ -68,15 +74,17 @@ class WebRtcEdges:
                 audio_out_10ms_chunks=parse_env_int(AUDIO_OUT_CHUNKS_SETTING, WEBRTC_AUDIO_OUT_CHUNKS),
             ),
         )
-        return [webrtc.input(), *inner, webrtc.output()]
+        return [webrtc.input()], [webrtc.output()]
 
 
 class WebSocketEdges:
     """A primary WebSocket: the gateway feeds the caller's audio in (``feed_audio``), a clocked output sends replies."""
 
-    def wrap(self, inner: list, session: SessionPort, connection: MediaConnection | None, audio_in_rate: int) -> list:
-        """``inner``, then the WebSocket's clocked reply-audio output."""
-        return [*inner, LiveWebSocketAudioOutput(session)]
+    def ends(
+        self, session: SessionPort, connection: MediaConnection | None, audio_in_rate: int
+    ) -> tuple[list[FrameProcessor], list[FrameProcessor]]:
+        """Nothing before the input gate, and the WebSocket's clocked reply-audio output."""
+        return [], [LiveWebSocketAudioOutput(session)]
 
 
 # Read per session, like the gateway's delegation parts: the transport is the client's choice of connection.
@@ -87,14 +95,13 @@ class PipelineHost:
     """A frontend adapter whose frontend is a Pipecat pipeline.
 
     The host wraps the frontend's processors with the caller's transport, the input gate (the session's input clock and
-    mute) and the playout tracker (what the caller heard), so every adapter it hosts has all three.
+    mute) and the output transcript (the sentences the caller heard), so every adapter it hosts has all three.
     """
 
     def __init__(self):
         """Start empty: the session's view comes with the start, and the pipeline once :meth:`run_pipeline` runs."""
         self.session: SessionPort | None = None  # the frontend adapter's view of the session, from its start
         self.gate: LiveInputGate | None = None  # ``input_ms`` is the session's input media clock
-        self.playout: PlayoutTracker | None = None  # what each line played; its facts go to ``playout.listen()``
         self.task: PipelineWorker | None = None
         self.runner_task: asyncio.Task | None = None
         self.background: set[asyncio.Task] = set()  # background commands; stop_pipeline cancels them
@@ -114,42 +121,41 @@ class PipelineHost:
 
         task.add_done_callback(done)
 
-    def audio_pipeline(self, middle: list, *, transport: str, connection, audio_in_rate: int) -> list:
-        """Wrap the frontend's processors with the input gate, the caller's transport and the playout tracker.
+    def edges(self, *, transport: str, connection, audio_in_rate: int, stt) -> FrontendEdges:
+        """The session's edges around the frontend: the caller's transport, the input gate and the output transcript.
+
+        The transcript, after the output, sends the sentences that played. The worker runs at the shared rates with no
+        RTVI and no idle close, is traced, under the session's id, when tracing is on, and reports the caller's
+        transcripts and the pipeline's errors as live events.
 
         Args:
-            middle: The frontend's processors, from the speech-to-text to the speech output.
             transport: The session's transport, a key of :data:`MEDIA_EDGES` (``webrtc`` or ``websocket``).
             connection: The WebRTC connection (``webrtc`` only).
             audio_in_rate: The sample rate the frontend wants caller audio at.
+            stt: The processor whose frames carry the caller's transcripts.
         """
         self.gate = LiveInputGate(self.session, audio_in_rate)
-        self.playout = PlayoutTracker(LiveOutputTranscript(self.session))
-        edges = MEDIA_EDGES[transport]()
-        return [*edges.wrap([self.gate, *middle], self.session, connection, audio_in_rate), self.playout]
+        inputs, outputs = MEDIA_EDGES[transport]().ends(self.session, connection, audio_in_rate)
+        worker = {
+            "params": build_pipeline_params(),
+            "idle_timeout_secs": None,
+            "enable_rtvi": False,
+            "enable_tracing": parse_env_bool(TRACING_SWITCH),
+            "conversation_id": self.session.id,
+            "observers": [LiveEventObserver(self.session, self.gate, stt)],
+        }
+        transcript = LiveOutputTranscript(self.session)
+        return FrontendEdges(inputs=[*inputs, self.gate], outputs=outputs, worker=worker, after=[transcript])
 
-    async def run_pipeline(self, processors: list, *, stt, tts) -> None:
-        """Start the pipeline and return once it is running; closing the pipeline closes the session.
-
-        The worker runs at the shared rates and is traced, under the session's id, when tracing is on.
+    async def run_pipeline(self, worker: PipelineWorker, processors: list) -> None:
+        """Run ``worker``'s pipeline and return once it is running; closing the pipeline closes the session.
 
         Args:
-            processors: The complete pipeline, from :meth:`audio_pipeline`.
-            stt: The processor whose frames carry the caller's transcripts.
-            tts: The processor whose frames carry the spoken reply.
+            worker: The pipeline's worker, on the session's :meth:`edges`.
+            processors: The pipeline's processors, each of which must have set up.
         """
         session = self.session
-        self.task = PipelineWorker(
-            Pipeline(processors),
-            params=build_pipeline_params(),
-            idle_timeout_secs=None,
-            enable_rtvi=False,
-            enable_tracing=parse_env_bool(TRACING_SWITCH),
-            conversation_id=session.id,
-            observers=[LiveEventObserver(session, self.gate, stt, tts)],
-            processor_unusable_policy=ProcessorUnusablePolicy.END,
-            setup_timeout_secs=120.0,
-        )
+        self.task = worker
         started = asyncio.Event()
         # A WebRTC input reads the caller while later processors set up: the gate drops that audio until the start.
         self.gate.muted = True

@@ -27,7 +27,6 @@ from typing import Any, get_args
 from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.backend.port import (
-    TERMINALS,
     Delivery,
     Phase,
     Route,
@@ -37,7 +36,8 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     ToolSource,
 )
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend, BrokenStreamError
-from examples.frontend_backend_live.delegation_core.ids import uid
+from examples.shared.delegation_contract import TERMINALS
+from examples.shared.ids import uid
 
 from .settings import LlmSettings
 

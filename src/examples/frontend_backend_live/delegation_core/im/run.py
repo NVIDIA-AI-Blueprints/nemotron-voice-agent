@@ -44,8 +44,9 @@ from examples.frontend_backend_live.delegation_core.im.conversation import TaskH
 from examples.frontend_backend_live.delegation_core.im.input import settings_for, task_request, user_message, with_parts
 from examples.frontend_backend_live.delegation_core.im.results import CallReports, ControlCalls
 from examples.frontend_backend_live.delegation_core.im.stop import AtBackstop, AtDeadline, StopReason
-from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter, message_text
+from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter
 from examples.frontend_backend_live.delegation_core.im.tools import WorkTools
+from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.delegation_core.ledger.records import Runner, Task, Work
 from examples.frontend_backend_live.delegation_core.ledger.records import Steering as SteeringRecord
 

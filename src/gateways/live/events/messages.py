@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from gateways.live.protocol.errors import ProtocolError, uid
+from examples.shared.ids import uid
+from gateways.live.protocol.errors import ProtocolError
 
 # The codes of failures on the server's side; every other code is an invalid client command.
 SERVER_CODES = frozenset({"server_error", "pipeline_error"})

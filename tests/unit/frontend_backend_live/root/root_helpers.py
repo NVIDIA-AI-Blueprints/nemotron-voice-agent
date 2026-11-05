@@ -36,7 +36,7 @@ class StubSettings:
     parsed: ClassVar[list] = []  # every block parsed, in order (reset by each test that reads it)
 
     @classmethod
-    def parse(cls, block: Mapping[str, Any]) -> StubSettings:
+    def parse(cls, block: Mapping[str, Any], **helpers) -> StubSettings:
         cls.parsed.append(dict(block))
         return cls(dict(block))
 
@@ -57,7 +57,6 @@ class StubAdapter:
     """A frontend adapter class by the class contract; its instances only record how they were built."""
 
     Settings: ClassVar[type] = StubSettings
-    hosts_rtvi: ClassVar[bool] = True
     built: ClassVar[list] = []  # every from_config call's arguments, in order
 
     def __init__(self, *args):
@@ -79,12 +78,6 @@ class StubAdapter:
         return StubReadiness()
 
 
-class NoRtviAdapter(StubAdapter):
-    """An adapter class the repository UI bot cannot host (``hosts_rtvi`` false), such as a realtime model's."""
-
-    hosts_rtvi: ClassVar[bool] = False
-
-
 def reset_stubs() -> None:
     """Forget what the stubs recorded."""
     StubSettings.parsed.clear()
@@ -102,10 +95,12 @@ def stub_root(**changes) -> factory.Root:
     """A root state with the stub adapter class, the shipped files and :data:`CATALOG`."""
     from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
     from examples.frontend_backend_live.delegation_core.config import CoreSettings
+    from examples.frontend_backend_live.delegation_core.profiles import load_profile
+    from tests.unit.core_helpers import CORE_TEXTS
 
-    core = CoreSettings.load(CONFIG_PATH.with_name("core.yaml"))
+    core = CoreSettings.load(CONFIG_PATH.with_name("core.yaml"), CORE_TEXTS)
     values = {
-        "config": load_live_config(CONFIG_PATH),
+        "config": load_live_config(load_profile, CONFIG_PATH),
         "core": core,
         "adapter": StubAdapter,
         "settings": StubSettings({"display_label": core.delegation.display_label}),

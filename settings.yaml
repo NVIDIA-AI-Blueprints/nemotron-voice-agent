@@ -97,8 +97,12 @@ nemotron-bolt-4b-nvcf:
 nemotron-super:
   <<: *llm
 
-nemotron-super-cloud:
+nemotron-super-nvcf:
   <<: *nim
+  reasoning_budget:
+    <<: *reasoning-budget
+    path: extra_body.reasoning_budget
+    default: 1024
   reasoning_effort:
     label: "Reasoning Effort"
     type: enum

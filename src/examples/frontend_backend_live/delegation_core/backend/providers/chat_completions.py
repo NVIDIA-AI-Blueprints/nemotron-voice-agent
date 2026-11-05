@@ -19,12 +19,12 @@ from typing import Any
 from loguru import logger
 from openai import AsyncOpenAI
 
-from ...config import ModelEndpoint
+from examples.shared.delegation_contract import ModelEndpoint
+
 from .base import DEFAULT_LIMITS, Backend, ProviderLimits, make_client
 from .translation import (
     ChatResponseTranslator,
     responses_items_to_messages,
-    thinking_enabled,
     to_chat_response_format,
     to_chat_tool_choice,
     to_chat_tools,
@@ -91,15 +91,11 @@ class ChatCompletionsBackend(Backend):
     async def _events(self, payload: dict) -> AsyncIterator[dict | None]:
         """Open the round, then yield its Responses events: the opening ones only once the first chunk arrived.
 
-        A chunk that gives no event yet (hidden reasoning, or answer text held while the model thinks) gives ``None``, a
-        sign of life, so a long but steady thinking round is never cut by the silence limit.
+        A chunk that gives no event yet (reasoning) gives ``None``, a sign of life, so a long but steady thinking round
+        is never cut by the silence limit.
         """
         request = self.request(payload)
-        translator = ChatResponseTranslator(
-            request["model"],
-            buffer_text=thinking_enabled(request),
-            single_call=payload.get("parallel_tool_calls") is False,
-        )
+        translator = ChatResponseTranslator(request["model"], single_call=payload.get("parallel_tool_calls") is False)
         stream = await self.client.chat.completions.create(**request)
         try:
             opened = False

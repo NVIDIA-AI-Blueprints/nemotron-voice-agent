@@ -25,13 +25,13 @@ from typing import Final
 from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.backend.port import (
-    TERMINALS,
     ConductorInput,
     ControlTools,
     Place,
     function_call_item,
 )
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend
+from examples.shared.delegation_contract import TERMINALS
 
 from .memory import ConductorMemory, DecisionRound
 from .render import round_input

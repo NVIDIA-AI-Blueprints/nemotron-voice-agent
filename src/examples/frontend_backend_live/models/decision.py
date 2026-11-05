@@ -1,28 +1,34 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The frontend model's output contract: one `{action, speech}` decision.
+"""The talker's output contract: one `{action, speech}` decision, and the spec of the call that asks for it.
 
 The parser accepts every action of `TalkerAction`; what a call allows is its caller's to enforce (the talker's floor,
-the writer's wording). Anything unusable delegates the original request: no tool has run at the talker
+the relay's checks). Anything unusable delegates the original request: no tool has run at the talker
 stage, so delegating can never repeat an action.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, get_args
+from typing import Literal, get_args
 
 from examples.shared.json_parsing import extract_json_object
-
-if TYPE_CHECKING:
-    from .base import CallSpec
 
 # Routing speaks, delegates or waits; the writer speaks.
 TalkerAction = Literal["speak", "delegate", "wait"]
 ACTIONS = get_args(TalkerAction)
 # Why the parser could not use a decision, so a caller can tell such a delegation from the model's own choice.
 UNUSABLE = frozenset({"empty_output", "invalid_json", "invalid_decision", "incomplete_output"})
+
+
+@dataclass(frozen=True)
+class CallSpec:
+    """What one model call is, stated by its caller: nothing about a call is inferred from its actions."""
+
+    role: str  # who calls: talker, writer or normalizer; it names the call in the logs
+    actions: tuple[str, ...]  # the actions the decision may take: the JSON schema's enum
+    hint: str  # the description of ``speech`` in the JSON schema
 
 
 @dataclass(frozen=True)
@@ -40,7 +46,7 @@ def unusable_decision(metadata: dict, reason: str) -> TalkerDecision:
 
 
 def decision_from_output_text(text: str, metadata: dict) -> TalkerDecision:
-    """Validate completed output: the first JSON object in it. Shared by every model provider.
+    """Validate completed output: the first JSON object in it. Shared by every call of the talker.
 
     The object is found by the repository's shared extractor (``examples.shared.json_parsing``), which reads the first
     complete object, so a valid decision followed by stray text is read as the decision.

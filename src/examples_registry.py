@@ -33,11 +33,12 @@ class ActivityCheckConfig(TypedDict, total=False):
 
 
 class LiveHooks(TypedDict):
-    """The hooks of an example that serves the Live API (``live:``), each a lazily imported ``module.path:callable``."""
+    """An example's ``live:`` block: its hooks, each a lazily imported ``module.path:callable``, and ``settings``."""
 
     factory: str  # builds one live session's parts (``gateways.live.ports.AdapterFactory``)
     describe: str  # the example's half of ``GET /v1/live/info``
     core: str  # builds the client of the process's one delegation core
+    settings: dict[str, int | list[str]]  # values for ``gateways.live.gateway.settings.LiveSettings``
 
 
 class ExampleEntry(TypedDict):
@@ -78,6 +79,9 @@ _SRC_ROOT = Path(__file__).resolve().parent
 _REGISTRY_PATH = _SRC_ROOT.parent / "examples_registry.yaml"
 # The hooks of an example's ``live:`` block, in order.
 LIVE_HOOKS: tuple[str, ...] = ("factory", "describe", "core")
+# The gateway settings that ``live.settings`` can set: the limits, each a whole number of at least 1, and the lists.
+LIVE_LIMITS: tuple[str, ...] = ("max_sessions", "max_session_seconds", "max_appends_per_minute", "max_delegate_rounds")
+LIVE_LISTS: tuple[str, ...] = ("ice_urls", "allowed_hosts")
 
 
 def _split_spec(spec: str, what: str = "Example bot") -> tuple[str, str]:
@@ -280,19 +284,40 @@ def _parse_defaults(example_id: str, entry: dict) -> dict[str, list[str] | str]:
     return parsed
 
 
+def _parse_live_settings(example_id: str, settings: Any) -> dict[str, int | list[str]]:
+    """The ``live.settings`` mapping: each of :data:`LIVE_LIMITS` and :data:`LIVE_LISTS` it sets, checked."""
+    if not isinstance(settings, dict):
+        raise RuntimeError(f"Example {example_id!r} live.settings must be a mapping")
+    parsed: dict[str, int | list[str]] = {}
+    for key, value in settings.items():
+        if key in LIVE_LIMITS:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise RuntimeError(f"Example {example_id!r} live.settings.{key} must be a whole number of at least 1")
+            parsed[key] = value
+        elif key in LIVE_LISTS:
+            parsed[key] = _parse_str_list(example_id, f"live.settings.{key}", value)
+        else:
+            raise RuntimeError(
+                f"Example {example_id!r} live.settings has an unknown key {key!r}; "
+                f"the keys are {', '.join(LIVE_LIMITS + LIVE_LISTS)}"
+            )
+    return parsed
+
+
 def _parse_live(example_id: str, entry: dict) -> LiveHooks | None:
-    """The example's ``live:`` block: each of :data:`LIVE_HOOKS` as ``module.path:callable``; ``None`` without one."""
+    """The example's ``live:`` block: each of :data:`LIVE_HOOKS`, and ``settings``; ``None`` without one."""
     live = entry.get("live")
     if live is None:
         return None
-    if not isinstance(live, dict) or set(live) != set(LIVE_HOOKS):
+    if not isinstance(live, dict) or set(live) - {"settings"} != set(LIVE_HOOKS):
         raise RuntimeError(
-            f"Example {example_id!r} live must name {', '.join(LIVE_HOOKS)}, each 'module.path:callable'"
+            f"Example {example_id!r} live must name {', '.join(LIVE_HOOKS)}, each 'module.path:callable', "
+            "and can add settings"
         )
-    hooks: LiveHooks = {name: str(live[name] or "").strip() for name in LIVE_HOOKS}
+    hooks = {name: str(live[name] or "").strip() for name in LIVE_HOOKS}
     for name, spec in hooks.items():
         _split_spec(spec, f"Example {example_id!r} live.{name}")
-    return hooks
+    return {**hooks, "settings": _parse_live_settings(example_id, live.get("settings", {}))}
 
 
 def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
@@ -432,15 +457,12 @@ def find(value: str = "", *, ignore_lock: bool = False) -> EnrichedExample:
 
 
 def live_example() -> EnrichedExample | None:
-    """Return the example that serves the Live API, or ``None`` when no example has a ``live`` block.
+    """Return the selected example (:func:`find`) when it has a ``live`` block, else ``None``.
 
-    It is the selected example when that one has a ``live`` block, else the first registered example that has one: a
-    deployment locked to an example without the block still finds the one that has it.
+    Only that example serves the Live API: a deployment of another example serves no Live route, whatever its settings.
     """
     selected = find()
-    if selected["live"] is not None:
-        return selected
-    return next((_lookup_by_key(key) for key, example in EXAMPLES.items() if example["live"] is not None), None)
+    return selected if selected["live"] is not None else None
 
 
 def metadata(example: EnrichedExample) -> dict:

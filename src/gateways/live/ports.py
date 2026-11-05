@@ -4,7 +4,8 @@
 """The ports between the live gateway and the parts that serve a session: types and their rules.
 
 A composition root mounts the routes with ``gateways.live.mount.mount_live``. Its :data:`AdapterFactory` builds each
-session's parts (:class:`SessionParts`), and its ``core`` hook builds, on first use, the one delegation core client the
+session's parts (:class:`SessionParts`): the frontend adapter and, for a WebRTC session, the peer connection
+(:class:`MediaConnection`). Its ``core`` hook builds, on first use, the one delegation core client the
 gateway holds (``gateways.live.server_delegation.responses_client.ResponsesClient``); a client-mode session never asks
 for it. The frontend adapter (:class:`FrontendAdapter`) hears and speaks to the caller and reports back through
 :class:`SessionPort`. The session builds its delegation part (:class:`DelegationPart`) from ``DELEGATION_PARTS`` by its
@@ -275,19 +276,48 @@ class Inspectable(Protocol):
 
 
 class MediaConnection(Protocol):
-    """The media connection the gateway made for a WebRTC session (its peer), which the adapter's transport uses."""
+    """A WebRTC session's peer connection: the factory makes it, and the frontend adapter's transport uses it.
+
+    The gateway answers the client's SDP offer with it, carries the session's events on its data channel and closes it,
+    with these calls only.
+    """
+
+    async def initialize(self, sdp: str, type: str) -> None:
+        """Take the client's SDP offer (``type`` is ``offer``) and make the answer."""
+
+    def get_answer(self) -> dict | None:
+        """The SDP answer, whose ``sdp`` the gateway returns; ``None`` before :meth:`initialize`."""
+
+    def event_handler(self, event_name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """A decorator that adds a handler of ``event_name``, called with the connection.
+
+        The gateway handles ``app-message`` (a client event on the data channel, the handler's second argument),
+        ``closed``, ``data-channel-closed`` and ``failed``.
+        """
+
+    def send_app_message(self, message: dict) -> None:
+        """Send one event on the data channel, or queue it until the channel opens."""
+
+    def is_connected(self) -> bool:
+        """Return whether the peer is connected."""
+
+    async def close_after_drain(self) -> None:
+        """Let the data channel flush the events it holds, then close the peer connection."""
 
 
 @dataclass(frozen=True)
 class SessionParts:
-    """What a composition root returns for one session: its frontend adapter."""
+    """What a composition root returns for one session: its frontend adapter and, on WebRTC, its peer connection."""
 
     frontend: FrontendAdapter
+    connection: MediaConnection | None = None  # a WebRTC session's peer, on the ICE servers the factory got
 
 
-# Builds the parts of a new session from its configuration, its transport (``webrtc`` or ``websocket``) and the
-# WebRTC peer (``None`` on a WebSocket). A factory raises ``ProtocolError`` to refuse a session.
-AdapterFactory = Callable[[SessionConfig, str, MediaConnection | None], Awaitable[SessionParts]]
+# Builds the parts of a new session from its configuration, its transport (``webrtc`` or ``websocket``) and the ICE
+# servers of a WebRTC session's peer (``None`` on a WebSocket): plain ``{urls}`` objects, with ``username`` and
+# ``credential`` when they have them, on which the factory makes the peer connection that the parts carry. A factory
+# raises ``ProtocolError`` to refuse a session.
+AdapterFactory = Callable[[SessionConfig, str, list[dict] | None], Awaitable[SessionParts]]
 # Builds the gateway's one delegation core client (``ResponsesClient``), or an awaitable of it. The gateway runs it
 # on first use (again after a failed build), so a client-mode session never builds a core, and closes the client
 # (``aclose``) at shutdown.

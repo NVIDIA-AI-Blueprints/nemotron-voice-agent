@@ -19,7 +19,7 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
-from utils import NVCF_LLM_BASE_URL, build_services_api_response, nvidia_api_key, parse_json_dict
+from utils import NVCF_LLM_BASE_URL, listed_services, nvidia_api_key, parse_json_dict
 
 
 def resolve_endpoint(entry: dict, body: dict, prefix: str = "", *, slot: str) -> ModelEndpoint:
@@ -100,9 +100,11 @@ class ExampleCatalog:
     def read(cls) -> ExampleCatalog:
         """Read the catalog of the example bound to the current context (``utils.set_service_context``).
 
-        It may probe local endpoints (``SERVICE_RECIPE=auto``), so a root calls it off the event loop.
+        The Live hooks read it as the repository UI lists it (``utils.listed_services``), so a slot's default is its
+        first listed entry whose service is not offline: the registry's default when its service runs, else the next
+        one that runs. It may probe local endpoints (``SERVICE_RECIPE=auto``), so a root calls it off the event loop.
         """
-        return cls(build_services_api_response())
+        return cls(listed_services())
 
     def entry(self, slot: str) -> dict:
         """The slot's default entry, or ``{}`` when the example's catalog lists none for it."""

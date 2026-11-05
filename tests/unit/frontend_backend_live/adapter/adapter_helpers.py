@@ -14,7 +14,6 @@ from pipecat.workers.runner import WorkerRunner
 
 from gateways.live.ports import EXCHANGE_RATE
 
-SILENCE = 0
 PACKET_BYTES = EXCHANGE_RATE // 10 * 2  # 100 ms of PCM16 at the exchange rate
 
 
@@ -52,9 +51,9 @@ class RecordingPort:
     def packets(self):
         return [entry for entry in self.log if entry[0] == "audio"]
 
-    def voiced(self):
-        """The packets that carry sound."""
-        return [entry for entry in self.packets() if any(entry[1])]
+    def sounds(self):
+        """Whether each packet carries sound, in order."""
+        return [bool(any(pcm)) for _, pcm, _ in self.packets()]
 
     def transcript(self):
         return [entry[2] for entry in self.log if entry[:2] == ("emit", "session.output_transcript.delta")]
@@ -81,14 +80,14 @@ class Probe(FrameProcessor):
 FLUSH = object()  # a step of run_frames: wait until every frame queued before it has passed the whole pipeline
 
 
-async def run_frames(processors, frames, *, settle=0.15, gap=0.02, observers=None, params=None):
+async def run_frames(processors, frames, *, settle=0.15, gap=0.02):
     """Run ``processors`` in a pipeline: once started, queue ``frames`` ``gap`` apart, wait ``settle``, then cancel it.
 
     A processor takes the frames waiting for it system frames first, so a cut queued right behind a line can overtake
     the line. A :data:`FLUSH` step before the cut keeps it behind the line, as a text-to-speech passes a cut on only
     after the frames it pushed before it.
     """
-    worker = PipelineWorker(Pipeline(processors), observers=observers or [], idle_timeout_secs=None, **(params or {}))
+    worker = PipelineWorker(Pipeline(processors), idle_timeout_secs=None)
     started = asyncio.Event()
     worker.add_event_handler("on_pipeline_started", lambda worker, frame: started.set())
     runner = WorkerRunner(handle_sigint=False)

@@ -16,8 +16,8 @@ import json
 from collections.abc import Mapping
 from copy import deepcopy
 
-from examples.frontend_backend_live.delegation_core.ids import approx_tokens
 from examples.frontend_backend_live.delegation_core.im.input import is_user_message
+from examples.shared.ids import approx_tokens
 
 
 def starts_a_request(item: dict) -> bool:

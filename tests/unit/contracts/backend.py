@@ -13,7 +13,8 @@
 * :class:`FakeDecisionTarget` and :class:`ConductorContract`: each conductor's test subclasses it;
 * :class:`ProviderContract`: each model provider's test subclasses it.
 
-Only the delegation core and the standard library are imported, like the core's own tests.
+Only the delegation core, the helpers it shares (``examples.shared``) and the standard library are imported, like
+the core's own tests.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 from examples.frontend_backend_live.delegation_core.backend.port import (
-    TERMINALS,
     Answer,
     BackendAdapter,
     BoundaryInput,
@@ -48,11 +48,15 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     message_phase,
 )
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend, ProviderLimits
-from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.shared.delegation_contract import TERMINALS, ModelEndpoint
 from tests.unit.contracts.base import ContractCase, collect
+from tests.unit.core_helpers import CORE_TEXTS
 
-# The core's texts as core.yaml words them (TaskContext.texts): a run's error outputs, not-run outputs and notes.
-TEXTS = CoreSettings.load(Path(__file__).resolve().parents[3] / "src/examples/frontend_backend_live/core.yaml").texts
+# The core's texts as prompts.yaml words them (TaskContext.texts): a run's error outputs, not-run outputs and notes.
+TEXTS = CoreSettings.load(
+    Path(__file__).resolve().parents[3] / "src/examples/frontend_backend_live/core.yaml", CORE_TEXTS
+).texts
 
 # ----------------------------------------------------------------------------------------------- the event rules
 
@@ -219,7 +223,7 @@ class FakeTaskContext:
     """A ``TaskContext`` for an adapter's tests: it serves a request and a history, and records every report.
 
     The app's functions are those the request declares (``declared``); every other call is the backend's, and a call it
-    refuses gets ``texts.not_run_output``. Its texts are core.yaml's. The test hands the app's outputs over with
+    refuses gets ``texts.not_run_output``. Its texts are prompts.yaml's. The test hands the app's outputs over with
     :meth:`give_outputs` and steering with :meth:`steer_with`.
     """
 
@@ -337,9 +341,6 @@ class BackendAdapterContract(ContractCase):
       - ``tail_error``: a round that answers and completes, then fails after its terminal;
     * ``release()``: let the ``slow`` round go on;
     * ``sent_instructions() -> list[str]``: the instructions its backend was sent, every model call.
-
-    The harness binds it to a real runtime (Hermes over ACP, in ``test_harness_real_hermes.py``) whose model endpoint
-    is scripted for each scenario.
     """
 
     def make_adapter(self, scenario: str) -> BackendAdapter:

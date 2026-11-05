@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The harness profile: the delegation core runs its backend work on Hermes over the Agent Client Protocol (ACP), an
-# agent its operator deploys. Point CORE_CONFIG_PATH at this file to use it. It extends core.agent.yaml, so both model
-# conductors read one conductor prompt and every worker gets the envelope (result_format: speak_display); everything
-# else of the core (the IM, its texts, the one-shot source) is core.yaml's, whose backend.harness block names the agent
-# class (agent: hermes) and how the agent is reached.
+# agent its operator deploys. Point CORE_CONFIG_PATH at this file to use it. It extends core.agent.yaml, so every
+# worker gets the envelope (result_format: speak_display); everything else of the core (the IM, the one-shot source)
+# is core.yaml's, whose backend.harness block names the agent class (agent: hermes) and how the agent is reached.
 #
 # Before a first run, deploy Hermes yourself: install it, and give it its model, its key, its toolsets and its context
 # length in its own home (HERMES_HOME, or ~/.hermes). Then put `hermes` on this server's PATH, or set

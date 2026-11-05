@@ -16,11 +16,11 @@ when an app call is ready, after every other call in flight has reported (one ap
 its commit gate runs when the call is forwarded); when a native steer was delivered, or steering waits while the round
 holds calls, so no output joins the history before its call; or when every prompt of the session has returned.
 
-**Answer.** The answer is the last message after the turn's last tool activity, only when the turn ended ``end_turn``,
-``Agent.no_answer`` finds it answered and ``Agent.model_text`` says a model call wrote it. Anything else fails the task
-(``response.failed``, ``server_error``) and the text is only logged. A message no model call wrote never becomes
-commentary either, since commentary can be spoken. Usage is how far the session's counters moved, since ACP counts
-usage across all of a session's turns.
+**Answer.** The answer is the last message after the turn's last tool activity, only when the turn ended ``end_turn``
+and ``Agent.no_answer`` finds it answered. Anything else fails the task (``response.failed``, ``server_error``) and the
+text is only logged. When ``Agent.no_answer`` finds that no model call completed, the last message is the agent's own
+text, and it never becomes commentary either, since commentary can be spoken. Usage is how far the session's counters
+moved, since ACP counts usage across all of a session's turns.
 
 **Steering.** An agent's own mid-turn steer joins the running turn at its next model boundary, so delivery is reported
 ``applied`` once a tool result came after the ack and a new model call began, or a new model message began while the
@@ -55,7 +55,7 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     StopOutcome,
     TaskContext,
 )
-from examples.frontend_backend_live.delegation_core.ids import uid
+from examples.shared.ids import uid
 
 from .bridge import WorkerDoor
 from .protocol import (
@@ -110,13 +110,11 @@ def output_text(item: Mapping[str, Any] | None) -> str | None:
 
 @dataclass
 class _Message:
-    """One assistant message of the agent: its text so far, and how it streamed (``protocol.MessageFacts``)."""
+    """One assistant message of the agent: its text so far, and whether it is the agent's own."""
 
     id: str
     parts: list[str] = field(default_factory=list)
-    chunks: int = 0
-    thought: bool = False  # a reasoning chunk carried its id
-    after_text: bool = False  # the agent's turn had streamed text before this message began
+    own: bool = False  # the last message of a turn in which no model call completed: never output
 
     @property
     def text(self) -> str:
@@ -188,7 +186,6 @@ class WorkerRun:
         self.total: int | None = None  # the session's cumulative token total, as last reported
         self.usage: Mapping[str, Any] | None = None  # the session's cumulative usage, as last reported
         self.tool_rows = False  # the session's transcript holds a tool result (a steer is then taken sooner)
-        self.text_streamed = False  # the agent's current turn streamed text so far
         self.current_message: str | None = None  # the newest model message's id
         self.sent: dict[int, _SentSteer] = {}  # native steers by their prompt number
         self.next_prompts: list[Steering] = []  # batches that go as the next prompt
@@ -448,7 +445,6 @@ class WorkerRun:
     def _start_turn(self, prompt: int) -> None:
         self.open_prompts.add(prompt)
         self.turn = _Turn(prompt, self.total, self.usage)
-        self.text_streamed = False
         self.task.trace("harness.prompt_sent", round=self.round, prompt=prompt)
 
     # ------------------------------------------------------------------------------------------------ a round
@@ -495,12 +491,12 @@ class WorkerRun:
     async def _close(self, final: _Message | None, usage: Mapping[str, Any] | None = None) -> AsyncIterator[dict]:
         """End the open round: its messages (``final`` is the answer, the rest commentary), then its calls.
 
-        A message no model call wrote is the agent's own text: commentary may be spoken as progress, so it is dropped
-        and logged, never passed on.
+        The agent's own message (``_Message.own``) is dropped and logged, never passed on: commentary may be spoken as
+        progress.
         """
         items = []
         for message in self.messages.values():
-            if message.text and not self.agent.model_text(message):
+            if message.own:
                 logger.warning(
                     f"harness.text_dropped task={self.task.task_id} text={message.text[:LOGGED_TEXT_CHARS]!r}"
                 )
@@ -654,11 +650,8 @@ class WorkerRun:
         if candidate is None or not candidate.text:
             return "the turn ended without a message after its last tool call"
         reason = self.agent.no_answer(usage_total(turn.usage), turn.total_before)
-        if reason is not None:
-            return reason
-        if not self.agent.model_text(candidate):
-            return "the last message was not streamed by a model call (the agent's own text)"
-        return None
+        candidate.own = reason is not None  # no model call completed: the agent's own text
+        return reason
 
     def _last_text(self) -> str:
         texts = [message.text for message in self.messages.values() if message.text]
@@ -817,7 +810,7 @@ class WorkerRun:
     def _begin_message(self, message_id: str) -> _Message:
         message = self.messages.get(message_id)
         if message is None:
-            message = self.messages[message_id] = _Message(message_id, after_text=self.text_streamed)
+            message = self.messages[message_id] = _Message(message_id)
             self.activity_since_message = False
         self.current_message = message_id
         return message
@@ -830,15 +823,13 @@ class WorkerRun:
             return
         message = self._begin_message(event.message_id)
         message.parts.append(event.text)
-        message.chunks += 1
-        self.text_streamed = self.text_streamed or bool(event.text)
 
     def thought_chunk(self, event: ThoughtChunk) -> None:
-        """Reasoning: its id marks the message as streamed by a model call."""
+        """Reasoning: its id begins the message that its text will join."""
         self._seen()
         if event.message_id is None or self._model_output(event, event.message_id):
             return
-        self._begin_message(event.message_id).thought = True
+        self._begin_message(event.message_id)
 
     def tool_card(self, event: ToolCard) -> None:
         """A tool call starts: the bridged ones are the bridge's to report; the agent's own are reported here."""
@@ -900,7 +891,6 @@ class WorkerRun:
         if turn is not None and event.prompt == turn.main:
             turn.main_open, turn.stop, turn.error = False, event.stop_reason, event.error
             turn.usage = event.usage
-            self.text_streamed = False  # model text from now on is a turn of the agent's own (a steer run as one)
             self.task.trace("harness.turn_ended", round=self.round, stop=event.stop_reason, error=event.error)
         elif turn is not None and event.usage is not None and turn.activity_after_main:
             turn.stop, turn.error, turn.usage = event.stop_reason, event.error, event.usage

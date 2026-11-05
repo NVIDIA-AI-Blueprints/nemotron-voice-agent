@@ -20,6 +20,7 @@ from examples.frontend_backend_live import factory
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from gateways.live.protocol import SessionConfig
+from tests.unit.core_helpers import CORE_TEXTS
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,
     StubAdapter,
@@ -55,11 +56,11 @@ class RootTests(RootCase):
     def test_concurrent_first_calls_read_the_files_once(self):
         reads, started = [], threading.Event()
 
-        def slow_read(path=None):
+        def slow_read(load_profile, path=None):
             reads.append(path)
             started.set()
             time.sleep(0.1)
-            return load_live_config(path)
+            return load_live_config(load_profile, path)
 
         results = []
         with patch.object(factory, "load_live_config", side_effect=slow_read):
@@ -108,7 +109,7 @@ class OneCoreTests(RootCase):
         self.assertIs(first, second)
         self.assertEqual(len(built), 1)
         (settings, endpoints, defaults) = built[0]
-        self.assertEqual(settings, CoreSettings.load(CONFIG_PATH.with_name("core.yaml")))
+        self.assertEqual(settings, CoreSettings.load(CONFIG_PATH.with_name("core.yaml"), CORE_TEXTS))
         self.assertEqual((defaults.model, defaults.tools), ("org/back", []))
         # Any client: the generic backend prompt as written, with none of the cafe demo's channel context.
         backend = yaml.safe_load(CONFIG_PATH.with_name("prompts.yaml").read_text(encoding="utf-8"))["agent_prompts"]

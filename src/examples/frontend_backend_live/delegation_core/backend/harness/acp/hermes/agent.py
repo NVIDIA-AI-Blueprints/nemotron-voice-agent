@@ -21,8 +21,9 @@ daemon may differ. The paths name files of Hermes's source.
   raw arguments (``acp_adapter/tools.py``). MCP tools are named ``mcp__<server>__<tool>``.
 * **Turn endings.** Provider errors, Hermes's own exits and an idle cancel's poisoned prompt also end in ``end_turn``,
   with one chunk of Hermes's own text, and usage is the session's running total (``agent/turn_finalizer.py``). So a
-  turn is answered only when its usage moved and its message came from a model call; a one-chunk reply that is a
-  turn's only text cannot be told apart from Hermes's own on the wire, so it fails the task.
+  turn is answered only when its usage moved, that is, a model call completed. ACP does not mark who wrote a message:
+  after a completed call, Hermes's own text, such as an ``Error: ...`` or the model's reasoning when it wrote no
+  answer (``agent/turn_final_response.py``), is the turn's answer.
 * **Cancel.** An idle session's cancel makes the next prompt end unprocessed (``agent/turn_facade_lease.py``), so a
   cancel goes only to a running prompt. A cancelled turn ends ``cancelled``, and its prompt's text is put before the
   session's next prompt (``acp_adapter/server.py``).
@@ -50,7 +51,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from ..agent import AcpAgent
 
 if TYPE_CHECKING:
-    from ...protocol import MessageFacts
     from ..updates import SessionUpdates
 
 # The prefix of a session's MCP tools in Hermes's tool cards.
@@ -141,10 +141,6 @@ class HermesAgent(AcpAgent):
     def unnamed_message(self, updates: SessionUpdates) -> str | None:
         """A chunk with no message id is Hermes's own reply (an ack, a command's reply), never model text."""
         return None
-
-    def model_text(self, message: MessageFacts) -> bool:
-        """Streamed by a model call: two chunks or more, or one after reasoning once its turn had streamed text."""
-        return message.chunks >= 2 or (message.thought and message.after_text)
 
     def no_answer(self, total: int | None, total_before: int | None) -> str | None:
         """No answer when the turn reported no usage, or when its usage did not move: no model call completed."""
