@@ -1161,7 +1161,7 @@ for observation limits.
 
 ## November 05, 2026: Local Integration Validation
 
-The Pipecat 1.15 integration passes 1,261 local tests and 415 subtests, with
+The Pipecat 1.15 integration passes 1,262 local tests and 417 subtests, with
 three opt-in live SDK tests skipped. Required Ruff 0.15.6 checks and formatting
 pass. Imports pass for the server and all five examples, client lint and build
 pass, and both service-free evaluation checks pass.

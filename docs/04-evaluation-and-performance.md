@@ -9,14 +9,16 @@ real-time pacing and places responses on the source timeline. The Generic
 Assistant is the first integration. Compare matched files through the normal
 live pipeline and offline processing before relying on equivalent benchmark
 outcomes; offline turnaround does not measure real-world response latency.
-An experimental opt-in text mode can analyze PCM prefixes during upload while
-withholding results until input validation and source recording finish. It
-preserves the default sealed-input path. Its historical Pipecat 1.12.0 results
-do not validate the current Pipecat 1.15.0 integration.
+An experimental opt-in text mode can analyze pulse-code modulation (PCM) audio
+prefixes during upload while withholding results until input validation and
+source recording finish. It preserves the default sealed-input path. Its
+historical Pipecat 1.12.0 results do not validate the current Pipecat 1.15.0
+integration.
 A separate [offline worker-pool prototype](offline-processing-reference.md#use-the-exclusive-offline-worker-pool-prototype)
 provides exclusive stream admission and does not change the normal online
-server. The external evaluator recommends C3 for this lane with 10 backends;
-this is an evaluation-profile setting, not a global concurrency default.
+server. The external evaluator recommends concurrency 3 (C3) for this lane with
+10 backends; this is an evaluation-profile setting, not a global concurrency
+default.
 Refer to the [evaluation profile and recovery contract](offline-processing-reference.md#recommended-offline-evaluation-profile)
 for the bounded retry policy, historical coverage, and remaining validation.
 Optional [client, server, and pool timings](offline-processing-reference.md#attribute-offline-client-and-server-waits)

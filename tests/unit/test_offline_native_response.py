@@ -21,7 +21,7 @@ from pipecat.frames.frames import (
     TTSAudioRawFrame,
     TTSStartedFrame,
 )
-from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
+from pipecat.metrics.metrics import ProcessingMetricsData, TTFATMetricsData, TTFBMetricsData
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.utils.errors import ErrorCategory
@@ -1035,6 +1035,116 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
         self.tts.release.set()
         result = await asyncio.wait_for(actor.result(), 1)
         self.assertEqual(result.text, "Hello world. More words.")
+
+    async def test_malformed_native_metric_values_preserve_frames_valid_siblings_and_completion(self):
+        """Observational values cannot fail native delivery, with or without a diagnostics sink."""
+        invalid_values = (
+            ("missing", {}),
+            ("none", {"value": None}),
+            ("boolean", {"value": True}),
+            ("false_boolean", {"value": False}),
+            ("string", {"value": "0.2"}),
+            ("container", {"value": []}),
+            ("negative", {"value": -0.1}),
+            ("nan", {"value": float("nan")}),
+            ("infinity", {"value": float("inf")}),
+            ("negative_infinity", {"value": float("-inf")}),
+            ("scaled_float_overflow", {"value": 1e308}),
+            ("integer_float_conversion_overflow", {"value": 10**400}),
+        )
+        for diagnostics_enabled in (False, True):
+            with self.subTest(diagnostics_enabled=diagnostics_enabled):
+                if diagnostics_enabled:
+                    await self.restart_session()
+                observer = Mock()
+                self.session._diagnostics = observer if diagnostics_enabled else None
+                actor = await self.session.begin([], 0, "metric-values", self.changed)
+                await self.wait_event(self.llm.entered)
+                invalid = []
+                for metric_type in (TTFBMetricsData, ProcessingMetricsData, TTFATMetricsData):
+                    for name, fields in invalid_values:
+                        if metric_type is TTFATMetricsData:
+                            fields = {"ttfat": fields["value"]} if fields else {}
+                        invalid.append(metric_type.model_construct(processor=f"invalid-{name}", **fields))
+                valid = [
+                    TTFBMetricsData(processor="valid-zero", value=0),
+                    TTFBMetricsData(processor="valid-ttfb", value=0.2),
+                    ProcessingMetricsData(processor="valid-processing", value=0.4),
+                    TTFATMetricsData(processor="valid-answer", ttfat=0.3, ttfb=0.2, thinking_time=0.1),
+                ]
+                malformed_processors = [
+                    TTFBMetricsData.model_construct(value=0.5),
+                    ProcessingMetricsData.model_construct(value=0.6, processor=None),
+                    ProcessingMetricsData.model_construct(value=0.7, processor=[]),
+                    TTFBMetricsData.model_construct(value=0.8, processor="unbounded-label" * 128),
+                    TTFBMetricsData.model_construct(value=0.1, processor=123),
+                    TTFBMetricsData.model_construct(value=0.2, processor=True),
+                    TTFBMetricsData.model_construct(value=0.3, processor=""),
+                    TTFBMetricsData.model_construct(value=0.4, processor="unbounded private label"),
+                    TTFATMetricsData.model_construct(ttfat=0.9),
+                ]
+                original = invalid + malformed_processors + valid
+                frame = MetricsFrame(data=original)
+                frame.metadata["nva_offline_response_generation"] = "metric-values"
+                await self.tts.push_frame(frame)
+                published = actor.drain().events
+                self.assertTrue(
+                    any(
+                        event.kind == "provider_frame"
+                        and isinstance(event.payload, NativeProviderFrame)
+                        and event.payload.frame is frame
+                        for event in published
+                    )
+                )
+                self.assertTrue(all(actual is initial for actual, initial in zip(frame.data, original, strict=True)))
+                self.llm.release.set()
+                self.tts.release.set()
+                result = await asyncio.wait_for(actor.result(), 1)
+                self.assertEqual(result.text, "Hello world. More words.")
+                self.assertTrue(result.metrics["tts_rpc_eof_drained"])
+                retained = result.metrics["native_provider_metrics"]
+                self.assertFalse(any(value["processor"].startswith("invalid-") for value in retained))
+                self.assertEqual(
+                    [value["value_ns"] for value in retained if value["processor"] == "other"],
+                    [
+                        500_000_000,
+                        600_000_000,
+                        700_000_000,
+                        800_000_000,
+                        100_000_000,
+                        200_000_000,
+                        300_000_000,
+                        400_000_000,
+                    ],
+                )
+                self.assertEqual(
+                    [value for value in retained if value["processor"].startswith("valid-")],
+                    [
+                        {"kind": "TTFBMetricsData", "processor": "valid-zero", "value_ns": 0},
+                        {"kind": "TTFBMetricsData", "processor": "valid-ttfb", "value_ns": 200_000_000},
+                        {
+                            "kind": "ProcessingMetricsData",
+                            "processor": "valid-processing",
+                            "value_ns": 400_000_000,
+                        },
+                    ],
+                )
+                observed = [call.kwargs for call in observer.record.call_args_list if call.args == ("native_metric",)]
+                self.assertFalse(any(value["processor"].startswith("invalid-") for value in observed))
+                self.assertEqual(
+                    [value["value_ms"] for value in observed if value["processor"] == "other"],
+                    [500.0, 600.0, 700.0, 800.0, 100.0, 200.0, 300.0, 400.0, 900.0] if diagnostics_enabled else [],
+                )
+                self.assertEqual(
+                    {
+                        value["processor"]: value["value_ms"]
+                        for value in observed
+                        if value["processor"].startswith("valid-")
+                    },
+                    {"valid-zero": 0.0, "valid-ttfb": 200.0, "valid-processing": 400.0, "valid-answer": 300.0}
+                    if diagnostics_enabled
+                    else {},
+                )
 
     def test_direct_mode_is_rejected_to_preserve_native_interruption_semantics(self):
         """Normal processor queues are required to cancel native HTTP generation."""

@@ -71,6 +71,24 @@ def _diagnose(diagnostics, event, **scalars):
             diagnostics.record(event, **scalars)
 
 
+def _scaled_native_metric_value(datum, scale: float) -> float | None:
+    """Reject malformed observations and overflow before converting latency units."""
+    value = getattr(datum, "ttfat" if isinstance(datum, TTFATMetricsData) else "value", None)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+        return None
+    try:
+        scaled = float(value) * scale
+    except (OverflowError, ValueError):
+        return None
+    return scaled if math.isfinite(scaled) else None
+
+
+def _native_metric_processor(datum) -> str:
+    """Use one bounded fallback for missing or malformed observational labels."""
+    processor = getattr(datum, "processor", None)
+    return processor if isinstance(processor, str) and re.fullmatch(r"[A-Za-z0-9_#.-]{1,128}", processor) else "other"
+
+
 def native_metric_values(frame) -> list[dict[str, str | float]]:
     """Copy only finite latency values and bounded native processor labels."""
     if not isinstance(frame, MetricsFrame):
@@ -79,21 +97,13 @@ def native_metric_values(frame) -> list[dict[str, str | float]]:
     for datum in frame.data:
         if not isinstance(datum, (TTFBMetricsData, TTFATMetricsData, ProcessingMetricsData)):
             continue
-        value = datum.ttfat if isinstance(datum, TTFATMetricsData) else datum.value
-        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
+        value_ms = _scaled_native_metric_value(datum, 1000)
+        if value_ms is None:
             continue
-        value_ms = float(value) * 1000
-        if not math.isfinite(value_ms):
-            continue
-        processor = datum.processor
         values.append(
             {
                 "metric_type": type(datum).__name__,
-                "processor": (
-                    processor
-                    if isinstance(processor, str) and re.fullmatch(r"[A-Za-z0-9_#.-]{1,128}", processor)
-                    else "other"
-                ),
+                "processor": _native_metric_processor(datum),
                 "value_ms": value_ms,
             }
         )
@@ -806,11 +816,14 @@ class NativeResponseSession:
             values = state.metrics.setdefault("native_provider_metrics", [])
             for datum in frame.data:
                 if isinstance(datum, (TTFBMetricsData, ProcessingMetricsData)):
+                    value_ns = _scaled_native_metric_value(datum, 1e9)
+                    if value_ns is None:
+                        continue
                     values.append(
                         {
                             "kind": type(datum).__name__,
-                            "processor": datum.processor,
-                            "value_ns": round(datum.value * 1e9),
+                            "processor": _native_metric_processor(datum),
+                            "value_ns": round(value_ns),
                         }
                     )
         if isinstance(frame, LLMFullResponseEndFrame) and direction == FrameDirection.DOWNSTREAM:
