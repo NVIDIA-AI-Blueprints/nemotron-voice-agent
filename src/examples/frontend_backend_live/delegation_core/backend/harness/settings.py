@@ -58,7 +58,7 @@ class Bridge:
 
 @dataclass(frozen=True)
 class HarnessPrompts:
-    """The words the harness adds to what its agent reads, from ``backend.harness.prompts`` in the core's file.
+    """The words the harness adds to what its agent reads, from ``backend.harness.prompts`` in the core's texts.
 
     Each template's fields are filled by ``harness/render.py``; the calls the bridge answers itself read the core's
     texts (a worker's door through ``TaskContext.texts``, the conductor's through its ``ControlTools``).
@@ -121,7 +121,7 @@ class HarnessPrompts:
 
 
 # Every key of backend.harness and its default (core.yaml names the agent and how to reach it: command or url). The
-# prompts have none: core.yaml words every one.
+# prompts have none: the core's texts word every one.
 DEFAULTS: Mapping[str, Any] = {
     "protocol": "acp",
     "agent": "acp",

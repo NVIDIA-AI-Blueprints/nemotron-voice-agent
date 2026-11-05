@@ -5,12 +5,10 @@
 
 """The contract of a ``ResponsesClient`` (``live/server_delegation/responses_client.py``), the port to the core.
 
-The gateway reaches the delegation core only through it. The in-process ``LocalResponsesClient`` binds it; an HTTP
-client gets the same contract.
-
-Its guarantees: a refusal comes before any event; each request reads one stream, which ends after its terminal;
-requests are accepted one at a time; a response opens ``queued`` at acceptance; ``input_tokens`` validates a request's
-settings in the background.
+The gateway reaches the delegation core only through it; the in-process ``LocalResponsesClient`` binds it, and an HTTP
+client gets the same contract. A refusal comes before any event; each request reads one stream, which ends after its
+terminal; requests are accepted one at a time; a response opens ``queued`` at acceptance; ``input_tokens`` validates a
+request's settings in the background.
 """
 
 from __future__ import annotations
@@ -49,27 +47,20 @@ class ResponsesClientContract(ContractCase):
         self.addAsyncCleanup(client.delete_conversation, conversation["id"])
         return client, conversation["id"]
 
-    async def test_a_conversation_opens_with_an_id(self):
-        _, conversation = await self.a_conversation()
-        self.assertTrue(conversation)
-
     async def test_a_malformed_request_is_refused_before_any_event(self):
         client, conversation = await self.a_conversation()
         with self.assertRaises(ValueError):
             await client.create_response({**a_request(conversation), "input": "not a list of items"})
 
-    async def test_each_request_reads_one_stream_that_ends_after_its_terminal(self):
+    async def test_a_response_opens_queued_and_its_one_stream_ends_after_its_terminal(self):
         client, conversation = await self.a_conversation()
-        events = await collect(await client.create_response(a_request(conversation)))
-        terminals = [event for event in events if event["type"] in TERMINALS]
-        self.assertEqual(len(terminals), 1)
-        self.assertIs(events[-1], terminals[0])
-
-    async def test_a_response_opens_queued_at_acceptance(self):
-        client, conversation = await self.a_conversation()
+        self.assertTrue(conversation)
         events = await collect(await client.create_response(a_request(conversation)))
         self.assertEqual([event["type"] for event in events[:2]], ["response.created", "response.queued"])
         self.assertEqual(events[0]["response"]["status"], "queued")
+        terminals = [event for event in events if event["type"] in TERMINALS]
+        self.assertEqual(len(terminals), 1)
+        self.assertIs(events[-1], terminals[0])
 
     async def test_input_tokens_validates_a_request(self):
         client, conversation = await self.a_conversation()

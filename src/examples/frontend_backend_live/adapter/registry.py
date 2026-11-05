@@ -3,9 +3,10 @@
 
 """The frontend adapters a deployment can choose by name: ``frontend.adapter`` in ``config.yaml``.
 
-One plain mapping, read only by the composition roots through ``examples.frontend_backend_live.tables.pick``. Each
-entry is a class with the class-side contract of ``adapter/contract.py`` (``FrontendAdapterClass``), so a second
-frontend adapter is one class and one line here.
+One plain mapping, read only by the composition roots through
+``examples.frontend_backend_live.delegation_core.tables.pick``. Each entry is a class with the class-side contract of
+``examples.frontend_backend_live.adapter.contract`` (``FrontendAdapterClass``), so a second frontend adapter is one
+class and one line here.
 """
 
 from __future__ import annotations

@@ -3,11 +3,11 @@
 
 # Frontend/Backend Live prompts. The top-level entries are the talker prompts that the UI lists and a UI bot session
 # selects (defaults.prompt in examples_registry.yaml names the default). agent_prompts holds the example's other prompts
-# and texts, which the UI shows read-only. A prompt file that the server is started with (PROMPT_FILE_PATH) replaces
-# this whole file, so it holds these entries too.
+# and texts, which the UI shows read-only, the delegation core's texts (Core) included. A prompt file that the server is
+# started with (PROMPT_FILE_PATH) replaces this whole file, so it holds these entries too.
 #
-# The Cascade texts are used exactly as written, leading and trailing spaces and newlines included, so keep them quoted
-# or in |2 blocks where those matter. tests/unit/frontend_backend_live/models/test_prompt_pins.py pins each one.
+# The Cascade and Core texts are used exactly as written, leading and trailing spaces and newlines included, so keep
+# them quoted or in |2 blocks where those matter.
 
 cafe:
   description: "Talker prompt for the Bluebird Cafe ordering assistant (frontend/backend live cascade)."
@@ -134,7 +134,7 @@ agent_prompts:
       content: |
         Channel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.
 
-  # The prompt set: the text of the cascade's own model calls and of each delegation's input, each entry named by its
+  # The prompt set: the text of the talker's calls and of each delegation's input, each entry named by its
   # field (prompts.py, PromptSet).
   Cascade:
     frame_before:
@@ -272,6 +272,13 @@ agent_prompts:
         needs a tool, check or action, any detail, calling something off, and any yes, no or answer to the
         assistant's question, even one word ("okay" to a yes-or-no question or a proposal). Never claim or
         promise an action; a lead-in may say work is starting but must name no detail, guessed cause or result.
+    json_rules:
+      description: "The decision rules, after every call's instructions: one JSON object, its two keys."
+      content: |2
+
+        Reply with a single JSON object and nothing else: the keys "action" and
+        "speech". No markdown, no code fences, no reasoning text before or
+        after the object.
     work_in_progress:
       description: "The work note: the open delegations, one numbered line each ({items})."
       content: |-
@@ -321,6 +328,9 @@ agent_prompts:
     cut_mark:
       description: "After the words a cut line kept, in the conversation and the next delegation's input."
       content: ' [cut off]'
+    resume_note:
+      description: "Kept in the conversation for a caller turn with no words that cut a line, whose rest is said again."
+      content: The caller made a sound with no words that cut off your line; its unheard rest is said again.
     writer_frame_before:
       description: "The writer's role, said before the application's instructions."
       content: |
@@ -515,3 +525,321 @@ agent_prompts:
     greeting:
       description: "Said when the greeting cannot be worded."
       content: Hi, I'm Remy from Bluebird Cafe. What can I get you?
+
+  # The delegation core's texts: the lines that the IM and the backend write or add to a model's input. Each entry is
+  # named by its place in the core's settings (core.yaml): texts.<key> for the core's own lines, and
+  # backend.<block>.<key> for a backend block's, which joins its block when the core's settings have it. A tool's
+  # entry holds the tool's description and parameters as YAML. The composition roots read these texts with core.yaml,
+  # once, so an edit takes effect at the next restart. An error's message (an exception's, a timed-out call's) comes
+  # from the code that reports it.
+  Core:
+    # How the backend works with the caller, added to every task's instructions before the voice note. A note holds only
+    # rules that hold for any business and do nothing where they do not apply. Short examples from several kinds of
+    # business may illustrate a rule; no task, tool or product names (those belong in the client's instructions). The
+    # situation question applies only when the caller has a problem, is one short question, and is asked once. none
+    # adds nothing.
+    texts.caller_notes.default:
+      description: "The caller note that delegation.caller_note names by default."
+      content: |
+
+        ## Working with the caller
+        - Some causes of a problem depend on the caller's situation, which no tool shows. Ask about it in
+          one short question right after you have identified the caller and before any checks, unless they
+          have already said, and only once. For example:
+          - a card that stopped working: whether they are using it abroad;
+          - a phone or internet service that stopped working: whether they are at home or travelling right now;
+          - a device that will not turn on: whether it was dropped or got wet.
+          Do not hand the caller off or give up while such a question is unasked.
+        - Before you hand the caller off, check the steps your instructions give for this problem, including
+          what the records show, and do the remaining ones that apply and that you are allowed to take, with
+          the caller's agreement where your instructions require it. Skip this when your instructions require
+          the hand-off right away. A refusal your instructions require is not a problem to work around.
+        - Before any change the caller cannot easily undo, describe the exact change, including any amount and
+          how it is paid or refunded, and ask whether to go ahead. Act only on a clear yes the caller gave after
+          hearing that whole description; a yes to something else, or the request itself, is not that yes. A yes
+          already given to the same description still counts after small talk or "are you there?".
+    texts.caller_notes.none:
+      description: "The caller note that adds nothing."
+      content: ""
+    # How the voice channel works, added to every task's instructions after the caller note.
+    texts.voice_notes.default:
+      description: "The voice note that delegation.voice_note names by default."
+      content: |
+
+        ## Voice channel
+        Your reply is spoken to the caller by a voice frontend, which may already have said a short
+        acknowledgment such as "Let me check." Start with the substance; do not greet or introduce
+        yourself again.
+        - Write plain spoken sentences: no markdown, lists, tables, links, or emoji.
+        - Put any question or request for confirmation at the end.
+        - The transcript in each request shows your replies as the caller heard them. A reply cut off
+          partway was heard only up to the cut: a question or a request for confirmation after it was
+          not heard, so ask it again before acting on what the caller said.
+        - Caller messages are speech-recognition transcripts. Spelled letters and spoken numbers arrive
+          as separate words ("J O H N", "four four seven two"); join them before using them in a tool
+          call. Words can be misheard, and the caller's latest correction wins.
+        - Speech recognition guesses capital letters, spacing and symbols and often drops single spelled
+          letters, so build an id from every piece the caller said, with spoken numbers as digits, and
+          trust the caller's words over the assistant's read-backs.
+        - Write an id in the form its tool describes. If a lookup fails, you may retry once with only its
+          letter case or separators changed; never try other letters or digits. Then read back what you
+          heard, letter by letter, and ask the caller to spell the part you are unsure of. Once a lookup
+          in this call has found what an id names, do not ask the caller for that id again.
+        - Offer two or three options at a time.
+    texts.result_formats.plain:
+      description: "The note of the plain result format: none."
+      content: ""
+    texts.result_formats.speak_display:
+      description: "The speak_display format's note, after the caller and voice notes in every task's instructions."
+      content: "Put screen-only detail in a show call, then answer in speakable sentences."
+    texts.handover_line:
+      description: "The commentary of a delegation whose Work a newer one carries ({delegation}: the newer one's id)."
+      content: "Handled together with your newer request ({delegation})."
+    texts.cancelled_line:
+      description: "The older delegation's answer when its Work stopped for a newer request, the stop confirmed."
+      content: "Stopped for your newer request."
+    texts.unconfirmed_line:
+      description: "The older delegation's answer when the stop for the newer request could not be confirmed."
+      content: "I could not confirm that the earlier request stopped; check before trying it again."
+    texts.owed_output:
+      description: "The output of a call that never reported: its outcome is unknown."
+      content: "Outcome unknown: check whether it happened before retrying."
+    texts.not_run_output:
+      description: "The output of a call refused while newer input waits to land."
+      content: "Not run: the caller said something new."
+    texts.stopped_output:
+      description: "The output of a call refused once its work is stopping (a stop, or its own cancel_work)."
+      content: "Not run: this work was stopped."
+    texts.clash_output:
+      description: "The output of a call refused because the app and a work tool both have a function by its name."
+      content: "Not run: the app and a work tool both have a function by this name, so neither runs."
+    # The error outputs of a call to a name no tool offers (which also says how to ask the caller to do a step that is
+    # theirs, such as one on their own device), and of a call that raised ({error}: its type and message).
+    texts.unknown_tool_output:
+      description: "The error output of a call to a name no tool offers ({name}; {offered}: the tools offered)."
+      content: >-
+        Unknown tool: {name}. The tools offered: {offered}. If this is something the caller does, ask them in plain
+        words to do it and tell you what they see; never say a tool's name to them.
+    texts.failed_output:
+      description: "The error output of a call that raised ({name}; {error}: its type and message)."
+      content: "{name} failed: {error}"
+    texts.misrouted_output:
+      description: "The error output of an app function that the IM routes to a harness's agent (it never should)."
+      content: "{name} is the app's function; the harness cannot run it"
+    texts.repeated_call_output:
+      description: "The output of an app call repeating the newest call with no request since ({output}: its answer)."
+      content: "{output}\n(not sent again: the same call just returned this)"
+    texts.cut_output:
+      description: "Between the head and tail of an output cut to delegation.tool_output_chars ({chars}: how many cut)."
+      content: "\n[... {chars} characters cut ...]\n"
+    texts.none:
+      description: "How an empty list of names reads: no tool offered, no request named."
+      content: "none"
+    texts.records_block:
+      description: "The work records, on every Work's input and every steer ({records}: one JSON line per Work)."
+      content: |-
+        Work so far in this call:
+        {records}
+    texts.closing_line:
+      description: "After the records block: say where the work stands, then go on."
+      content: >-
+        Say in one sentence where the work stands, and in the same reply carry on with the next step, unless the work is
+        done or needs the caller.
+    texts.task_line:
+      description: "A task's brief from its conductor ({task})."
+      content: "Task: {task}"
+    texts.round_cap_note:
+      description: "Added to the instructions of the backend LLM's round after max_tool_rounds, which offers no tool."
+      content: >-
+        You have reached the step limit and can call no more tools. Answer the caller in plain sentences with what the
+        results so far show, and say what is still unchecked.
+    texts.conductor_prompt:
+      description: "A model conductor's instructions ({max_running}: the tasks its backend runs at once)."
+      content: >-
+        You place the caller's requests for a voice assistant. For each new request, call one tool: start_work
+        for new work (split it into tasks only when the parts are independent), steer_work when it changes or adds
+        to open work, cancel_work when the caller wants open work stopped, or answer_status when the records already
+        answer a question about open work. At most {max_running} tasks run at once, counting the running and queued
+        tasks of open work; when new work would make more, steer the request into open work instead. Never do the
+        work yourself, and never word a result for the caller.
+    texts.outcomes.started:
+      description: "The outcome a conductor gets when its start_work started work ({work}, {tasks})."
+      content: "Started {work} with {tasks}."
+    texts.outcomes.steered:
+      description: "The outcome when its steer_work sent requests into open work ({work}, {tasks})."
+      content: "Sent to {work} ({tasks}); it applies at the next step."
+    texts.outcomes.restarted:
+      description: "The outcome when the work it steered had already ended, so new work started ({work}, {new})."
+      content: "{work} had already ended, so this started {new}."
+    texts.outcomes.cancel_requested:
+      description: "The outcome when its cancel_work stops open work ({work}, {tasks})."
+      content: "Stopping {work} ({tasks})."
+    texts.outcomes.ended:
+      description: "The outcome when the work it would stop had already ended ({work})."
+      content: "{work} had already ended; nothing to do."
+    texts.outcomes.answered:
+      description: "The outcome when its answer_status answered a request ({delegation})."
+      content: "Answered {delegation}."
+    texts.outcomes.refused:
+      description: "The outcome of a decision the IM refused ({reason}: one of the refusal reasons)."
+      content: "Not applied: {reason}"
+    texts.refusal_reasons.ended:
+      description: "The reason for a placement after its decide() ended."
+      content: "its decide() has ended"
+    texts.refusal_reasons.unplaced:
+      description: "The reason when none of the requests waits to be placed ({delegations})."
+      content: "no unplaced request among {delegations}"
+    texts.refusal_reasons.no_work:
+      description: "The reason for an unknown Work ({work})."
+      content: "no work {work}"
+    texts.refusal_reasons.no_task:
+      description: "The reason for an unknown task ({task}, {work})."
+      content: "no task {task} in {work}"
+    texts.refusal_reasons.no_open_work:
+      description: "The reason for an answer_status while no work is open; the request then starts work."
+      content: >-
+        no work is open, and answer_status answers questions about open work only; every new request is start_work
+    texts.refusal_reasons.over_limit:
+      description: "The reason for work whose tasks, with open work's running and queued ones, pass {max_running}."
+      content: "at most {max_running} tasks run at once, and this work would make more"
+    texts.refusal_reasons.idle:
+      description: "The reason for a control call that reaches the harness's conductor before a decide() takes calls."
+      content: "no request waits to be placed now."
+    texts.control_tools.start_work:
+      description: "A model conductor's tool that starts work, as the model reads it."
+      content: |
+        description: Start new work for these requests, as one task or as several independent tasks that run in parallel.
+        parameters:
+          type: object
+          properties:
+            delegations:
+              type: array
+              items: {type: string}
+              description: The ids of the requests this work answers.
+            tasks:
+              type: array
+              items: {type: string}
+              description: One short brief per independent task; leave it out for one task on the requests as asked.
+          required: [delegations]
+          additionalProperties: false
+    texts.control_tools.steer_work:
+      description: "A model conductor's tool that joins requests to open work, as the model reads it."
+      content: |
+        description: Join these requests to open work, so it takes them in at its next step.
+        parameters:
+          type: object
+          properties:
+            work_id:
+              type: string
+              description: The open work to join.
+            delegations:
+              type: array
+              items: {type: string}
+              description: The ids of the requests that join it.
+            task_id:
+              type: string
+              description: The one task they concern; leave it out when they concern every task of the work.
+          required: [work_id, delegations]
+          additionalProperties: false
+    texts.control_tools.cancel_work:
+      description: "A model conductor's tool that stops open work, as the model reads it."
+      content: |
+        description: Stop open work, or one task of it, because the caller no longer wants it.
+        parameters:
+          type: object
+          properties:
+            work_id:
+              type: string
+              description: The open work to stop.
+            task_id:
+              type: string
+              description: The one task to stop; leave it out to stop every task of the work.
+          required: [work_id]
+          additionalProperties: false
+    texts.control_tools.answer_status:
+      description: "A model conductor's tool that answers from the work records, as the model reads it."
+      content: |
+        description: Answer a question about open work from its records, without changing any work.
+        parameters:
+          type: object
+          properties:
+            delegation_id:
+              type: string
+              description: The id of the request to answer.
+            text:
+              type: string
+              description: The answer, from the records only.
+          required: [delegation_id, text]
+          additionalProperties: false
+    texts.work_tools.show:
+      description: "The work tool of the speak_display result format, as the model reads it."
+      content: |
+        description: Put this on the caller's screen. It is shown, never spoken.
+        parameters:
+          type: object
+          properties:
+            display:
+              type: string
+              description: What the screen shows.
+          required: [display]
+          additionalProperties: false
+    texts.work_tools.cancel_work:
+      description: "The work tool that stops a task's work after its step, as the model reads it."
+      content: |
+        description: >-
+          Stop this work after the current step, only when the caller asks to stop it or says they no longer want it.
+          A caller who finishes giving details or agrees to go on has not asked to stop. It undoes nothing already done.
+        parameters:
+          type: object
+          properties: {}
+          additionalProperties: false
+    backend.app_output_steps.shape_hints.hint:
+      description: "The shape_hints step's hint on an app output that found nothing ({value}: the failed value)."
+      content: "(Not tried yet in this call, and matches the usual form: {value}.)"
+    backend.harness.prompts.conductor_input:
+      description: "The harness conductor's input for one decide(): new requests, work records, unread conversation."
+      content: |-
+        New requests to place:
+        {arrivals}
+
+        Work records:
+        {works}
+
+        Conversation since your last turn:
+        {conversation}
+    backend.harness.prompts.arrival:
+      description: "One new request in the conductor's input ({delegation}, {text})."
+      content: "[{delegation}] {text}"
+    backend.harness.prompts.work:
+      description: "One Work of the conductor's work records ({work}, {state}, {carrier}, {requests}, {tasks})."
+      content: "[{work}] {state}, carried by {carrier}; requests: {requests}\n{tasks}"
+    backend.harness.prompts.task:
+      description: "One task of a Work in the work records ({task}, {state}, {seconds}, {brief}, {steps}, {note})."
+      content: "  task {task}: {state} for {seconds} s{brief}; steps: {steps}; newest note: {note}"
+    backend.harness.prompts.brief:
+      description: "A task's brief in its line ({brief})."
+      content: ', brief "{brief}"'
+    backend.harness.prompts.none:
+      description: "An empty part of the conductor's input."
+      content: "none"
+    backend.harness.prompts.worker_input:
+      description: "A worker's first prompt: its task's view of the conversation as a transcript ({transcript})."
+      content: "The conversation and your task:\n\n{transcript}"
+    backend.harness.prompts.user:
+      description: "A user message in a transcript ({text})."
+      content: "{text}"
+    backend.harness.prompts.assistant:
+      description: "An assistant message in a transcript ({text})."
+      content: "Assistant: {text}"
+    backend.harness.prompts.call:
+      description: "A tool call in a transcript ({name}, {arguments})."
+      content: "Earlier step, already done: {name} with {arguments}"
+    backend.harness.prompts.output:
+      description: "A tool output in a transcript ({name}, {output})."
+      content: "Result of {name}: {output}"
+    backend.harness.prompts.unnamed_call:
+      description: "The name of an output's call when the call is not in the transcript."
+      content: "the call"
+    backend.harness.agents.hermes.command_guard:
+      description: 'Put before a prompt that starts with "/", which Hermes would run as a command.'
+      content: "Request: "

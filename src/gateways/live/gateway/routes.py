@@ -8,8 +8,9 @@
   WebSocket /v1/live/sessions/{id}/attach     - Sideband observer and trusted control channel
   GET       /v1/live/sessions/{id}/history    - What the session's models hold now
 
-A composition root supplies the factory that builds each session's frontend adapter and the hook that builds the one
-delegation core client (``gateways.live.ports``). Nothing here knows about models or prompts.
+A composition root supplies the factory that builds each session's parts (its frontend adapter, and a WebRTC
+session's peer connection) and the hook that builds the one delegation core client (``gateways.live.ports``).
+Nothing here knows about models or prompts.
 """
 
 from __future__ import annotations

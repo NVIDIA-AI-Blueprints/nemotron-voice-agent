@@ -3,18 +3,18 @@
 
 """The cascade's speech services: streaming speech-to-text in, text-to-speech out, and how a line is spoken.
 
-``speech.tts_mode`` names one of :data:`SPEECH_MODES`, the two ways the text-to-speech can take a line. Each keeps a
+The text-to-speech's synthesis mode names one of :data:`SPEECH_MODES`, the two ways it can take a line. Each keeps a
 line's text behind its audio in its own way, so that whatever follows the audio output sees a sentence's text only once
-its audio has played (the playout facts, ``media/playout.py``):
+its audio has played (``examples.frontend_backend_live.media.silent_lines`` and the assistant aggregator):
 
 * :class:`PerSentence` (the default) sends one request per sentence. Pipecat yields a sentence's audio before its text,
-  so nothing needs holding.
+  so nothing needs holding. This example's settings in ``examples_registry.yaml`` set the Magpie entries' synthesis
+  mode to ``per_sentence``.
 * :class:`Stitched` sends a line as one stitched stream, which sounds smoother across sentences, but Pipecat queues
   each sentence's text before the audio arrives. :class:`LineTextHold` therefore holds a line's text until all its
-  audio has been produced: a stitched line that is cut reports none of its text as heard.
+  audio has been produced: a stitched line that is cut reports none of its text, so it counts as heard whole.
 
-A host that builds the text-to-speech itself (the repository UI bot, from the catalog) gets the mode the service
-already runs in from :func:`speech_mode`.
+The frontend's build gets the mode the service runs in from :func:`speech_mode`.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 
 from examples.frontend_backend_live.media.turns import TurnEnd
 from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
-from utils import NVCF_GRPC_SERVER, is_nvcf, load_ipa_dictionary, nvidia_api_key
+from utils import NVCF_GRPC_SERVER, is_nvcf, load_ipa_dictionary, normalize_lang_code, nvidia_api_key
 
 
 def speech_server(entry: Mapping[str, Any]) -> str:
@@ -71,9 +71,12 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
     function_id = str(raw_function_id) if raw_function_id is not None else default_tts.get("function_id", "")
     model = body.get("tts_model", "") or default_tts.get("model", "")
     zero_shot = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get("zero_shot_audio_prompt_file", "")
+    language = body.get("tts_language_code", "") or default_tts.get("language_code", "")
     settings_kwargs: dict = {"voice": voice}
     if mode:
         settings_kwargs["synthesis_mode"] = mode
+    if language:
+        settings_kwargs["language"] = normalize_lang_code(language)
     kwargs: dict = {
         "api_key": nvidia_api_key(),
         "server": server,
@@ -81,7 +84,7 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
         "use_ssl": is_nvcf(server),
         "text_transforms": [("*", nemotron_speech_text_transform)],
         "custom_dictionary": load_ipa_dictionary(),
-        # A line with no audio (a rate-limited request, say) is the cascade's to retry or write off
+        # A line with no audio (a rate-limited request, say) is the voice's to retry or write off
         # (speech.start_timeout_seconds, speech.retry_silent_lines): it costs that line, never the call.
         "max_consecutive_zero_audio_contexts": 0,
     }
@@ -90,16 +93,17 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
     if zero_shot:
         kwargs["zero_shot_audio_prompt_file"] = zero_shot
     logger.info(
-        f"TTS: server={server}, voice={voice}, model={model or '(default)'}, synthesis_mode={mode or '(default)'}"
+        f"TTS: server={server}, voice={voice}, model={model or '(default)'}, synthesis_mode={mode or '(default)'}, "
+        f"language={language or '(default)'}"
     )
     return NvidiaTTSService(**kwargs)
 
 
 # ------------------------------------------------------------------------------------------- the TTS modes
 class SpeechMode(Protocol):
-    """How the text-to-speech takes a line, and what keeps the line's text behind its audio (``speech.tts_mode``)."""
+    """How the text-to-speech takes a line, and what keeps the line's text behind its audio."""
 
-    synthesis_mode: ClassVar[str]  # the NVIDIA text-to-speech synthesis mode, set through the session body
+    synthesis_mode: ClassVar[str]  # the NVIDIA text-to-speech synthesis mode that names it
     reports_sentences: ClassVar[bool]  # whether each sentence's text follows its own audio, so playout reports it
 
     def text_hold(self) -> list[FrameProcessor]:
@@ -132,13 +136,17 @@ SPEECH_MODES: dict[str, type[SpeechMode]] = {"per_sentence": PerSentence, "stitc
 
 
 def speech_mode(tts: Any) -> SpeechMode:
-    """The TTS mode a text-to-speech service already runs in: the one its synthesis mode setting names.
+    """The TTS mode a text-to-speech service runs in: the one its synthesis mode setting names (:func:`named_mode`)."""
+    return named_mode(getattr(getattr(tts, "settings", None), "synthesis_mode", None))
+
+
+def named_mode(synthesis_mode: Any) -> SpeechMode:
+    """The TTS mode a synthesis mode names: a service's setting, or a catalog entry's ``synthesis_mode``.
 
     Magpie's synthesis mode defaults to ``stitched`` (``settings.yaml``), whose text comes before its audio, so assuming
-    :class:`PerSentence` there would drop every sentence from the transcript. A service that names no mode of the
-    table, or has no such setting, is taken as :class:`PerSentence`, the NVIDIA service's own default.
+    :class:`PerSentence` there would drop every sentence from the transcript. A mode the table does not name, or none,
+    is taken as :class:`PerSentence`, the NVIDIA service's own default.
     """
-    synthesis_mode = getattr(getattr(tts, "settings", None), "synthesis_mode", None)
     return SPEECH_MODES.get(str(synthesis_mode), PerSentence)()
 
 

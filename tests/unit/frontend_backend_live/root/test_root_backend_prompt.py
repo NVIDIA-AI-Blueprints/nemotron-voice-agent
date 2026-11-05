@@ -15,6 +15,7 @@ from examples.frontend_backend_live import factory, pipeline
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH
 from examples.frontend_backend_live.delegation_core.app import build_core
 from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
+from examples.frontend_backend_live.delegation_core.im.input import compose
 from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.core_helpers import FakeChat, chunk
 from tests.unit.frontend_backend_live.root.root_helpers import CATALOG, StubAdapter, clear_root_caches
@@ -27,6 +28,11 @@ AGENT_PROMPTS = yaml.safe_load(CONFIG_PATH.with_name("prompts.yaml").read_text(e
 def entry(group: str, name: str) -> str:
     """The text of ``agent_prompts.<group>.<name>`` as the file holds it, stripped as a backend prompt is used."""
     return AGENT_PROMPTS[group][name]["content"].strip()
+
+
+def core_text(name: str) -> str:
+    """The core's text ``agent_prompts.Core.<name>`` as the file holds it, used as written."""
+    return AGENT_PROMPTS["Core"][name]["content"]
 
 
 def ui_bot_core():
@@ -72,13 +78,15 @@ class DefaultPromptTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_request_with_no_instructions_gets_the_generic_prompt_and_the_ui_bot_the_cafe_prompt(self):
         channel = entry("Channel", "cafe")
+        # Then the core's notes, which the roots hand the core from the prompt file.
+        notes = (core_text("texts.caller_notes.default"), core_text("texts.voice_notes.default"))
         live = await self.system_message(factory.delegation_core)
-        self.assertTrue(live.startswith(entry("Backend", "generic")), live)
+        self.assertEqual(live, compose(entry("Backend", "generic"), *notes))
         self.assertNotIn(channel, live)
         self.assertNotIn("Bluebird", live)  # nothing of the cafe for a client that brings its own tools
         ui_bot = await self.system_message(ui_bot_core)
         cafe = f"{entry('Backend', 'cafe')}\n\n{channel}"  # the cafe's prompt, then its channel
-        self.assertTrue(ui_bot.startswith(cafe), ui_bot)
+        self.assertEqual(ui_bot, compose(cafe, *notes, core_text("texts.result_formats.speak_display")))
 
 
 if __name__ == "__main__":

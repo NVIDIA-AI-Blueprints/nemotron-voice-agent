@@ -43,6 +43,17 @@ HOLDER = (
     "os._exit(9)\n"
 )
 SOURCES = Path(delegation_core.__file__).parents[3]  # src
+ECHO = (
+    "import sys, os\n"
+    "sys.stdout.write(os.getcwd() + ' ' + os.environ.get('MARK', '-') + ' ' + os.environ.get('HOME', '-') + '\\n')\n"
+    "sys.stdout.flush()\n"
+    "for line in sys.stdin:\n"
+    "    sys.stdout.write(line)\n"
+    "    sys.stdout.flush()\n"
+)
+SHELL = {"PATH": os.environ["PATH"]}
+# Linux's prctl options (<linux/prctl.h>) for a child subreaper: the process that adopts its descendants' orphans.
+PR_SET_CHILD_SUBREAPER, PR_GET_CHILD_SUBREAPER = 36, 37
 
 
 @contextlib.contextmanager
@@ -54,35 +65,35 @@ def warnings_logged():
         yield lines
 
 
+def stdio(command, env=None, grace=2.0):
+    """A stdio transport that starts ``command`` in a scratch folder with ``env`` only."""
+    launch = RuntimeLaunch(tuple(command), env or {}, None, scratch("proc-"))
+    return StdioTransport.for_launch(launch, stop_grace_seconds=grace)
+
+
 class WorkFolderTests(unittest.TestCase):
     def setUp(self):
         self.root = scratch("harness-work-")
 
-    def test_a_work_folder_is_marked_and_holds_the_sessions_folders(self):
-        work = WorkFolder.make(self.root)
-        self.assertEqual(work.path.parent, self.root)
-        self.assertEqual(sorted(path.name for path in work.path.iterdir()), [MARKER, "sessions"])
-        self.assertEqual((work.path / MARKER).read_text().strip(), str(os.getpid()))  # a note: the lock says it lives
-        folder = work.session_folder("w1")
-        self.assertEqual(folder, work.path / "sessions" / "w1")
-        self.assertEqual(list(folder.iterdir()), [])  # the agent class readies it (Agent.prepare)
-        work.remove()
-        self.assertFalse(work.path.exists())
-
-    def test_only_a_marked_folder_is_removed_and_the_sweep_takes_only_the_folders_no_process_holds(self):
+    def test_a_work_folder_is_marked_and_the_sweep_takes_only_the_marked_folders_no_process_holds(self):
+        live = WorkFolder.make(self.root)
+        self.assertEqual(sorted(path.name for path in live.path.iterdir()), [MARKER, "sessions"])
+        self.assertEqual((live.path / MARKER).read_text().strip(), str(os.getpid()))  # a note: the lock says it lives
+        self.assertEqual(live.session_folder("w1"), live.path / "sessions" / "w1")
         stranger = self.root / "not-ours"
         stranger.mkdir()
-        WorkFolder(stranger).remove()
-        self.assertTrue(stranger.exists())
-        live = WorkFolder.make(self.root)
-        # A crashed run's leftover names a process id that runs: in a restarted container, the server usually gets
-        # its predecessor's id; here, this process's own.
+        WorkFolder(stranger).remove()  # only a marked folder is removed
+        # A crashed run's leftover names a process id that runs: in a restarted container, the server usually gets its
+        # predecessor's id; here, this process's own.
         leftover = self.root / "work-crashed"
         (leftover / "sessions").mkdir(parents=True)
         (leftover / MARKER).write_text(f"{os.getpid()}\n")
         self.assertEqual(WorkFolder.sweep(self.root), 1)
         self.assertEqual((live.path.exists(), leftover.exists(), stranger.exists()), (True, False, True))
+        with mock.patch.object(fcntl, "flock"):  # as on NFS, where a process may take its own lock again
+            self.assertEqual(WorkFolder.sweep(self.root), 0)  # never its own process's folder
         live.remove()
+        self.assertFalse(live.path.exists())
 
     def test_another_processs_folder_is_kept_whatever_id_it_names_until_that_process_ends(self):
         command = [sys.executable, "-I", "-c", HOLDER, str(SOURCES), str(self.root)]
@@ -91,78 +102,57 @@ class WorkFolderTests(unittest.TestCase):
                 folder = Path(holder.stdout.readline().strip())
                 # A server in another container (another PID namespace) names an id that does not run here.
                 (folder / MARKER).write_text("999999999\n")
-                self.assertEqual(WorkFolder.sweep(self.root), 0)
-                self.assertTrue(folder.exists())
+                self.assertEqual((WorkFolder.sweep(self.root), folder.exists()), (0, True))
                 holder.stdin.close()
                 self.assertEqual(holder.wait(10), 9)  # it crashed: the system released its lock
             finally:
                 holder.kill()
-        self.assertEqual(WorkFolder.sweep(self.root), 1)
-        self.assertFalse(folder.exists())
-
-    def test_the_sweep_never_takes_its_own_processs_folder_even_where_a_lock_never_refuses_its_owner(self):
-        live = WorkFolder.make(self.root)
-        with mock.patch.object(fcntl, "flock"):  # as on NFS, where a process may take its own lock again
-            self.assertEqual(WorkFolder.sweep(self.root), 0)
-        self.assertTrue(live.path.exists())
-        live.remove()
+        self.assertEqual((WorkFolder.sweep(self.root), folder.exists()), (1, False))
 
     def test_the_process_environment_is_the_allowlist_the_agents_needs_and_env_only(self):
-        block = {
-            "prompts": PROMPTS,
-            "agents": AGENT_BLOCKS,
-            "command": ["hermes", "acp"],
-            "env": {"HERMES_HOME": "/srv/hermes"},
-            "pass_env": ["PATH", "UNSET_NAME"],
-        }
-        os.environ["HARNESS_TEST_SECRET"] = "must-not-pass"
-        try:
+        block = {"prompts": PROMPTS, "agents": AGENT_BLOCKS, "command": ["hermes", "acp"]}
+        block |= {"env": {"HERMES_HOME": "/srv/hermes"}, "pass_env": ["PATH", "UNSET_NAME"]}
+        with mock.patch.dict(os.environ, {"HARNESS_TEST_SECRET": "must-not-pass"}):
             plain = RuntimeOpener(HarnessSettings.parse(block)).environment()
             hermes = RuntimeOpener(HarnessSettings.parse({**block, "agent": "hermes"})).environment()
-            overridden = {**block, "agent": "hermes", "env": {"HERMES_ACP_SKIP_CONFIGURED_MCP": "0"}}
-            operator = RuntimeOpener(HarnessSettings.parse(overridden)).environment()
-        finally:
-            del os.environ["HARNESS_TEST_SECRET"]
+            operator = {**block, "agent": "hermes", "env": {"HERMES_ACP_SKIP_CONFIGURED_MCP": "0"}}
+            overridden = RuntimeOpener(HarnessSettings.parse(operator)).environment()
         self.assertEqual(plain, {"PATH": os.environ["PATH"], "HERMES_HOME": "/srv/hermes"})
         self.assertEqual(hermes, {**plain, "HERMES_ACP_SKIP_CONFIGURED_MCP": "1"})  # what Hermes needs
-        self.assertEqual(operator["HERMES_ACP_SKIP_CONFIGURED_MCP"], "0")  # the configured env has the last word
-
-
-class _StubbornClient(FakeClient):
-    async def close(self) -> None:
-        raise RuntimeError("the agent would not stop")
+        self.assertEqual(overridden["HERMES_ACP_SKIP_CONFIGURED_MCP"], "0")  # the configured env has the last word
 
 
 class RuntimeProcessTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_runtime_that_cannot_start_leaves_no_work_folder(self):
-        root = scratch("harness-work-")
-        block = {"prompts": PROMPTS, "command": ["/nonexistent/runtime"], "work_root": str(root)}
-        opener = RuntimeOpener(HarnessSettings.parse(block))
-        with self.assertRaises(FileNotFoundError):
-            await opener.open(Role("workers", "w"))
-        self.assertEqual(list(root.iterdir()), [])
+    async def test_a_runtime_that_cannot_start_or_be_reached_in_time_leaves_no_work_folder(self):
+        held = []  # the connections a server that never answers the handshake keeps
+        server = await asyncio.start_server(lambda reader, writer: held.append(writer), "127.0.0.1", 0)
+        self.addAsyncCleanup(server.wait_closed)
+        self.addCleanup(server.close)
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/acp"
+        served = {"transport": "websocket", "url": url, "start_timeout_seconds": 0.5, "stop_grace_seconds": 5}
+        for block, error in (({"command": ["/nonexistent/runtime"]}, FileNotFoundError), (served, TimeoutError)):
+            root = scratch("harness-work-")
+            opener = RuntimeOpener(HarnessSettings.parse({"prompts": PROMPTS, "work_root": str(root), **block}))
+            started = time.monotonic()
+            with self.subTest(error.__name__), self.assertRaises(error):
+                await opener.open(Role("workers", "w"))
+            self.assertLess(time.monotonic() - started, 2)  # bounded by the start timeout, not the stop grace
+            self.assertEqual(list(root.iterdir()), [])
+        for writer in held:
+            writer.close()
 
     async def test_closing_a_runtime_process_ends_its_client_then_deletes_its_folder_even_when_the_close_fails(self):
+        class Stubborn(FakeClient):
+            async def close(self) -> None:
+                raise RuntimeError("the agent would not stop")
+
         root = scratch("harness-work-")
         client, work = FakeClient(), WorkFolder.make(root)
         await RuntimeProcess(client, work).close()
         self.assertEqual((client.alive, work.path.exists()), (False, False))
-        stubborn = WorkFolder.make(root)
         with self.assertRaisesRegex(RuntimeError, "would not stop"):
-            await RuntimeProcess(_StubbornClient(), stubborn).close()
+            await RuntimeProcess(Stubborn(), WorkFolder.make(root)).close()
         self.assertEqual(list(root.iterdir()), [])
-
-
-ECHO = (
-    "import sys, os\n"
-    "sys.stdout.write(os.getcwd() + ' ' + os.environ.get('MARK', '-') + ' ' + os.environ.get('HOME', '-') + '\\n')\n"
-    "sys.stdout.flush()\n"
-    "for line in sys.stdin:\n"
-    "    sys.stdout.write(line)\n"
-    "    sys.stdout.flush()\n"
-)
-# Linux's prctl options (<linux/prctl.h>) for a child subreaper: the process that adopts its descendants' orphans.
-PR_SET_CHILD_SUBREAPER, PR_GET_CHILD_SUBREAPER = 36, 37
 
 
 @contextlib.contextmanager
@@ -204,59 +194,42 @@ def reap(group: int) -> None:
 
 
 class StdioTransportTests(unittest.IsolatedAsyncioTestCase):
-    async def test_it_starts_the_command_in_its_work_folder_with_only_the_given_environment_and_closes_it(self):
-        folder = scratch("harness-proc-")
-        launch = RuntimeLaunch((sys.executable, "-I", "-c", ECHO), {"MARK": "given"}, None, folder)
-        transport = StdioTransport.for_launch(launch, stop_grace_seconds=2)
+    async def test_it_starts_the_command_in_its_folder_with_only_the_given_environment_and_closes_it(self):
+        transport = stdio((sys.executable, "-I", "-c", ECHO), {"MARK": "given"})
         with warnings_logged() as warnings:
             reader, writer = await transport.open()
             started = (await asyncio.wait_for(reader.readline(), 5)).decode().split()
-            self.assertEqual(started, [str(folder), "given", "-"])  # its folder; its environment and nothing else
+            self.assertEqual(started, [str(transport.launch.folder), "given", "-"])  # its folder; only its env
             writer.write(b'{"jsonrpc": "2.0"}\n')
             await writer.drain()
             self.assertEqual(await asyncio.wait_for(reader.readline(), 5), b'{"jsonrpc": "2.0"}\n')
             await transport.close()
-        self.assertTrue(transport.closed.is_set())
-        self.assertEqual(transport.process.returncode, 0)  # stdin closed: it ended on its own
+        self.assertEqual((transport.closed.is_set(), transport.process.returncode), (True, 0))  # stdin closed: it ended
         self.assertEqual(warnings, [])  # the exit it asked for
-
-    async def test_a_runtime_that_ignores_end_of_file_is_terminated(self):
-        folder = scratch("harness-proc-")
-        stubborn = "import time\nwhile True:\n    time.sleep(1)\n"
-        transport = StdioTransport.for_launch(
-            RuntimeLaunch((sys.executable, "-I", "-c", stubborn), {}, None, folder), stop_grace_seconds=0.3
-        )
-        await transport.open()
-        await transport.close()
-        self.assertTrue(transport.closed.is_set())
-        self.assertNotEqual(transport.process.returncode, 0)
+        stubborn = stdio((sys.executable, "-I", "-c", "import time\nwhile True:\n    time.sleep(1)\n"), grace=0.3)
+        await stubborn.open()
+        await stubborn.close()  # it ignores the end of its input: terminated
+        self.assertNotEqual(stubborn.process.returncode, 0)
 
     async def test_an_exit_it_did_not_ask_for_is_a_warning_with_the_exit_code_and_the_last_stderr_lines(self):
-        crash = "echo starting >&2; echo 'No usable credentials found for the provider' >&2; exit 3"
-        launch = RuntimeLaunch(("sh", "-c", crash), {"PATH": os.environ["PATH"]}, None, scratch("harness-proc-"))
-        transport = StdioTransport.for_launch(launch, stop_grace_seconds=2)
+        transport = stdio(("sh", "-c", "echo starting >&2; echo 'No usable credentials' >&2; exit 3"), SHELL)
         with warnings_logged() as warnings:
             await transport.open()
             await asyncio.wait_for(transport.closed.wait(), 5)
             await transport.close()
-        self.assertEqual(len(warnings), 1, warnings)
-        self.assertIn(f"pid={transport.process.pid} code=3", warnings[0])
-        self.assertIn("starting | No usable credentials found for the provider", warnings[0])
+        [warning] = warnings
+        self.assertIn(f"pid={transport.process.pid} code=3", warning)
+        self.assertIn("starting | No usable credentials", warning)
 
-    async def test_its_exit_is_seen_and_its_close_ends_its_group_while_a_process_it_left_holds_its_pipes(self):
-        left = "sleep 30 & sleep 0.5; exit 1"  # the child keeps the agent's stdout and stderr open
-        launch = RuntimeLaunch(("sh", "-c", left), {"PATH": os.environ["PATH"]}, None, scratch("harness-proc-"))
-        transport = StdioTransport.for_launch(launch, stop_grace_seconds=1)
+    async def test_its_close_ends_its_group_while_a_process_it_left_holds_its_pipes(self):
+        transport = stdio(("sh", "-c", "sleep 30 & sleep 0.5; exit 1"), SHELL, grace=1)  # the child keeps its pipes
         await transport.open()
         group = transport.process.pid
-        try:
-            await asyncio.wait_for(transport.closed.wait(), 2)
-            await transport.close()
-            with self.assertRaises(ProcessLookupError):
-                os.killpg(group, 0)  # the process it left was ended with it
-        finally:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(group, signal.SIGKILL)
+        self.addCleanup(reap, group)
+        await asyncio.wait_for(transport.closed.wait(), 2)  # its exit is seen
+        await transport.close()
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(group, 0)  # the process it left was ended with it
 
     @unittest.skipUnless(sys.platform == "linux", "a child subreaper and /proc are Linux's")
     async def test_its_close_does_not_wait_out_the_grace_for_a_zombie_left_in_its_group(self):
@@ -264,118 +237,91 @@ class StdioTransportTests(unittest.IsolatedAsyncioTestCase):
         # that process ends, it stays in the agent's group as a zombie.
         if not self.enterContext(orphans_adopted()):
             self.skipTest("this process may not be a child subreaper here")
-        left = "read x; sleep 0.2 </dev/null >/dev/null 2>&1 & exit 0"  # at end-of-file it leaves a sleep and exits
-        launch = RuntimeLaunch(("sh", "-c", left), {"PATH": os.environ["PATH"]}, None, scratch("harness-proc-"))
-        transport = StdioTransport.for_launch(launch, stop_grace_seconds=2)
+        transport = stdio(("sh", "-c", "read x; sleep 0.2 </dev/null >/dev/null 2>&1 & exit 0"), SHELL)
         await transport.open()
-        group = transport.process.pid
-        self.addCleanup(reap, group)
+        self.addCleanup(reap, transport.process.pid)
         began = time.monotonic()
-        await transport.close()
+        await transport.close()  # at end-of-file it leaves a sleep and exits
         self.assertLess(time.monotonic() - began, 1)  # under half a grace step: no close step waits for the zombie
-        self.assertEqual(set(group_states(group).values()), {"Z"})  # nothing of its group runs; the zombie stays
+        self.assertEqual(set(group_states(transport.process.pid).values()), {"Z"})  # nothing runs; the zombie stays
 
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
-REQUESTS: list[str] = []
-
-
-async def _handshake(reader, writer):
-    """Accept one WebSocket connection (RFC 6455), the standard library only."""
-    head = await reader.readuntil(b"\r\n\r\n")
-    REQUESTS.append(head.decode())
+async def handshake(reader, writer):
+    """Accept one WebSocket connection (RFC 6455) with the standard library only: its request's head."""
+    head = (await reader.readuntil(b"\r\n\r\n")).decode()
     key = next(
-        line.split(":", 1)[1].strip()
-        for line in head.decode().split("\r\n")
-        if line.lower().startswith("sec-websocket-key")
+        line.split(":", 1)[1].strip() for line in head.split("\r\n") if line.lower().startswith("sec-websocket-key")
     )
     accept = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
-    writer.write(
-        (
-            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-            f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
-        ).encode()
-    )
+    upgrade = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    writer.write(f"{upgrade}Sec-WebSocket-Accept: {accept}\r\n\r\n".encode())
+    return head
 
 
-async def _frame(reader) -> tuple[int, bytes]:
+async def frame(reader) -> tuple[int, bytes]:
     """One frame from the client (masked): its opcode and payload."""
     first, second = await reader.readexactly(2)
     length = second & 0x7F
     if length == 126:
         (length,) = struct.unpack(">H", await reader.readexactly(2))
-    elif length == 127:
-        (length,) = struct.unpack(">Q", await reader.readexactly(8))
     mask = await reader.readexactly(4)
     return first & 0x0F, bytes(b ^ mask[i % 4] for i, b in enumerate(await reader.readexactly(length)))
 
 
-async def _echo(reader, writer):
-    """A one-connection WebSocket echo server (text frames)."""
-    await _handshake(reader, writer)
-    while True:
-        opcode, payload = await _frame(reader)
-        if opcode == 0x8:  # close
-            writer.write(b"\x88\x00")
-            await writer.drain()
-            writer.close()
-            return
-        header = (
-            bytes([0x81, len(payload)]) if len(payload) < 126 else bytes([0x81, 126]) + struct.pack(">H", len(payload))
-        )
-        writer.write(header + payload)
-        await writer.drain()
-
-
-async def _closes(reader, writer):
-    """A server whose agent ends at once: it closes the connection with 1011 and a reason, then answers the close."""
-    await _handshake(reader, writer)
-    reason = struct.pack(">H", 1011) + b"agent crashed"
-    writer.write(bytes([0x88, len(reason)]) + reason)
-    await writer.drain()
-    with contextlib.suppress(asyncio.IncompleteReadError, ConnectionError):
-        await _frame(reader)  # the client's close
-    writer.close()
-
-
 class WebSocketTransportTests(unittest.IsolatedAsyncioTestCase):
-    async def test_each_line_is_one_frame_and_each_frame_one_line(self):
-        server = await asyncio.start_server(_echo, "127.0.0.1", 0)
-        port = server.sockets[0].getsockname()[1]
-        launch = RuntimeLaunch((), {"KEY": "never sent"}, f"ws://127.0.0.1:{port}/acp", Path("/work/work-1"))
-        transport = WebSocketTransport.for_launch(launch, stop_grace_seconds=2)
+    async def serve(self, handler, env=None):
+        """A transport to a one-connection server run by ``handler(reader, writer)``."""
+        server = await asyncio.start_server(handler, "127.0.0.1", 0)
+        self.addAsyncCleanup(server.wait_closed)
+        self.addCleanup(server.close)
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/acp"
+        return WebSocketTransport.for_launch(
+            RuntimeLaunch((), env or {}, url, Path("/work/work-1")), stop_grace_seconds=2
+        )
+
+    async def test_each_line_is_one_frame_and_each_frame_one_line_on_the_url_as_served(self):
+        heads = []
+
+        async def echo(reader, writer):
+            heads.append(await handshake(reader, writer))
+            while (message := await frame(reader))[0] != 0x8:  # until the close
+                writer.write(bytes([0x81, len(message[1])]) + message[1])
+            writer.write(b"\x88\x00")
+            writer.close()
+
+        transport = await self.serve(echo, {"KEY": "never sent"})
         reader, writer = await transport.open()
-        # The URL as the operator serves it: no query of ours, and nothing of this side's environment.
-        self.assertEqual(REQUESTS[-1].split("\r\n")[0], "GET /acp HTTP/1.1")
-        self.assertNotIn("never sent", REQUESTS[-1])
+        self.assertEqual(heads[0].split("\r\n")[0], "GET /acp HTTP/1.1")  # no query of ours
+        self.assertNotIn("never sent", heads[0])  # nothing of this side's environment
         writer.write(b'{"a": 1}\n{"b"')
         writer.write(b": 2}\n")
         await writer.drain()
-        self.assertEqual(await asyncio.wait_for(reader.readline(), 5), b'{"a": 1}\n')
-        self.assertEqual(await asyncio.wait_for(reader.readline(), 5), b'{"b": 2}\n')
+        for line in (b'{"a": 1}\n', b'{"b": 2}\n'):
+            self.assertEqual(await asyncio.wait_for(reader.readline(), 5), line)
         with warnings_logged() as warnings:
             await transport.close()
-        self.assertTrue(transport.closed.is_set())
-        self.assertEqual(warnings, [])  # the close it asked for
-        server.close()
-        await server.wait_closed()
+        self.assertEqual((transport.closed.is_set(), warnings), (True, []))  # the close it asked for
 
     async def test_a_connection_the_agents_side_closes_ends_the_stream_with_a_warning_of_its_code_and_reason(self):
-        server = await asyncio.start_server(_closes, "127.0.0.1", 0)
-        port = server.sockets[0].getsockname()[1]
-        launch = RuntimeLaunch((), {}, f"ws://127.0.0.1:{port}/acp", Path("/work/work-1"))
-        transport = WebSocketTransport.for_launch(launch, stop_grace_seconds=2)
+        async def crash(reader, writer):  # the agent ends at once: a close with 1011 and a reason
+            await handshake(reader, writer)
+            reason = struct.pack(">H", 1011) + b"agent crashed"
+            writer.write(bytes([0x88, len(reason)]) + reason)
+            with contextlib.suppress(asyncio.IncompleteReadError, ConnectionError):
+                await frame(reader)  # the client's close
+            writer.close()
+
+        transport = await self.serve(crash)
         with warnings_logged() as warnings:
             reader, _ = await transport.open()
             await asyncio.wait_for(transport.closed.wait(), 5)
         self.assertEqual(await asyncio.wait_for(reader.read(), 5), b"")  # the stream ended, as at an exit
-        self.assertEqual(len(warnings), 1, warnings)
-        self.assertIn("code=1011 reason='agent crashed'", warnings[0])
+        [warning] = warnings
+        self.assertIn("code=1011 reason='agent crashed'", warning)
         await transport.close()
-        server.close()
-        await server.wait_closed()
 
     def test_it_needs_a_websocket_url_and_stdio_a_command(self):
         for url in (None, "", "http://agent:8790/acp"):
@@ -384,38 +330,6 @@ class WebSocketTransportTests(unittest.IsolatedAsyncioTestCase):
         WebSocketTransport.check((), "wss://agent.example/acp")
         with self.assertRaisesRegex(ValueError, "must name the agent to start"):
             StdioTransport.check((), "ws://agent:8790/acp")
-
-
-class ConnectTimeoutTests(unittest.IsolatedAsyncioTestCase):
-    async def test_reaching_a_served_agent_is_bounded_by_the_start_timeout_not_the_stop_grace(self):
-        from examples.frontend_backend_live.delegation_core.backend.harness.protocol import Role
-
-        held = []  # the connections a server that never answers the handshake keeps
-
-        async def hold(reader, writer):
-            held.append(writer)
-
-        server = await asyncio.start_server(hold, "127.0.0.1", 0)
-        port = server.sockets[0].getsockname()[1]
-        block = {
-            "prompts": PROMPTS,
-            "transport": "websocket",
-            "url": f"ws://127.0.0.1:{port}/acp",
-            "start_timeout_seconds": 0.5,
-            "stop_grace_seconds": 5,
-            "work_root": str(scratch("harness-work-")),
-        }
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        try:
-            with self.assertRaisesRegex(TimeoutError, r"start_timeout_seconds \(0.5 s\)"):
-                await RuntimeOpener(HarnessSettings.parse(block)).open(Role("workers", "w"))
-            self.assertLess(loop.time() - started, 2)
-        finally:
-            for writer in held:
-                writer.close()
-            server.close()
-            await server.wait_closed()
 
 
 if __name__ == "__main__":

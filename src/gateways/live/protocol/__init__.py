@@ -20,7 +20,7 @@ from gateways.live.protocol.config import (
     SessionConfig,
     StrictModel,
 )
-from gateways.live.protocol.errors import ProtocolError, approx_tokens, uid, validation_error
+from gateways.live.protocol.errors import ProtocolError, validation_error
 from gateways.live.protocol.voices import LIVE_VOICES, TTS_VOICES
 
 __all__ = [
@@ -38,7 +38,5 @@ __all__ = [
     "ResponsesDelegationConfig",
     "SessionConfig",
     "StrictModel",
-    "approx_tokens",
-    "uid",
     "validation_error",
 ]

@@ -1065,8 +1065,8 @@ name = "httpcore2"
 version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/15/8c/e925b1c92018abb3a1863ce1549d76d2381e334d21d65d4ac8f65dabd78a/httpcore2-2.13.0.tar.gz", hash = "sha256:2adc8be4fb285fbcd6d894298db3b52c177e74b6674eda3a76bd36be3292a3db", size = 67740, upload-time = "2026-09-14T14:18:04.717Z" }
 wheels = [
@@ -1791,7 +1791,6 @@ dependencies = [
     { name = "pipecat-ai", extra = ["nvidia", "openai", "runner", "webrtc", "websocket"] },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -1828,7 +1827,6 @@ requires-dist = [
     { name = "pipecat-ai", extras = ["nvidia", "silero", "runner", "webrtc", "websocket", "openai"], specifier = "==1.15.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "websockets", specifier = ">=15.0.1" },
 ]
 
 [package.metadata.requires-dev]

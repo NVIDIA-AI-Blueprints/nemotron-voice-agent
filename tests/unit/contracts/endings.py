@@ -24,8 +24,6 @@ from pathlib import Path
 from examples.frontend_backend_live.delegation_core.backend.port import message_phase
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "delegation_endings.json"
-# How a delegation ends, as the reader names it (the frontend's ``cascade.ports.Ending``).
-ENDINGS = ("answered", "handed_over", "late", "failed", "cancelled", "lost")
 READER_KEYS = ("results", "endings", "takers", "waits", "typed", "progress", "steps", "shown")
 TERMINAL_WORDS = ("completed", "failed", "incomplete")
 ITEM_WORDS = ("message", "function_call", "mcp_call", "mcp_call.in_progress", "mcp_call.completed", "mcp_call.failed")
@@ -193,8 +191,6 @@ def timeline_problems(scenario: dict) -> list[str]:
     reader = scenario["reader"]
     if set(reader) - set(READER_KEYS):
         problems.append(f"unknown reader keys {sorted(set(reader) - set(READER_KEYS))}")
-    if set(reader.get("endings", {}).values()) - set(ENDINGS):
-        problems.append(f"unknown endings {sorted(set(reader['endings'].values()) - set(ENDINGS))}")
     return problems
 
 

@@ -17,6 +17,8 @@ from dataclasses import dataclass, field, fields
 from types import MappingProxyType
 from typing import Any
 
+from examples.shared.delegation_contract import ModelEndpoint as SharedEndpoint
+
 # Every other number is a timeout, a limit or a count, where 0 would disable or break the feature.
 ZERO_ALLOWED = frozenset({"provider_retries"})
 # Settings a profile may turn off with null.
@@ -70,28 +72,20 @@ def _typed(where: str, value: Any, default: Any) -> Any:
 
 
 @dataclass(frozen=True)
-class ModelEndpoint:
-    """One chat-style model endpoint, resolved from a ``services.yaml`` entry and the session body.
+class ModelEndpoint(SharedEndpoint):
+    """One chat-style model endpoint, with the frontend's own reply format on top of the shared fields."""
 
-    ``extra_params`` are passed to the client verbatim (``temperature``, ``max_tokens``, ``extra_body``,
-    ``stream_options`` ...), so settings written there by ``settings.yaml`` take effect unchanged.
-    """
-
-    model: str
-    base_url: str
-    api_key: str = "not-needed"
-    extra_params: dict = field(default_factory=dict)
-    # Frontend only: json_schema -> json_object -> none; a rejecting 400 steps down once.
+    # Frontend only: json_schema or none, the talker's decision format; nothing steps down.
     response_format: str = "json_schema"
 
 
 @dataclass(frozen=True)
 class ReliabilityConfig:
-    """The frontend model's timeouts and retries. Retries never wrap an action that could repeat."""
+    """The talker's timeouts and retries. Retries never wrap an action that could repeat."""
 
-    provider_retries: int = 2
-    talker_attempt_timeout_seconds: float = 10.0  # one routing or phrasing attempt
-    client_timeout_seconds: float = 45.0  # the frontend model's client, per request
+    provider_retries: int = 2  # the model client's own retries of transient failures
+    talker_attempt_timeout_seconds: float = 10.0  # one talker call, from its request to the end of its decision
+    client_timeout_seconds: float = 45.0  # the talker's model client, per request
 
 
 @dataclass(frozen=True)
@@ -101,8 +95,8 @@ class DelegationConfig:
     # How long the voice waits for the app's outputs to a delegation before it says the app-wait line; null: no line.
     # It is below the core's deadline for those outputs (core.yaml delegation.client_tool_timeout_seconds).
     app_wait_seconds: float | None = 50.0
-    result_wording: str = "writer"  # how ready results are worded: writer (a model call) or as_written
-    # The writer may word a short progress line when work has run this long without the assistant saying anything;
+    result_wording: str = "writer"  # how ready results are worded: writer (the talker) or as_written
+    # The talker may word a short progress line when work has run this long without the assistant saying anything;
     # null: none. A later line for the same delegation needs a backend step that ended or a new progress note.
     progress_after_seconds: float | None = 8.0
     progress_max_per_delegation: int = 3
@@ -129,7 +123,6 @@ class MemoryConfig:
 class SpeechConfig:
     """How replies are spoken."""
 
-    tts_mode: str = "per_sentence"  # per_sentence | stitched
     # How the caller's turn ends (media/turns.py): smart_turn, silence or shared.
     turn_end: str = "smart_turn"
     vad_start_seconds: float = 0.12  # smart_turn, silence: speech this long marks the caller as speaking
@@ -138,7 +131,7 @@ class SpeechConfig:
     start_timeout_seconds: float = 3.0  # a line whose audio has not started by then is retried or written off
     resume_after_noise: bool = True  # a line cut by a noise, or by words the talker waits on, resumes
     retry_silent_lines: bool = True  # a line that produced no audio is said once more
-    # What the talker's memory alone keeps of a cut line: as_recorded, the words that played, as every record keeps
+    # What the talker's context alone keeps of a cut line: as_recorded, the words that played, as every record keeps
     # them; estimated, also the whole words its audio likely carried past what played.
     heard_words: str = "as_recorded"
     estimate_chars_per_second: float = 15.0  # that estimate's speaking rate until a sentence of the call has played
@@ -148,7 +141,7 @@ class SpeechConfig:
 class LiveConfig:
     """The cascade's settings: the ``frontend.cascade`` block of ``config.yaml``.
 
-    ``provider`` names the frontend model's implementation (``models/``), ``slot`` the ``examples_registry.yaml``
+    ``provider`` names the talker's service (``talker.LLM_SERVICES``), ``slot`` the ``examples_registry.yaml``
     services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the talker prompt of
     ``prompts.yaml`` (``agent_prompts.Talker``) used, as written, as the talker's instructions when a session supplies
     none or blank ones.
@@ -206,6 +199,8 @@ class LiveConfig:
             if isinstance(preroll, bool) or not isinstance(preroll, int) or not 0 <= preroll <= 2000:
                 raise ConfigError(f"{where}.tts_preroll_ms must be a whole number from 0 to 2000")
             values["tts_preroll_ms"] = preroll
+        if "memory" in values and values["memory"].compact_at > 1:
+            raise ConfigError(f"{where}.memory.compact_at must be a number above 0 and at most 1")
         if "display_label" in block:
             values["display_label"] = _typed(f"{where}.display_label", block["display_label"], cls.display_label)
         return cls(**values)

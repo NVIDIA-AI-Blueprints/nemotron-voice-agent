@@ -13,13 +13,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from pipecat.transports.smallwebrtc.connection import IceServer
+
 from examples.frontend_backend_live import factory, pipeline
+from examples.frontend_backend_live.adapter.connection import LiveWebRTCConnection
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
-from examples.frontend_backend_live.config_manager.schema import ConfigError
+from examples.frontend_backend_live.delegation_core.profiles import load_profile
 from gateways.live.protocol import ProtocolError, SessionConfig
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,
-    NoRtviAdapter,
     StubAdapter,
     StubReadiness,
     StubSettings,
@@ -47,7 +49,7 @@ class AdapterChoiceTests(unittest.TestCase):
     def test_the_named_class_parses_its_own_block_with_the_cores_display_label(self):
         with patch.object(factory, "frontend_adapters", return_value={"cascade": StubAdapter}):
             state = factory.root()
-        block = dict(load_live_config(CONFIG_PATH).blocks["cascade"])
+        block = dict(load_live_config(load_profile, CONFIG_PATH).blocks["cascade"])
         self.assertIs(state.adapter, StubAdapter)
         self.assertEqual(StubSettings.parsed, [{**block, "display_label": state.core.delegation.display_label}])
         self.assertIsInstance(state.readiness, StubReadiness)
@@ -82,9 +84,23 @@ class SessionFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_each_session_is_built_by_the_class_from_its_settings_and_the_catalog(self):
         state = stub_root()
         with patch.object(factory, "root", return_value=state):
-            parts = await factory.create_frontend_adapter(SESSION, "webrtc", "peer")
-        self.assertEqual(parts.frontend.args, (SESSION, "webrtc", "peer", state.settings, CATALOG))
+            parts = await factory.create_frontend_adapter(SESSION, "websocket", None)
+        self.assertEqual(parts.frontend.args, (SESSION, "websocket", None, state.settings, CATALOG))
         self.assertEqual(parts, factory.SessionParts(frontend=parts.frontend))  # the frontend only
+
+    async def test_a_webrtc_sessions_peer_is_made_on_the_gateways_ice_servers_and_given_to_the_adapter(self):
+        turn = {"urls": ["turn:turn.example:3478"], "username": "user", "credential": "secret"}
+        state = stub_root()
+        with patch.object(factory, "root", return_value=state):
+            parts = await factory.create_frontend_adapter(SESSION, "webrtc", [turn, {"urls": ["stun:s:3478"]}])
+        self.addAsyncCleanup(parts.connection.close_after_drain)
+        self.assertIsInstance(parts.connection, LiveWebRTCConnection)
+        self.assertEqual(parts.frontend.args, (SESSION, "webrtc", parts.connection, state.settings, CATALOG))
+        # Pipecat's IceServer, TURN credentials included
+        self.assertEqual(
+            parts.connection.ice_servers,
+            [IceServer(urls=turn["urls"], username="user", credential="secret"), IceServer(urls=["stun:s:3478"])],
+        )
 
     async def test_readiness_is_asked_for_every_session(self):
         state = stub_root(readiness=StubReadiness())
@@ -135,15 +151,7 @@ class UiBotHostTests(unittest.TestCase):
         self.addCleanup(pipeline.bot_root.cache_clear)
         self.enterContext(patch.object(pipeline.ExampleCatalog, "read", return_value=CATALOG))
 
-    def test_the_ui_bot_refuses_an_adapter_it_cannot_host_and_names_those_it_can(self):
-        table = {"cascade": NoRtviAdapter, "stub": StubAdapter}
-        with (
-            patch.object(pipeline, "frontend_adapters", return_value=table),
-            self.assertRaisesRegex(ConfigError, "'cascade' cannot run in the UI bot.*it can host: stub"),
-        ):
-            pipeline.bot_root()
-
-    def test_the_ui_bot_hosts_an_adapter_that_can(self):
+    def test_the_ui_bot_reads_the_named_adapters_block_with_the_cores_display_label(self):
         with patch.object(pipeline, "frontend_adapters", return_value={"cascade": StubAdapter}):
             state = pipeline.bot_root()
         self.assertEqual((state.cascade.provider, state.cascade.slot), ("chat-completions", "llm"))

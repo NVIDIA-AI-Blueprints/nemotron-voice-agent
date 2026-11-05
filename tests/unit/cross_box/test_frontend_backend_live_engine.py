@@ -21,14 +21,15 @@ from pipecat.observers.base_observer import BaseObserver
 from pipecat.processors.frame_processor import FrameProcessor
 
 from examples.frontend_backend_live.adapter.adapter import LIVE_AUDIO_IN_RATE, CascadeAdapter
-from examples.frontend_backend_live.cascade.heard_log import Heard
+from examples.frontend_backend_live.adapter.connection import LiveWebRTCConnection
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask, compose, settings_for
+from examples.frontend_backend_live.heard_log import Heard
 from examples.frontend_backend_live.prompts import load_prompts
 from gateways.live.gateway import LiveGateway, LiveSettings, create_live_router
 from gateways.live.gateway.websocket import run_primary_websocket
 from gateways.live.ports import SessionParts
 from gateways.live.protocol import SessionConfig
-from gateways.live.server_delegation.passthrough import COMPOSED_SOURCE, client_settings
+from gateways.live.server_delegation.passthrough import COMPOSED_SOURCE, request_settings
 from tests.unit.cascade_helpers import (
     CORE_YAML,
     ENDPOINT,
@@ -44,6 +45,7 @@ from tests.unit.cascade_helpers import (
     tool_call_round,
 )
 from tests.unit.core_helpers import FakeChat, chunk, tool_fragment
+from tests.unit.frontend_helpers import ScriptedChat, decision
 from tests.unit.live_helpers import FakeWebSocket
 
 # The example's prompt file: its prompt set, whose words the cascade writes in these whole-call tests, and its lines.
@@ -86,13 +88,23 @@ class EngineHarness(unittest.IsolatedAsyncioTestCase):
         for _ in range(tenths):
             self.ws.send({"type": "session.input_audio.append", "audio": SILENCE_100MS})
 
-    async def serve(self, session, script, *, live_config=LIVE_CONFIG, delegation=None, core=CORE_YAML, tts=FakeTTS):
+    async def serve(
+        self,
+        session,
+        script,
+        *,
+        live_config=LIVE_CONFIG,
+        delegation=None,
+        core=CORE_YAML,
+        tts=FakeTTS,
+        websocket=FakeWebSocket,
+    ):
         """Run the real gateway with a real engine, scripted models and fake speech services.
 
         ``live_config`` is the cascade's block, ``core`` the core's file (a profile), and ``delegation`` sets keys of
-        its ``delegation`` block; ``tts`` is the speech output's class.
+        its ``delegation`` block; ``tts`` is the speech output's class, and ``websocket`` the client socket's.
         """
-        self.chat = FakeChat(*script)
+        self.chat = ScriptedChat(*script)
         self.stt, self.tts = FakeSTT(), tts()
         self.engines: list[CascadeAdapter] = []
         self.parts: list[SessionParts] = []
@@ -111,7 +123,7 @@ class EngineHarness(unittest.IsolatedAsyncioTestCase):
         hook = core_hook(self.core)
         self.core_client = hook.client
         self.gateway = LiveGateway(factory, LiveSettings(max_session_seconds=60), core=hook)
-        self.ws = FakeWebSocket()
+        self.ws = websocket()
         self.server = asyncio.create_task(run_primary_websocket(self.gateway, self.ws))
         self.addAsyncCleanup(self.stop)
         self.ws.send({"type": "session.start", "event_id": "start_1", "session": session})
@@ -182,6 +194,8 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.assertEqual((item["name"], json.loads(item["arguments"])), ("get_menu", {"category": "tea"}))
         completed = await self.ws.wait_for("response.event", where=lambda e: e["event"]["type"] == "response.completed")
         self.assertEqual(completed["event"]["response"]["output"], [])  # lifecycle snapshots are redacted
+        # The lead-in is said once the delegation is accepted; a result that arrived first would speak for it.
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "check." in e["delta"])
         self.ws.send(
             {
                 "type": "response.item.create",
@@ -213,7 +227,7 @@ class ClientToolsEndToEndTests(EngineHarness):
     async def test_the_backend_runs_on_its_static_prompt_when_the_session_supplies_none(self):
         def task_for(session):  # the server delegation's request, with the core's defaults for what it leaves out
             defaults = BackendTask("fallback", STATIC_BACKEND, [])
-            return settings_for(client_settings(SessionConfig.model_validate(session)), defaults)
+            return settings_for(request_settings(SessionConfig.model_validate(session).delegation.responses), defaults)
 
         session = {**RESPONSES_SESSION, "delegation": {"type": "responses", "responses": {"model": "org/org/model"}}}
         task = task_for(session)
@@ -333,7 +347,7 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.ws.send({"type": "session.update", "event_id": "u", "session": patch})
         await self.ws.wait_for("session.updated")
         # The update applies to the requests sent after it, which read the stored settings.
-        settings = client_settings(self.live_session.config)
+        settings = request_settings(self.live_session.config.delegation.responses)
         self.assertEqual((settings["instructions"], settings["max_output_tokens"]), ("New backend rules.", 77))
         # A model the core does not serve: the core checks the settings after the answer (with its
         # input_tokens; core.yaml's unlisted_models: report), and the error is nonfatal.
@@ -398,16 +412,20 @@ class ClientToolsEndToEndTests(EngineHarness):
         )
 
     async def test_history_shows_what_the_talker_and_the_backend_hold(self):
+        backend_answers = asyncio.Event()  # the backend answers once the lead-in has played
         await self.serve(
             RESPONSES_SESSION,
             [
                 _decision_chunks('{"action":"delegate","speech":"Let me check."}'),
+                backend_answers,
                 [chunk("We have Earl Grey.", finish="stop")],
                 _decision_chunks('{"action":"speak","speech":"We have Earl Grey."}'),
             ],
         )
         self.ws.send({"type": "session.thinking.append", "delegation_id": None, "content": "The caller is a regular."})
         await self.stt.say("What teas do you have?")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "check." in e["delta"])
+        backend_answers.set()
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "Grey" in e["delta"])
 
         history = await self.history()
@@ -495,8 +513,99 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.assertTrue((await self.history())["backend"]["busy"])  # still watched after the app-wait line
 
 
+class TalkerMovesEndToEndTests(EngineHarness):
+    """The talker's moves in a live session, through the gateway, the cascade adapter and the core."""
+
+    def said(self) -> str:
+        """Everything the caller heard so far, from the session's output transcript."""
+        return " ".join(
+            e["delta"].strip() for e in self.ws.from_server if e["type"] == "session.output_transcript.delta"
+        )
+
+    async def until(self, predicate, what: str, timeout: float = 4.0) -> None:
+        try:
+            async with asyncio.timeout(timeout):
+                while not predicate():
+                    await asyncio.sleep(0.01)
+        except TimeoutError:
+            raise AssertionError(f"timed out waiting for {what}") from None
+
+    def decided(self, count: int):
+        """Whether the talker's ``count``-th call has been decided."""
+        return lambda: len(self.chat.requests) >= count and self.engines[0].voice.call is None
+
+    async def test_a_wait_says_nothing_and_the_next_turn_is_decided_after_it(self):
+        await self.serve(
+            RESPONSES_SESSION,
+            [decision("wait"), decision("speak", "Earl Grey it is.")],
+        )
+        await self.stt.say("Hmm, let me think.")
+        await self.until(self.decided(1), "the wait")
+        await self.stt.say("A pot of Earl Grey.")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "is." in e["delta"])
+        self.assertEqual(self.said(), "Earl Grey it is.")  # the wait said nothing
+        self.assertNotIn("session.delegation.created", self.ws.kinds())
+        runtime = self.chat.requests[1]["messages"][-1]["content"]
+        self.assertIn("Hmm, let me think.", runtime)  # the turn it waited on is the conversation's
+        self.assertIn(PROMPTS.newest_turn.format(turn="A pot of Earl Grey."), runtime)  # the newest turn alone
+
+    async def test_a_barge_in_in_the_middle_of_the_decision_cuts_it_and_both_turns_are_decided_together(self):
+        held = asyncio.Event()  # the first decision stops in the middle of its JSON
+        await self.serve(
+            RESPONSES_SESSION,
+            [
+                [chunk('{"action":"speak","spe'), held, chunk('ech":"We have Earl Grey."}'), chunk(finish="stop")],
+                decision("speak", "Coffee it is."),
+            ],
+        )
+        self.addCleanup(held.set)
+        await self.stt.say("Tell me about your teas.")
+        await self.until(lambda: self.chat.requests, "the first decision")
+        await self.stt.propose("Actually, a coffee.")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "is." in e["delta"])
+        self.assertEqual(self.said(), "Coffee it is.")  # nothing of the cut decision was said
+        turns = PROMPTS.newest_turn.format(turn="Tell me about your teas. Actually, a coffee.")
+        self.assertIn(turns, self.chat.requests[1]["messages"][-1]["content"])
+        said = [m["content"] for m in self.engines[0].frontend.context.get_messages() if m["role"] == "assistant"]
+        self.assertEqual(said, ["Coffee it is."])
+
+    async def test_two_delegations_each_answer_and_the_second_carries_what_was_heard_since_the_first(self):
+        first, second = asyncio.Event(), asyncio.Event()  # each answer comes once its lead-in has played
+        await self.serve(
+            RESPONSES_SESSION,
+            [
+                decision("delegate", "Let me check."),
+                first,
+                [chunk("We have Earl Grey.", finish="stop")],
+                decision("speak", "We have Earl Grey."),
+                decision("delegate", "One moment."),
+                second,
+                [chunk("Your order is placed.", finish="stop")],
+                decision("speak", "Your order is placed."),
+            ],
+        )
+        await self.stt.say("What teas do you have?")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "check." in e["delta"])
+        first.set()
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "Grey." in e["delta"])
+        await self.until(self.decided(3), "the first answer")
+        await self.stt.say("Order one, please.")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "moment." in e["delta"])
+        second.set()
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "placed." in e["delta"])
+        created = [e["delegation"]["id"] for e in self.ws.from_server if e["type"] == "session.delegation.created"]
+        self.assertEqual(len(set(created)), 2)
+        self.assertEqual(self.said(), "Let me check. We have Earl Grey. One moment. Your order is placed.")
+        # The second delegation's input is what the caller heard since the first one's: its lead-in, said after the
+        # first input was built, and the newer turn.
+        second_input = self.chat.requests[4]["messages"]  # the backend's round for the second delegation
+        text = json.dumps(second_input, ensure_ascii=False)
+        self.assertIn(f"{PROMPTS.transcript.agent}: Let me check.", text)
+        self.assertIn("Order one, please.", text)
+
+
 class TypedQuestionTests(EngineHarness):
-    """The application's typed question enters the talker's memory, with the gateway's half."""
+    """The application's typed question enters the talker's context, with the gateway's half."""
 
     async def test_the_writer_words_a_typed_runs_answer_knowing_the_question_which_is_never_a_caller_turn(self):
         await self.serve(
@@ -516,10 +625,11 @@ class TypedQuestionTests(EngineHarness):
         wording = self.chat.requests[1]["messages"][-1]
         self.assertEqual(wording["role"], "user")
         self.assertTrue(wording["content"].startswith(f"{question['content']}\n"), wording["content"])
-        memory = self.engines[0].cascade.memory.messages()
-        self.assertIn(question, memory)
-        self.assertNotIn({"role": "user", "content": "Is there parking?"}, memory)  # no caller turn
-        self.assertEqual([entry.kind for entry in self.engines[0].cascade.heard_log.entries], [Heard.AGENT])
+        voice = self.engines[0].voice
+        context = [(m["role"], m["content"], m["kind"]) for m in voice.conversation()]
+        self.assertIn((question["role"], question["content"], "typed"), context)
+        self.assertNotIn("caller", [kind for _, _, kind in context])  # no caller turn
+        self.assertEqual([entry.kind for entry in voice.heard_log.entries], [Heard.AGENT])
 
 
 class ClientModeEndToEndTests(EngineHarness):
@@ -540,6 +650,8 @@ class ClientModeEndToEndTests(EngineHarness):
         self.assertEqual(created["delegation"]["target"], "client")
         self.assertNotIn("response_id", created["delegation"])
         delegation_id = created["delegation"]["id"]
+        # The client answers once the lead-in has played; commentary that came first would drop it.
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "moment." in e["delta"])
         self.ws.send(
             {
                 "type": "session.commentary.append",
@@ -609,9 +721,9 @@ class ClientModeEndToEndTests(EngineHarness):
     async def test_a_webrtc_offer_that_asks_for_client_delegation_starts_a_client_mode_session(self):
         built = []
 
-        async def factory(config, transport, connection):
+        async def factory(config, transport, ice_servers):
             built.append(config.mode)
-            return SessionParts(frontend=_IdleFrontend())
+            return SessionParts(frontend=_IdleFrontend(), connection=LiveWebRTCConnection.from_ice_servers(ice_servers))
 
         router, gateway = create_live_router(factory, LiveSettings())
         app = FastAPI()
@@ -623,7 +735,7 @@ class ClientModeEndToEndTests(EngineHarness):
         await client.setLocalDescription(await client.createOffer())
         offer = {"type": "webrtc", "sdp": client.localDescription.sdp}
         session = {**self.CLIENT_SESSION, "delegation": {"type": "client"}}
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as http:
             response = await http.post("/v1/live/sessions", json={"session": session, "transport": offer})
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(built, ["client"])
@@ -705,7 +817,7 @@ class WebRTCEndToEndTests(unittest.IsolatedAsyncioTestCase):
                         return event
 
         await client.setLocalDescription(await client.createOffer())
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as http:
             response = await http.post(
                 "/v1/live/sessions",
                 json={
@@ -808,7 +920,7 @@ class StartOnceTests(EngineHarness):
     """Who starts what in a live session: each loop runs once.
 
     The delegation side's ``open`` opens the conversation, whose IM session starts its placer, and the adapter's
-    ``start`` the silence timer. Attaching the cascade to its processor starts neither.
+    ``start`` the silence timer. Building the voice starts neither.
     """
 
     @staticmethod
@@ -829,8 +941,8 @@ class StartOnceTests(EngineHarness):
 class CloseOwnerTests(EngineHarness):
     """Who closes what in a live session: the delegation side's own close stops its worker.
 
-    The adapter's close stops the pipeline, the presenter's task, the silence timer and the talker's model, and leaves
-    the delegation side alone. A whole session's close cannot tell the two apart: it closes the side right after the
+    The adapter's close stops the pipeline, the voice's tasks and the silence timer, and leaves the delegation side
+    alone. A whole session's close cannot tell the two apart: it closes the side right after the
     adapter, and a second close of the side does nothing.
     """
 
@@ -873,13 +985,29 @@ class ContextMeterTests(unittest.TestCase):
     def test_the_cascade_reports_how_much_conversation_its_talker_holds(self):
         from types import SimpleNamespace
 
-        from tests.unit.cascade_helpers import ListConversation
+        from pipecat.processors.aggregators.llm_context import LLMContext
 
-        engine = SimpleNamespace(cascade=None)
+        from examples.frontend_backend_live.delegation_core.items import message_text
+        from examples.frontend_backend_live.spoken import AsRecorded
+        from examples.frontend_backend_live.voice import Voice, Writer
+        from tests.unit.frontend_helpers import Port
+
+        engine = SimpleNamespace(voice=None)
         self.assertIsNone(CascadeAdapter.context_tokens(engine))
-        engine.cascade = SimpleNamespace(conversation=ListConversation([{"role": "user", "content": "hi"}]))
+        engine.voice = Voice(
+            config=LIVE_CONFIG,
+            prompts=PROMPTS,
+            lines=LINES,
+            json_rules=PROMPTS.json_rules,
+            resume_note=PROMPTS.resume_note,
+            delegation=Port(),
+            wording=Writer(),
+            cut_memory=AsRecorded(),
+            item_text=message_text,
+        )
+        engine.voice.context = LLMContext([{"role": "user", "content": "hi"}])
         small = CascadeAdapter.context_tokens(engine)
-        engine.cascade = SimpleNamespace(conversation=ListConversation([{"role": "user", "content": "hi " * 500}]))
+        engine.voice.context = LLMContext([{"role": "user", "content": "hi " * 500}])
         self.assertGreater(CascadeAdapter.context_tokens(engine), small + 300)
 
 
@@ -892,24 +1020,24 @@ class AdapterCloseTests(unittest.IsolatedAsyncioTestCase):
         async def stop_pipeline():
             calls.append("pipeline stopped")
 
-        async def close_cascade():
-            calls.append("cascade closed")
+        async def close_voice():
+            calls.append("voice closed")
 
         adapter = SimpleNamespace(
-            _closed=False, runner_task=None, stop_pipeline=stop_pipeline, cascade=SimpleNamespace(close=close_cascade)
+            _closed=False, runner_task=None, stop_pipeline=stop_pipeline, voice=SimpleNamespace(close=close_voice)
         )
         # The session closes its frontend adapter, then its delegation side, and one adapter is both.
         await CascadeAdapter.close(adapter)
         await CascadeAdapter.close(adapter)
-        self.assertEqual(calls, ["pipeline stopped", "cascade closed"])
+        self.assertEqual(calls, ["pipeline stopped", "voice closed"])
         # A session closed while it was starting: its pipeline started after the close, and the start's early-close
-        # path closes the parts again. That late pipeline is stopped; the cascade is not closed twice.
+        # path closes the parts again. That late pipeline is stopped; the voice is not closed twice.
         adapter.runner_task = SimpleNamespace(done=lambda: False)
         await CascadeAdapter.close(adapter)
-        self.assertEqual(calls, ["pipeline stopped", "cascade closed", "pipeline stopped"])
+        self.assertEqual(calls, ["pipeline stopped", "voice closed", "pipeline stopped"])
         adapter.runner_task = SimpleNamespace(done=lambda: True)
         await CascadeAdapter.close(adapter)
-        self.assertEqual(calls, ["pipeline stopped", "cascade closed", "pipeline stopped"])
+        self.assertEqual(calls, ["pipeline stopped", "voice closed", "pipeline stopped"])
 
 
 if __name__ == "__main__":

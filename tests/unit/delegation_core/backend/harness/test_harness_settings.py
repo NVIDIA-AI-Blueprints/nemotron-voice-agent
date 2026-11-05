@@ -33,9 +33,11 @@ from examples.frontend_backend_live.delegation_core.backend.harness.steering imp
     NativeCommand,
     NextPrompt,
 )
-from examples.frontend_backend_live.delegation_core.config import CoreSettings, ModelEndpoint
+from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.shared.delegation_contract import ModelEndpoint
 from tests.unit.contracts.backend import FakeTaskContext
+from tests.unit.core_helpers import CORE_TEXTS
 from tests.unit.delegation_core.backend.harness.doubles import (
     AGENT_BLOCKS,
     PROMPTS,
@@ -61,12 +63,12 @@ def scratch_root(block):
 
 
 def with_prompts(block):
-    """``block`` with core.yaml's prompts and agent blocks unless it words its own: a harness block carries both."""
+    """``block`` with the shipped prompts and agent blocks unless it words its own: a harness block carries both."""
     return {"prompts": PROMPTS, "agents": AGENT_BLOCKS, **block}
 
 
 def parse(block):
-    """The settings of ``block``, with core.yaml's prompts and agent blocks."""
+    """The settings of ``block``, with the shipped prompts and agent blocks."""
     return HarnessSettings.parse(with_prompts(block))
 
 
@@ -116,7 +118,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(parse({"command": ["x"]}).describe()["url"])
 
     def test_core_yamls_harness_block_parses(self):
-        block = CoreSettings.load(FBL / "core.yaml").backend.blocks["harness"]
+        block = CoreSettings.load(FBL / "core.yaml", CORE_TEXTS).backend.blocks["harness"]
         settings = HarnessSettings.parse(block)
         self.assertIsInstance(settings.agent, HermesAgent)
         self.assertIsInstance(settings.steering, NativeCommand)
@@ -243,13 +245,12 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
 
 class CoreSwitchTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_harness_profile_switches_the_core_to_the_harness_with_no_other_change(self):
-        # It builds on the agent's profile, so both model conductors read one prompt and its envelope.
-        self.assertIn("\nextends: core.agent.yaml\n", (FBL / "core.harness.yaml").read_text(encoding="utf-8"))
-        settings = CoreSettings.load(FBL / "core.harness.yaml")
-        agent = CoreSettings.load(FBL / "core.agent.yaml")
+        # It is the agent's profile with the harness for its adapter, so every worker gets the envelope.
+        settings = CoreSettings.load(FBL / "core.harness.yaml", CORE_TEXTS)
+        agent = CoreSettings.load(FBL / "core.agent.yaml", CORE_TEXTS)
         self.assertEqual((settings.backend.adapter, settings.backend.one_shot_adapter), ("harness", "llm"))
+        self.assertEqual(dataclasses.replace(settings.backend, adapter=agent.backend.adapter), agent.backend)
         self.assertEqual(settings.delegation, agent.delegation)
-        self.assertEqual(settings.texts.conductor_prompt, agent.texts.conductor_prompt)
         self.assertEqual(settings.delegation.result_format, "speak_display")
         blocks = {**settings.backend.blocks, "harness": scratch_root(settings.backend.blocks["harness"])}
         settings = dataclasses.replace(settings, backend=dataclasses.replace(settings.backend, blocks=blocks))

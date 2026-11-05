@@ -20,9 +20,8 @@ from typing import Any, ClassVar
 
 from openai import APIError, AsyncOpenAI
 
-from examples.frontend_backend_live.delegation_core.backend.port import TERMINALS
+from examples.shared.delegation_contract import TERMINALS, ModelEndpoint
 
-from ...config import ModelEndpoint
 from .retry import TRANSIENT, StreamErrorEvent, with_retries
 
 

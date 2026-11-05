@@ -3,51 +3,32 @@
 
 # ruff: noqa: D101, D102
 
-"""The Live example's Compose recipes serve the Live routes by default.
+"""No Compose service sets the Live settings.
 
-A recipe's ``EXAMPLE_SELECTION`` is only a default, and ``all`` leaves the Live routes off, so the three Live recipes
-default ``LIVE_ENABLED`` to ``true``. No other recipe sets it, because the routes are open to anyone who can reach the
-server unless ``LIVE_API_TOKEN`` is set.
+The Live routes are open to anyone who can reach the server unless ``LIVE_API_TOKEN`` is set, so no recipe serves them
+by default: a deployment sets the token, or ``LIVE_ENABLED=true``, in its ``.env``.
 """
 
-import re
 import unittest
 from pathlib import Path
 
 import yaml
 
 REPO = Path(__file__).resolve().parents[3]
-LIVE_EXAMPLE = "frontend-backend-live"
-LIVE_RECIPES = {"frontend-backend-live", "frontend-backend-live-server", "frontend-backend-live-single-gpu"}
-DEFAULT_ON = "${LIVE_ENABLED:-true}"
-INTERPOLATION = re.compile(r"^\$\{\w+:-(?P<default>[^}]*)\}$")
+LIVE_SETTINGS = {"LIVE_ENABLED", "LIVE_API_TOKEN"}
 
 
-def compose_default(value: object) -> str:
-    """The value Compose gives an ``environment`` entry whose variable is unset or empty in the shell and ``.env``."""
-    match = INTERPOLATION.match(str(value))
-    return match.group("default") if match else str(value)
-
-
-class LiveRecipeTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+class ComposeTests(unittest.TestCase):
+    def test_no_service_sets_the_live_settings(self):
         compose = yaml.safe_load((REPO / "docker-compose.yml").read_text(encoding="utf-8"))
-        cls.environments = {name: service.get("environment") or {} for name, service in compose["services"].items()}
-        cls.live = {
-            name
-            for name, environment in cls.environments.items()
-            if compose_default(environment.get("EXAMPLE_SELECTION", "")) == LIVE_EXAMPLE
-        }
-
-    def test_only_the_three_live_recipes_set_live_enabled_and_they_default_it_to_true(self):
-        self.assertEqual(self.live, LIVE_RECIPES)
-        for name in sorted(self.live):
+        services = dict(compose["services"])
+        for include in compose.get("include", []):
+            services.update(yaml.safe_load((REPO / include["path"]).read_text(encoding="utf-8")).get("services") or {})
+        for name, service in services.items():
+            # A mapping's keys, or a list's NAME=value and NAME items.
+            names = {str(item).split("=", 1)[0] for item in service.get("environment") or ()}
             with self.subTest(service=name):
-                self.assertEqual(self.environments[name].get("LIVE_ENABLED"), DEFAULT_ON)
-                self.assertEqual(compose_default(self.environments[name]["LIVE_ENABLED"]), "true")
-        others = {name for name, environment in self.environments.items() if "LIVE_ENABLED" in environment}
-        self.assertEqual(others - self.live, set())
+                self.assertEqual(names & LIVE_SETTINGS, set())
 
 
 if __name__ == "__main__":

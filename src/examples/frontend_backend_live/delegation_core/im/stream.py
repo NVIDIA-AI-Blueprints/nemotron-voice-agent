@@ -19,8 +19,8 @@ from copy import deepcopy
 from typing import Any
 
 from examples.frontend_backend_live.delegation_core.backend.port import Outcome, Phase
-from examples.frontend_backend_live.delegation_core.ids import uid
 from examples.frontend_backend_live.delegation_core.ledger.records import WorkLedger
+from examples.shared.ids import uid
 
 # A response's terminal events, and the status each gives the response.
 TERMINALS = {"response.completed": "completed", "response.failed": "failed", "response.incomplete": "incomplete"}
@@ -31,16 +31,6 @@ MCP_ENDINGS = {
     # it may have run: the call did not complete, and its outcome is not known (its output says so)
     "unclear": ("response.mcp_call.failed", "incomplete"),
 }
-
-
-def message_text(item: dict) -> str:
-    """The text of a message item: its ``output_text`` parts, joined (a plain string content is taken whole)."""
-    content = item.get("content")
-    if isinstance(content, str):
-        return content
-    return "".join(
-        part.get("text", "") for part in content or [] if isinstance(part, dict) and part.get("type") == "output_text"
-    )
 
 
 def output_message(item_id: str, text: str, phase: Phase, status: str = "completed") -> dict:

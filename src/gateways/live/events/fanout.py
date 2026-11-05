@@ -18,8 +18,9 @@ from copy import deepcopy
 
 from loguru import logger
 
+from examples.shared.ids import uid
 from gateways.live.events.permissions import server_event_allowed
-from gateways.live.protocol import ProtocolError, SessionConfig, uid
+from gateways.live.protocol import ProtocolError, SessionConfig
 
 MAX_SIDEBAND_OBSERVERS = 8
 # How many events each connection may fall behind by, by its role: the primary carries the session's audio and every

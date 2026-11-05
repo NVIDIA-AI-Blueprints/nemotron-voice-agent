@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from gateways.live.protocol import ProtocolError, uid
+from examples.shared.ids import uid
+from gateways.live.protocol import ProtocolError
 
 if TYPE_CHECKING:
     from gateways.live.ports import DelegationEvents, DelegationView

@@ -13,12 +13,10 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.40.0",
     "langchain-nvidia-ai-endpoints>=1.2.1",
     "imageio-ffmpeg>=0.5.1",
-    # The harness backend adapter's protocol packages (Hermes over ACP, tools over MCP, a WebSocket transport). Only
-    # src/examples/frontend_backend_live/delegation_core/backend/harness may import them
-    # (tests/unit/test_import_boundaries.py).
+    # The harness backend adapter's protocol packages (Hermes over ACP, tools over MCP), imported only by
+    # src/examples/frontend_backend_live/delegation_core/backend/harness.
     "agent-client-protocol==0.9.0",
     "mcp>=2.2.0",
-    "websockets>=15.0.1",
 ]
 
 # Force patched versions for known CVEs

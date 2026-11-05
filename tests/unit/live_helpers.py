@@ -21,20 +21,17 @@ class FakeAdapter:
 
     As the core, it is the scripted ``ResponsesClient`` the session builds its server delegation on: it
     opens one conversation, refuses the models in ``models_rejected`` (also when it checks settings), and answers each
-    request with a stream that has no event, noting the request's input items.
+    request with a stream that has no event.
     """
 
     CONVERSATION = "conv_fake"
 
-    def __init__(self, fail_start=False):
-        self.fail_start = fail_start
+    def __init__(self):
         self.session = self.delegation = None
         self.started = self.closed = False
         self.muted = False
         self.audio: list[bytes] = []
         self.appended: list[tuple] = []
-        self.items: list[dict] = []  # the input items of the requests the server delegation sent
-        self.creates = 0  # how many requests it sent
         self.models_rejected = {"bad-model"}
         self.checked: list[dict] = []  # the settings it was asked to check (input_tokens)
 
@@ -47,8 +44,6 @@ class FakeAdapter:
         return self
 
     async def start(self, session, delegation):
-        if self.fail_start:
-            raise RuntimeError("pipeline failed")
         self.session, self.delegation, self.started = session, delegation, True
 
     async def close(self):
@@ -67,8 +62,6 @@ class FakeAdapter:
         return {"id": model, "object": "model", "created": 0, "owned_by": "test"}
 
     async def create_response(self, params):
-        self.items.extend(params["input"])
-        self.creates += 1
         return NoEvents()
 
     async def list_conversation_items(self, conversation_id):
@@ -160,7 +153,7 @@ class FakeWebSocket:
         self.closed = False
 
     # What the gateway calls ---------------------------------------------------------------
-    headers: dict = {}  # noqa: RUF012
+    headers: dict = {"host": "localhost"}  # noqa: RUF012
 
     async def accept(self):
         return None

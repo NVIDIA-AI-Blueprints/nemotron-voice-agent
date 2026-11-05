@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, ClassVar
 
 from openai.types.chat import ChatCompletionChunk
 
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmAdapter, LlmSettings, LlmSource
-from examples.frontend_backend_live.delegation_core.backend.port import TERMINALS, BoundaryInput
+from examples.frontend_backend_live.delegation_core.backend.port import BoundaryInput
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend, ProviderLimits
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
-from tests.unit.contracts.backend import MENU_FUNCTION, FakeTaskContext
+from examples.shared.delegation_contract import TERMINALS, ModelEndpoint
+from tests.unit.contracts.backend import MENU_FUNCTION, FakeTaskContext, call_round, text_round
 
 ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")
 LIMITS = ProviderLimits(provider_retries=0, first_event_timeout_seconds=2.0, idle_timeout_seconds=2.0)
@@ -36,7 +36,7 @@ class FakeStream:
     """A model client's stream of chunks or events; a :class:`Sleep` in it is a pause between two of them."""
 
     def __init__(self, items):
-        self.items, self.closed = list(items), False
+        self.items = list(items)
 
     def __aiter__(self):
         return self._iterate()
@@ -49,7 +49,7 @@ class FakeStream:
                 yield item
 
     async def close(self):
-        self.closed = True
+        pass
 
 
 class FakeChat:
@@ -95,8 +95,8 @@ class FakeResponses:
         pass
 
 
-def chunk(content=None, tool_calls=None, finish=None):
-    delta = {"role": "assistant"}
+def chunk(content=None, tool_calls=None, finish=None, **delta_extra):
+    delta = {"role": "assistant", **delta_extra}
     if content is not None:
         delta["content"] = content
     if tool_calls is not None:
@@ -130,20 +130,27 @@ class Hang:
 
 
 class ScriptedProvider(Backend):
-    """A provider that plays one script per round: events, exceptions, :class:`Sleep`, :class:`Hang` or gates."""
+    """A provider that plays one script per round, or ``respond(payload)``'s: events, exceptions, pauses or gates."""
 
     name = "scripted"
 
-    def __init__(self, *rounds, limits: ProviderLimits = LIMITS, endpoint: ModelEndpoint = ENDPOINT):
+    def __init__(
+        self,
+        *rounds,
+        respond: Callable[[dict], list] | None = None,
+        limits: ProviderLimits = LIMITS,
+        endpoint: ModelEndpoint = ENDPOINT,
+    ):
         super().__init__(endpoint, limits)
-        self.rounds, self.payloads, self.opened, self.closed = list(rounds), [], 0, False
+        self.rounds, self.respond, self.payloads = list(rounds), respond, []
+        self.opened = self.closed = 0
         self.read_after_terminal = False
 
     async def _events(self, payload):
         self.payloads.append(json.loads(json.dumps(payload)))
         self.opened += 1
         ended = False
-        for step in self.rounds.pop(0):
+        for step in self.respond(payload) if self.respond is not None else self.rounds.pop(0):
             self.read_after_terminal = self.read_after_terminal or ended
             ended = ended or (isinstance(step, dict) and step.get("type") in TERMINALS)
             if isinstance(step, BaseException):
@@ -158,7 +165,7 @@ class ScriptedProvider(Backend):
                 yield step
 
     async def close(self):
-        self.closed = True
+        self.closed += 1
 
 
 async def _hang(seconds):
@@ -168,6 +175,28 @@ async def _hang(seconds):
             await asyncio.shield(task)
         except asyncio.CancelledError:
             continue
+
+
+def gated(gate: asyncio.Event, round_: list) -> list:
+    """``round_``, waiting at ``gate`` once it opened: a round still streaming until the test lets it go on."""
+    return [round_[0], gate, *round_[1:]]
+
+
+def contract_rounds(scenario: str, gate: asyncio.Event) -> list[list]:
+    """The rounds of a ``BackendAdapterContract`` scenario; the ``slow`` one waits at ``gate``."""
+    return {
+        "answer": [text_round("Done.")],
+        "own_call": [call_round("lookup", {}), text_round("Done.", "resp_2")],
+        "tool_fails": [call_round("lookup", {}), text_round("Done.", "resp_2")],
+        "app_call": [call_round("get_menu", {}, said="Let me look."), text_round("Done.", "resp_2")],
+        "slow": [gated(gate, text_round("Old.")), text_round("Done.", "resp_2")],
+        "tail_error": [[*text_round("Done."), RuntimeError("after the terminal")], text_round("Again.", "resp_2")],
+    }[scenario]
+
+
+def contract_tools(scenario: str) -> list | None:
+    """The server tool sources of a ``BackendAdapterContract`` scenario."""
+    return {"own_call": [RecordingTools()], "tool_fails": [RecordingTools(fail=["lookup"])]}.get(scenario)
 
 
 # --------------------------------------------------------------------------------------------- tool sources
@@ -269,17 +298,12 @@ async def drive(run, task: IMTask) -> list[dict]:
     return events
 
 
-def source(
-    *providers: Backend,
-    settings: LlmSettings = FAST,
-    tools: Sequence | None = None,
-    endpoints=None,
-) -> LlmSource:
+def source(*providers: Backend, settings: LlmSettings = FAST, tools: Sequence | None = None) -> LlmSource:
     """An ``LlmSource`` whose providers are ``providers``, made in turn, one per model a session asks for."""
     made = list(providers)
     return LlmSource(
         settings,
-        endpoints=endpoints or (lambda model: ModelEndpoint(model=model or ENDPOINT.model, base_url=ENDPOINT.base_url)),
+        endpoints=lambda model: ModelEndpoint(model=model or ENDPOINT.model, base_url=ENDPOINT.base_url),
         tools=lambda: list(tools or ()),
         make_provider=lambda endpoint: made.pop(0),
     )

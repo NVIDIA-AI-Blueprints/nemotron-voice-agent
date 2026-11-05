@@ -10,9 +10,12 @@ import json
 import threading
 import unittest
 from dataclasses import replace
-from types import SimpleNamespace
+from functools import partial
 from unittest.mock import patch
 
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 
@@ -21,34 +24,52 @@ from examples.frontend_backend_live.adapter.adapter import (
     LIVE_AUDIO_IN_RATE,
     CascadeAdapter,
     CascadeAdapterSettings,
+    seed_messages,
 )
+from examples.frontend_backend_live.adapter.bridge import LiveOutputTranscript
 from examples.frontend_backend_live.adapter.contract import FrontendAdapterClass, ServiceStarting
 from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
 from examples.frontend_backend_live.adapter.readiness import EndpointReadiness
 from examples.frontend_backend_live.adapter.registry import FRONTEND_ADAPTERS
-from examples.frontend_backend_live.cascade.talker.talker import Talker
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, ConfigError, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
-from examples.frontend_backend_live.media.services import PerSentence, Stitched
+from examples.frontend_backend_live.delegation_core.items import message_text
+from examples.frontend_backend_live.delegation_core.profiles import load_profile
+from examples.frontend_backend_live.delegation_core.tables import pick
 from examples.frontend_backend_live.media.turns import Shared, Silence, SmartTurn
-from examples.frontend_backend_live.models import FRONTENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import load_prompts
-from examples.frontend_backend_live.tables import pick
+from examples.frontend_backend_live.spoken import AsRecorded
+from examples.frontend_backend_live.talker import LLM_SERVICES, RESPONSE_FORMATS, TalkerChat
+from examples.frontend_backend_live.voice import Voice, Writer
 from gateways.live.ports import EXCHANGE_RATE, FrontendAdapter
 from gateways.live.protocol import SessionConfig
 from tests.unit.cascade_helpers import LIVE_CONFIG as CASCADE_TEST_CONFIG
+from tests.unit.core_helpers import FakeChat
 from tests.unit.frontend_backend_live.adapter.adapter_helpers import RecordingPort
+from tests.unit.frontend_helpers import ENDPOINT, Port
 from utils import NVCF_GRPC_SERVER, NVCF_LLM_BASE_URL
 
 # The shipped frontend.cascade block, as the root hands it to the class.
-SHIPPED_BLOCK = dict(load_live_config(CONFIG_PATH).blocks["cascade"])
+SHIPPED_BLOCK = dict(load_live_config(load_profile, CONFIG_PATH).blocks["cascade"])
+# The helpers the root hands the class with its block: the delegation core's.
+HELPERS = {"pick": pick, "message_text": message_text}
 # The example's own catalog reader, with one talker model.
 SHIPPED_CATALOG = ExampleCatalog({"llm": [{"model_id": "org/front", "base_url": "http://front/v1"}]})
 # The end-to-end tests' configuration, with the talker's prompt named as config.yaml names it.
 TALKER_CONFIG = replace(CASCADE_TEST_CONFIG, prompt="generic")
-TALKER_SETTINGS = CascadeAdapterSettings(live=TALKER_CONFIG, turn_end=SmartTurn(TALKER_CONFIG.speech))
+TALKER_SETTINGS = CascadeAdapterSettings(
+    live=TALKER_CONFIG,
+    talker=TalkerChat,
+    turn_end=SmartTurn(TALKER_CONFIG.speech),
+    wording=Writer,
+    cut_memory=AsRecorded,
+    response_formats=partial(pick, RESPONSE_FORMATS, kind="response_format"),
+    message_text=message_text,
+)
 LOCAL = {"asr": "nemotron-asr:50052", "tts": "magpie-tts:50051", "base_url": "http://nvidia-llm:8000/v1"}
+# The talker's services entry.
+TALKER_ENTRY = {"model_id": "model-of-llm", "system_prompt": "You are a helpful assistant."}
 CLOUD = {"asr": NVCF_GRPC_SERVER, "tts": NVCF_GRPC_SERVER, "base_url": NVCF_LLM_BASE_URL}
 
 
@@ -69,7 +90,8 @@ class FakeCatalog:
 
     def service(self, slot):
         self.asked.append(("service", slot))
-        return {"server": self.recipe[slot], "voice_id": "Magpie-Multilingual.EN-US.Aria"}
+        speech = {"server": self.recipe.get(slot), "voice_id": "Magpie-Multilingual.EN-US.Aria"}
+        return {"llm": TALKER_ENTRY}.get(slot, speech)
 
 
 def session(**changes) -> SessionConfig:
@@ -80,7 +102,7 @@ def session(**changes) -> SessionConfig:
 async def build_as_the_root_does(table, name, block, catalog, config):
     """The root's four steps, with no branch on the adapter's name."""
     cls = pick(table, name, "frontend adapter")
-    settings = cls.Settings.parse(block)
+    settings = cls.Settings.parse(block, **HELPERS)
     await cls.readiness(settings, catalog).ensure_ready()
     return cls.from_config(config, "websocket", None, settings, catalog)
 
@@ -93,7 +115,6 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
                 self.assertLessEqual(members(FrontendAdapterClass), set(dir(cls)))
                 self.assertLessEqual(members(FrontendAdapter), set(dir(cls)))
         self.assertIs(CascadeAdapter.Settings, CascadeAdapterSettings)
-        self.assertTrue(CascadeAdapter.hosts_rtvi)
 
     async def test_the_cascade_builds_through_the_same_four_steps(self):
         with (
@@ -110,22 +131,15 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
 
 # ---------------------------------------------------------------------------------------------- settings
 class SettingsTests(unittest.TestCase):
-    def test_the_adapter_reads_its_own_speech_key(self):
-        self.assertEqual(
-            CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": {"tts_mode": "stitched"}}).tts_mode, "stitched"
-        )
-        self.assertEqual(CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": None}).tts_mode, "per_sentence")
-
     def test_the_settings_build_the_turn_end_the_speech_block_names(self):
         for name, cls in {"smart_turn": SmartTurn, "silence": Silence, "shared": Shared}.items():
             with self.subTest(name):
-                settings = CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": {"turn_end": name}})
+                settings = CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": {"turn_end": name}}, **HELPERS)
                 self.assertIs(type(settings.turn_end), cls)
 
     def test_a_bad_speech_block_is_refused_with_a_message_that_names_it(self):
         cases = {
             "frontend.cascade.speech has unknown keys: tts_rate": {"tts_rate": 22050},
-            "Unknown speech.tts_mode 'streaming'; known: per_sentence, stitched": {"tts_mode": "streaming"},
             "Unknown speech.turn_end 'vad'; known: shared, silence, smart_turn": {"turn_end": "vad"},
             "speech.vad_stop_seconds must be below speech.turn_silence_seconds: Smart Turn judges a pause before the "
             "silence that ends the turn anyway": {"vad_stop_seconds": 1.2},  # as long as the default silence
@@ -140,42 +154,40 @@ class SettingsTests(unittest.TestCase):
         }
         for message, speech in cases.items():
             with self.subTest(message), self.assertRaises(ValueError) as refused:
-                CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": speech})
+                CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": speech}, **HELPERS)
             self.assertEqual(str(refused.exception), message)
 
     def test_every_other_key_is_checked_by_the_frontends_settings(self):
         with self.assertRaisesRegex(ConfigError, "frontend.cascade has unknown keys: spech"):
-            CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "spech": {}})
+            CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "spech": {}}, **HELPERS)
         with self.assertRaisesRegex(ConfigError, "must be a mapping"):
-            CascadeAdapterSettings.parse([])
+            CascadeAdapterSettings.parse([], **HELPERS)
 
     def test_the_cascades_own_rules_are_checked_when_the_settings_are_parsed(self):
-        with self.assertRaisesRegex(ValueError, "Unknown result wording 'poetic'"):
-            CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "delegation": {"result_wording": "poetic"}})
+        with self.assertRaisesRegex(ValueError, "Unknown delegation.result_wording 'poetic'"):
+            CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "delegation": {"result_wording": "poetic"}}, **HELPERS)
 
     def test_a_provider_the_table_does_not_name_is_refused_when_the_settings_are_read(self):
         # No table names a realtime frontend, so the read refuses it as it refuses a typo.
         with self.assertRaises(ValueError) as refused:
-            CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "provider": "realtime"})
-        known = ", ".join(sorted(FRONTENDS))
+            CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "provider": "realtime"}, **HELPERS)
+        known = ", ".join(sorted(LLM_SERVICES))
         self.assertEqual(str(refused.exception), f"Unknown frontend.cascade.provider 'realtime'; known: {known}")
-        for provider in FRONTENDS:
+        for provider in LLM_SERVICES:
             with self.subTest(provider):
-                self.assertEqual(
-                    CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "provider": provider}).live.provider, provider
-                )
+                settings = CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "provider": provider}, **HELPERS)
+                self.assertEqual(settings.live.provider, provider)
 
 
 # -------------------------------------------------------------------------------------------- from_config
 class FromConfigTests(unittest.TestCase):
-    def build(self, config=None, tts_mode="per_sentence", catalog=None):
-        settings = replace(TALKER_SETTINGS, tts_mode=tts_mode)
+    def build(self, config=None, catalog=None):
         catalog = catalog or FakeCatalog()
         with (
             patch("examples.frontend_backend_live.adapter.adapter.build_stt") as stt,
             patch("examples.frontend_backend_live.adapter.adapter.build_tts") as tts,
         ):
-            adapter = CascadeAdapter.from_config(config or session(), "websocket", None, settings, catalog)
+            adapter = CascadeAdapter.from_config(config or session(), "websocket", None, TALKER_SETTINGS, catalog)
         return adapter, catalog, stt, tts
 
     def test_the_adapter_builds_its_talker_and_its_own_speech_services_and_connects_nothing(self):
@@ -189,15 +201,15 @@ class FromConfigTests(unittest.TestCase):
         (stop,) = adapter.user_params.user_turn_strategies.stop  # the same turn end's turn detection
         self.assertIsInstance(stop, TurnAnalyzerUserTurnStopStrategy)
         self.assertEqual(adapter.user_params.user_mute_strategies, [])  # a live session has no welcome to wait for
-        tts.assert_called_once_with({**voice, "tts_synthesis_mode": "per_sentence"}, catalog.service("tts"))
-        self.assertIsInstance(adapter.speech, PerSentence)
+        tts.assert_called_once_with(voice, catalog.service("tts"))  # in its catalog entry's synthesis mode
         self.assertEqual((adapter.transport, adapter.live_config), ("websocket", TALKER_CONFIG))
-        self.assertIsNone(adapter.cascade)  # nothing is built or connected before start
+        self.assertIs(adapter.talker, TalkerChat)
+        self.assertIsNone(adapter.frontend)  # nothing is built or connected before start
         self.assertIsNone(adapter.task)
 
     def test_the_turn_end_builds_the_speech_to_text_and_the_user_aggregators_settings_together(self):
         settings = CascadeAdapterSettings.parse(
-            {**SHIPPED_BLOCK, "speech": {"turn_end": "silence", "turn_silence_seconds": 0.8}}
+            {**SHIPPED_BLOCK, "speech": {"turn_end": "silence", "turn_silence_seconds": 0.8}}, **HELPERS
         )
         with (
             patch("examples.frontend_backend_live.adapter.adapter.build_stt") as stt,
@@ -208,11 +220,6 @@ class FromConfigTests(unittest.TestCase):
         self.assertIsInstance(settings.turn_end, Silence)
         self.assertEqual(adapter.user_params.vad_analyzer.params.stop_secs, 0.8)
 
-    def test_the_tts_mode_sets_the_synthesis_mode_and_the_text_hold(self):
-        adapter, _, _, tts = self.build(tts_mode="stitched")
-        self.assertEqual(tts.call_args.args[0], {"tts_synthesis_mode": "stitched"})
-        self.assertIsInstance(adapter.speech, Stitched)
-
     def test_a_session_without_instructions_or_with_blank_ones_gets_the_configured_talker_entry(self):
         for blank in (None, "", " ", "\n\t \n"):
             with self.subTest(instructions=blank):
@@ -222,7 +229,7 @@ class FromConfigTests(unittest.TestCase):
         self.assertEqual(adapter.instructions, "  Be brief.\n")  # the client's own text, word for word
 
     def test_the_shipped_default_is_the_domain_free_generic_talker_as_written(self):
-        settings = CascadeAdapterSettings.parse(SHIPPED_BLOCK)
+        settings = CascadeAdapterSettings.parse(SHIPPED_BLOCK, **HELPERS)
         with (
             patch("examples.frontend_backend_live.adapter.adapter.build_stt"),
             patch("examples.frontend_backend_live.adapter.adapter.build_tts"),
@@ -259,6 +266,14 @@ class FromConfigTests(unittest.TestCase):
         )
         self.assertNotIn("nvapi-secret", json.dumps(info))
 
+    def test_describe_gives_the_text_to_speechs_synthesis_mode(self):
+        class StitchedCatalog(FakeCatalog):
+            def service(self, slot):
+                return {**super().service(slot), "synthesis_mode": "stitched"}
+
+        info = CascadeAdapter.describe(TALKER_SETTINGS, StitchedCatalog())
+        self.assertEqual(info["speech"]["tts_mode"], "stitched")
+
     def test_describe_gives_the_seconds_each_turn_end_runs_with(self):
         cases = {
             "silence": {
@@ -271,7 +286,7 @@ class FromConfigTests(unittest.TestCase):
         for name, seconds in cases.items():
             with self.subTest(name):
                 speech = {"turn_end": name, "vad_start_seconds": 0.16, "turn_silence_seconds": 0.8}
-                settings = CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": speech})
+                settings = CascadeAdapterSettings.parse({**SHIPPED_BLOCK, "speech": speech}, **HELPERS)
                 info = CascadeAdapter.describe(settings, FakeCatalog())
                 self.assertEqual(info["speech"], {"tts_mode": "per_sentence", "turn_end": name, **seconds})
 
@@ -321,18 +336,17 @@ class Passthrough(FrameProcessor):
 
 
 class TextHost(PipelineHost):
-    """A second PipelineHost adapter with no speech services: the host still gives it a gate and a tracker."""
+    """A second PipelineHost adapter with no speech services: the host still gives it a gate and a transcript."""
 
     async def start(self, session, delegation):
         self.session = session
-        processors = self.audio_pipeline(
-            [Passthrough()], transport="websocket", connection=None, audio_in_rate=LIVE_AUDIO_IN_RATE
-        )
-        await self.run_pipeline(processors, stt=None, tts=None)
+        edges = self.edges(transport="websocket", connection=None, audio_in_rate=LIVE_AUDIO_IN_RATE, stt=None)
+        self.processors = edges.around([Passthrough()], [])
+        await self.run_pipeline(PipelineWorker(Pipeline(self.processors), **edges.worker), self.processors)
 
 
 class TextOnlyHostTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_text_only_host_gets_the_input_gate_and_the_playout_tracker(self):
+    async def test_a_text_only_host_gets_the_input_gate_and_the_output_transcript(self):
         host, port = TextHost(), RecordingPort()
         await host.start(port, None)
         self.addAsyncCleanup(host.stop_pipeline)
@@ -342,12 +356,13 @@ class TextOnlyHostTests(unittest.IsolatedAsyncioTestCase):
             while port.input_ms < 100:
                 await asyncio.sleep(0.01)
         self.assertTrue(host.gate.muted)
-        self.assertIsNotNone(host.playout)
+        self.assertIsInstance(host.processors[-1], LiveOutputTranscript)
 
 
 # ---------------------------------------------------------------------------------------- the history half
 class HistoryTests(unittest.IsolatedAsyncioTestCase):
-    def adapter(self, reports_events):
+    def adapter(self, reports_events=True):
+        """A session's adapter whose voice runs on the shipped prompt file, as its start builds it."""
         adapter = CascadeAdapter(
             session(instructions="Be brief."),
             "websocket",
@@ -358,51 +373,65 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
             prompts=load_prompts(),
             stt=None,
             tts=None,
+            item_text=message_text,
         )
-        adapter.delegation = SimpleNamespace(reports_events=reports_events)
-        frontend = SimpleNamespace(name="chat-completions", reply_format="Reply in JSON.")
-        prompts = SimpleNamespace(
-            frame_before="Before.",
-            frame_after="After.",
-            routing="Route.",
-            call_hints=SimpleNamespace(talker=""),
-            runtime_label="Runtime:",
-            decision_cue="Decide.",
+        prompts = adapter.prompts
+        adapter.delegation = Port(reports_events=reports_events)
+        adapter.voice = Voice(
+            config=TALKER_CONFIG,
+            prompts=prompts.cascade,
+            lines=prompts.lines,
+            json_rules=prompts.cascade.json_rules,
+            resume_note=prompts.cascade.resume_note,
+            delegation=adapter.delegation,
+            wording=Writer(),
+            cut_memory=AsRecorded(),
+            item_text=message_text,
         )
-        adapter.agent = SimpleNamespace(talker=Talker(frontend, prompts), frontend=frontend)
-        adapter.cascade = SimpleNamespace(
-            conversation=SimpleNamespace(
-                labeled=lambda: [{"role": "system", "content": "Be brief."}], kinds=lambda: []
-            ),
-            turns=SimpleNamespace(work_line=lambda: "Work." if reports_events else ""),
-            heard_log=SimpleNamespace(lines=lambda: [("caller", "C: A latte."), ("context", "X: Loyalty: gold.")]),
-            worknote=SimpleNamespace(open=lambda: ["item_d1"]),
-        )
+        context = LLMContext(adapter.voice.seed(seed_messages(adapter.config, adapter.instructions)))
+        level = RESPONSE_FORMATS["json_schema"]
+        talker = TalkerChat.from_config(ENDPOINT, TALKER_CONFIG.reliability, level, FakeChat())
+        adapter.voice.bind(talker, context)
+        self.addAsyncCleanup(adapter.voice.close)
         return adapter
 
+    def parts(self, adapter, runtime):
+        prompts = adapter.prompts.cascade
+        return [
+            {"source": "agent_prompts.Cascade.frame_before", "text": prompts.frame_before},
+            {"source": "session.instructions", "text": "Be brief."},
+            {"source": "agent_prompts.Cascade.frame_after", "text": prompts.frame_after},
+            {"source": "agent_prompts.Cascade.routing", "text": prompts.routing},
+            {"source": "agent_prompts.Cascade.json_rules", "text": prompts.json_rules},
+            {"source": "runtime data, after the conversation", "text": runtime},
+        ]
+
     async def test_the_adapters_half_in_responses_mode(self):
-        history = await self.adapter(reports_events=True).history()
+        adapter = self.adapter(reports_events=True)
+        voice = adapter.voice
+        voice.handoffs.delegate("A latte.", "", decided_at=0)
+        await asyncio.gather(*voice.handoffs.tasks)
+        voice.heard_log.caller("Make it oat milk.")
+        history = await adapter.history()
         self.assertEqual(history["frontend"]["model"], "talker-model")
-        self.assertEqual(
-            history["frontend"]["prompt"],
-            [
-                {"source": "agent_prompts.Cascade.frame_before", "text": "Before."},
-                {"source": "session.instructions", "text": "Be brief."},
-                {"source": "agent_prompts.Cascade.frame_after", "text": "After."},
-                {"source": "agent_prompts.Cascade.routing", "text": "Route."},
-                {"source": "reply format (chat-completions frontend)", "text": "Reply in JSON."},
-                {"source": "runtime data, after the conversation", "text": "Runtime:\nWork.\n\nDecide."},
-            ],
-        )
-        pending = [{"kind": "caller", "text": "C: A latte."}, {"kind": "context", "text": "X: Loyalty: gold."}]
-        self.assertEqual(history["backend"], {"busy": True, "pending": pending})
+        work = voice.worknote.line()
+        self.assertTrue(work)  # the open delegation's line
+        prompts = adapter.prompts.cascade
+        runtime = f"{prompts.runtime_label}\n{work}\n\n{prompts.decision_cue}"
+        self.assertEqual(history["frontend"]["prompt"], self.parts(adapter, runtime))
+        self.assertTrue(history["backend"]["busy"])
+        [pending] = history["backend"]["pending"]
+        self.assertEqual(pending["kind"], "caller")
+        self.assertTrue(pending["text"].endswith("Make it oat milk."))
 
     async def test_client_mode_has_no_server_side_backend(self):
-        history = await self.adapter(reports_events=False).history()
+        adapter = self.adapter(reports_events=False)
+        history = await adapter.history()
         self.assertIsNone(history["backend"])
-        self.assertEqual(history["frontend"]["messages"], [])  # the talker's voice history: no turn yet
-        runtime = {"source": "runtime data, after the conversation", "text": "Runtime:\nDecide."}  # no work line
-        self.assertEqual(history["frontend"]["prompt"][-1], runtime)
+        self.assertEqual(history["frontend"]["messages"], [])  # the talker's context: no turn yet
+        prompts = adapter.prompts.cascade
+        runtime = f"{prompts.runtime_label}\n{prompts.decision_cue}"  # no work line
+        self.assertEqual(history["frontend"]["prompt"], self.parts(adapter, runtime))
 
     async def test_blank_instructions_show_as_the_talker_entry_that_replaced_them(self):
         adapter = self.adapter(reports_events=True)
@@ -412,7 +441,7 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_nothing_before_the_start(self):
         adapter = self.adapter(reports_events=True)
-        adapter.cascade = None
+        adapter.voice = None
         self.assertIsNone(await adapter.history())
 
 

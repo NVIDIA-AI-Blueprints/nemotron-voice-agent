@@ -19,6 +19,8 @@ from examples.frontend_backend_live.delegation_core.backend.adapters import ADAP
 from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
 from examples.frontend_backend_live.delegation_core.backend.port import (
     AdapterSource,
+    AppOutputStep,
+    AppOutputSteps,
     EndpointLookup,
     OneShotSource,
     ToolSources,
@@ -50,12 +52,13 @@ class DelegationCore:
         defaults: BackendTask,
         result_format: Any,
         call_reports: Any,
+        output_steps: AppOutputSteps = lambda observe: (),
         observe: Callable[..., Any] = log_trace,
     ):
         """Hold what each IM session is built from (see :func:`build_core`, which makes these choices)."""
         self.settings, self.source, self.one_shot_source = settings, source, one_shot_source
         self.defaults, self.result_format, self.call_reports = defaults, result_format, call_reports
-        self.observe = observe
+        self.output_steps, self.observe = output_steps, observe
 
     def session(self) -> IMSession:
         """A new IM session for a new conversation, on a new adapter of the backend source; it runs once started."""
@@ -66,6 +69,7 @@ class DelegationCore:
             self.settings.texts,
             result_format=self.result_format,
             call_reports=self.call_reports,
+            output_steps=self.output_steps(self.observe),
             observe=self.observe,
         )
 
@@ -126,6 +130,26 @@ def tool_sources(blocks: Mapping[str, Mapping[str, Any]]) -> ToolSources:
     return lambda: tuple(source.from_settings(blocks[name]) for name, source in classes.items())
 
 
+def app_output_steps(blocks: Mapping[str, Mapping[str, Any]]) -> AppOutputSteps:
+    """What makes each IM session's app output steps: one of each named step, from its block, in the file's order.
+
+    The names and the blocks are checked here, so a core that names an unknown step, or gives one a bad block, fails
+    when it is built.
+    """
+    if not blocks:
+        return lambda observe: ()
+    # The steps load only when the core's file names one.
+    from examples.frontend_backend_live.delegation_core.backend.output_steps import APP_OUTPUT_STEPS
+
+    classes = {name: pick(APP_OUTPUT_STEPS, name, "app output step") for name in blocks}
+
+    def steps(observe: Callable[..., Any]) -> tuple[AppOutputStep, ...]:
+        return tuple(step.from_settings(blocks[name], observe=observe) for name, step in classes.items())
+
+    steps(log_trace)  # each block is checked once, now
+    return steps
+
+
 def build_core(
     settings: CoreSettings,
     *,
@@ -145,9 +169,9 @@ def build_core(
         observe: The core's trace hook (its own log lines by default); a root passes nothing of the frontend's.
 
     Raises:
-        ValueError: ``backend`` names an adapter or a tool source the tables do not hold, or has a block for no adapter
-            of the table; an adapter's block is refused by its source; the one-shot source cannot serve one-shot
-            sessions; or the result format or the backend call report is unknown.
+        ValueError: ``backend`` names an adapter, a tool source or an app output step the tables do not hold, or has a
+            block for no adapter of the table; an adapter's or a step's block is refused; the one-shot source cannot
+            serve one-shot sessions; or the result format or the backend call report is unknown.
     """
     backend = settings.backend
     unknown = sorted(set(backend.blocks) - set(adapters))
@@ -161,6 +185,7 @@ def build_core(
         texts.control_tools, texts.conductor_prompt, texts.refusal("idle"), texts.failed_output
     )
     tools = tool_sources(backend.tools)
+    steps = app_output_steps(backend.app_output_steps)
     sources = {
         name: pick(adapters, name, "backend adapter")().from_settings(
             backend.blocks.get(name, {}), endpoints=endpoints, tools=tools, vocabulary=vocabulary
@@ -185,5 +210,6 @@ def build_core(
         defaults=defaults,
         result_format=result_format,
         call_reports=call_reports,
+        output_steps=steps,
         observe=observe,
     )

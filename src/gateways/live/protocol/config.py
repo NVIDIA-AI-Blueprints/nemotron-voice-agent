@@ -16,7 +16,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from gateways.live.protocol.errors import ProtocolError, approx_tokens, validation_error
+from examples.shared.ids import approx_tokens
+from gateways.live.protocol.errors import ProtocolError, validation_error
 from gateways.live.protocol.voices import LIVE_VOICES, TTS_VOICES
 
 

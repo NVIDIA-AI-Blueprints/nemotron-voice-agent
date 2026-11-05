@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 
@@ -29,9 +30,10 @@ def positive_setting(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class LiveSettings:
-    """Operator settings for the live endpoints, read from the environment."""
+    """Operator settings for the live endpoints: the serving example's values, the token and the worker count."""
 
-    api_token: str = ""
+    # Kept out of the repr, so a logged traceback that shows the settings never shows the token.
+    api_token: str = field(default="", repr=False)
     max_sessions: int = 8
     max_session_seconds: int = 1800
     # The context appends one session accepts in any minute, the three kinds together: a limit of this server's own.
@@ -45,33 +47,33 @@ class LiveSettings:
     # The delegate route's limits: rounds at once, and the size of one round's body (its whole history).
     max_delegate_rounds: int = 2
     delegate_body_bytes: int = 512 * 1024
-    # With no token, the names besides IP literals and ``localhost`` that the delegate route answers to: a request for
-    # any other ``Host`` is refused, which stops DNS rebinding on plain HTTP.
+    # With no token, the names besides IP literals and ``localhost`` that the live routes answer to: a request for any
+    # other ``Host`` is refused, which stops DNS rebinding on plain HTTP.
     allowed_hosts: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
-    def from_env(cls) -> LiveSettings:
-        """Read the live settings from the environment; an unset or empty value is the default.
+    def from_env(cls, values: Mapping[str, int | Sequence[str]] | None = None) -> LiveSettings:
+        """Build the settings from ``values`` and the environment; a key that ``values`` lacks keeps its default.
 
-        The variables: ``LIVE_API_TOKEN``, ``LIVE_MAX_SESSIONS``, ``LIVE_MAX_SESSION_SECONDS``, ``LIVE_ICE_URLS``,
-        ``LIVE_MAX_APPENDS_PER_MINUTE``, ``LIVE_MAX_DELEGATE_ROUNDS``, ``LIVE_ALLOWED_HOSTS`` (comma-separated) and
-        ``UVICORN_WORKERS``.
+        ``values``, which the root passes in from the serving example, holds the limits as whole numbers and
+        ``ice_urls`` and ``allowed_hosts`` as lists of strings; each string is stripped, and a blank one is dropped.
+        The environment gives ``LIVE_API_TOKEN`` and ``UVICORN_WORKERS``.
 
         Raises:
-            ValueError: A session, append or round limit or the worker count is not a whole number of at least 1.
+            ValueError: ``UVICORN_WORKERS`` is not a whole number of at least 1.
         """
+        values = dict(values or {})
         return cls(
-            api_token=os.getenv("LIVE_API_TOKEN", ""),
-            max_sessions=positive_setting("LIVE_MAX_SESSIONS", cls.max_sessions),
-            max_session_seconds=positive_setting("LIVE_MAX_SESSION_SECONDS", cls.max_session_seconds),
-            max_appends_per_minute=positive_setting("LIVE_MAX_APPENDS_PER_MINUTE", cls.max_appends_per_minute),
-            ice_urls=listed("LIVE_ICE_URLS"),
+            **{
+                **values,
+                "ice_urls": listed(values.get("ice_urls", ())),
+                "allowed_hosts": tuple(name.lower() for name in listed(values.get("allowed_hosts", ()))),
+            },
+            api_token=os.getenv("LIVE_API_TOKEN", "").strip(),
             workers=positive_setting("UVICORN_WORKERS", cls.workers),
-            max_delegate_rounds=positive_setting("LIVE_MAX_DELEGATE_ROUNDS", cls.max_delegate_rounds),
-            allowed_hosts=tuple(name.lower() for name in listed("LIVE_ALLOWED_HOSTS")),
         )
 
 
-def listed(name: str) -> tuple[str, ...]:
-    """The comma-separated values the environment variable ``name`` holds, without blanks."""
-    return tuple(value.strip() for value in os.getenv(name, "").split(",") if value.strip())
+def listed(values: Sequence[str]) -> tuple[str, ...]:
+    """The strings of ``values``, stripped, without blanks."""
+    return tuple(value.strip() for value in values if value.strip())

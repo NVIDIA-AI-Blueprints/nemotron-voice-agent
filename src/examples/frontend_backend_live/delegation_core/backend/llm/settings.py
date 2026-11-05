@@ -25,8 +25,8 @@ from examples.frontend_backend_live.delegation_core.backend.providers import (
     ChatCompletionsBackend,
     ProviderLimits,
 )
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
 from examples.frontend_backend_live.delegation_core.tables import pick
+from examples.shared.delegation_contract import ModelEndpoint
 
 
 class ReportUnlisted:

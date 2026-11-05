@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103, D105, D107
 
-"""The IM's test doubles: scripted adapters and conductors, the core's settings and texts, and session builders."""
+"""The IM's test doubles: scripted adapters and conductors, the core's settings and texts, and the IM's test case."""
 
 from __future__ import annotations
 
@@ -30,24 +30,20 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
 )
 from examples.frontend_backend_live.delegation_core.config import CoreSettings, Texts
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
-from examples.frontend_backend_live.delegation_core.im.oneshot import OneShotSession
-from examples.frontend_backend_live.delegation_core.im.results import CallReports, ResultFormat
 from examples.frontend_backend_live.delegation_core.im.session import IMSession
-from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter, message_text
+from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream, ResponseWriter
+from examples.frontend_backend_live.delegation_core.items import message_text
 from tests.unit.contracts.endings import normalized
+from tests.unit.core_helpers import CORE_TEXTS
 
 # The core's own settings file: the IM's settings and its texts.
 CORE_YAML = Path(__file__).resolve().parents[3] / "src/examples/frontend_backend_live/core.yaml"
-CORE_SETTINGS = CoreSettings.load(CORE_YAML)
+CORE_SETTINGS = CoreSettings.load(CORE_YAML, CORE_TEXTS)
 TEXTS = CORE_SETTINGS.texts
 DEFAULTS = BackendTask("test/model", "Do the task.", [])
 MENU = {"type": "function", "name": "get_menu", "parameters": {"type": "object", "properties": {}}}
 # The lines the endings fixture marks by name ("[handover_line]" ...).
-FIXTURE_LINES = {
-    "handover_line": TEXTS.handover_line,
-    "cancelled_line": TEXTS.cancelled_line,
-    "unconfirmed_line": TEXTS.unconfirmed_line,
-}
+FIXTURE_LINES = {key: getattr(TEXTS, key) for key in ("handover_line", "cancelled_line", "unconfirmed_line")}
 
 
 def is_handover_line(text: str) -> bool:
@@ -62,25 +58,13 @@ def ask(text: str) -> list[dict]:
 
 
 def message_item(text: str, phase: str, item_id: str = "msg") -> dict:
-    return {
-        "id": item_id,
-        "type": "message",
-        "role": "assistant",
-        "status": "completed",
-        "phase": phase,
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
-    }
+    item = {"id": item_id, "type": "message", "role": "assistant", "status": "completed", "phase": phase}
+    return {**item, "content": [{"type": "output_text", "text": text, "annotations": []}]}
 
 
 def call_item(name: str, arguments: dict, call_id: str) -> dict:
-    return {
-        "id": f"fc_{call_id}",
-        "type": "function_call",
-        "status": "completed",
-        "call_id": call_id,
-        "name": name,
-        "arguments": json.dumps(arguments),
-    }
+    item = {"id": f"fc_{call_id}", "type": "function_call", "status": "completed", "call_id": call_id, "name": name}
+    return {**item, "arguments": json.dumps(arguments)}
 
 
 async def read_all(stream: AsyncIterator[dict]) -> list[dict]:
@@ -99,6 +83,28 @@ def app_outputs(events: list[dict], output: str = "{}") -> list[dict]:
     return [{"type": "function_call_output", "call_id": call["call_id"], "output": output} for call in calls]
 
 
+def said(events: list[dict]) -> list[tuple[str, str]]:
+    """The phase and text of each message a response's events finished, in order."""
+    return [(item["phase"], message_text(item)) for item in finished_items(events) if item["type"] == "message"]
+
+
+def texts(events: list[dict]) -> list[str]:
+    """The text of each message a response's events finished, in order."""
+    return [text for _, text in said(events)]
+
+
+def function_calls(events: list[dict]) -> list[str]:
+    """The call id of each of the app's function calls a response's events finished, in order."""
+    return [item["call_id"] for item in finished_items(events) if item["type"] == "function_call"]
+
+
+def records_of(message: dict) -> list[dict]:
+    """The work records a request's message carries, one per line of its records block."""
+    head = TEXTS.records_block.split("{records}")[0]
+    (block,) = [part["text"] for part in message["content"] if part["text"].startswith(head)]
+    return [json.loads(line) for line in block.splitlines()[1:]]
+
+
 class Wire:
     """Everything the IM writes, in order, as ``(response_id, event)`` with ``response_id`` added to each event."""
 
@@ -108,17 +114,13 @@ class Wire:
     @contextmanager
     def recording(self) -> Iterator[Wire]:
         original = ResponseWriter._emit
-        wire = self
 
         def emit(writer, kind, **fields):
             original(writer, kind, **fields)
-            wire.events.append((writer.id, {"type": kind, **deepcopy(fields), "response_id": writer.id}))
+            self.events.append((writer.id, {"type": kind, **deepcopy(fields), "response_id": writer.id}))
 
         with mock.patch.object(ResponseWriter, "_emit", emit):
             yield self
-
-    def of(self, response_id: str) -> list[dict]:
-        return [event for rid, event in self.events if rid == response_id]
 
 
 # The steps of a scripted task -------------------------------------------------------------------------------------
@@ -133,7 +135,9 @@ class ScriptStep:
 
 
 @dataclass
-class _Say(ScriptStep):
+class Say(ScriptStep):
+    """Commentary in the task's next round."""
+
     text: str
 
     async def play(self, run):
@@ -179,11 +183,13 @@ class _AppCall(ScriptStep):
 
 
 @dataclass
-class _OwnCall(ScriptStep):
-    name: str
-    output: str
-    fails: bool
-    label: str
+class OwnCall(ScriptStep):
+    """A round that calls the backend's own tool ``name``, which the run runs and reports."""
+
+    name: str = "lookup"
+    output: str = '{"ok": true}'
+    fails: bool = False
+    label: str = "cafe"
     call_id: str | None = None
 
     async def play(self, run):
@@ -198,7 +204,9 @@ class _OwnCall(ScriptStep):
 
 
 @dataclass
-class _Show(ScriptStep):
+class Show(ScriptStep):
+    """A round that calls the IM's ``show`` work tool, which the run runs through the task's tools."""
+
     display: str
 
     async def play(self, run):
@@ -228,8 +236,30 @@ class _Wait(ScriptStep):
 
 
 @dataclass
-class _Fail(ScriptStep):
-    error: Exception
+class CancelOwnWork(ScriptStep):
+    """A round that calls the work tool cancel_work, run through the task's tools; then a round of ``later`` calls."""
+
+    later: tuple[dict, ...] = ()
+
+    async def play(self, run):
+        call = call_item("cancel_work", {}, "call_cancel")
+        for event in run.round_events([call]):
+            yield event
+        run.routes.append(run.task.route(call))
+        tools = run.task.tools()
+        run.task.tool_started(call, tools.label)
+        run.task.tool_outcome("call_cancel", await tools.execute("call_cancel", "cancel_work", "{}"), "done")
+        if self.later:
+            for event in run.round_events(list(self.later)):
+                yield event
+            run.routes += [run.task.route(later) for later in self.later]
+
+
+@dataclass
+class Fail(ScriptStep):
+    """The run raises."""
+
+    error: Exception = field(default_factory=lambda: RuntimeError("The backend failed"))
 
     async def play(self, run):
         raise self.error
@@ -237,8 +267,10 @@ class _Fail(ScriptStep):
 
 
 @dataclass
-class _Cut(ScriptStep):
-    reason: str
+class Cut(ScriptStep):
+    """An attempt cut short (``response.incomplete`` with ``reason``), then the run raises."""
+
+    reason: str = "max_output_tokens"
 
     async def play(self, run):
         details = {"incomplete_details": {"reason": self.reason}}
@@ -248,7 +280,9 @@ class _Cut(ScriptStep):
 
 
 @dataclass
-class _FailedAttempt(ScriptStep):
+class FailedAttempt(ScriptStep):
+    """An attempt that streams a message and fails; the run goes on with its next step (a retry)."""
+
     code: str = "server_error"
 
     async def play(self, run):
@@ -258,7 +292,9 @@ class _FailedAttempt(ScriptStep):
 
 
 @dataclass
-class _Progress(ScriptStep):
+class Progress(ScriptStep):
+    """The run reports progress that is not model text."""
+
     text: str
 
     async def play(self, run):
@@ -268,17 +304,14 @@ class _Progress(ScriptStep):
 
 
 @dataclass
-class _Empty(ScriptStep):
+class Empty(ScriptStep):
+    """A round with no items: the task's events end with no answer."""
+
     ends = True
 
     async def play(self, run):
         for event in run.round_events([]):
             yield event
-
-
-def say(text: str) -> ScriptStep:
-    """Commentary in the task's next round."""
-    return _Say(text)
 
 
 def answer(text: str = "Done.", usage: dict | None = None, hold: asyncio.Event | None = None) -> ScriptStep:
@@ -296,46 +329,9 @@ def app_call(name: str = "get_menu", arguments: dict | None = None, call_id: str
     return _AppCall(name, arguments or {}, call_id)
 
 
-def own_call(
-    name: str = "lookup", output: str = '{"ok": true}', fails: bool = False, label: str = "cafe", call_id=None
-) -> ScriptStep:
-    """A round that calls the backend's own tool ``name``, which the run runs and reports."""
-    return _OwnCall(name, output, fails, label, call_id)
-
-
-def show(display: str) -> ScriptStep:
-    """A round that calls the IM's ``show`` work tool, which the run runs through the task's tools."""
-    return _Show(display)
-
-
 def wait(event: asyncio.Event) -> ScriptStep:
     """Pause until ``event`` is set or the run is stopped."""
     return _Wait(event)
-
-
-def fail(error: Exception | None = None) -> ScriptStep:
-    """The run raises."""
-    return _Fail(error or RuntimeError("The backend failed"))
-
-
-def cut(reason: str = "max_output_tokens") -> ScriptStep:
-    """An attempt cut short (``response.incomplete`` with ``reason``), then the run raises."""
-    return _Cut(reason)
-
-
-def failed_attempt(code: str = "server_error") -> ScriptStep:
-    """An attempt that streams a message and fails; the run goes on with its next step (a retry)."""
-    return _FailedAttempt(code)
-
-
-def progress(text: str) -> ScriptStep:
-    """The run reports progress that is not model text."""
-    return _Progress(text)
-
-
-def empty() -> ScriptStep:
-    """A round with no items: the task's events end with no answer."""
-    return _Empty()
 
 
 class ScriptedRun:
@@ -412,7 +408,7 @@ class ScriptedRun:
 
 
 class ScriptedAdapter:
-    """A backend adapter whose tasks each play the next script: a list of steps, or a function of the task."""
+    """A backend adapter whose tasks each play the next script (steps, or a function of the task) in a ``run``."""
 
     def __init__(
         self,
@@ -422,8 +418,9 @@ class ScriptedAdapter:
         delivery: str = "applied",
         stop_outcome: StopOutcome = "stopped",
         stop_delay: float = 0.0,
+        run: type[ScriptedRun] = ScriptedRun,
     ):
-        self.scripts = list(scripts)
+        self.scripts, self.run = list(scripts), run
         self.max_running = max_running
         self._conductor = conductor if conductor is not None else SteerNewest()
         self.delivery, self.stop_outcome, self.stop_delay = delivery, stop_outcome, stop_delay
@@ -437,7 +434,7 @@ class ScriptedAdapter:
 
     def start(self, task: TaskContext) -> ScriptedRun:
         script = self.scripts.pop(0) if self.scripts else [answer()]
-        run = ScriptedRun(self, task, script(task) if callable(script) else script)
+        run = self.run(self, task, script(task) if callable(script) else script)
         self.runs.append(run)
         return run
 
@@ -475,6 +472,16 @@ def planned(*plans: Callable[[ConductorInput, Place], Awaitable[None]]) -> Scrip
     return ScriptedConductor(plan)
 
 
+def placing(*decisions: Decision) -> Callable[[ConductorInput, Place], Awaitable[None]]:
+    """A plan that places ``decisions`` in order, whatever it is given."""
+
+    async def plan(given: ConductorInput, place: Place) -> None:
+        for decision in decisions:
+            await place(decision)
+
+    return plan
+
+
 @dataclass
 class ScriptedConductor:
     """A conductor that hands every ``decide()`` to ``plan(given, place)``; it keeps what it was given and told."""
@@ -482,45 +489,16 @@ class ScriptedConductor:
     plan: Callable[[ConductorInput, Place], Awaitable[None]]
     given: list[ConductorInput] = field(default_factory=list)
     outcomes: list[str] = field(default_factory=list)
-    decisions: list[Decision] = field(default_factory=list)
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
         self.given.append(given)
 
         async def recording(decision: Decision) -> str:
-            self.decisions.append(decision)
             outcome = await place(decision)
             self.outcomes.append(outcome)
             return outcome
 
         await self.plan(given, recording)
-
-
-def im_session(
-    adapter: ScriptedAdapter,
-    *,
-    texts: Texts = TEXTS,
-    result_format: ResultFormat | None = None,
-    call_reports: CallReports | None = None,
-    observe: Callable[..., None] | None = None,
-    **changes: Any,
-) -> IMSession:
-    """An IM session on ``adapter`` with the core's settings (``changes`` override them) and ``texts``."""
-    settings = replace(CORE_SETTINGS.delegation, **changes)
-    return IMSession(
-        adapter,
-        DEFAULTS,
-        settings,
-        texts,
-        result_format=result_format,
-        call_reports=call_reports,
-        observe=observe or (lambda kind, **fields: None),
-    )
-
-
-def one_shot_session(adapter: ScriptedAdapter, **changes: Any) -> OneShotSession:
-    """A one-shot session on ``adapter`` with the core's settings and texts."""
-    return OneShotSession(adapter, DEFAULTS, replace(CORE_SETTINGS.delegation, **changes), TEXTS)
 
 
 class IMCase(unittest.IsolatedAsyncioTestCase):
@@ -530,10 +508,17 @@ class IMCase(unittest.IsolatedAsyncioTestCase):
         self.wire = self.enterContext(Wire().recording())
         self.traces: list[tuple[str, dict]] = []
 
-    def session(self, adapter: ScriptedAdapter, **kwargs: Any) -> IMSession:
-        kwargs.setdefault("observe", lambda kind, **fields: self.traces.append((kind, fields)))
-        kwargs.setdefault("close_grace_seconds", 0.01)  # a test's last close does not wait for runs it left hanging
-        im = im_session(adapter, **kwargs)
+    def session(self, adapter: ScriptedAdapter, *, texts: Texts = TEXTS, **changes: Any) -> IMSession:
+        """A started IM session on ``adapter``: the core's settings, which ``changes`` override, and ``texts``.
+
+        ``changes`` may also give the session's ``result_format``, ``call_reports`` and ``output_steps``.
+        """
+        formats = ("result_format", "call_reports", "output_steps")
+        options = {name: changes.pop(name) for name in formats if name in changes}
+        changes.setdefault("close_grace_seconds", 0.01)  # a test's last close does not wait for runs it left hanging
+        settings = replace(CORE_SETTINGS.delegation, **changes)
+        observe = lambda kind, **fields: self.traces.append((kind, fields))  # noqa: E731
+        im = IMSession(adapter, DEFAULTS, settings, texts, **options, observe=observe)
         im.start()
         self.addAsyncCleanup(im.close)
         return im
@@ -542,6 +527,20 @@ class IMCase(unittest.IsolatedAsyncioTestCase):
         """Let the event loop run ``count`` times, so everything ready runs."""
         for _ in range(count):
             await asyncio.sleep(0)
+
+    async def admit_each(self, im: IMSession, *requests: str, settings: dict | None = None) -> list[ResponseStream]:
+        """Admit one request per text as D1, D2 ..., letting everything ready run after each; their streams."""
+        streams = []
+        for number, text in enumerate(requests, 1):
+            streams.append(im.admit(ask(text), delegation_id=f"D{number}", settings=settings).stream)
+            await self.turns()
+        return streams
+
+    async def answer_calls(self, im: IMSession, events: list[dict], output: str = "{}", **admission: Any) -> list[dict]:
+        """The app's ``output`` for each call ``events`` ended with, as D1's continuation unless told: its events."""
+        admission.setdefault("delegation_id", "D1")
+        continuation = im.admit_client_request(app_outputs(events, output), **admission)
+        return await asyncio.wait_for(read_all(continuation.stream), 2)
 
     def timeline(self) -> list[list[str]]:
         """The wire, as the endings fixture writes it: a handover line is marked whichever taker it names."""

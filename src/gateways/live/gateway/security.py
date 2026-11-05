@@ -18,7 +18,7 @@ LOCAL_NAMES = frozenset({"localhost"})
 
 
 def authorize(settings: LiveSettings, connection) -> None:
-    """Check the bearer token (when configured) and reject cross-site browser origins."""
+    """Check the bearer token (when configured), reject cross-site browser origins, then check the host name."""
     if settings.api_token:
         authorization = connection.headers.get("authorization", "")
         if not hmac.compare_digest(authorization.encode(), ("Bearer " + settings.api_token).encode()):
@@ -27,6 +27,7 @@ def authorize(settings: LiveSettings, connection) -> None:
     host = connection.headers.get("host")
     if origin and origin not in {f"http://{host}", f"https://{host}"}:
         raise HTTPException(403, "Unexpected browser origin")
+    check_host(settings, connection)
 
 
 def host_name(host: str) -> str:
@@ -51,7 +52,7 @@ def check_host(settings: LiveSettings, connection) -> None:
     except ValueError:
         pass
     if name not in LOCAL_NAMES and name not in settings.allowed_hosts:
-        raise HTTPException(403, f"Host {name!r} is not allowed: add it to LIVE_ALLOWED_HOSTS, or set LIVE_API_TOKEN")
+        raise HTTPException(403, f"Host {name!r} is not allowed: add it to allowed_hosts, or set LIVE_API_TOKEN")
 
 
 async def read_json_body(settings: LiveSettings, request: Request, limit: int = MAX_BODY_BYTES) -> dict:

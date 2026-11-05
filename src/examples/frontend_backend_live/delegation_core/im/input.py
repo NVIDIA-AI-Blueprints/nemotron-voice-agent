@@ -15,9 +15,8 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 
-# The options a request may carry beside the model, the instructions, the tools, the tool choice and the output limit.
-# The Responses backend passes them on; the chat-completions backend maps those it has an equivalent for.
-OPTIONS = ("parallel_tool_calls", "reasoning", "text", "service_tier")
+from examples.shared.delegation_contract import OPTIONS
+
 # The fields of a Responses request that set how its Work runs on the backend model.
 SETTINGS = ("model", "instructions", "tools", "tool_choice", "max_output_tokens", *OPTIONS)
 
@@ -31,7 +30,8 @@ class BackendTask:
     tools: list[dict]
     tool_choice: str | dict = "auto"
     max_output_tokens: int | None = None
-    # The ``OPTIONS`` the client set.
+    # The ``OPTIONS`` the client set: the Responses backend passes them on; the chat-completions backend maps those it
+    # has an equivalent for.
     options: dict = field(default_factory=dict)
 
     def payload(self) -> dict:

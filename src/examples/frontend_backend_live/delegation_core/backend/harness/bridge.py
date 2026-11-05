@@ -26,7 +26,7 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, Outcome, TaskContext, ToolSource
-from examples.frontend_backend_live.delegation_core.ids import uid
+from examples.shared.ids import uid
 
 from .protocol import AppCall, CallRunning, CallSettled, HeldCall, Mailbox, McpServer
 from .settings import Bridge

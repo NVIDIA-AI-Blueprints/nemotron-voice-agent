@@ -12,7 +12,8 @@
 # once. Every key of backend.llm-agent has its default in delegation_core/backend/agent/settings.py; core.yaml lists
 # the ones this example sets.
 #
-# texts.conductor_prompt is core.yaml's. core.harness.yaml extends this file, so both model conductors read one prompt.
+# Both model conductors read texts.conductor_prompt (agent_prompts.Core in prompts.yaml); core.harness.yaml extends
+# this file.
 
 extends: core.yaml
 

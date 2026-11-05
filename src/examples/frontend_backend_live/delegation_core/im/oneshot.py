@@ -18,13 +18,14 @@ from typing import Any
 
 from examples.frontend_backend_live.delegation_core.backend.port import BackendAdapter
 from examples.frontend_backend_live.delegation_core.config import DelegationSettings, Texts
-from examples.frontend_backend_live.delegation_core.ids import uid
 from examples.frontend_backend_live.delegation_core.im.conversation import TaskHistory
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.delegation_core.im.results import ResultFormat
 from examples.frontend_backend_live.delegation_core.im.run import TaskRun, WorkRun
 from examples.frontend_backend_live.delegation_core.im.session import Admission, DelegationError, IMSession, Incoming
-from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream, message_text
+from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
+from examples.frontend_backend_live.delegation_core.items import message_text
+from examples.shared.ids import uid
 
 
 def _noop(kind: str, **fields: Any) -> None:

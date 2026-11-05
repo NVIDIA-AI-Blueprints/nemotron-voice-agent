@@ -36,7 +36,10 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
-from gateways.live.protocol import BackendConfig, ProtocolError, SessionConfig, uid
+from examples.shared.delegation_contract import DELEGATION_ID, OPTIONS, TERMINALS, TYPED_RUN
+from examples.shared.ids import uid
+from examples.shared.observe import log_observation
+from gateways.live.protocol import BackendConfig, ProtocolError, SessionConfig
 from gateways.live.server_delegation.sender import Request, RequestSender
 
 if TYPE_CHECKING:
@@ -44,14 +47,8 @@ if TYPE_CHECKING:
     from gateways.live.server_delegation.responses_client import ResponsesClient
 
 Observe = Callable[..., None]
-# The options a request carries only when the client set a value other than its default.
-OPTIONS = ("parallel_tool_calls", "reasoning", "text", "service_tier")
-# The metadata keys of the gateway-to-core convention: the live session, the delegation a request starts
-# or continues, and the mark of a typed run (the client's typed messages, or nothing, run as a delegation of its own).
+# The metadata key that names the live session, beside the delegation contract's keys (DELEGATION_ID, TYPED_RUN).
 LIVE_SESSION_ID = "live_session_id"
-LIVE_DELEGATION_ID = "live_delegation_id"
-TYPED_RUN = "live_typed_run"
-TERMINALS = frozenset({"response.completed", "response.failed", "response.incomplete"})
 SETTINGS = "session.delegation.responses"  # where a setting the core refuses lives in the session's settings
 MAX_OPEN_ROUTES = 512
 MAX_PENDING_RESULTS = 512
@@ -61,19 +58,6 @@ CONVERSATION_SECONDS = 10  # how long the core may take to open a session's conv
 # plus the relay of the ends the core writes; CLOSE_SECONDS when the client does not say.
 RELAY_SECONDS = 5.0
 CLOSE_SECONDS = 10.0
-
-
-def log_observation(kind: str, **fields) -> None:
-    """Default observation hook: one debug log line per event."""
-    logger.debug(f"live.{kind} {fields}")
-
-
-def client_settings(config: SessionConfig | None) -> dict:
-    """What a session's settings make each request carry: :func:`request_settings` of its ``delegation.responses``.
-
-    A client delegation has no ``responses`` block, so it sets nothing.
-    """
-    return request_settings(config.delegation.responses if config is not None else None)
 
 
 def request_settings(responses: BackendConfig | None) -> dict:
@@ -577,7 +561,7 @@ class ServerDelegation:
             if not request.outcome.done():
                 request.outcome.set_exception(RuntimeError("Session is closing"))
             return False
-        metadata = {LIVE_DELEGATION_ID: request.delegation_id}
+        metadata = {DELEGATION_ID: request.delegation_id}
         if self.view is not None:
             metadata = {LIVE_SESSION_ID: self.view.id, **metadata}
         if request.typed_run:

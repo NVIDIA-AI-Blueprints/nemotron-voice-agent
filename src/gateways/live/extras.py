@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from loguru import logger
 from pydantic import ValidationError
 
-from gateways.live.gateway import LiveGateway, security
+from gateways.live.gateway import LiveGateway
 from gateways.live.protocol import LIVE_VOICES, BackendConfig, ProtocolError
 
 Describe = Callable[[], Awaitable[dict]]
@@ -108,8 +108,8 @@ def add_extras(app: FastAPI, gateway: LiveGateway, describe: Describe | None = N
 
     ``describe`` returns plain JSON for ``/info``. ``/delegate`` runs on the gateway's one delegation core client
     (``LiveGateway.core``), which it builds on first use, within the route's limits: at most
-    ``max_delegate_rounds`` rounds at once (429 over it), a body of at most ``delegate_body_bytes``, a model the core
-    serves (400 otherwise), and, with no token, a ``Host`` that is an IP literal, ``localhost`` or an allowed name.
+    ``max_delegate_rounds`` rounds at once (429 over it), a body of at most ``delegate_body_bytes``, and a model the
+    core serves (400 otherwise).
     """
     running = 0  # delegate rounds in flight
 
@@ -130,7 +130,6 @@ def add_extras(app: FastAPI, gateway: LiveGateway, describe: Describe | None = N
         fault is a 502 or a 503 that names no detail of the server.
         """
         nonlocal running
-        security.check_host(gateway.settings, request)
         data = await gateway.body(request, gateway.settings.delegate_body_bytes)
         round_request = delegate_request(data)
         if running >= gateway.settings.max_delegate_rounds:

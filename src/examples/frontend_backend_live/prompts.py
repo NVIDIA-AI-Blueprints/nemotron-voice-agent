@@ -5,19 +5,22 @@
 
 The file's top-level entries are the talker prompts a UI bot session selects with ``prompt_key``, through
 ``utils.resolve_prompt`` as in every example. ``agent_prompts`` holds the other texts, which the UI shows read-only and
-no session selects, in five groups:
+no session selects, in six groups:
 
 * ``Talker``: the talker prompt of a live session that sets no instructions or blank ones, by the name that
   ``frontend.cascade.prompt`` gives;
 * ``Backend``: the backend prompt of a request that sets no instructions, by the name that the core's ``backend.prompt``
   gives;
 * ``Channel``: the context that the UI bot adds after its talker prompt and its backend prompt (``ui_bot.channel``);
-* ``Cascade``: the prompt set, the text of the cascade's own model calls and of each delegation's input
+* ``Cascade``: the prompt set, the text of the talker's calls and of each delegation's input
   (:class:`PromptSet`), each entry named by its field (``work_texts.item``);
-* ``Lines``: the lines that the voice says word for word (:class:`FixedLines`).
+* ``Lines``: the lines that the voice says word for word (:class:`FixedLines`);
+* ``Core``: the delegation core's texts, each named by its place in the core's settings (``texts.handover_line``,
+  ``backend.harness.prompts.user``), which the composition roots hand to ``CoreSettings.load``.
 
 A prompt file the server was started with (``PROMPT_FILE_PATH``) replaces this whole file, as for every example, so it
-holds these entries too. Each session reads the file once when it starts, so an edit takes effect at the next session.
+holds these entries too. Each session reads the file once when it starts, so an edit takes effect at the next session;
+the roots read the core's texts with the core's settings, once.
 """
 
 from __future__ import annotations
@@ -27,8 +30,39 @@ from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Any, get_type_hints
 
-from examples.frontend_backend_live.cascade.lines import FixedLines
 from utils import load_yaml_file, resolve_prompt_catalog_path
+
+
+@dataclass(frozen=True)
+class FixedLines:
+    """Every line the voice says word for word: ``agent_prompts.Lines``. An empty line says nothing."""
+
+    apology: str  # a delegation failed and no tool ran
+    unclear: str  # a delegation failed, or came back late, after a tool ran: the outcome is not known
+    lost: str  # the delegation's stream ended with no ending
+    refusal: str  # the delegation was refused before any work
+    app_wait_line: str  # the app has not answered a delegation's calls yet
+    holding: str  # the talker failed while work is open
+    intro: str  # the UI bot's greeting instructions
+    greeting: str  # the UI bot's greeting when its instructions cannot be worded
+
+    @classmethod
+    def parse(cls, block: Mapping[str, Any]) -> FixedLines:
+        """Validate ``block``: every name present, no other, each a string.
+
+        Raises:
+            ValueError: A name is missing or unknown, or a line is not a string.
+        """
+        names = {field.name for field in fields(cls)}
+        if not isinstance(block, Mapping):
+            raise ValueError("agent_prompts.Lines must be a mapping of name to text")
+        unknown, missing = set(block) - names, names - set(block)
+        if unknown or missing:
+            raise ValueError(f"agent_prompts.Lines: unknown {sorted(unknown)}, missing {sorted(missing)}")
+        wrong = sorted(name for name, text in block.items() if not isinstance(text, str))
+        if wrong:
+            raise ValueError(f"agent_prompts.Lines: {', '.join(wrong)} must be text")
+        return cls(**block)
 
 
 @dataclass(frozen=True)
@@ -86,10 +120,10 @@ class TranscriptText:
 
 @dataclass(frozen=True, kw_only=True)
 class PromptSet:
-    """The text a prompt set contributes to each model call of the cascade, and to each delegation's input.
+    """The text a prompt set contributes to each call of the talker, and to each delegation's input.
 
-    The cascade reads the work note's texts, the labels and marks of the talker's memory, and the transcript's words
-    from here; the talker, the writer and the normalizer read the rest.
+    The voice reads the work note's texts, the labels and marks of the talker's context, and the transcript's words
+    from here; the talker's calls and the normalizer read the rest.
     """
 
     routing: str  # appended to the client's instructions for the routing decision
@@ -102,9 +136,9 @@ class PromptSet:
     typed_request_label: str  # work the frontend did not delegate: the client's own typed run
     work_texts: WorkTexts  # the words of each open delegation's line in the work note
     update_label: str  # in front of every update the writer words: backend results, the application's message, or both
-    result_label: str  # in front of a backend result in the talker's memory, which marks it as reference data
-    context_label: str  # in front of the application's context and its typed question in the talker's memory
-    cut_mark: str  # after the words a cut line kept, in the talker's memory and in the next delegation's input
+    result_label: str  # in front of a backend result in the talker's context, which marks it as reference data
+    context_label: str  # in front of the application's context and its typed question in the talker's context
+    cut_mark: str  # after the words a cut line kept, in the talker's context and in the next delegation's input
     transcript: TranscriptText  # the words of each delegation's input
     writer_notes: WriterNotes
     call_hints: CallHints
@@ -117,10 +151,8 @@ class PromptSet:
     runtime_label: str  # in front of the routing decision's runtime data, sent after the conversation
     decision_cue: str  # the routing decision's last line, after the runtime data: what to decide now
     newest_turn: str  # before the cue when caller turns are decided: "{turn}", their words
-
-    def framed(self, instructions: str) -> str:
-        """The client's instructions as the routing decision reads them: word for word, inside the set's frame."""
-        return self.frame_before + instructions + self.frame_after
+    json_rules: str  # the decision rules, after every call's instructions: one JSON object with action and speech
+    resume_note: str  # the note a caller turn with no words that cut a line leaves in the talker's context
 
     def writer_framed(self, instructions: str) -> str:
         """The client's instructions as the writer reads them: word for word, inside the set's writer frame."""
@@ -129,12 +161,13 @@ class PromptSet:
 
 @dataclass(frozen=True)
 class Prompts:
-    """One read of the example's prompt file: the prompt set and the lines, built at once, and the named prompts."""
+    """One read of the example's prompt file: the prompt set, the lines and the core's texts, and the named prompts."""
 
     path: Path  # the file read: PROMPT_FILE_PATH, or the prompts.yaml beside this module
     agent_prompts: Mapping[str, Any]  # the file's agent_prompts, as read
     cascade: PromptSet
     lines: FixedLines
+    core: Mapping[str, str]  # the delegation core's texts, each by its place in the core's settings
 
     def text(self, group: str, name: str) -> str:
         """Entry ``name`` of ``agent_prompts.<group>`` (``Talker``, ``Backend`` or ``Channel``), stripped.
@@ -194,23 +227,34 @@ def _texts(agent_prompts: Mapping[str, Any], group: str, path: Path) -> dict[str
     return texts
 
 
+def _typed(cls: type, groups: Mapping[str, Any], group: str, path: Path):
+    """``cls`` built from ``agent_prompts.<group>``: each text field from the entry its dotted path names.
+
+    Raises:
+        KeyError: The group, or an entry a field names, is missing; the message names it and the file.
+        ValueError: An entry of the group has no text.
+    """
+    texts = _texts(groups, group, path)
+    missing = [name for name in _paths(cls) if name not in texts]
+    if missing:
+        raise KeyError(f"agent_prompts.{group} in {path} has no {', '.join(missing)}")
+    return _built(cls, texts)
+
+
 def load_prompts() -> Prompts:
     """Read the example's prompt file once: ``PROMPT_FILE_PATH``, or the ``prompts.yaml`` beside this module.
 
-    The prompt set and the lines are built at once, since every session uses them; the named prompts are read when used
+    The prompt set, the lines and the core's texts are read at once; the named prompts are read when used
     (:meth:`Prompts.text`).
 
     Raises:
         RuntimeError: The file is missing or malformed.
-        KeyError: ``agent_prompts.Cascade`` or ``agent_prompts.Lines`` is missing, or a text of the prompt set; the
-            message names it and the file.
+        KeyError: ``agent_prompts.Cascade``, ``agent_prompts.Lines`` or ``agent_prompts.Core`` is missing, or a text of
+            the prompt set; the message names it and the file.
         ValueError: An entry of those groups has no text, or a line is missing or unknown.
     """
     path = resolve_prompt_catalog_path(__file__)
     groups = load_yaml_file(path, required=True).get("agent_prompts")
     groups = groups if isinstance(groups, Mapping) else {}
-    cascade = _texts(groups, "Cascade", path)
-    missing = [name for name in _paths(PromptSet) if name not in cascade]
-    if missing:
-        raise KeyError(f"agent_prompts.Cascade in {path} has no {', '.join(missing)}")
-    return Prompts(path, groups, _built(PromptSet, cascade), FixedLines.parse(_texts(groups, "Lines", path)))
+    cascade, lines = _typed(PromptSet, groups, "Cascade", path), FixedLines.parse(_texts(groups, "Lines", path))
+    return Prompts(path, groups, cascade, lines, _texts(groups, "Core", path))

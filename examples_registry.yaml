@@ -26,8 +26,9 @@ transports: all
 # name unless `categories` maps it to another one. `settings` overrides
 # `settings.yaml` defaults per slot and service key. An example that serves the
 # Live API (`/v1/live`) names its hooks under `live` (`factory`, `describe`,
-# `core`, each `module.path:callable`, imported on first use); the selected
-# example serves it when it has the block, else the first one listed that has.
+# `core`, each `module.path:callable`, imported on first use) and the gateway's
+# settings under `live.settings`; the Live API is served only when the
+# selected example has the block.
 examples:
   generic-assistant:
     label: Generic Assistant
@@ -99,7 +100,7 @@ examples:
     label: Frontend Backend Live
     services:
       llm: [nemotron-lightning]
-      thinker-llm: [nemotron-super-cloud, nemotron-lightning]
+      thinker-llm: [nemotron-super, nemotron-lightning]
       asr: [nemotron-asr-streaming-english, parakeet-ctc]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     categories:
@@ -111,17 +112,20 @@ examples:
           max_tokens: 512
           enable_thinking: false
       thinker-llm:
-        nemotron-super-cloud:
+        nemotron-super:
           temperature: 0.0
           max_tokens: 4096
           enable_thinking: true
-          reasoning_budget: 1024
-          reasoning_effort: medium
         nemotron-lightning:
           temperature: 0.7
           max_tokens: 4096
           enable_thinking: true
           reasoning_budget: 256
+      tts:
+        magpie-multilingual-tts:
+          synthesis_mode: per_sentence
+        magpie-zeroshot-tts:
+          synthesis_mode: per_sentence
     defaults:
       prompt: [cafe]
     bot: examples.frontend_backend_live.pipeline:bot
@@ -129,3 +133,10 @@ examples:
       factory: examples.frontend_backend_live.factory:create_frontend_adapter
       describe: examples.frontend_backend_live.factory:describe
       core: examples.frontend_backend_live.factory:core
+      settings:
+        max_sessions: 8
+        max_session_seconds: 1800
+        max_appends_per_minute: 64
+        max_delegate_rounds: 2
+        ice_urls: []
+        allowed_hosts: []

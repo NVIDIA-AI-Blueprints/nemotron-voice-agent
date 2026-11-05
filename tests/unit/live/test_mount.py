@@ -6,8 +6,8 @@
 """The mount: one shared core client, the session registry and the WebRTC peers' ICE servers.
 
 The gateway builds one delegation core client from the ``core`` hook on first use, shares it with every ``responses``
-session and delegate round, and closes it once at shutdown, only if it was built. Each WebRTC peer gets the root's ICE
-servers, TURN credentials included.
+session and delegate round, and closes it once at shutdown, only if it was built. Each WebRTC session's factory gets
+the root's ICE servers, TURN credentials included, as plain objects for the peer it makes.
 """
 
 import asyncio
@@ -18,8 +18,8 @@ import httpx
 from fastapi import FastAPI
 
 from gateways.live.gateway import LiveGateway, LiveSettings
-from gateways.live.gateway import webrtc as webrtc_edge
 from gateways.live.mount import mount_live
+from gateways.live.ports import SessionParts
 from gateways.live.protocol import ProtocolError, SessionConfig
 from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
 
@@ -158,38 +158,39 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class IceServerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_the_roots_ice_servers_and_their_turn_credentials_reach_the_peer(self):
+    async def test_the_roots_ice_servers_and_their_turn_credentials_reach_the_peers_factory(self):
         turn = {"urls": ["turn:turn.example:3478?transport=udp"], "username": "user", "credential": "secret"}
-        asked, built = [], []
+        asked, handed, closed = [], [], []
 
         def ice_servers(request):
             asked.append(request.url.path)
             return [turn]
 
-        class Recording(webrtc_edge.LiveWebRTCConnection):
-            def __init__(self, ice_servers=None, **kwargs):
-                built.append(ice_servers)
-                super().__init__(ice_servers=ice_servers, **kwargs)
+        class Unanswered:
+            """A peer connection that cannot answer the offer: no real peer in this test."""
 
             async def initialize(self, sdp, type):
                 raise RuntimeError("no real peer in this test")
 
+            async def close_after_drain(self):
+                closed.append(self)
+
+        async def factory(config, transport, servers):
+            handed.append(servers)
+            return SessionParts(frontend=FakeAdapter(), connection=Unanswered())
+
         app = FastAPI()
         settings = LiveSettings(ice_urls=("stun:stun.example:3478",))
-        gateway = mount_live(app, factory=adapter_factory, settings=settings, ice_servers=ice_servers)
-        with patch.object(webrtc_edge, "LiveWebRTCConnection", Recording):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
-                response = await http.post(
-                    "/v1/live/sessions",
-                    json={"session": {"model": "live-1"}, "transport": {"type": "webrtc", "sdp": OFFER}},
-                )
+        gateway = mount_live(app, factory=factory, settings=settings, ice_servers=ice_servers)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as http:
+            response = await http.post(
+                "/v1/live/sessions",
+                json={"session": {"model": "live-1"}, "transport": {"type": "webrtc", "sdp": OFFER}},
+            )
         self.assertEqual(response.status_code, 400)  # the offer is not answered here
         self.assertEqual(asked, ["/v1/live/sessions"])
-        [servers] = built
-        self.assertEqual(
-            [(server.urls, server.username, server.credential) for server in servers],
-            [(turn["urls"], "user", "secret"), (["stun:stun.example:3478"], None, None)],
-        )
+        self.assertEqual(handed, [[turn, {"urls": ["stun:stun.example:3478"]}]])
+        self.assertEqual(len(closed), 1)  # the session closed, and its peer with it
         self.assertEqual(gateway.sessions, {})
 
 

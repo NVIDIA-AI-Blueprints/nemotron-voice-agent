@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Where the display part of each delegation goes in the repository UI bot: a ``DisplaySink`` (``cascade/ports.py``).
+"""Where the repository UI bot shows each delegation: an ``examples.frontend_backend_live.display.DisplaySink``.
 
 :class:`RtviTaskCards` shows each delegation as one ``agent-task-update`` card in the repository UI
 (``client/src/components/content/ConversationPanel.tsx``), with the request, its newest progress line, the display
-part, the answer and the words said. The bot's root attaches it to its pipeline worker. A live session needs no sink of
-its own: its client gets every official event through the gateway's relay, display items included, and the cascade's
-default sink shows nothing.
+part and the answer. The words said reach the UI once, as the bot's transcript. The bot's root attaches it to its
+pipeline worker. A live session needs no sink of its own: its client gets every official event through the gateway's
+relay, display items included, and the voice's default sink shows nothing.
 
 Plain calls that never wait: a card is queued on the worker in a task of its own, in call order.
 """
@@ -15,13 +15,13 @@ Plain calls that never wait: a card is queued on the worker in a task of its own
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from pipecat.frames.frames import Frame
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 
-from examples.frontend_backend_live.cascade.ports import Ending, ReadyResult
+from examples.frontend_backend_live.delegations import Ending, ReadyResult
 
 CARD_MESSAGE = "agent-task-update"  # the repository UI's task card message
 AGENT = "backend"  # who does the delegated work, as the card names it
@@ -45,15 +45,13 @@ class TaskCard:
     query: str = ""
     detail: str = ""
     answers: list[str] = field(default_factory=list)
-    spoken: list[str] = field(default_factory=list)
 
 
 class RtviTaskCards:
     """Shows each delegation as an ``agent-task-update`` card in the repository UI, updated as the delegation moves on.
 
     Each call updates the delegation's card and sends all of it, so the UI's merge of a card's fields never loses one.
-    The card says ``done`` (or ``failed``, ``cancelled``) when the delegation ends; the UI also shows the spoken words
-    as the assistant's turn once a done card carries them, whichever of the two comes first.
+    The card says ``done`` (or ``failed``, ``cancelled``) when the delegation ends.
     """
 
     def __init__(self, queue_frame: Callable[[Frame], Awaitable[None]], agent: str = AGENT):
@@ -79,12 +77,6 @@ class RtviTaskCards:
         self._card(result.delegation_id).answers.append(result.speak)
         self._update(result.delegation_id)
 
-    def spoken(self, delegation_ids: Sequence[str], words: str) -> None:
-        """The line said for these delegations' results."""
-        for delegation_id in delegation_ids:
-            self._card(delegation_id).spoken.append(words)
-            self._update(delegation_id)
-
     def ended(self, delegation_id: str, how: Ending) -> None:
         """The delegation ended: the card's status and stage say how."""
         self._update(delegation_id, status=ENDED_STATUS[how], stage=how.value)
@@ -105,7 +97,6 @@ class RtviTaskCards:
             "query": card.query,
             "detail": card.detail,
             "response": "\n\n".join(card.answers),
-            "spoken_response": " ".join(card.spoken),
         }
         task = asyncio.get_running_loop().create_task(self.queue_frame(RTVIServerMessageFrame(data=message)))
         self._sending.add(task)

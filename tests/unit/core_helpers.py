@@ -3,21 +3,33 @@
 
 # ruff: noqa: D101, D102, D103, D105, D107
 
-"""Shared doubles of the delegation core's tests. They import only the core.
+"""Shared doubles of the delegation core's tests. They import only the core and the helpers it shares.
 
-The core's tests (``tests/unit/delegation_core/``) import only the core and this module, because the core is its own
-package; the tests of the other parts import from here too.
+The core's tests (``tests/unit/delegation_core/``) import only the core, the helpers it shares (``examples.shared``)
+and this module, because the core is its own package; the tests of the other parts import from here too.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
+import yaml
 from openai import APITimeoutError
 from openai.types.chat import ChatCompletionChunk
 
 from examples.frontend_backend_live.delegation_core.backend.providers import ProviderLimits
-from examples.frontend_backend_live.delegation_core.config import ModelEndpoint
-from examples.frontend_backend_live.delegation_core.im.stream import message_text
+from examples.frontend_backend_live.delegation_core.items import message_text
+from examples.shared.delegation_contract import ModelEndpoint
+
+# The core's texts as the example's prompts.yaml words them (agent_prompts.Core), which a root hands to
+# CoreSettings.load with the core's file. They are read here as a root reads them, so the core's tests load no module of
+# the frontend.
+PROMPTS_YAML = Path(__file__).resolve().parents[2] / "src/examples/frontend_backend_live/prompts.yaml"
+CORE_TEXTS = {
+    name: entry["content"]
+    for name, entry in yaml.safe_load(PROMPTS_YAML.read_text(encoding="utf-8"))["agent_prompts"]["Core"].items()
+}
 
 
 def answer_text(event: dict) -> str | None:
@@ -45,22 +57,6 @@ def answer_text(event: dict) -> str | None:
 # The core's endpoint and provider limits for these doubles, in the core's own types.
 ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")
 LIMITS = ProviderLimits(provider_retries=1, first_event_timeout_seconds=2.0, idle_timeout_seconds=2.0)
-
-
-def _text_round(text: str, response_id: str = "resp") -> list[dict]:
-    """A backend round that answers ``text``: one completed message, as a provider's translation writes it."""
-    item = {
-        "id": f"msg_{response_id}",
-        "type": "message",
-        "role": "assistant",
-        "status": "completed",
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
-    }
-    return [
-        {"type": "response.created", "response": {"id": response_id, "status": "in_progress"}},
-        {"type": "response.output_item.done", "output_index": 0, "item": item},
-        {"type": "response.completed", "response": {"id": response_id, "status": "completed", "output": [item]}},
-    ]
 
 
 # ------------------------------------------------------------------------ a scripted chat-completions client

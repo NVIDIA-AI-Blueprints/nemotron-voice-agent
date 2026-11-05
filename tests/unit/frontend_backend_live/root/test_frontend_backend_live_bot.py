@@ -3,103 +3,107 @@
 
 # ruff: noqa: D101, D102, D107
 
-"""The repository UI bot's composition, as its root (``pipeline.py``) builds it, with no Live gateway."""
+"""Whole calls through the repository UI bot, as its root (``pipeline.py``) runs it, on its own core."""
 
 import asyncio
 import json
-import unittest
 from unittest.mock import patch
 
+from pipecat.frames.frames import VADUserStoppedSpeakingFrame
+
 from examples.frontend_backend_live import pipeline
-from examples.frontend_backend_live.factory import backend_defaults, core_client, endpoint_lookup, ui_bot_instructions
-from examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from examples.frontend_backend_live.prompts import load_prompts
-from tests.unit.contracts.base import ContractCase
-from tests.unit.frontend_backend_live.root.root_helpers import StubAdapter
-
-ENTRY = {"model_id": "test/model", "base_url": "http://localhost:1/v1"}
-
-
-class BotRootTests(unittest.TestCase):
-    def test_the_sessions_backend_choice_reaches_the_cores_lookup(self):
-        body = {"thinker_model_id": "org/picked", "thinker_base_url": "http://picked/v1", "model_id": "org/front"}
-        self.assertEqual(pipeline.backend_overrides(body), {"model_id": "org/picked", "base_url": "http://picked/v1"})
-        catalog = ExampleCatalog({"thinker-llm": [{"model_id": "org/default", "base_url": "http://default/v1"}]})
-        endpoints = endpoint_lookup(catalog, "thinker-llm", pipeline.backend_overrides(body))
-        self.assertEqual((endpoints(None).model, endpoints(None).base_url), ("org/picked", "http://picked/v1"))
-        self.assertEqual(endpoints("org/default").base_url, "http://default/v1")  # a listed model keeps its entry
-        with self.assertRaisesRegex(LookupError, "'org/unlisted' is not in the catalog"):
-            endpoints("org/unlisted")
+from examples.frontend_backend_live.delegation_core.app import build_core
+from examples.frontend_backend_live.factory import core_client
+from gateways.live.server_delegation import ServerDelegation
+from tests.unit.cascade_helpers import chat_adapters
+from tests.unit.core_helpers import chunk, tool_fragment
+from tests.unit.frontend_backend_live.root.test_root_ui_bot import BotCase
+from tests.unit.frontend_helpers import ScriptedChat, decision
 
 
-class CafeOrderTests(ContractCase, unittest.IsolatedAsyncioTestCase):
-    async def test_a_cafe_order_flows_through_the_bots_core_and_the_real_tools(self):
-        from examples.frontend_backend_live.cascade.agent import build_agent
-        from examples.frontend_backend_live.cascade.session import CascadeSession
-        from examples.frontend_backend_live.delegation_core.app import build_core
-        from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
-        from gateways.live.server_delegation import ServerDelegation
-        from tests.unit.cascade_helpers import CASCADE_ENDPOINT, ListConversation, _decision_chunks, _messages
-        from tests.unit.core_helpers import FakeChat, chunk, tool_fragment
+def heard(frontend) -> list[str]:
+    """The lines the talker's context records as heard."""
+    return [m["content"] for m in frontend.context.get_messages() if m["role"] == "assistant"]
 
-        # One fake endpoint serves every model call, in order: routing, tool round, answer round, phrasing.
-        client = FakeChat(
-            _decision_chunks('{"action":"delegate","speech":"Let me add that."}'),
-            [
-                chunk(
-                    tool_calls=[
-                        tool_fragment(0, "call_1", "manage_cart", '{"action":"add","item_id":"lat","size":"large"}')
-                    ]
-                ),
-                chunk(finish="tool_calls"),
-            ],
+
+class BotCallTests(BotCase):
+    """The talker and the backend model each scripted; the calls start with the caller."""
+
+    def setUp(self):
+        super().setUp()
+        self.welcome, self.backend = False, ScriptedChat()
+
+        def core(settings, *, endpoints, defaults):
+            return build_core(settings, endpoints=endpoints, defaults=defaults, adapters=chat_adapters(self.backend))
+
+        for name, value in {
+            "build_core": core,
+            "core_client": core_client,
+            "ServerDelegation": ServerDelegation,
+        }.items():
+            self.enterContext(patch.object(pipeline, name, value))
+
+    def cards(self) -> dict:
+        """Each delegation's newest task card, by its task id."""
+        return {
+            data["task_id"]: data
+            for data in self.transport.outbound.messages
+            if data.get("type") == "agent-task-update"
+        }
+
+    async def test_each_cafe_order_runs_the_cafes_tool_its_result_is_worded_and_its_card_shows_the_answer(self):
+        first, second = asyncio.Event(), asyncio.Event()  # each answer comes once its lead-in has played
+        worded = "One large latte is in your cart, five ninety-seven with tax."
+        self.chat.script += [
+            decision("delegate", "Let me add that."),
+            decision("speak", worded),
+            decision("delegate", "One moment."),
+            decision("speak", "Your Matcha is ordered."),
+        ]
+        arguments = '{"action":"add","item_id":"lat","size":"large"}'
+        self.backend.script += [
+            [chunk(tool_calls=[tool_fragment(0, "call_1", "manage_cart", arguments)]), chunk(finish="tool_calls")],
+            first,
             [chunk("Added one large Latte. Your total is $5.97 with tax.", finish="stop")],
-            _decision_chunks(
-                '{"action":"speak","speech":"One large latte is in your cart, five ninety-seven with tax."}'
-            ),
+            second,
+            [chunk("Ordered one Matcha.", finish="stop")],
+        ]
+
+        async def during_run(frontend):
+            await self.stt.propose("A large latte, please.")
+            await self.until(lambda: self.tts.spoken, "the first lead-in")
+            first.set()
+            await self.until(lambda: len(heard(frontend)) == 2, "the first answer heard")
+            await self.stt.propose("One Matcha, please.")
+            await self.until(lambda: len(self.tts.spoken) == 3, "the second lead-in")
+            second.set()
+            await self.until(lambda: len(self.tts.spoken) == 4 and len(self.cards()) == 2, "the second answer")
+
+        frontend = await self.run_bot(during_run)
+        self.assertEqual(self.tts.spoken, ["Let me add that.", worded, "One moment.", "Your Matcha is ordered."])
+        tool_result = next(m for m in self.backend.requests[1]["messages"] if m["role"] == "tool")
+        self.assertEqual(json.loads(tool_result["content"])["status"], "added")  # the cafe's own cart tool ran
+        relay = self.chat.requests[1]["messages"][-1]["content"]  # the talker words the backend's answer
+        self.assertIn("Added one large Latte. Your total is $5.97 with tax.", relay)
+        self.assertEqual(heard(frontend), self.tts.spoken)
+        self.assertEqual(
+            [(card["query"], card["status"], card["response"]) for card in self.cards().values()],
+            [
+                ("A large latte, please.", "done", "Added one large Latte. Your total is $5.97 with tax."),
+                ("One Matcha, please.", "done", "Ordered one Matcha."),
+            ],
         )
-        with (
-            patch.object(pipeline.ExampleCatalog, "read", return_value=ExampleCatalog({"thinker-llm": [ENTRY]})),
-            patch.object(pipeline, "frontend_adapters", return_value={"cascade": StubAdapter}),
-        ):
-            pipeline.bot_root.cache_clear()
-            state = pipeline.bot_root()
-        self.addCleanup(pipeline.bot_root.cache_clear)
-        # The bot's core profile (the cafe's tools and backend prompt) and its channel, as the bot builds them.
-        prompts = load_prompts()
-        settings, instructions = state.core, ui_bot_instructions(prompts, prompts.text("Channel", state.channel))
-        endpoints = endpoint_lookup(state.catalog, settings.backend.slot)
-        spoken: list[str] = []
 
-        async def say(text):
-            spoken.append(text)
+    async def test_a_finished_caller_turn_and_its_latency_reach_the_client_as_generic_sends_them(self):
+        self.chat.script.append(decision("speak", "Earl Grey it is."))
 
-        with patch.object(providers, "AsyncOpenAI", return_value=client):  # every provider makes its client there
-            core = build_core(
-                settings, endpoints=endpoints, defaults=backend_defaults(settings, endpoints, instructions)
-            )
-            delegation = ServerDelegation(core_client(core))
-            agent = build_agent(state.cascade, CASCADE_ENDPOINT, prompts, frontend_client=client)
-            conversation = ListConversation(_messages())
-            session = CascadeSession(
-                agent, state.cascade, conversation, delegation=delegation, say=say, lines=prompts.lines
-            )
-            conversation.add({"role": "user", "content": "A large latte, please."})  # the caller's turn arrives
-            await delegation.open(None)
-            session.start()
-            try:
-                await session.on_turn()
-                async with asyncio.timeout(2):
-                    while len(spoken) < 2:
-                        await asyncio.sleep(0.005)
-            finally:
-                await session.close()
-                await delegation.close()
-                await core.aclose()
-        self.assertEqual(spoken[0], "Let me add that.")
-        tool_result = next(m for m in client.requests[2]["messages"] if m["role"] == "tool")
-        self.assertEqual(json.loads(tool_result["content"])["status"], "added")
+        async def during_run(frontend):
+            await self.stt.push_frame(VADUserStoppedSpeakingFrame(stop_secs=0.2))  # the caller's speech ended
+            await self.stt.propose("A pot of Earl Grey.")
+            await self.until(lambda: len(self.transport.outbound.messages) >= 4, "the turn's messages")
 
-
-if __name__ == "__main__":
-    unittest.main()
+        await self.run_bot(during_run)
+        sent = self.transport.outbound.messages
+        kinds = ["user-turn-finalized", "user-bot-latency", "metric-group", "latency-breakdown"]
+        self.assertEqual([data["type"] for data in sent], kinds)
+        self.assertEqual((sent[0]["transcript"], sent[2]["group_id"]), ("A pot of Earl Grey.", "turn-1"))

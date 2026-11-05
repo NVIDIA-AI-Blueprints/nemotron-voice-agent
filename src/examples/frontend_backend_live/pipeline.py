@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frontend/Backend Live pipeline: STT -> talker/writer processor -> TTS, with a delegation core of its own.
+"""Frontend/Backend Live pipeline: STT -> the talker (Pipecat's LLM service) -> TTS, with a delegation core of its own.
 
 A session's talker prompt is the ``prompts.yaml`` entry it selects, as in every example. Its backend prompt and server
 tools are those of ``ui_bot.core_config``, and the channel context that ``ui_bot.channel`` names follows both prompts.
@@ -16,22 +16,19 @@ from dotenv import load_dotenv
 from loguru import logger
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
-from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.tts import NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from examples.frontend_backend_live.cascade.agent import build_agent
-from examples.frontend_backend_live.cascade.memory import ContextConversation
 from examples.frontend_backend_live.config_manager.loader import load_live_config
-from examples.frontend_backend_live.config_manager.schema import ConfigError, LiveConfig
+from examples.frontend_backend_live.config_manager.schema import LiveConfig
 from examples.frontend_backend_live.delegation_core.app import build_core
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.items import message_text
+from examples.frontend_backend_live.delegation_core.profiles import load_profile
+from examples.frontend_backend_live.delegation_core.tables import pick
 from examples.frontend_backend_live.factory import (
     adapter_block,
     backend_defaults,
@@ -43,21 +40,25 @@ from examples.frontend_backend_live.factory import (
     ui_bot_instructions,
     with_display_label,
 )
-from examples.frontend_backend_live.media.playout import PlayoutTracker, SpeechPlayout
-from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
-from examples.frontend_backend_live.media.services import build_stt, build_tts, speech_mode
+from examples.frontend_backend_live.frontend import FrontendEdges, FrontendSpec, build_frontend
+from examples.frontend_backend_live.media.services import build_stt, build_tts
 from examples.frontend_backend_live.media.task_cards import RtviTaskCards
 from examples.frontend_backend_live.media.turns import TURN_ENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import load_prompts
-from examples.frontend_backend_live.tables import pick
+from examples.frontend_backend_live.spoken import CUT_MEMORIES
+from examples.frontend_backend_live.talker import LLM_SERVICES, RESPONSE_FORMATS, TalkerChat
+from examples.frontend_backend_live.voice import RESULT_WORDINGS
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.pipeline_utils import (
     build_pipeline_params,
     create_transport,
+    latency_metric_group,
     register_session_start_handlers,
+    turn_taking_latency_secs,
     with_realtime_observers,
 )
+from examples.shared.speaker import finalized_turn_payloads, send_rtvi_payloads
 from gateways.live.server_delegation import ServerDelegation
 from tracing import IS_TRACING_ENABLED
 from utils import (
@@ -73,9 +74,10 @@ BACKEND_BODY_PREFIX = "thinker_"
 
 @dataclass(frozen=True)
 class BotRoot:
-    """What the UI bot reads once: the cascade's settings, its core profile and channel, and the example's catalog."""
+    """What the UI bot reads once: the cascade's settings and talker service, its core and channel, and the catalog."""
 
     cascade: LiveConfig
+    talker: type[TalkerChat]  # frontend.cascade.provider
     core: CoreSettings
     channel: str  # ui_bot.channel: the agent_prompts.Channel entry after the talker and backend prompts
     catalog: ExampleCatalog
@@ -85,24 +87,19 @@ class BotRoot:
 def bot_root() -> BotRoot:
     """Read the bot's files and the bound example's catalog, once; it blocks, so the bot calls it in a thread.
 
-    The bot hosts the frontend in its own RTVI pipeline, so ``frontend.adapter`` must name a class with ``hosts_rtvi``.
     The core profile is the one ``ui_bot.core_config`` names.
 
     Raises:
-        ConfigError: ``frontend.adapter`` names an adapter the UI bot cannot host, or ``config.yaml`` is malformed.
-        ValueError: ``frontend.adapter`` names no frontend adapter, or the core profile is malformed.
+        ConfigError: ``config.yaml`` is malformed.
+        ValueError: ``frontend.adapter`` names no frontend adapter, ``frontend.cascade.provider`` no talker service, or
+            the core profile is malformed.
     """
-    config = load_live_config()
-    adapters = frontend_adapters()
-    if not pick(adapters, config.adapter, "frontend adapter").hosts_rtvi:
-        hosted = ", ".join(name for name, adapter in adapters.items() if adapter.hosts_rtvi) or "none"
-        raise ConfigError(
-            f"frontend.adapter {config.adapter!r} cannot run in the UI bot, which hosts the frontend in its own RTVI "
-            f"pipeline; the frontend adapters it can host: {hosted}"
-        )
+    config = load_live_config(load_profile)
+    pick(frontend_adapters(), config.adapter, "frontend adapter")  # an unknown frontend.adapter is refused
     core = ui_bot_core(config)
     cascade = LiveConfig.parse(with_display_label(adapter_block(config), core))
-    return BotRoot(cascade, core, config.ui_bot.channel, ExampleCatalog.read())
+    talker = pick(LLM_SERVICES, cascade.provider, "frontend.cascade.provider")
+    return BotRoot(cascade, talker, core, config.ui_bot.channel, ExampleCatalog.read())
 
 
 def backend_overrides(body: dict) -> dict:
@@ -128,8 +125,8 @@ def hold_client_text(transport) -> None:
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Frontend/Backend Live pipeline for one session.
 
-    The cascade greets the caller with its own line when the registry's welcome switch is on, shows each delegation as
-    a task card, corrects its records by what the caller heard, and closes when the pipeline has finished.
+    The voice greets the caller with its own line when the registry's welcome switch is on, shows each delegation as a
+    task card, and closes when the pipeline has finished; the assistant aggregator records what the caller heard.
     """
     logger.info("Starting Frontend/Backend Live cascaded pipeline")
     transport = await create_transport(runner_args)
@@ -156,9 +153,6 @@ async def bot(runner_args: RunnerArguments) -> None:
     turn_end = pick(TURN_ENDS, cascade.speech.turn_end, "speech.turn_end")(cascade.speech)
     stt = build_stt(body, catalog.service("asr"), turn_end)
     tts = build_tts(body, catalog.service("tts"))
-    # What the caller heard corrects the cascade's records, as in a live session. The text-to-speech runs in the
-    # catalog's synthesis mode, and the tracker sends no transcript: the RTVI client gets Pipecat's own.
-    speech_playout, tracker = SpeechPlayout(speech_mode(tts)), PlayoutTracker()
 
     default_llm = catalog.entry(cascade.slot)
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
@@ -167,32 +161,17 @@ async def bot(runner_args: RunnerArguments) -> None:
     # there, which compaction drops.
     seed = (system_prompt, f"{talker_prompt}\n\n{channel}")
     messages = [{"role": "system", "content": text} for text in seed if text]
-    context = LLMContext(messages)  # the talker's memory: only the cascade trims it, at each caller turn
-    # Only the caller's turns come from Pipecat's aggregator; the cascade writes its own lines (cascade.utterances).
-    user_aggregator = LLMContextAggregatorPair(context, user_params=turn_end.user_params(welcome_enabled)).user()
 
     # The bot's own delegation core runs the tools its core profile names on the server. Its server delegation has no
-    # Live sink, so each delegation's events go to the cascade only, and the core runs every request on its defaults.
+    # Live sink, so each delegation's events go to the voice only, and the core runs every request on its defaults.
     defaults = backend_defaults(core_settings, endpoints, backend_instructions)
     core = build_core(core_settings, endpoints=endpoints, defaults=defaults)
     delegation = ServerDelegation(core_client(core))
-    live = LiveTalkerProcessor()
     audio_recorder = create_audio_recorder()
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            user_aggregator,
-            live,
-            *speech_playout.speech_out(tts),
-            transport.output(),
-            tracker,
-            *([audio_recorder] if audio_recorder else []),
-        ]
-    )
-
     latency_observer = UserBotLatencyObserver()
+    latency_turn = 1
+    latest_latency: float | None = None
 
     @latency_observer.event_handler("on_first_bot_speech_latency")
     async def on_first_bot_speech(observer, latency):
@@ -203,77 +182,104 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_measured")
     async def on_latency(observer, latency):
+        nonlocal latest_latency
+        latest_latency = latency
         logger.info(f"User-to-bot latency: {latency:.3f}s")
         await task.queue_frame(
             RTVIServerMessageFrame(data={"type": "user-bot-latency", "latency": round(latency, 3), "first": False})
         )
 
-    task = PipelineWorker(
-        pipeline,
-        params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
-        idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=with_realtime_observers(latency_observer, transport=transport),
-        enable_tracing=IS_TRACING_ENABLED,
-        processor_unusable_policy=ProcessorUnusablePolicy.END,
-        setup_timeout_secs=120.0,
-    )
+    @latency_observer.event_handler("on_latency_breakdown")
+    async def on_breakdown(observer, breakdown):
+        nonlocal latency_turn, latest_latency
+        if latest_latency is not None:
+            group = latency_metric_group(latency_turn, latest_latency, breakdown)
+            await task.queue_frame(RTVIServerMessageFrame(data=group))
+            latency_turn += 1
+            latest_latency = None
+        events = breakdown.turn_contribution_lines()
+        await task.queue_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "latency-breakdown",
+                    "turn_taking_latency": round(turn_taking_latency, 3)
+                    if (turn_taking_latency := turn_taking_latency_secs(breakdown)) is not None
+                    else None,
+                    "events": events,
+                }
+            )
+        )
+        if events:
+            logger.info(f"Latency breakdown: {' | '.join(events)}")
 
-    # The cascade shows each delegation as a task card in the UI, the display part of its result included.
-    session = speech_playout.cascade(
-        tracker,
-        build_agent(cascade, frontend_endpoint, prompts),
-        cascade,
-        ContextConversation(context),
-        delegation=delegation,
-        say=live.speak,
-        display=RtviTaskCards(task.queue_frame),
-        lines=prompts.lines,
+    # The frontend's one build, between the RTVI transport's edges; the RTVI client gets Pipecat's own transcript. The
+    # voice shows each delegation as a task card in the UI, the display part of its result included.
+    response_format = pick(RESPONSE_FORMATS, frontend_endpoint.response_format, "response_format")
+    frontend = build_frontend(
+        FrontendSpec(
+            config=cascade,
+            talker=state.talker.from_config(frontend_endpoint, cascade.reliability, response_format),
+            prompts=prompts.cascade,
+            lines=prompts.lines,
+            seed=messages,
+            stt=stt,
+            tts=tts,
+            user_params=turn_end.user_params(welcome_enabled),
+            delegation=delegation,
+            wording=pick(RESULT_WORDINGS, cascade.delegation.result_wording, "delegation.result_wording"),
+            cut_memory=pick(CUT_MEMORIES, cascade.speech.heard_words, "speech.heard_words"),
+            item_text=message_text,
+            display=lambda worker: RtviTaskCards(worker.queue_frame),
+        ),
+        FrontendEdges(
+            inputs=[transport.input()],
+            outputs=[transport.output()],
+            worker={
+                "params": build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
+                "idle_timeout_secs": runner_args.pipeline_idle_timeout_secs,
+                "observers": with_realtime_observers(latency_observer, transport=transport),
+                "enable_tracing": IS_TRACING_ENABLED,
+            },
+            after=[audio_recorder] if audio_recorder else [],
+        ),
     )
-    live.attach(session)
-    cascade_open = True
+    task, voice = frontend.worker, frontend.voice
 
-    async def close_cascade() -> None:
-        """Close the cascade once (its presenter, its timers and the talker's model); a failed close is logged."""
-        nonlocal cascade_open
-        if not cascade_open:
+    voice_open = True
+
+    async def close_voice() -> None:
+        """Close the voice once (its tasks and timers); a failed close is logged."""
+        nonlocal voice_open
+        if not voice_open:
             return
-        cascade_open = False
+        voice_open = False
         try:
-            await session.close()
+            await voice.close()
         except Exception:
-            logger.exception("The cascade could not close")
+            logger.exception("The voice could not close")
 
     @task.event_handler("on_pipeline_finished")
     async def on_pipeline_finished(task, frame):
         # Nothing is worded or said once the pipeline has ended: a result that arrives later stays unsaid.
-        await close_cascade()
+        await close_voice()
 
-    @user_aggregator.event_handler("on_user_turn_stopped")
+    @frontend.user_aggregator.event_handler("on_user_turn_stopped")
     async def on_user_turn_stopped(aggregator, strategy, message):
-        await task.queue_frame(
-            RTVIServerMessageFrame(
-                data={
-                    "type": "user-turn-finalized",
-                    "timestamp": getattr(message, "timestamp", None),
-                    "transcript": getattr(message, "content", None),
-                    "user_id": getattr(message, "user_id", None),
-                }
-            )
-        )
+        await send_rtvi_payloads(task, finalized_turn_payloads(None, message))
 
     async def _on_session_start() -> None:
         if audio_recorder:
             await audio_recorder.start_recording()
         if welcome_enabled:
-            session.greet(prompts.lines.intro)  # said before the caller speaks, as the assistant's own line
+            voice.greet(prompts.lines.intro)  # said before the caller speaks, as the assistant's own line
 
-    # The shared start handler runs with its welcome off: the greeting is the cascade's line, never a caller turn.
+    # The shared start handler runs with its welcome off: the greeting is the voice's line, never a caller turn.
     # The caller's audio still waits for it when the welcome is on (the aggregator follows the same switch), and so
     # does a Realtime client's text, whose gate that handler opens.
     register_session_start_handlers(
         transport=transport,
         task=task,
-        context=context,
+        context=frontend.context,
         runner_args=runner_args,
         on_start=_on_session_start,
         welcome_enabled=False,
@@ -306,14 +312,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     try:
         await delegation.open(None)  # the conversation, whose IM session's loop starts; no view: nothing is relayed
-        session.start()  # the presenter's task and the silence timer
+        voice.start()  # the quiet task that offers progress lines
         await runner.add_workers(task)
         await runner.run()
     finally:
-        # Close once each, in a live session's order: the cascade, the server delegation (which deletes the IM session
+        # Close once each, in a live session's order: the voice, the server delegation (which deletes the IM session
         # and its backend adapter), then the core. A failed or cancelled close still runs the later ones.
         try:
-            await close_cascade()
+            await close_voice()
         finally:
             try:
                 await delegation.close()
