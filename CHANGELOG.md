@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nemotron 3.5 Transcribe ASR for the Generic Assistant.** Use the opt-in `transcribe-asr` profile for self-hosted speech recognition with optional transcription prompts.
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
 - **Frontend/Backend Live example.** On every caller turn, a talker replies, delegates the turn to a backend, or waits. The backend can be an LLM, an LLM agent, or an agent that you deploy, such as Hermes. Cloud, `/server`, and `/single-gpu` recipes serve the Bluebird Cafe ordering assistant.
 - **Live gateway.** Only the Frontend/Backend Live example serves live sessions at `/v1/live`, over WebRTC or WebSocket, when `LIVE_API_TOKEN` sets a bearer token, or without one when `LIVE_ENABLED=true`. The server does the delegated work in Responses mode, and the client app does it in client mode.

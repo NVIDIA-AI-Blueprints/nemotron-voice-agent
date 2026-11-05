@@ -9,7 +9,7 @@ import os
 import socket
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import examples_registry
 import server
@@ -81,12 +81,55 @@ class ServiceStatusTest(unittest.TestCase):
         self.assertEqual([entry["selected"] for entry in result["llm"]], [True, False])
         self.assertEqual([entry["status"] for entry in result["asr"]], ["offline"])
 
+    def test_speech_entry_with_health_path_uses_http_readiness(self) -> None:
+        asr_server = "http://speech.invalid:9000/v1"
+        entry = _entry("self-hosted:transcribe", server=asr_server, health_path="/v1/health/ready")
+        catalog = [("self-hosted", {"asr": {"transcribe": entry}})]
+        for body, status in (
+            (b'{"status":"ready"}', "ready"),
+            (b'{"status":"starting"}', "starting"),
+            (404, "starting"),
+        ):
+            server._seen_service_targets.clear()
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = body
+            error = urllib.error.HTTPError(asr_server, body, "Not Found", None, None) if isinstance(body, int) else None
+            with (
+                self.subTest(status=status),
+                patch("utils.service_catalog_sources", return_value=catalog),
+                patch("urllib.request.urlopen", side_effect=error, return_value=response) as http,
+                patch("socket.create_connection") as connect,
+            ):
+                result = asyncio.run(server._with_service_status({"asr": [entry]}))
+                self.assertEqual(result["asr"][0]["status"], status)
+                check = server._ensure_asr_ready_for_connection({"asr_server": asr_server}, {"services": {"asr": []}})
+                if status == "ready":
+                    asyncio.run(check)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "ASR service is still starting"):
+                        asyncio.run(check)
+                self.assertEqual(http.call_args.args[0], "http://speech.invalid:9000/v1/health/ready")
+                connect.assert_not_called()
+
     def test_connect_check_reports_missing_service_as_not_running(self) -> None:
         with (
             patch("socket.create_connection", side_effect=socket.gaierror),
             self.assertRaisesRegex(RuntimeError, "not running at nemo-speech:50051"),
         ):
             server._check_service_port("ASR", "nemo-speech:50051")
+
+    def test_speech_health_path_without_url_scheme_uses_port_fallback(self) -> None:
+        for address, expected in (
+            ("nemotron-asr-streaming-english:50052", "http://nemotron-asr-streaming-english:9001/v1/health/ready"),
+            ("127.0.0.1:50152", "http://127.0.0.1:9001/v1/health/ready"),
+            ("speech.invalid:50052", ""),
+        ):
+            entry = _entry("self-hosted:streaming", server=address, health_path="/custom/ready")
+            with (
+                self.subTest(address=address),
+                patch("utils.service_catalog_sources", return_value=[("self-hosted", {"asr": {"streaming": entry}})]),
+            ):
+                self.assertEqual(server._local_speech_ready_url("ASR", address), expected)
 
 
 if __name__ == "__main__":
