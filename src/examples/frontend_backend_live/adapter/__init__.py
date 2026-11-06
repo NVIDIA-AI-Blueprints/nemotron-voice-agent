@@ -12,7 +12,9 @@ protocol and it: they host its pipeline in a live session and wire the session's
 * ``contract``: what a frontend adapter class offers the composition root (types only).
 * ``registry``: ``FRONTEND_ADAPTERS``, the adapters a deployment chooses by name.
 * ``readiness``: whether the services an adapter class needs accept connections.
-* ``bridge``: the input gate, the event observer and the WebSocket audio output.
+* ``bridge``: the input gate, the event observer, the output transcript and a primary WebSocket's silence between
+  lines.
+* ``serializer``: a primary WebSocket's audio events and frames, on Pipecat's WebSocket transport.
 * ``pipeline_host``: hosting the Pipecat pipeline of a live session.
 * ``connection``: a WebRTC session's peer connection, on Pipecat's SmallWebRTC, which the gateway answers the
   client's offer with and Pipecat's transport carries the audio on.

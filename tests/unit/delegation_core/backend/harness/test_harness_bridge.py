@@ -9,7 +9,6 @@ The core's tests may not import ``mcp``, so the client side is plain JSON-RPC ov
 """
 
 import asyncio
-import dataclasses
 import json
 import unittest
 
@@ -46,7 +45,7 @@ class Raising(FakeTaskContext):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.texts = dataclasses.replace(self.texts, failed_output="{name} broke: {error}")
+        self.texts = self.texts.model_copy(update={"failed_output": "{name} broke: {error}"})
 
     def route(self, call):
         raise RuntimeError("the gate broke")
@@ -86,7 +85,7 @@ class McpClient:
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.bridge = McpBridge(Bridge("127.0.0.1", 0, None))
+        self.bridge = McpBridge(Bridge(bind="127.0.0.1:0"))
         await self.bridge.start()
         self.http = httpx.AsyncClient(timeout=10)
 

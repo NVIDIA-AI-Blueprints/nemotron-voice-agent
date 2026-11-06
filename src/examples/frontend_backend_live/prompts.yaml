@@ -49,7 +49,7 @@ cafe:
 
 agent_prompts:
   # The talker prompt of a live session that sets no instructions or blank ones, by the name that
-  # frontend.cascade.prompt in config.yaml gives, used as written.
+  # frontend.cascade.prompt in the example's settings (examples_registry.yaml) gives, used as written.
   Talker:
     generic:
       description: "Talker prompt for any Live session that sets no or blank instructions; it names no domain."
@@ -78,8 +78,9 @@ agent_prompts:
         Generate <|SpawnThinking|> before giving an answer that depends on backend work.
         Do not guess the result while waiting.
 
-  # The backend prompt of a request that sets no instructions, by the name that backend.prompt in core.yaml or its
-  # profile gives. The Live core uses it as written; the UI bot adds the channel context after it.
+  # The backend prompt of a request that sets no instructions, by the name that the core's backend.prompt gives (the
+  # example's settings in examples_registry.yaml). The Live core uses it as written; the UI bot adds the channel
+  # context after it.
   Backend:
     cafe:
       description: "Backend task prompt: cafe ordering tools (menu, cart, checkout)."
@@ -127,7 +128,8 @@ agent_prompts:
         complete after the tool or service confirms success. If the outcome is unclear, state that and
         explain what needs to be checked.
 
-  # The context that the UI bot adds after its talker prompt and its backend prompt (ui_bot.channel in config.yaml).
+  # The context that the UI bot adds after its talker prompt and its backend prompt (ui_bot.channel in the example's
+  # settings).
   Channel:
     cafe:
       description: "Channel context shared by the talker and the backend."
@@ -279,6 +281,54 @@ agent_prompts:
         Reply with a single JSON object and nothing else: the keys "action" and
         "speech". No markdown, no code fences, no reasoning text before or
         after the object.
+    tool_rules:
+      description: "The tool-calling talker's rules after its routing call's instructions, in place of json_rules."
+      content: |2
+
+        You make your move with your reply. Besides your words you have two tools, delegate and wait. They only
+        make your move: they look nothing up and change nothing.
+        - speak: reply in plain text and call no tool. Everything you write is said to the caller exactly as
+          written, so write plain spoken sentences: no lists, markdown or symbols.
+        - delegate: call the delegate tool and write no text. Your lead-in goes in its lead_in argument; leave
+          lead_in out where the rules leave the speech empty.
+        - wait: call the wait tool and write no text.
+        Your reply is one of these three: text with no call, the delegate call alone, or the wait call alone. The
+        examples above write each move as a JSON object, and the rules call its words speech; make the move this
+        way instead: speak is its speech as your text, delegate is a delegate call with its speech as lead_in,
+        and wait is a wait call.
+        Text never starts any work: a reply that says you will check, look up or do something, with no delegate
+        call, tells the caller that work started when none did. Make a call with the tool itself, never as text,
+        and never write a tool's name, a call, its arguments, a move's name, your reasoning or the caller's words
+        as your text.
+    tools.delegate:
+      description: "The tool-calling talker's delegate tool, as the model reads it: its description and parameters."
+      content: |
+        description: >-
+          Hands the caller's turn to the backend, which does all of the task work; its answer is said to the caller
+          automatically when it arrives. The only way to start, change or stop work: words alone start nothing.
+          Call it with no text.
+        parameters:
+          type: object
+          properties:
+            lead_in:
+              type: string
+              description: >-
+                Your lead-in, said to the caller once the work has started: a short warm phrase, rarely over eight
+                words, that fits this turn and the call so far and says the work is starting, never its outcome;
+                never a question, a guessed cause, the caller's sentence, a name, number, code or spelling said back,
+                an example's lead-in or an earlier line. Leave it out for a turn that only acknowledges or only adds
+                to work your last line acknowledged.
+          additionalProperties: false
+    tools.wait:
+      description: "The tool-calling talker's wait tool, as the model reads it: its description and parameters."
+      content: |
+        description: >-
+          Lets this turn pass in silence: nothing is said and nothing is handed over now, and the backend gets the
+          turn with the caller's next request. It is the move whenever the rules say wait. Call it with no text.
+        parameters:
+          type: object
+          properties: {}
+          additionalProperties: false
     work_in_progress:
       description: "The work note: the open delegations, one numbered line each ({items})."
       content: |-
@@ -328,9 +378,9 @@ agent_prompts:
     cut_mark:
       description: "After the words a cut line kept, in the conversation and the next delegation's input."
       content: ' [cut off]'
-    resume_note:
-      description: "Kept in the conversation for a caller turn with no words that cut a line, whose rest is said again."
-      content: The caller made a sound with no words that cut off your line; its unheard rest is said again.
+    empty_turn_note:
+      description: "Pipecat's note on a caller turn with no words that cut the voice off, in the runtime data of the talker's one run on it."
+      content: The caller may have said something while you were responding, but it was not recognized. Your reply was cut off there, and the conversation holds only the part they heard, which may be none of it. Continue from where you were cut off, or briefly ask them to repeat what they said.
     writer_frame_before:
       description: "The writer's role, said before the application's instructions."
       content: |
@@ -445,35 +495,6 @@ agent_prompts:
     call_hints.progress:
       description: "The description of speech in the progress line's JSON schema."
       content: One short sentence on what is being done now, never an outcome, a question, a read-back or a time; empty to stay silent.
-    call_hints.normalizer:
-      description: "The description of speech in the normalizer's JSON schema."
-      content: 'The newest caller turn, rewritten: everything but the rewritten details word for word.'
-    normalizer_prompt.instructions:
-      description: "The normalizer's instructions."
-      content: |-
-        You clean up speech-recognition transcripts for a phone assistant. You do not talk
-        to the caller. You rewrite only the caller's newest turn so that the details in it are written the way a computer
-        system stores them, using the conversation so far as context.
-
-        Rules:
-        1. Join spelled letters and digits into one token, keeping the caller's order. Spoken symbols become characters:
-           "underscore" -> "_", "dash" or "hyphen" -> "-", and in an email "at" -> "@" and "dot" -> ".".
-           "j dot w r e n at example dot org" -> "j.wren@example.org"; "Q nine one underscore T" -> "Q91_T".
-        2. Numbers become digits: "zero crates" -> "0 crates", "twenty three" -> "23", "March third" -> "March 3".
-           "oh" inside a spoken number is zero.
-        3. When the caller spells a word, the spelling wins over how the word was transcribed: "Bryn, that's B R I N" -> "Brin".
-        4. When a value is clearly the same as one already in the conversation (an ID, a name, a code or a place from
-           earlier turns or from reference data) apart from an obvious transcription error, write it exactly as it appears
-           there. Only when the match is clear; never pick between two candidates.
-        5. When the caller corrects a value in this turn, keep the correction exactly as stated.
-        6. Keep everything else word for word. Do not answer, add, drop, summarize or explain, and never invent a value
-           the caller did not say. If nothing needs normalizing, return the turn unchanged.
-
-        Put the rewritten turn in "speech" with "action": "speak".
-    normalizer_prompt.newest_turn:
-      description: "In front of the caller turn the normalizer rewrites."
-      content: |
-        Caller's newest turn (rewrite only this):
     transcript.header:
       description: "The first line of each delegation's input, before the lines since the last request."
       content: 'Conversation since the last request (what the caller said and heard):'
@@ -527,19 +548,18 @@ agent_prompts:
       content: Hi, I'm Remy from Bluebird Cafe. What can I get you?
 
   # The delegation core's texts: the lines that the IM and the backend write or add to a model's input. Each entry is
-  # named by its place in the core's settings (core.yaml): texts.<key> for the core's own lines, and
-  # backend.<block>.<key> for a backend block's, which joins its block when the core's settings have it. A tool's
-  # entry holds the tool's description and parameters as YAML. The composition roots read these texts with core.yaml,
-  # once, so an edit takes effect at the next restart. An error's message (an exception's, a timed-out call's) comes
-  # from the code that reports it.
+  # named by its place in the core's settings (the example's settings in examples_registry.yaml): texts.<key> for the
+  # core's own lines, and backend.<block>.<key> for a backend block's, which joins its block when the core's settings
+  # have it. A tool's entry holds the tool's description and parameters as YAML. The composition roots read these
+  # texts with the core's settings, once, so an edit takes effect at the next restart. An error's message (an
+  # exception's, a timed-out call's) comes from the code that reports it.
   Core:
     # How the backend works with the caller, added to every task's instructions before the voice note. A note holds only
     # rules that hold for any business and do nothing where they do not apply. Short examples from several kinds of
     # business may illustrate a rule; no task, tool or product names (those belong in the client's instructions). The
-    # situation question applies only when the caller has a problem, is one short question, and is asked once. none
-    # adds nothing.
+    # situation question applies only when the caller has a problem, is one short question, and is asked once.
     texts.caller_notes.default:
-      description: "The caller note that delegation.caller_note names by default."
+      description: "The caller note, which the IM adds to every task's instructions."
       content: |
 
         ## Working with the caller
@@ -558,12 +578,9 @@ agent_prompts:
           how it is paid or refunded, and ask whether to go ahead. Act only on a clear yes the caller gave after
           hearing that whole description; a yes to something else, or the request itself, is not that yes. A yes
           already given to the same description still counts after small talk or "are you there?".
-    texts.caller_notes.none:
-      description: "The caller note that adds nothing."
-      content: ""
     # How the voice channel works, added to every task's instructions after the caller note.
     texts.voice_notes.default:
-      description: "The voice note that delegation.voice_note names by default."
+      description: "The voice note, which the IM adds to every task's instructions."
       content: |
 
         ## Voice channel

@@ -23,7 +23,6 @@ import asyncio
 import json
 from collections import deque
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 from examples.frontend_backend_live.delegation_core.backend.port import (
@@ -51,12 +50,10 @@ from examples.frontend_backend_live.delegation_core.backend.providers import Bac
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.shared.delegation_contract import TERMINALS, ModelEndpoint
 from tests.unit.contracts.base import ContractCase, collect
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS
 
 # The core's texts as prompts.yaml words them (TaskContext.texts): a run's error outputs, not-run outputs and notes.
-TEXTS = CoreSettings.load(
-    Path(__file__).resolve().parents[3] / "src/examples/frontend_backend_live/core.yaml", CORE_TEXTS
-).texts
+TEXTS = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS).texts
 
 # ----------------------------------------------------------------------------------------------- the event rules
 

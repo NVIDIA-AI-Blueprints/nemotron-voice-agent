@@ -6,9 +6,9 @@
 **Opening.** The first ``events()`` takes a turn of the workers' process, readies the session's folder with the
 instructions the IM composed, opens the session's bridge door and ``session/new``, and requires the agent to list the
 door's tools (one retry under a new server name, then the task fails). The first prompt is the task's ``history()`` as
-a transcript, after any blocks the agent class puts first. A session the session policy kept
-(``backend.harness.session``) takes the task instead when it fits (:meth:`WorkerRun._adopt`), and its prompt is only
-the items of ``history()`` that follow the ones it was shown or wrote.
+a transcript, after any blocks the agent class puts first. The session an earlier task of the call answered in, which
+the adapter kept, takes the task instead when it fits (:meth:`WorkerRun._adopt`), and its prompt is only the items of
+``history()`` that follow the ones it was shown or wrote.
 
 **Rounds.** The agent runs its own model calls; a round is what the IM reads as one, from ``response.created`` to one
 terminal. A round ends when a new model message begins after tool activity (a round's calls come after its messages);
@@ -22,10 +22,15 @@ text is only logged. When ``Agent.no_answer`` finds that no model call completed
 text, and it never becomes commentary either, since commentary can be spoken. Usage is how far the session's counters
 moved, since ACP counts usage across all of a session's turns.
 
-**Steering.** An agent's own mid-turn steer joins the running turn at its next model boundary, so delivery is reported
-``applied`` once a tool result came after the ack and a new model call began, or a new model message began while the
-session's transcript held a tool row. A batch not taken by the turn's end goes as the next prompt. A steer that reaches
-an idle session runs as a turn of its own, so the run reads until every prompt has returned.
+**Steering.** The agent class decides how a batch reaches the turn (``steering.agent_steering``). An agent's own
+mid-turn steer joins the running turn at its next model boundary, so delivery is reported ``applied`` once a tool result
+came after the ack and a new model call began, or a new model message began while the session's transcript held a tool
+row. A batch not taken by the turn's end goes as the next prompt. A steer that reaches an idle session runs as a turn of
+its own, so the run reads until every prompt has returned. An agent with no mid-turn steer has its turn cancelled once
+no bridged call runs; when the turn ends, the batch goes as the session's next prompt, since the session holds the
+history. After the cancel went out, a turn that did not end ``cancelled`` may have ended before the cancel reached the
+agent, and an idle agent takes a cancel for its next prompt: a fresh session then gets the history with the batch as its
+first prompt.
 A turn that answered ends the task even while steering waits: each batch it did not take goes back to the IM
 ``not_applied``, and the IM starts it as the next request; only a turn without an answer goes on with it.
 
@@ -152,6 +157,11 @@ class _Turn:
     seen: bool = False  # the agent reported anything of the turn: its prompt holds the session
     early: list[Steering] = field(default_factory=list)  # native steers waiting for that, so none races the prompt
 
+    @property
+    def cancel_pending(self) -> bool:
+        """Our cancel went out and the turn did not end ``cancelled``: the agent may take it for its next prompt."""
+        return self.cancelled_by_us and self.stop != "cancelled"
+
 
 class _TimedOut:
     """The turn ran past its limit (the run's own event)."""
@@ -189,7 +199,7 @@ class WorkerRun:
         self.current_message: str | None = None  # the newest model message's id
         self.sent: dict[int, _SentSteer] = {}  # native steers by their prompt number
         self.next_prompts: list[Steering] = []  # batches that go as the next prompt
-        self.reprompts: list[Steering] = []  # batches that wait for a cancel and a fresh session
+        self.reprompts: list[Steering] = []  # batches that wait for the turn's cancel, then go as the next prompt
         self.app_queue: deque[HeldCall] = deque()  # app calls held, not forwarded yet
         self.forwarded: list[HeldCall] = []  # the app call the last round forwarded, answered at resume()
         self.running: set[str] = set()  # calls the bridge runs now
@@ -282,13 +292,13 @@ class WorkerRun:
         return outcome
 
     async def release(self) -> None:
-        """Keep the session for a later task when the session policy takes it; else retire the door and the session.
+        """Keep the session for a later task when the adapter takes it; else retire the door and the session.
 
         Either way the run's turn of its runtime process is given back: a kept session holds none while it waits. Safe
         to call twice: the second call finds no runtime.
         """
         kept = self._kept()
-        if kept is not None and self.settings.sessions.keep(self.host, kept):
+        if kept is not None and self.host.keep(kept):
             self.runtime = self.session = self.door = None
             kept.runtime.leave()
             self.task.trace("harness.session_kept", server=kept.door.name, session=kept.session.id)
@@ -310,13 +320,14 @@ class WorkerRun:
         """The session as a later task may take it: only once its task answered and nothing of the task is left in it.
 
         No stopped, failed or timed-out task's session qualifies, nor one with a prompt, a batch or a call of the task
-        still open, or whose client has ended. Nor does one sent a cancel: its turn may answer before the cancel
-        reaches the agent, and an idle agent takes a cancel for its next prompt (Hermes ends that one unprocessed).
+        still open, or whose client has ended. Nor does one our cancel may still reach (``_Turn.cancel_pending``): its
+        turn answered before the cancel reached the agent, and an idle agent takes a cancel for its next prompt (Hermes
+        ends that one unprocessed). A cancel the turn took, ending ``cancelled``, leaves the session clean.
         """
         session, door, runtime = self.session, self.door, self.runtime
         if session is None or door is None or runtime is None or not self.answered or self.stopped:
             return None
-        if self.turn is not None and self.turn.cancelled_by_us:
+        if self.turn is not None and self.turn.cancel_pending:
             return None
         left = (session.outstanding, self.reprompts, self.next_prompts, self.sent, self.forwarded, self.app_queue)
         if any(left) or self.running or self.cards_open or door.held or not runtime.client.alive:
@@ -328,8 +339,8 @@ class WorkerRun:
 
     # ------------------------------------------------------------------------------------------------ opening
     async def _open(self) -> None:
-        """Take the session the session policy kept when it fits, else open one (the module's docstring); prompt it."""
-        kept = self.settings.sessions.take(self.host)
+        """Take the session the adapter kept when it fits, else open one (the module's docstring); prompt it."""
+        kept = self.host.take_kept()
         if kept is not None and self._adopt(kept):
             return
         self.runtime = await self.host.shared(self.host.workers)
@@ -604,7 +615,10 @@ class WorkerRun:
         if self.reprompts and (turn.cancelled_by_us or turn.stop == "end_turn"):
             async for event in self._close(None):
                 yield event
-            await self._reopen()
+            if turn.cancel_pending:
+                await self._reopen()
+            else:
+                self._reprompt_now()
             return
         if failure is not None:
             async for event in self._fail(failure, self._last_text()):
@@ -700,8 +714,20 @@ class WorkerRun:
         self.task.trace("harness.steer_prompted", round=self.round, batches=len(batches))
         self._start_turn(prompt)
 
+    def _reprompt_now(self) -> None:
+        """After a turn with no cancel of ours pending: the batches as the session's next prompt (it holds the history).
+
+        What the turn left open ends with it: an app call it held and never forwarded ends not run, and a tool card it
+        never ended is over (ACP has the client mark a cancelled turn's unfinished tool calls cancelled).
+        """
+        for held in self.app_queue:
+            held.reply(self.task.texts.not_run_output)
+        self.app_queue, self.cards_open = deque(), set()
+        self.next_prompts, self.reprompts = [*self.next_prompts, *self.reprompts], []
+        self._prompt_next_now()
+
     async def _reopen(self) -> None:
-        """After a cancel for steering: a fresh session, its first prompt the history with the batches."""
+        """After a turn our cancel may still reach: a fresh session, its first prompt the history with the batches."""
         batches, self.reprompts = self.reprompts, []
         self._close_door(self.task.texts.not_run_output)
         if self.session is not None:
@@ -744,11 +770,11 @@ class WorkerRun:
             self.settings.steering.deliver(self, steering)
 
     def prompt_next(self, steering: Steering) -> None:
-        """The batch goes as the next prompt, once the turn ends."""
+        """The batch goes as the next prompt, once the turn ends (a steer the turn could not take)."""
         self.next_prompts.append(steering)
 
     def reprompt(self, steering: Steering) -> None:
-        """Cancel the turn once no bridged call runs; then a fresh session carries the batch."""
+        """Cancel the turn once no bridged call runs; then the batch goes as the session's next prompt."""
         self.reprompts.append(steering)
         self._cancel_for_reprompt()
 

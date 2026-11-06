@@ -188,7 +188,7 @@ class CallTests(IMCase):
     async def test_the_workers_own_cancel_work_refuses_later_calls_writes_no_item_and_its_next_answer_counts(self):
         cancel = CancelOwnWork((call_item("lookup", {}, "call_later"),))  # then a call it may not run
         adapter = ScriptedAdapter([Show("Earl Grey"), cancel, answer("Stopped as asked.")])
-        im = self.session(adapter, result_format=SPEAK_DISPLAY, work_tools=("cancel_work",))
+        im = self.session(adapter, result_format=SPEAK_DISPLAY)
         events = await read_all(im.admit(ask("Book it."), delegation_id="D1").stream)
         self.assertEqual(adapter.runs[0].routes, ["backend", "backend", "refused"])  # show, cancel_work, the call after
         self.assertEqual(outputs(adapter.runs[0].histories[-1])["call_later"], TEXTS.stopped_output)

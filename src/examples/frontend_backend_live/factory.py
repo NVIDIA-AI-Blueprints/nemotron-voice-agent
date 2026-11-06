@@ -9,32 +9,31 @@
 * :func:`core` (``live.core``) gives the client of the process's one delegation core, built on first use.
 * :func:`describe` (``live.describe``) describes the example for ``GET /v1/live/info``.
 
-The root reads ``config.yaml`` (``LIVE_CONFIG_PATH``), the core's ``core.yaml`` (``CORE_CONFIG_PATH``) with its texts
-(the ``agent_prompts.Core`` entries of ``prompts.yaml``) and the example's catalog once, off the event loop
-(:func:`root`), and resolves what the core names by reference (``backend.slot``, and ``backend.prompt``: an
-``agent_prompts.Backend`` entry of ``prompts.yaml``). Nothing of the frontend goes into the core. The repository UI bot
-(``pipeline.py``) builds a core of its own with these functions, from ``ui_bot.core_config``, with the channel context
-after its backend prompt (:func:`ui_bot_instructions`). The two roots are the only modules that import the core, and
-each hands the frontend the helpers the two share: the core's one copy of ``pick``, its profile loader and
-``message_text``.
+The root reads the example's settings (the ``config`` block of its ``examples_registry.yaml`` entry,
+:func:`example_config`), the core's texts (the ``agent_prompts.Core`` entries of ``prompts.yaml``) and the example's
+catalog once, off the event loop (:func:`root`), and resolves what the core names by reference (``backend.slot``, and
+``backend.prompt``: an ``agent_prompts.Backend`` entry of ``prompts.yaml``). Nothing of the frontend goes into the core.
+The repository UI bot (``pipeline.py``) builds a core of its own with these functions, from the core's settings with
+``ui_bot.core`` merged over them, with the channel context after its backend prompt (:func:`ui_bot_instructions`). The
+two roots are the only modules that import the core, and each hands the frontend the helpers the two share: the core's
+one copy of ``pick`` and ``message_text``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache, wraps
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import examples_registry
 
 # Starts OpenTelemetry when ENABLE_TRACING is on, as the UI bot's root does: the frontend adapter traces each session's
 # pipeline but may not import the setup itself.
 import tracing  # noqa: F401
 from examples.frontend_backend_live.adapter.contract import ServiceStarting
-from examples.frontend_backend_live.config_manager.loader import EXAMPLE_DIR, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ExampleConfig, ModelEndpoint
 from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
 from examples.frontend_backend_live.delegation_core.api.service import ResponsesService
@@ -43,7 +42,6 @@ from examples.frontend_backend_live.delegation_core.backend.port import Endpoint
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.delegation_core.items import message_text
-from examples.frontend_backend_live.delegation_core.profiles import load_profile
 from examples.frontend_backend_live.delegation_core.tables import pick
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import Prompts, load_prompts
@@ -59,8 +57,8 @@ if TYPE_CHECKING:
     )
     from gateways.live.ports import MediaConnection
 
-# The delegation core's own file, beside config.yaml; CORE_CONFIG_PATH names another.
-CORE_CONFIG = EXAMPLE_DIR / "core.yaml"
+# The example's key in examples_registry.yaml, whose config block holds the example's settings.
+EXAMPLE_KEY = "frontend-backend-live"
 
 # The root's reads and the core's build happen once, also when several sessions start together: a first call waits
 # for the build another thread has begun. Reentrant, because the core's build reads the root's state.
@@ -84,7 +82,7 @@ def once[T](build: Callable[[], T]) -> Callable[[], T]:
     return built
 
 
-# ------------------------------------------------------------------------------------------------- the root's files
+# ---------------------------------------------------------------------------------------------- the root's settings
 @dataclass(frozen=True)
 class Root:
     """What the root reads once: the example's settings, the core's and its texts, the adapter's class, the catalog."""
@@ -97,29 +95,33 @@ class Root:
     catalog: ExampleCatalog
 
 
-def core_config_path() -> Path:
-    """The delegation core's own file: ``CORE_CONFIG_PATH``, or the bundled ``core.yaml``."""
-    return Path(os.environ.get("CORE_CONFIG_PATH") or CORE_CONFIG)
-
-
-def core_settings(path: Path) -> CoreSettings:
-    """The core's settings from its file at ``path``, with the core's texts from the example's prompt file.
+def example_config() -> ExampleConfig:
+    """The example's settings: the ``config`` block of its ``examples_registry.yaml`` entry, validated.
 
     Raises:
-        ValueError: The file or a text is malformed.
+        ValueError: The block is malformed (a pydantic ``ValidationError`` names each key at fault).
+    """
+    return ExampleConfig.model_validate(examples_registry.example_config(EXAMPLE_KEY))
+
+
+def core_settings(data: Mapping[str, Any]) -> CoreSettings:
+    """The core's settings ``data``, with the core's texts from the example's prompt file.
+
+    Raises:
+        ValueError: The settings or a text is malformed.
         RuntimeError: The prompt file is missing or malformed (:func:`load_prompts`).
         KeyError: The prompt file lacks a group or an entry that the example reads (:func:`load_prompts`).
     """
-    return CoreSettings.load(path, load_prompts().core)
+    return CoreSettings.parse(data, load_prompts().core)
 
 
 def ui_bot_core(config: ExampleConfig) -> CoreSettings:
-    """The UI bot's core profile: the file ``ui_bot.core_config`` names, in the example's folder.
+    """The UI bot's core: the core's settings with ``ui_bot.core`` merged over them, on the llm adapter it names.
 
     Raises:
-        ValueError: The profile is malformed.
+        ValueError: The merged settings are malformed.
     """
-    return core_settings(EXAMPLE_DIR / config.ui_bot.core_config)
+    return core_settings(config.ui_bot_core)
 
 
 def frontend_adapters() -> Mapping[str, FrontendAdapterClass]:
@@ -137,29 +139,29 @@ def webrtc_peer(ice_servers: list[dict]) -> MediaConnection:
 
 
 def adapter_block(config: ExampleConfig) -> Mapping[str, Any]:
-    """The block of ``config.yaml`` that the chosen frontend adapter reads: ``frontend.<adapter>``."""
-    return config.blocks[config.adapter]
+    """The block of the example's settings that the chosen frontend adapter reads: ``frontend.<adapter>``."""
+    return config.frontend.block
 
 
 def with_display_label(block: Mapping[str, Any], core: CoreSettings) -> dict[str, Any]:
-    """``block`` with the core's display label handed in, so the label is written once (``core.yaml``)."""
+    """``block`` with the core's display label handed in, so the label is written once (the core's settings)."""
     return {**block, "display_label": core.delegation.display_label}
 
 
 @once
 def root() -> Root:
-    """Read the root's files and the catalog, and settle the frontend adapter, once; it blocks, so callers use a thread.
+    """Read the settings and the catalog, and settle the frontend adapter, once; it blocks, so callers use a thread.
 
     Raises:
-        ValueError: A file is malformed (``ConfigError`` for ``config.yaml``), ``frontend.adapter`` names no frontend
-            adapter, or the adapter's class refuses its block.
+        ValueError: The example's settings are malformed, ``frontend.adapter`` names no frontend adapter, or the
+            adapter's class refuses its block.
         RuntimeError: The prompt file is missing or malformed.
         KeyError: The prompt file lacks a group or an entry that the example reads.
     """
-    config = load_live_config(load_profile)
-    core = core_settings(core_config_path())
+    config = example_config()
+    core = core_settings(config.core)
     catalog = ExampleCatalog.read()
-    adapter = pick(frontend_adapters(), config.adapter, "frontend adapter")
+    adapter = pick(frontend_adapters(), config.frontend.adapter, "frontend adapter")
     block = with_display_label(adapter_block(config), core)
     settings = adapter.Settings.parse(block, pick=pick, message_text=message_text)
     return Root(config, core, adapter, settings, adapter.readiness(settings, catalog), catalog)
@@ -175,8 +177,8 @@ def endpoint_lookup(catalog: ExampleCatalog, slot: str, overrides: dict | None =
     """The core's ``EndpointLookup`` for a backend slot.
 
     ``None`` (or the slot's own model) gives the slot's endpoint, with the session's ``overrides``; another model gives
-    the catalog entry that serves it, and a model the catalog does not list raises ``LookupError`` (the backend reports
-    it, or falls back to the default endpoint where its settings say so).
+    the catalog entry that serves it, and a model the catalog does not list raises ``LookupError``, which the backend
+    reports.
 
     Raises:
         ValueError: At once, when the slot has no model.
@@ -228,7 +230,7 @@ def core_client(core: DelegationCore) -> LocalResponsesClient:
 
 @once
 def delegation_core() -> DelegationCore:
-    """The one delegation core of this process, built on first use from the core's own file; it blocks.
+    """The one delegation core of this process, built on first use from the core's settings; it blocks.
 
     It serves every Live client, whatever its tools, so a request with no instructions gets the backend prompt that
     ``backend.prompt`` names as written, with no channel context.
@@ -260,7 +262,7 @@ async def create_frontend_adapter(
     Raises:
         ProtocolError: A service the adapter needs is still starting (code ``server_error``, so the client is not
             blamed and can try again).
-        ValueError: A root file is malformed (the gateway answers that the pipeline could not be created).
+        ValueError: The root's settings are malformed (the gateway answers that the pipeline could not be created).
     """
     state = await asyncio.to_thread(root)
     try:

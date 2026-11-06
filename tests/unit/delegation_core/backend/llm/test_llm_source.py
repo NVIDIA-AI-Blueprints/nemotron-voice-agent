@@ -3,13 +3,12 @@
 
 # ruff: noqa: D101, D102, D103, D107
 
-"""Tests for the ``llm`` source and its sessions: its block, what it serves, its models, its rule conductors."""
+"""Tests for the ``llm`` source and its sessions: its block, what it serves, its models, the steer rule."""
 
-import dataclasses
 import json
 import unittest
 
-from examples.frontend_backend_live.delegation_core.backend.conductors import StartEach, SteerOpenWork
+from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
 from examples.frontend_backend_live.delegation_core.backend.llm.run import RoundFailedError
 from examples.frontend_backend_live.delegation_core.backend.port import (
@@ -44,7 +43,7 @@ def lookup(model):
 def build(block, tools=lambda: [], make_provider=None):
     if make_provider is None:
         return LlmSource.from_settings(block, endpoints=lookup, tools=tools, vocabulary=None)
-    return LlmSource(LlmSettings.parse(block), endpoints=lookup, tools=tools, make_provider=make_provider)
+    return LlmSource(LlmSettings.model_validate(block), endpoints=lookup, tools=tools, make_provider=make_provider)
 
 
 class ModelTask(IMTask):
@@ -58,7 +57,7 @@ class ModelTask(IMTask):
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
     def test_the_block_names_what_it_serves_and_it_describes_that_without_credentials(self):
-        names = {"provider": "openai-responses", "conductor": "start_each", "unlisted_models": "fallback"}
+        names = {"provider": "openai-responses"}
         block = {**names, "max_tool_rounds": 4, "provider_retries": 1, "idle_timeout_seconds": 10.5}
         described = build(block, tools=lambda: [TOOL_SOURCES["cafe"].from_settings({})]).describe()
         expected = {**names, "adapter": "llm", "model": "test/model", "max_running": 1, "max_tool_rounds": 4}
@@ -69,23 +68,20 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             TOOL_SOURCES["cafe"].from_settings({"url": "http://example"})
         described["tools"][0]["name"] = "changed"  # the source's schemas are a copy
         self.assertEqual(CafeTools().tools()[0]["name"], "get_menu")
-        defaults = build({}).describe()
-        self.assertEqual(
-            [defaults[key] for key in ("provider", "conductor", "unlisted_models")],
-            ["chat-completions", "steer", "report"],
-        )
+        self.assertEqual(build({}).describe()["provider"], "chat-completions")
+        self.assertIsInstance(build({}).new().conductor(), SteerOpenWork)  # the steer rule places every request
 
     def test_a_bad_block_fails_when_the_core_is_built(self):
         cases = {
             "an unknown provider": ({"provider": "hermes"}, "Unknown backend provider 'hermes'"),
-            "an unknown conductor": ({"conductor": "fold"}, "Unknown llm conductor 'fold'"),
-            "an unknown policy": ({"unlisted_models": "guess"}, "Unknown unlisted-model policy"),
-            "an unknown key": ({"merge_pending": True}, "unknown keys: merge_pending"),
-            "a fraction of rounds": ({"max_tool_rounds": 2.5}, "whole number"),
-            "a boolean count": ({"provider_retries": True}, "whole number"),
-            "no rounds": ({"max_tool_rounds": 0}, "at least 1"),
-            "a negative wait": ({"idle_timeout_seconds": -1}, "positive"),
-            "not a mapping": ("fast", "mapping"),
+            "a conductor, which is the steer rule": ({"conductor": "steer"}, "conductor\n.*Extra inputs"),
+            "a rule for unlisted models": ({"unlisted_models": "report"}, "unlisted_models\n.*Extra inputs"),
+            "an unknown key": ({"merge_pending": True}, "merge_pending\n.*Extra inputs"),
+            "a fraction of rounds": ({"max_tool_rounds": 2.5}, "max_tool_rounds\n.*valid integer"),
+            "a boolean count": ({"provider_retries": True}, "provider_retries\n.*valid integer"),
+            "no rounds": ({"max_tool_rounds": 0}, "max_tool_rounds\n.*greater than or equal to 1"),
+            "a negative wait": ({"idle_timeout_seconds": -1}, "idle_timeout_seconds\n.*greater than 0"),
+            "not a mapping": ("fast", "backend.llm\n.*valid dictionary"),
         }
         for name, (block, message) in cases.items():
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):
@@ -124,27 +120,21 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(provider.endpoint, len(provider.payloads)) for provider in made], [(DEFAULT, 1), (OTHER, 3)])
         self.assertEqual({payload["model"] for payload in made[1].payloads}, {"other/model"})
 
-    async def test_an_unlisted_model_is_refused_or_runs_on_the_default_endpoint_as_the_policy_says(self):
+    async def test_a_model_the_catalog_does_not_list_is_refused_and_a_task_on_it_fails_before_any_call(self):
         made = []
 
         def make(endpoint):
             made.append(ScriptedProvider(text_round("Done."), endpoint=endpoint))
             return made[-1]
 
-        report = build({}, make_provider=make)
-        await report.check_model("other/model")
+        source = build({}, make_provider=make)
+        await source.check_model("other/model")
         with self.assertRaisesRegex(ValueError, "not in the model catalog"):
-            await report.check_model("nvidia/unlisted")
+            await source.check_model("nvidia/unlisted")
         task = ModelTask("nvidia/unlisted")
         with self.assertRaisesRegex(ValueError, "not in the model catalog"):
-            await drive(report.new().start(task), task)
+            await drive(source.new().start(task), task)
         self.assertEqual(made, [])
-        fallback = build({"unlisted_models": "fallback"}, make_provider=make)
-        await fallback.check_model("nvidia/unlisted")
-        task = ModelTask("nvidia/unlisted")
-        await drive(fallback.new().start(task), task)
-        self.assertEqual(made[0].endpoint, dataclasses.replace(DEFAULT, model="nvidia/unlisted"))
-        self.assertEqual(made[0].payloads[0]["model"], "nvidia/unlisted")
 
     async def test_each_session_gets_fresh_tool_sources_starts_no_call_early_and_closes_its_providers(self):
         providers = [
@@ -176,11 +166,6 @@ class SteerOpenWorkContractTests(ConductorContract, unittest.IsolatedAsyncioTest
         return SteerOpenWork()
 
 
-class StartEachContractTests(ConductorContract, unittest.IsolatedAsyncioTestCase):
-    def make_conductor(self):
-        return StartEach()
-
-
 def a_work(work_id: str, state: str, seconds: float) -> WorkSummary:
     task = TaskSummary(f"{work_id}.1", state, None, (), False, None, seconds)
     return WorkSummary(work_id, state, f"d_{work_id}", (a_request(f"d_{work_id}", "Earlier."),), (task,), seconds)
@@ -210,10 +195,6 @@ class RuleTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(decision=decision, works=[work.work_id for work in works]):
                 self.assertEqual(await decide(SteerOpenWork(), *works, arrivals=("d_1", "d_2")), [decision])
         self.assertEqual(await decide(SteerOpenWork(), running, arrivals=()), [])
-
-    async def test_start_each_starts_a_work_for_each_arrival(self):
-        decisions = await decide(StartEach(), a_work("W1", "running", 3.0), arrivals=("d_1", "d_2"))
-        self.assertEqual(decisions, [Start(("d_1",)), Start(("d_2",))])
 
 
 if __name__ == "__main__":

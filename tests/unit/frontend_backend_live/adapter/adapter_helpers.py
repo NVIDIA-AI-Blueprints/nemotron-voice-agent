@@ -11,23 +11,56 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.workers.runner import WorkerRunner
+from starlette.websockets import WebSocketState
 
-from gateways.live.ports import EXCHANGE_RATE
+from gateways.live.protocol import AudioFormat
 
-PACKET_BYTES = EXCHANGE_RATE // 10 * 2  # 100 ms of PCM16 at the exchange rate
+WIRE_RATE = AudioFormat().rate  # a primary WebSocket's wire rate when its client sets none: 24 kHz PCM16
+PACKET_BYTES = WIRE_RATE // 10 * 2  # 100 ms of PCM16 at that rate
 
 
-def tone(ms: int, rate: int = EXCHANGE_RATE, level: int = 0x1010) -> bytes:
+def tone(ms: int, rate: int = WIRE_RATE, level: int = 0x1010) -> bytes:
     """``ms`` of a constant PCM16 level at ``rate``."""
     return level.to_bytes(2, "little", signed=True) * (rate * ms // 1000)
+
+
+class FakeSocket:
+    """The gateway's primary socket as the adapter's transport reads it, with what the client sends (:meth:`send`).
+
+    :meth:`handle` notes each frame it is handed and gives back the wire audio the frame carries, if any.
+    """
+
+    client_state = WebSocketState.CONNECTED
+
+    def __init__(self, audio_format: AudioFormat | None = None):
+        self.format = audio_format or AudioFormat()
+        self.handed: list = []
+        self.audio: dict = {}  # a frame's text: the wire audio it carries
+        self.incoming: asyncio.Queue = asyncio.Queue()
+
+    def send(self, text: str, audio: bytes | None = None) -> None:
+        """The client sends a text frame, which carries ``audio`` as the gateway's socket would take it."""
+        self.audio[text] = audio
+        self.incoming.put_nowait({"type": "websocket.receive", "text": text})
+
+    async def receive(self):
+        return await self.incoming.get()
+
+    async def close(self, code=1000, reason=None):
+        pass
+
+    async def handle(self, data):
+        self.handed.append(data)
+        return self.audio.get(data)
 
 
 class RecordingPort:
     """A frontend adapter's view of its session that notes what the adapter sends, in order."""
 
-    def __init__(self, active=True, session_id="live_test"):
+    def __init__(self, active=True, session_id="live_test", socket=None):
         self.id, self.input_ms, self.active = session_id, 0, active
-        # ("emit", kind, fields), ("audio", pcm, rate), ("error", message) or ("close", reason), in order
+        self.socket = socket or FakeSocket()
+        # ("emit", kind, fields), ("audio", wire audio), ("error", message) or ("close", reason), in order
         self.log: list[tuple] = []
 
     def is_active(self):
@@ -39,8 +72,8 @@ class RecordingPort:
     async def advance_input_clock(self, ms):
         self.input_ms = max(self.input_ms, ms)
 
-    async def send_output_audio(self, pcm, sample_rate):
-        self.log.append(("audio", pcm, sample_rate))
+    async def send_output_audio(self, audio):
+        self.log.append(("audio", audio))
 
     async def report_error(self, message, client_event_id=None):
         self.log.append(("error", message))
@@ -49,11 +82,12 @@ class RecordingPort:
         self.log.append(("close", reason))
 
     def packets(self):
-        return [entry for entry in self.log if entry[0] == "audio"]
+        """The audio of each packet sent, in order."""
+        return [entry[1] for entry in self.log if entry[0] == "audio"]
 
     def sounds(self):
         """Whether each packet carries sound, in order."""
-        return [bool(any(pcm)) for _, pcm, _ in self.packets()]
+        return [bool(any(audio)) for audio in self.packets()]
 
     def transcript(self):
         return [entry[2] for entry in self.log if entry[:2] == ("emit", "session.output_transcript.delta")]

@@ -8,8 +8,8 @@ line's text behind its audio in its own way, so that whatever follows the audio 
 its audio has played (``examples.frontend_backend_live.media.silent_lines`` and the assistant aggregator):
 
 * :class:`PerSentence` (the default) sends one request per sentence. Pipecat yields a sentence's audio before its text,
-  so nothing needs holding. This example's settings in ``examples_registry.yaml`` set the Magpie entries' synthesis
-  mode to ``per_sentence``.
+  so nothing needs holding, and ``SilentSentences`` right after it marks the text of a sentence that got no audio. This
+  example's settings in ``examples_registry.yaml`` set the Magpie entries' synthesis mode to ``per_sentence``.
 * :class:`Stitched` sends a line as one stitched stream, which sounds smoother across sentences, but Pipecat queues
   each sentence's text before the audio arrives. :class:`LineTextHold` therefore holds a line's text until all its
   audio has been produced: a stitched line that is cut reports none of its text, so it counts as heard whole.
@@ -28,8 +28,8 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 
-from examples.frontend_backend_live.media.turns import TurnEnd
-from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
+from examples.frontend_backend_live.media.silent_lines import SilentSentences
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_markdown_text_transform
 from utils import NVCF_GRPC_SERVER, is_nvcf, load_ipa_dictionary, normalize_lang_code, nvidia_api_key
 
 
@@ -38,11 +38,8 @@ def speech_server(entry: Mapping[str, Any]) -> str:
     return str(entry.get("server") or NVCF_GRPC_SERVER)
 
 
-def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaSTTService:
-    """Build the streaming speech-to-text service from the catalog entry and body overrides.
-
-    ``turn_end`` builds it, with its budget for the final measured from that turn end's VAD stop (``media/turns.py``).
-    """
+def build_stt(body: dict, default_asr: dict) -> NvidiaSTTService:
+    """Build the streaming speech-to-text service from the catalog entry and body overrides, as other examples do."""
     server = body.get("asr_server", "") or speech_server(default_asr)
     kwargs: dict = {"api_key": nvidia_api_key(), "server": server, "use_ssl": is_nvcf(server)}
     function_id = body.get("asr_function_id", "") or default_asr.get("function_id", "")
@@ -55,14 +52,17 @@ def build_stt(body: dict, default_asr: dict, turn_end: TurnEnd) -> NvidiaSTTServ
     if language:
         kwargs["settings"].language = language
     logger.info(f"ASR: server={server}, function_id={function_id or '(default)'}, language={language or '(default)'}")
-    return turn_end.stt(**kwargs, stop_history=320)
+    return NvidiaSTTService(**kwargs, stop_history=320)
 
 
 def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
     """Build the text-to-speech service from the catalog entry and body overrides.
 
     The service takes the pipeline's output rate when it starts: a live session's is the shared
-    ``PIPELINE_AUDIO_OUT_SAMPLE_RATE``, which every Magpie deployment accepts.
+    ``PIPELINE_AUDIO_OUT_SAMPLE_RATE``, which every Magpie deployment accepts. It strips Markdown from what it speaks,
+    since the voice says a backend's text as written; the talker's context keeps each line's text as it is. It keeps
+    Pipecat's limit of audio contexts with no audio, as the other examples do: a line with no audio is the voice's to
+    say once more, and three such contexts in a row write the service off, which ends the call.
     """
     server = body.get("tts_server", "") or speech_server(default_tts)
     voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
@@ -82,11 +82,8 @@ def build_tts(body: dict, default_tts: dict) -> NvidiaTTSService:
         "server": server,
         "settings": NvidiaTTSSettings(**settings_kwargs),
         "use_ssl": is_nvcf(server),
-        "text_transforms": [("*", nemotron_speech_text_transform)],
+        "text_transforms": [("*", nemotron_speech_markdown_text_transform)],
         "custom_dictionary": load_ipa_dictionary(),
-        # A line with no audio (a rate-limited request, say) is the voice's to retry or write off
-        # (speech.start_timeout_seconds, speech.retry_silent_lines): it costs that line, never the call.
-        "max_consecutive_zero_audio_contexts": 0,
     }
     if function_id or model:
         kwargs["model_function_map"] = {"function_id": function_id, "model_name": model}
@@ -107,7 +104,7 @@ class SpeechMode(Protocol):
     reports_sentences: ClassVar[bool]  # whether each sentence's text follows its own audio, so playout reports it
 
     def text_hold(self) -> list[FrameProcessor]:
-        """New processors to place right after the text-to-speech (none when its text already follows its audio)."""
+        """New processors to place right after the text-to-speech: what keeps its text behind its audio, or marks it."""
 
 
 class PerSentence:
@@ -117,8 +114,8 @@ class PerSentence:
     reports_sentences: ClassVar[bool] = True
 
     def text_hold(self) -> list[FrameProcessor]:
-        """Nothing: each sentence's text already follows its audio."""
-        return []
+        """A :class:`SilentSentences`, which marks the text of each sentence that got no audio."""
+        return [SilentSentences()]
 
 
 class Stitched:

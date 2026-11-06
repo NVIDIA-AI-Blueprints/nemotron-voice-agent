@@ -14,8 +14,6 @@ import itertools
 import json
 import unittest
 from collections.abc import Callable, Sequence
-from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
@@ -28,7 +26,6 @@ from examples.frontend_backend_live.delegation_core.backend.agent import (
     ConductorSettings,
     LlmConductor,
 )
-from examples.frontend_backend_live.delegation_core.backend.agent.settings import WHEN_IDLE
 from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
 from examples.frontend_backend_live.delegation_core.backend.port import (
     Answer,
@@ -58,7 +55,7 @@ from tests.unit.contracts.backend import (
     message_events,
     text_round,
 )
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, core_block
 from tests.unit.delegation_core.backend.llm.doubles import (
     FAST,
     LIMITS,
@@ -74,14 +71,13 @@ from tests.unit.delegation_core.backend.llm.doubles import (
 )
 from tests.unit.delegation_core.helpers import IMCase, ask, read_all
 
-CORE_YAML = Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live/core.yaml"
-AGENT_YAML = Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live/core.agent.yaml"
 VOCABULARY = ControlVocabulary(TEXTS.control_tools, TEXTS.conductor_prompt, TEXTS.refusal("idle"), TEXTS.failed_output)
 ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1", api_key="secret-key")
 OTHER = ModelEndpoint(model="other/model", base_url="http://localhost:2/v1")
-# The model conductor places every request, also while no Work is open, so the tests read its rounds; the idle rule
-# (conductor.when_idle) has tests of its own.
-CONDUCTOR = ConductorSettings(when_idle=WHEN_IDLE["decide"])
+# The model conductor places every request, also while no Work is open, so the tests read its rounds.
+CONDUCTOR = ConductorSettings()
+# The shipped settings on the agent, with the envelope in every worker's instructions.
+AGENT = core_block(backend={"adapter": "llm-agent"}, delegation={"result_format": "speak_display"})
 SETTINGS = AgentSettings(conductor=CONDUCTOR, worker=FAST)
 
 
@@ -138,7 +134,9 @@ def start_each(payload: dict) -> list[dict]:
 
 def conductor_on(model: ScriptedProvider, **settings: Any) -> LlmConductor:
     """An ``LlmConductor`` on ``model``, with the shipped vocabulary and ``settings`` over ``CONDUCTOR``."""
-    return LlmConductor(lambda: model, VOCABULARY, replace(CONDUCTOR, **settings), ENDPOINT.model, SETTINGS.max_running)
+    return LlmConductor(
+        lambda: model, VOCABULARY, CONDUCTOR.model_copy(update=settings), ENDPOINT.model, SETTINGS.max_running
+    )
 
 
 # --------------------------------------------------------------------------------------------- the workers' model
@@ -181,7 +179,9 @@ def a_work(work_id: str, *task_states: str, state: str = "running", delegation_i
 
 
 def build(block, *, tools=lambda: [], endpoints=lookup, **makers) -> AgentSource:
-    return AgentSource(AgentSettings.parse(block), endpoints=endpoints, tools=tools, vocabulary=VOCABULARY, **makers)
+    return AgentSource(
+        AgentSettings.model_validate(block), endpoints=endpoints, tools=tools, vocabulary=VOCABULARY, **makers
+    )
 
 
 def given(*requests, works=(), conversation=None, new_from=0) -> ConductorInput:
@@ -221,17 +221,12 @@ class LlmConductorContractTests(ConductorContract, unittest.IsolatedAsyncioTestC
         return conductor_on(ScriptedProvider(respond=start_each))
 
 
-class IdleRuleContractTests(ConductorContract, unittest.IsolatedAsyncioTestCase):
-    def make_conductor(self):
-        return conductor_on(ScriptedProvider(respond=start_each), when_idle=WHEN_IDLE["start"])
-
-
 class SourceTests(unittest.IsolatedAsyncioTestCase):
     def test_the_block_names_what_it_serves_and_it_describes_that_without_credentials(self):
         conductor = {"provider": "openai-responses", "model": "other/model", "timeout_seconds": 4.0}
         conductor |= {"memory_tokens": 2000, "max_output_tokens_per_request": 128, "temperature": None}
-        conductor |= {"reasoning_effort": "low", "when_idle": "decide"}
-        worker = {"provider": "openai-responses", "unlisted_models": "fallback", "max_tool_rounds": 5}
+        conductor |= {"reasoning_effort": "low"}
+        worker = {"provider": "openai-responses", "max_tool_rounds": 5}
         block = {"max_running": 4, "conductor": conductor, "worker": worker}
         described = build(block, tools=lambda: [CafeTools()]).describe()
         self.assertEqual(
@@ -241,30 +236,30 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(described["worker"], worker)
         self.assertEqual([tool["name"] for tool in described["tools"]], ["get_menu", "manage_cart", "place_order"])
         self.assertNotIn("secret-key", json.dumps(described))
-        self.assertEqual(build({}).describe()["conductor"]["when_idle"], "start")
         self.assertEqual(build({"max_running": 1}).describe()["conductor"], "steer")  # the rule places, no model
 
     def test_a_bad_block_fails_when_the_core_is_built(self):
         cases = {
-            "not a mapping": ("fast", "backend.llm-agent must be a mapping"),
-            "an unknown key": ({"workers": 3}, "backend.llm-agent has unknown keys: workers"),
-            "no task may run": ({"max_running": 0}, "max_running must be a whole number of at least 1"),
-            "an unknown conductor key": ({"conductor": {"tool_choice": "auto"}}, "conductor has unknown keys"),
+            "not a mapping": ("fast", "backend.llm-agent\n.*valid dictionary"),
+            "an unknown key": ({"workers": 3}, "backend.llm-agent\nworkers\n.*Extra inputs"),
+            "no task may run": ({"max_running": 0}, "max_running\n.*greater than or equal to 1"),
+            "an unknown conductor key": ({"conductor": {"tool_choice": "auto"}}, "conductor.tool_choice\n.*Extra"),
             "an unknown provider": ({"conductor": {"provider": "hermes"}}, "Unknown backend provider 'hermes'"),
-            "a negative wait": ({"conductor": {"timeout_seconds": -1}}, "timeout_seconds must be a positive number"),
-            "no memory": ({"conductor": {"memory_tokens": 0}}, "memory_tokens must be a whole number of at least 1"),
-            "a negative temperature": ({"conductor": {"temperature": -0.1}}, "must be a non-negative number"),
-            "an empty effort": ({"conductor": {"reasoning_effort": " "}}, "reasoning_effort must be non-empty text"),
+            "a negative wait": ({"conductor": {"timeout_seconds": -1}}, "conductor.timeout_seconds\n.*greater than 0"),
+            "no memory": ({"conductor": {"memory_tokens": 0}}, "conductor.memory_tokens\n.*equal to 1"),
+            "a negative temperature": ({"conductor": {"temperature": -0.1}}, "temperature\n.*equal to 0"),
+            "an empty effort": ({"conductor": {"reasoning_effort": " "}}, "reasoning_effort\n.*non-empty text"),
             "an unlisted model": ({"conductor": {"model": "unlisted/model"}}, "'unlisted/model' is not in the model"),
-            "an unknown idle rule": ({"conductor": {"when_idle": "wait"}}, "Unknown conductor idle rule 'wait'"),
-            "a worker's conductor": ({"worker": {"conductor": "steer"}}, "worker takes no conductor"),
-            "a worker's unknown key": ({"worker": {"fold": True}}, "backend.llm-agent.worker: .*unknown keys: fold"),
+            "a rule for requests with no open Work": ({"conductor": {"when_idle": "start"}}, "when_idle\n.*Extra"),
+            "a worker's conductor": ({"worker": {"conductor": "steer"}}, "worker.conductor\n.*Extra inputs"),
+            "a worker's unknown key": ({"worker": {"fold": True}}, "worker.fold\n.*Extra inputs"),
         }
         for name, (block, message) in cases.items():
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):
                 build(block)
         one_shot = {"slot": "s", "prompt": "p", "adapter": "llm-agent", "one_shot_adapter": "llm-agent"}
-        settings = replace(CoreSettings.load(CORE_YAML, CORE_TEXTS), backend=BackendChoice.parse(one_shot))
+        shipped = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS)
+        settings = shipped.model_copy(update={"backend": BackendChoice.model_validate(one_shot)})
         with self.assertRaisesRegex(ValueError, "cannot serve one-shot sessions"):
             build_core(settings, endpoints=lookup, defaults=BackendTask("test/model", "x", []))
 
@@ -273,7 +268,6 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         await built.check_model("other/model")
         with self.assertRaisesRegex(ValueError, "does not serve the model 'unlisted/model'"):
             await built.check_model("unlisted/model")
-        await build({"worker": {"unlisted_models": "fallback"}}).check_model("unlisted/model")
         # What the benchmark client sends: functions, tool_choice auto, one call per round, an effort.
         body = {"tools": [{"type": "function", "name": "get_menu"}], "tool_choice": "auto", "reasoning": {}}
         self.assertEqual(built.unsupported({**body, "parallel_tool_calls": False}), [])
@@ -408,20 +402,14 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
         await decide(conductor, given(a_request("D1", "Teas?"), a_request("D2", "Green only.")))
         self.assertEqual(len(model.payloads[1]["input"]), 1)  # nothing of the cancelled round
 
-    async def test_with_no_open_work_the_idle_rule_starts_the_requests_together_and_the_model_reads_it_next(self):
-        model = ScriptedProvider(decisions(steer("W1", "D3")))
-        conductor = conductor_on(model, when_idle=WHEN_IDLE["start"])
+    async def test_with_no_open_work_the_model_places_the_requests_too(self):
+        model = ScriptedProvider(decisions(start("D1", "D2")))
         ended = a_work("W0", state="answered")  # the records list it; it takes no request
-        placed = await decide(conductor, given(a_request("D1", "Teas?"), a_request("D2", "Hours?"), works=(ended,)))
-        self.assertEqual((placed, model.payloads), ([Start(("D1", "D2"))], []))
         placed = await decide(
-            conductor, given(a_request("D3", "Green."), works=(a_work("W1", state="waiting_client"),))
+            conductor_on(model), given(a_request("D1", "Teas?"), a_request("D2", "Hours?"), works=(ended,))
         )
-        self.assertEqual(placed, [Steer("W1", ("D3",))])  # an open Work: the model decides
-        read = [
-            round_data({"input": [item]})["new_requests"][0]["delegation_id"] for item in model.payloads[0]["input"]
-        ]
-        self.assertEqual(read, ["D1", "D3"])
+        self.assertEqual((placed, len(model.payloads)), ([Start(("D1", "D2"))], 1))
+        self.assertEqual([work["state"] for work in round_data(model.payloads[0])["works"]], ["answered"])
 
 
 async def read(stream) -> list[dict]:
@@ -505,27 +493,6 @@ class AgentScenarioTests(IMCase):
         )
         self.assertEqual(answers(events), ["Friday at seven is free; shall I book it?"])
 
-    async def test_a_held_answer_steered_into_its_work_is_progress_and_the_worker_runs_one_more_round(self):
-        round_gate, deciding = asyncio.Event(), asyncio.Event()
-        conductor = ScriptedProvider(decisions(start("D1")), [deciding, *decisions(steer("W1", "D2"))])
-        workers = ScriptedProvider(gated(round_gate, text_round("Black tea.")), text_round("Green tea, as you asked."))
-        im = self.session(agent(conductor, workers), hold_answers_while_deciding=True)
-        first = im.admit(ask("Find teas."), delegation_id="D1")
-        await self.turns()
-        second = im.admit(ask("And a green one?"), delegation_id="D2")
-        await self.turns()
-        round_gate.set()  # the worker answers while the conductor decides
-        await self.turns()
-        self.assertEqual(answers([event for _, event in self.wire.events]), [])  # nothing said while it decided
-        deciding.set()
-        older, newer = await read(first.stream), await read(second.stream)
-        self.assertEqual((answers(older), answers(newer)), ([], ["Green tea, as you asked."]))
-        texts = texts_of(workers.payloads[-1])  # one more round, which reads the held answer, then D2
-        self.assertEqual(len(workers.payloads), 2)
-        self.assertLess(
-            texts.index("Black tea."), next(n for n, text in enumerate(texts) if "And a green one?" in text)
-        )
-
     async def test_the_envelope_reaches_every_worker_and_never_the_conductor(self):
         envelope = TEXTS.result_formats["speak_display"]
         conductor = ScriptedProvider(decisions(start("D1", tasks=["teas", "hours"])))
@@ -543,7 +510,7 @@ class AgentScenarioTests(IMCase):
     async def test_with_one_task_at_a_time_the_steer_rule_places_with_no_model_call_and_a_newer_request_joins(self):
         gate, conductor = asyncio.Event(), ScriptedProvider()  # never asked
         workers = ScriptedProvider(gated(gate, text_round("Old.")), text_round("Teas for two."))
-        im = self.session(agent(conductor, workers, settings=replace(SETTINGS, max_running=1)))
+        im = self.session(agent(conductor, workers, settings=SETTINGS.model_copy(update={"max_running": 1})))
         first = im.admit(ask("Find teas."), delegation_id="D1")
         await self.turns()
         second = im.admit(ask("For two."), delegation_id="D2")
@@ -552,9 +519,9 @@ class AgentScenarioTests(IMCase):
         self.assertEqual((answers(await read(first.stream)), conductor.payloads), ([], []))  # handed over to D2
 
 
-class ProfileTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_conversation_is_answered_through_the_core_built_from_the_agent_profile(self):
-        # core.agent.yaml switches the core to the agent, with stateless rounds on llm and the envelope.
+class CoreSwitchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_conversation_is_answered_through_the_core_built_on_the_agent(self):
+        # backend.adapter: llm-agent switches the core to the agent, with stateless rounds on llm; the envelope too.
         conductor = ScriptedProvider(respond=start_each)
         workers = ScriptedProvider(respond=lambda payload: text_round("A latte is $4.50."))
 
@@ -563,14 +530,16 @@ class ProfileTests(unittest.IsolatedAsyncioTestCase):
             def from_settings(cls, block, *, endpoints, tools, vocabulary):
                 makers = {"make_provider": lambda _: workers, "make_conductor_provider": lambda _: conductor}
                 return cls(
-                    AgentSettings.parse(block), endpoints=endpoints, tools=tools, vocabulary=vocabulary, **makers
+                    AgentSettings.model_validate(block),
+                    endpoints=endpoints,
+                    tools=tools,
+                    vocabulary=vocabulary,
+                    **makers,
                 )
 
         defaults = BackendTask("test/model", "Take orders.", [])
         adapters = {**ADAPTERS, "llm-agent": lambda: Scripted}
-        core = build_core(
-            CoreSettings.load(AGENT_YAML, CORE_TEXTS), endpoints=lookup, defaults=defaults, adapters=adapters
-        )
+        core = build_core(CoreSettings.parse(AGENT, CORE_TEXTS), endpoints=lookup, defaults=defaults, adapters=adapters)
         self.addAsyncCleanup(core.aclose)
         self.assertEqual((core.describe()["adapter"], core.describe()["one_shot_adapter"]), ("llm-agent", "llm"))
         await core.check_model("test/model")
@@ -585,7 +554,7 @@ class ProfileTests(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(10):
             events = [event async for event in stream]
         self.assertEqual((events[-1]["type"], answers(events)), ("response.completed", ["A latte is $4.50."]))
-        self.assertEqual(conductor.payloads, [])  # no Work was open: the request started one with no model call
+        self.assertEqual(len(conductor.payloads), 1)  # the model placed the request, though no Work was open
         self.assertIn(TEXTS.result_formats["speak_display"], workers.payloads[0]["instructions"])
 
 

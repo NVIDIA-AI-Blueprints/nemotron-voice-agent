@@ -6,12 +6,16 @@
 The parser accepts every action of `TalkerAction`; what a call allows is its caller's to enforce (the talker's floor,
 the relay's checks). Anything unusable delegates the original request: no tool has run at the talker
 stage, so delegating can never repeat an action.
+
+The tool-calling talker's routing call makes the same decision with a call of a routing tool (`TOOL_DECISIONS`), or
+with text and no call for a `speak`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 from examples.shared.json_parsing import extract_json_object
 
@@ -26,7 +30,7 @@ UNUSABLE = frozenset({"empty_output", "invalid_json", "invalid_decision", "incom
 class CallSpec:
     """What one model call is, stated by its caller: nothing about a call is inferred from its actions."""
 
-    role: str  # who calls: talker, writer or normalizer; it names the call in the logs
+    role: str  # who calls: talker or writer; it names the call in the logs
     actions: tuple[str, ...]  # the actions the decision may take: the JSON schema's enum
     hint: str  # the description of ``speech`` in the JSON schema
 
@@ -38,6 +42,7 @@ class TalkerDecision:
     action: TalkerAction
     speech: str = ""
     diagnostics: dict = field(default_factory=dict)
+    call_id: str = ""  # the routing tool's call that made it, whose handler Pipecat runs; empty: none
 
 
 def unusable_decision(metadata: dict, reason: str) -> TalkerDecision:
@@ -59,6 +64,25 @@ def decision_from_output_text(text: str, metadata: dict) -> TalkerDecision:
     if set(data) == {"action", "speech"} and data["action"] in ACTIONS and isinstance(data["speech"], str):
         return TalkerDecision(data["action"], data["speech"], metadata)
     return unusable_decision(metadata, "invalid_decision")
+
+
+def delegated(arguments: Mapping[str, Any], diagnostics: dict) -> TalkerDecision:
+    """A ``delegate`` call: the turn goes to the backend, its ``lead_in`` the lead-in when it is text, else none."""
+    lead_in = arguments.get("lead_in")
+    return TalkerDecision("delegate", lead_in if isinstance(lead_in, str) else "", diagnostics)
+
+
+def waited(arguments: Mapping[str, Any], diagnostics: dict) -> TalkerDecision:
+    """A ``wait`` call: nothing is said and nothing is handed over now."""
+    return TalkerDecision("wait", "", diagnostics)
+
+
+# The tool-calling talker's routing tools, by name, in the order they are offered and win when a reply calls more than
+# one: the decision a call of each one makes, from its arguments.
+TOOL_DECISIONS: dict[str, Callable[[Mapping[str, Any], dict], TalkerDecision]] = {
+    "delegate": delegated,
+    "wait": waited,
+}
 
 
 def decision_schema(spec: CallSpec) -> dict:

@@ -1,258 +1,196 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed configuration of the example's own file, ``config.yaml``, and its checks. No provider is imported here.
+"""Typed settings of the example: the ``config`` block of its ``examples_registry.yaml`` entry. No provider is imported.
 
-``config.yaml`` holds the frontend's settings only. It names the frontend adapter that serves live sessions
-(``frontend.adapter``), holds each adapter's own block (``frontend.<name>``), and names the UI bot's core profile
-and channel context (``ui_bot``): :class:`ExampleConfig`. The cascade's block is :class:`LiveConfig`, which the cascade
-adapter's class parses (``LiveConfig.parse``). The delegation core reads its own file (``core.yaml``,
-``examples.frontend_backend_live.delegation_core.config``).
+:class:`ExampleConfig` is the whole block: the frontend adapter that serves live sessions (``frontend.adapter``) with
+each adapter's own block (``frontend.<name>``), the delegation core's settings (``core``), and the UI bot's channel
+context and core (``ui_bot``). The cascade's block is :class:`LiveConfig`, which the cascade adapter's class validates.
+The core's settings are the core's own to validate (``examples.frontend_backend_live.delegation_core.config``), so they
+are kept here as written. Each model is a pydantic model, like the Live gateway's session config: an unknown key is an
+error, and every default lives in its model.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field, fields
-from types import MappingProxyType
-from typing import Any
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Annotated, Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from examples.shared.delegation_contract import ModelEndpoint as SharedEndpoint
 
-# Every other number is a timeout, a limit or a count, where 0 would disable or break the feature.
-ZERO_ALLOWED = frozenset({"provider_retries"})
-# Settings a profile may turn off with null.
-NULL_ALLOWED = frozenset({"app_wait_seconds", "progress_after_seconds"})
+
+class StrictModel(BaseModel):
+    """Base of the example's settings models: frozen, and an unknown key is an error."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class ConfigError(ValueError):
-    """Raised when ``config.yaml`` is malformed."""
+# A name: non-empty text.
+Name = Annotated[str, Field(strict=True, min_length=1)]
+# A positive whole number; a fraction or a boolean is refused.
+WholeNumber = Annotated[int, Field(strict=True, gt=0)]
+# A positive number of seconds (a whole number is one too).
+Seconds = Annotated[float, Field(strict=True, gt=0)]
 
 
-def section(where: str, raw: Any, cls: type) -> dict[str, Any]:
-    """``raw`` (the block at ``where``) checked against the fields of ``cls``.
-
-    Each value is checked against the type of the default it replaces: a whole number refuses a fraction, a duration
-    refuses a negative, and only :data:`NULL_ALLOWED` settings take ``null``.
-
-    Raises:
-        ConfigError: The block is not a mapping, a key is unknown, or a value has the wrong kind.
-    """
-    if raw is None:
-        return {}
-    if not isinstance(raw, Mapping):
-        raise ConfigError(f"{where} must be a mapping")
-    allowed = {f.name: f for f in fields(cls)}
-    unknown = set(raw) - set(allowed)
-    if unknown:
-        raise ConfigError(f"{where} has unknown keys: {', '.join(sorted(map(str, unknown)))}")
-    defaults = cls()
-    return {name: _typed(f"{where}.{name}", value, getattr(defaults, name)) for name, value in raw.items()}
-
-
-def _typed(where: str, value: Any, default: Any) -> Any:
-    """``value`` checked against the kind of ``default``."""
-    name = where.rsplit(".", 1)[-1]
-    if value is None and name in NULL_ALLOWED:
-        return None
-    if isinstance(default, bool):
-        if not isinstance(value, bool):
-            raise ConfigError(f"{where} must be true or false")
-        return value
-    if isinstance(default, str):
-        if not isinstance(value, str) or not value:
-            raise ConfigError(f"{where} must be a name")
-        return value
-    minimum = "non-negative" if name in ZERO_ALLOWED else "positive"
-    whole = isinstance(default, int)
-    number = not isinstance(value, bool) and isinstance(value, int if whole else int | float)
-    if not number or value < 0 or (value == 0 and name not in ZERO_ALLOWED):
-        raise ConfigError(f"{where} must be a {minimum} {'whole number' if whole else 'number'}")
-    return value if whole else float(value)
+def merged(base: Any, changes: Any) -> Any:
+    """``changes`` over ``base``: mappings merge key by key, anything else replaces (``null`` included)."""
+    if not isinstance(base, Mapping) or not isinstance(changes, Mapping):
+        return deepcopy(changes)
+    result = {key: deepcopy(value) for key, value in base.items()}
+    for key, value in changes.items():
+        result[key] = merged(result[key], value) if key in result else deepcopy(value)
+    return result
 
 
 @dataclass(frozen=True)
 class ModelEndpoint(SharedEndpoint):
-    """One chat-style model endpoint, with the frontend's own reply format on top of the shared fields."""
+    """One chat-style model endpoint, with the frontend's own reply format and entry key on top of the shared fields."""
 
     # Frontend only: json_schema or none, the talker's decision format; nothing steps down.
     response_format: str = "json_schema"
+    # Frontend only: the services key of the catalog entry it comes from ("" for none); the cascade's talker_style names
+    # the talker's style by it.
+    service_key: str = ""
 
 
-@dataclass(frozen=True)
-class ReliabilityConfig:
-    """The talker's timeouts and retries. Retries never wrap an action that could repeat."""
+class ReliabilityConfig(StrictModel):
+    """The talker's timeout and retries. Retries never wrap an action that could repeat."""
 
-    provider_retries: int = 2  # the model client's own retries of transient failures
-    talker_attempt_timeout_seconds: float = 10.0  # one talker call, from its request to the end of its decision
-    client_timeout_seconds: float = 45.0  # the talker's model client, per request
+    # The model client's own retries of transient failures; 0: none.
+    provider_retries: Annotated[int, Field(strict=True, ge=0)] = 2
+    talker_attempt_timeout_seconds: Seconds = 10.0  # one talker call, from its request to the end of its decision
 
 
-@dataclass(frozen=True)
-class DelegationConfig:
-    """What the voice does around its delegations: the app wait, how results are worded, spoken progress."""
+class DelegationConfig(StrictModel):
+    """What the voice does around its delegations: the app wait and spoken progress."""
 
     # How long the voice waits for the app's outputs to a delegation before it says the app-wait line; null: no line.
-    # It is below the core's deadline for those outputs (core.yaml delegation.client_tool_timeout_seconds).
-    app_wait_seconds: float | None = 50.0
-    result_wording: str = "writer"  # how ready results are worded: writer (the talker) or as_written
+    # It is below the core's deadline for those outputs (the core's delegation.client_tool_timeout_seconds).
+    app_wait_seconds: Seconds | None = 50.0
     # The talker may word a short progress line when work has run this long without the assistant saying anything;
     # null: none. A later line for the same delegation needs a backend step that ended or a new progress note.
-    progress_after_seconds: float | None = 8.0
-    progress_max_per_delegation: int = 3
+    progress_after_seconds: Seconds | None = 8.0
+    progress_max_per_delegation: WholeNumber = 3
 
 
-@dataclass(frozen=True)
-class NormalizerConfig:
-    """Rewriting the caller's turn into written form before the talker sees it."""
-
-    enabled: bool = False
-    # A slower normalization keeps the turn as heard.
-    timeout_seconds: float = 4.0
-
-
-@dataclass(frozen=True)
-class MemoryConfig:
+class MemoryConfig(StrictModel):
     """The talker's memory."""
 
-    context_tokens: int = 16_000  # the talker's memory budget
-    compact_at: float = 0.8  # whole turn groups are dropped once memory passes this share of the budget
+    context_tokens: WholeNumber = 16_000  # the talker's memory budget
+    # Whole turn groups are dropped once memory passes this share of the budget: above 0, at most 1.
+    compact_at: Annotated[float, Field(strict=True, gt=0, le=1)] = 0.8
 
 
-@dataclass(frozen=True)
-class SpeechConfig:
-    """How replies are spoken."""
+class SpeechConfig(StrictModel):
+    """How the caller's turn starts and ends (media/turns.py)."""
 
-    # How the caller's turn ends (media/turns.py): smart_turn, silence or shared.
-    turn_end: str = "smart_turn"
-    vad_start_seconds: float = 0.12  # smart_turn, silence: speech this long marks the caller as speaking
-    vad_stop_seconds: float = 0.2  # smart_turn: the pause Smart Turn judges, below turn_silence_seconds
-    turn_silence_seconds: float = 1.2  # a pause this long ends the turn whatever Smart Turn judged
-    start_timeout_seconds: float = 3.0  # a line whose audio has not started by then is retried or written off
-    resume_after_noise: bool = True  # a line cut by a noise, or by words the talker waits on, resumes
-    retry_silent_lines: bool = True  # a line that produced no audio is said once more
-    # What the talker's context alone keeps of a cut line: as_recorded, the words that played, as every record keeps
-    # them; estimated, also the whole words its audio likely carried past what played.
-    heard_words: str = "as_recorded"
-    estimate_chars_per_second: float = 15.0  # that estimate's speaking rate until a sentence of the call has played
+    # Speech this long marks the caller as speaking; while the bot is silent, that first sound starts their turn.
+    vad_start_seconds: Seconds = 0.12
+    vad_stop_seconds: Seconds = 0.2  # the pause Smart Turn judges, below turn_silence_seconds
+    turn_silence_seconds: Seconds = 1.2  # a pause this long ends the turn whatever Smart Turn judged
+    # While the bot speaks, the words that start the caller's turn and so cut it; while it is silent, the caller's first
+    # sound starts it.
+    interrupt_min_words: WholeNumber = 2
 
 
-@dataclass(frozen=True)
-class LiveConfig:
-    """The cascade's settings: the ``frontend.cascade`` block of ``config.yaml``.
+class LiveConfig(StrictModel):
+    """The cascade's settings: the ``frontend.cascade`` block.
 
-    ``provider`` names the talker's service (``talker.LLM_SERVICES``), ``slot`` the ``examples_registry.yaml``
-    services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the talker prompt of
-    ``prompts.yaml`` (``agent_prompts.Talker``) used, as written, as the talker's instructions when a session supplies
-    none or blank ones.
-    ``display_label`` is not a key of the file: the root hands the cascade the delegation core's
+    ``slot`` names the ``examples_registry.yaml`` services slot whose selected ``services.yaml`` entry is the talker's
+    model, ``talker_style`` the talker's style by that entry's services key (:meth:`style_of`), and ``prompt`` the
+    talker prompt of ``prompts.yaml`` (``agent_prompts.Talker``) used, as written, as the talker's instructions when a
+    session supplies none or blank ones. A part left out, or null, keeps its defaults.
+    ``display_label`` is not a key of the block: the root hands the cascade the delegation core's
     ``delegation.display_label`` (the server label of the core's display items), so the label is written once.
     """
 
-    provider: str
-    slot: str
-    prompt: str = "generic"
-    reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
-    delegation: DelegationConfig = field(default_factory=DelegationConfig)
-    normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)
-    memory: MemoryConfig = field(default_factory=MemoryConfig)
-    speech: SpeechConfig = field(default_factory=SpeechConfig)
-    # Reply audio held before playback starts, so uneven TTS chunks do not stall it (0 sends audio at once).
-    tts_preroll_ms: int = 300
-    display_label: str = "delegation_core"
+    model_config = ConfigDict(extra="forbid", frozen=True, title="frontend.cascade")
 
+    slot: Name
+    # The talker's style by the services key of the slot's selected entry, its service in talker.LLM_SERVICES: json
+    # (the JSON decision, for a key not listed) or tools (the routing decision with function calling).
+    talker_style: dict[Name, Name] = {}
+    prompt: Name = "generic"
+    reliability: ReliabilityConfig = Field(default_factory=ReliabilityConfig)
+    delegation: DelegationConfig = Field(default_factory=DelegationConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    speech: SpeechConfig = Field(default_factory=SpeechConfig)
+    # Reply audio held before playback starts, so uneven TTS chunks do not stall it (0 sends audio at once), at most
+    # 2000 ms.
+    tts_preroll_ms: Annotated[int, Field(strict=True, ge=0, le=2000)] = 300
+    display_label: Name = "delegation_core"
+
+    @field_validator("talker_style", "reliability", "delegation", "memory", "speech", mode="before")
     @classmethod
-    def parse(cls, block: Any) -> LiveConfig:
-        """Validate the cascade's block (with the ``display_label`` the root put in).
+    def null_is_the_defaults(cls, part: Any) -> Any:
+        """A part set to null keeps its defaults."""
+        return {} if part is None else part
 
-        Raises:
-            ConfigError: A key is unknown, a value has the wrong kind, or the model is not named.
-        """
-        where = "frontend.cascade"
-        if not isinstance(block, Mapping):
-            raise ConfigError(f"{where} must be a mapping")
-        own = {name: value for name, value in block.items() if name != "display_label"}
-        parts = {
-            "reliability": ReliabilityConfig,
-            "delegation": DelegationConfig,
-            "normalizer": NormalizerConfig,
-            "memory": MemoryConfig,
-            "speech": SpeechConfig,
-        }
-        plain = {"provider", "slot", "prompt", "tts_preroll_ms"}
-        unknown = set(own) - set(parts) - plain
-        if unknown:
-            raise ConfigError(f"{where} has unknown keys: {', '.join(sorted(map(str, unknown)))}")
-        values: dict[str, Any] = {
-            name: part(**section(f"{where}.{name}", own[name], part)) for name, part in parts.items() if name in own
-        }
-        for name in ("provider", "slot"):
-            if not isinstance(own.get(name), str) or not own[name]:
-                raise ConfigError(f"{where}.{name} must name the frontend model's {name}")
-            values[name] = own[name]
-        if "prompt" in own:
-            if not isinstance(own["prompt"], str) or not own["prompt"]:
-                raise ConfigError(f"{where}.prompt must name a talker prompt of prompts.yaml (agent_prompts.Talker)")
-            values["prompt"] = own["prompt"]
-        if "tts_preroll_ms" in own:
-            preroll = own["tts_preroll_ms"]
-            if isinstance(preroll, bool) or not isinstance(preroll, int) or not 0 <= preroll <= 2000:
-                raise ConfigError(f"{where}.tts_preroll_ms must be a whole number from 0 to 2000")
-            values["tts_preroll_ms"] = preroll
-        if "memory" in values and values["memory"].compact_at > 1:
-            raise ConfigError(f"{where}.memory.compact_at must be a number above 0 and at most 1")
-        if "display_label" in block:
-            values["display_label"] = _typed(f"{where}.display_label", block["display_label"], cls.display_label)
-        return cls(**values)
+    def style_of(self, service_key: str) -> str:
+        """The talker's style for the model whose services key is ``service_key``: json unless the block names one."""
+        return self.talker_style.get(service_key, "json")
 
 
-@dataclass(frozen=True)
-class UiBotConfig:
+class FrontendChoice(StrictModel):
+    """The frontend adapter that serves each live session (``frontend.adapter``), and each adapter's own block.
+
+    Every key besides ``adapter`` is one adapter's block (``blocks``), kept as written for its class to validate.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, title="frontend")
+
+    adapter: Name  # a FRONTEND_ADAPTERS name
+    blocks: dict[str, dict[str, Any]] = {}  # frontend.<name>: each adapter's own block, as written
+
+    @model_validator(mode="before")
+    @classmethod
+    def adapter_blocks(cls, raw: Any) -> Any:
+        """Every key besides ``adapter`` is one adapter's block."""
+        if not isinstance(raw, Mapping):
+            return raw
+        blocks = {str(key): block for key, block in raw.items() if key != "adapter"}
+        return {**({"adapter": raw["adapter"]} if "adapter" in raw else {}), "blocks": blocks}
+
+    @model_validator(mode="after")
+    def the_adapter_has_its_block(self) -> FrontendChoice:
+        """``adapter`` names a block, and no block sets what the root hands it (the core's display label)."""
+        for name, block in self.blocks.items():
+            if "display_label" in block:
+                raise ValueError(f"frontend.{name}.display_label comes from the core's delegation.display_label")
+        if self.adapter not in self.blocks:
+            raise ValueError(f"frontend.adapter names {self.adapter!r}, but there is no frontend.{self.adapter} block")
+        return self
+
+    @property
+    def block(self) -> dict[str, Any]:
+        """The block the chosen frontend adapter reads: ``frontend.<adapter>``."""
+        return self.blocks[self.adapter]
+
+
+class UiBotConfig(StrictModel):
     """The repository UI bot's own settings (``ui_bot``)."""
 
-    # The delegation core profile the bot builds its core from, beside config.yaml (core.ui-bot.yaml: results with a
-    # display part for the task cards); its backend.prompt and backend.tools are the bot's backend prompt and tools.
-    core_config: str = "core.ui-bot.yaml"
-    channel: str = ""  # agent_prompts.Channel: the context after the bot's talker and backend prompts
+    channel: Name  # agent_prompts.Channel: the context after the bot's talker and backend prompts
+    # What the bot's own delegation core changes from the core's settings, merged over them key by key: its backend
+    # prompt and server tools, the display part of its results, and the llm adapter whatever the core's adapter is.
+    core: dict[str, Any] = {}
 
 
-@dataclass(frozen=True)
-class ExampleConfig:
-    """Everything ``config.yaml`` sets: the frontend adapter, each adapter's own block, and the UI bot's profile."""
+class ExampleConfig(StrictModel):
+    """Everything the example's ``config`` block sets: the frontend, the delegation core, and the UI bot."""
 
-    adapter: str  # frontend.adapter: the frontend adapter that serves each live session (a FRONTEND_ADAPTERS name)
-    blocks: Mapping[str, Mapping[str, Any]]  # frontend.<name>: each adapter's own block, as written
-    ui_bot: UiBotConfig = field(default_factory=UiBotConfig)
+    model_config = ConfigDict(extra="forbid", frozen=True, title="the example's settings")
 
-    @classmethod
-    def parse(cls, data: Any) -> ExampleConfig:
-        """Validate the file's top level; each adapter's block is kept as written, for its class to parse.
+    frontend: FrontendChoice
+    core: dict[str, Any]  # the delegation core's settings, which the core validates with its texts
+    ui_bot: UiBotConfig
 
-        Raises:
-            ConfigError: The file is not a mapping, a key is unknown, ``frontend.adapter`` is missing or names no
-                block, a block is not a mapping, or a block sets what the root hands it.
-        """
-        if not isinstance(data, Mapping):
-            raise ConfigError("config.yaml must be a mapping")
-        unknown = set(data) - {"frontend", "ui_bot"}
-        if unknown:
-            raise ConfigError(f"config.yaml has unknown keys: {', '.join(sorted(map(str, unknown)))}")
-        frontend = data.get("frontend")
-        if not isinstance(frontend, Mapping):
-            raise ConfigError("config.yaml needs frontend: the frontend adapter (adapter) and its block")
-        adapter = frontend.get("adapter")
-        if not isinstance(adapter, str) or not adapter:
-            raise ConfigError("frontend.adapter must name the frontend adapter that serves live sessions")
-        blocks = {}
-        for name, block in frontend.items():
-            if name == "adapter":
-                continue
-            if not isinstance(block, Mapping):
-                raise ConfigError(f"frontend.{name} must be a mapping: a frontend adapter's block")
-            if "display_label" in block:
-                raise ConfigError(f"frontend.{name}.display_label comes from core.yaml delegation.display_label")
-            blocks[str(name)] = MappingProxyType(dict(block))
-        if adapter not in blocks:
-            raise ConfigError(f"frontend.adapter names {adapter!r}, but config.yaml has no frontend.{adapter} block")
-        ui_bot = UiBotConfig(**section("ui_bot", data.get("ui_bot"), UiBotConfig))
-        return cls(adapter=adapter, blocks=MappingProxyType(blocks), ui_bot=ui_bot)
+    @property
+    def ui_bot_core(self) -> dict[str, Any]:
+        """The UI bot's delegation core settings: the core's, with ``ui_bot.core`` merged over them."""
+        return merged(self.core, self.ui_bot.core)

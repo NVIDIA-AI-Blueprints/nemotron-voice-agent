@@ -7,17 +7,12 @@
 
 import json
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
-
-import yaml
 
 from examples.frontend_backend_live.delegation_core.app import app_output_steps, log_trace
 from examples.frontend_backend_live.delegation_core.backend.recovery import ShapeHints
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_TEXTS, core_block
 from tests.unit.delegation_core.helpers import (
-    CORE_YAML,
     IMCase,
     ScriptedAdapter,
     answer,
@@ -27,19 +22,15 @@ from tests.unit.delegation_core.helpers import (
     read_all,
 )
 
-# The step is off in the shipped core.yaml; a profile turns it on with the block that file documents. Its block (with
-# the hint's words from prompts.yaml), and the hint it adds.
+# The step is off in the shipped settings; a deployment turns it on with its block. Its block (with the hint's words
+# from prompts.yaml), and the hint it adds.
 NOT_FOUND_PATTERN = r"(?i)\b(not found|does not exist|no such)\b"
 
 
 def _shape_hints_block() -> dict:
-    with TemporaryDirectory() as folder:
-        profile = Path(folder) / "core.shape-hints.yaml"
-        steps = {"shape_hints": {"not_found_pattern": NOT_FOUND_PATTERN}}
-        profile.write_text(
-            yaml.safe_dump({"extends": str(CORE_YAML), "backend": {"app_output_steps": steps}}), encoding="utf-8"
-        )
-        return dict(CoreSettings.load(profile, CORE_TEXTS).backend.app_output_steps["shape_hints"])
+    steps = {"shape_hints": {"not_found_pattern": NOT_FOUND_PATTERN}}
+    settings = CoreSettings.parse(core_block(backend={"app_output_steps": steps}), CORE_TEXTS)
+    return dict(settings.backend.app_output_steps["shape_hints"])
 
 
 SHAPE_HINTS = _shape_hints_block()

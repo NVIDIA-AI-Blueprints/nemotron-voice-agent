@@ -7,16 +7,16 @@ import asyncio
 import base64
 import json
 import unittest
-from dataclasses import replace
-from pathlib import Path
-from tempfile import TemporaryDirectory
+from functools import partial
 from unittest.mock import patch
 
 import httpx
 from aiortc import RTCPeerConnection
 from aiortc.mediastreams import AudioStreamTrack
 from fastapi import FastAPI
-from pipecat.frames.frames import InputAudioRawFrame, LLMTextFrame
+from loguru import logger
+from pipecat.frames.frames import InputAudioRawFrame, LLMTextFrame, MetricsFrame, VADUserStoppedSpeakingFrame
+from pipecat.metrics.metrics import TTFBMetricsData
 from pipecat.observers.base_observer import BaseObserver
 from pipecat.processors.frame_processor import FrameProcessor
 
@@ -25,13 +25,13 @@ from examples.frontend_backend_live.adapter.connection import LiveWebRTCConnecti
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask, compose, settings_for
 from examples.frontend_backend_live.heard_log import Heard
 from examples.frontend_backend_live.prompts import load_prompts
+from examples.shared import audio_recorder
 from gateways.live.gateway import LiveGateway, LiveSettings, create_live_router
 from gateways.live.gateway.websocket import run_primary_websocket
 from gateways.live.ports import SessionParts
 from gateways.live.protocol import SessionConfig
 from gateways.live.server_delegation.passthrough import COMPOSED_SOURCE, request_settings
 from tests.unit.cascade_helpers import (
-    CORE_YAML,
     ENDPOINT,
     LIVE_CONFIG,
     MENU_TOOL,
@@ -44,8 +44,8 @@ from tests.unit.cascade_helpers import (
     core_hook,
     tool_call_round,
 )
-from tests.unit.core_helpers import FakeChat, chunk, tool_fragment
-from tests.unit.frontend_helpers import ScriptedChat, decision
+from tests.unit.core_helpers import CORE_BLOCK, FakeChat, chunk, tool_fragment
+from tests.unit.frontend_helpers import ScriptedChat, ToneTTS, decision
 from tests.unit.live_helpers import FakeWebSocket
 
 # The example's prompt file: its prompt set, whose words the cascade writes in these whole-call tests, and its lines.
@@ -83,6 +83,11 @@ SILENCE_100MS = base64.b64encode(bytes(4800)).decode()
 
 
 class EngineHarness(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # The shared audio recorder's switches at their defaults, whatever the environment sets: nothing records.
+        self.enterContext(patch.object(audio_recorder, "ENABLE_ASR_DUMP", False))
+        self.enterContext(patch.object(audio_recorder, "ENABLE_TTS_DUMP", False))
+
     def feed_silence(self, tenths):
         """Send caller audio so the input media clock advances (append acknowledgments wait for it)."""
         for _ in range(tenths):
@@ -95,14 +100,18 @@ class EngineHarness(unittest.IsolatedAsyncioTestCase):
         *,
         live_config=LIVE_CONFIG,
         delegation=None,
-        core=CORE_YAML,
+        core=CORE_BLOCK,
+        models=(),
         tts=FakeTTS,
         websocket=FakeWebSocket,
+        early=(),
     ):
         """Run the real gateway with a real engine, scripted models and fake speech services.
 
-        ``live_config`` is the cascade's block, ``core`` the core's file (a profile), and ``delegation`` sets keys of
-        its ``delegation`` block; ``tts`` is the speech output's class, and ``websocket`` the client socket's.
+        ``live_config`` is the cascade's block, ``core`` the core's settings, ``models`` the models its catalog lists
+        beside the endpoint's, and ``delegation`` sets keys of its ``delegation`` block; ``tts`` is the speech output's
+        class, and ``websocket`` the client socket's. ``early`` are client events sent right after ``session.start``,
+        before ``session.started``.
         """
         self.chat = ScriptedChat(*script)
         self.stt, self.tts = FakeSTT(), tts()
@@ -117,8 +126,8 @@ class EngineHarness(unittest.IsolatedAsyncioTestCase):
             self.parts.append(parts)
             return parts
 
-        # The gateway's one core, as the root builds it: the shipped core.yaml, its backend LLM on the same script.
-        self.core = chat_core(self.chat, path=core, **(delegation or {}))
+        # The gateway's one core, as the root builds it: the shipped core settings, its backend LLM on the same script.
+        self.core = chat_core(self.chat, core=core, models=models, **(delegation or {}))
         self.addAsyncCleanup(self.core.aclose)
         hook = core_hook(self.core)
         self.core_client = hook.client
@@ -127,6 +136,8 @@ class EngineHarness(unittest.IsolatedAsyncioTestCase):
         self.server = asyncio.create_task(run_primary_websocket(self.gateway, self.ws))
         self.addAsyncCleanup(self.stop)
         self.ws.send({"type": "session.start", "event_id": "start_1", "session": session})
+        for message in early:
+            self.ws.send(message)
         return await self.ws.wait_for("session.started")
 
     @property
@@ -349,8 +360,8 @@ class ClientToolsEndToEndTests(EngineHarness):
         # The update applies to the requests sent after it, which read the stored settings.
         settings = request_settings(self.live_session.config.delegation.responses)
         self.assertEqual((settings["instructions"], settings["max_output_tokens"]), ("New backend rules.", 77))
-        # A model the core does not serve: the core checks the settings after the answer (with its
-        # input_tokens; core.yaml's unlisted_models: report), and the error is nonfatal.
+        # A model the core does not serve: the core checks the settings after the answer (with its input_tokens), and
+        # the error is nonfatal: the session goes on, and the setting is kept.
         update = {"delegation": {"responses": {"model": "org/unlisted-model"}}}
         self.ws.send({"type": "session.update", "event_id": "u2", "session": update})
         error = (await self.ws.wait_for("error"))["error"]
@@ -359,21 +370,18 @@ class ClientToolsEndToEndTests(EngineHarness):
             ("responses_validation_failed", "session.delegation.responses.model", "u2"),
         )
         self.assertEqual(self.live_session.status, "active")
+        self.assertEqual(request_settings(self.live_session.config.delegation.responses)["model"], "org/unlisted-model")
 
-    async def test_a_fallback_profile_starts_the_benchmark_clients_session_with_no_error_and_runs_its_model(self):
-        # The second real-core case of the background check: a core profile's unlisted_models: fallback runs a model
-        # the catalog does not list on the slot's endpoint. So the benchmark client's session, which names its own agent
-        # model, starts with no error (core.yaml reports the model, as above), and its typed run goes to that endpoint
-        # as that model.
-        profile = Path(self.enterContext(TemporaryDirectory())) / "core.custom.yaml"
-        profile.write_text(f"extends: {CORE_YAML}\nbackend: {{llm: {{unlisted_models: fallback}}}}\n", encoding="utf-8")
+    async def test_the_benchmark_clients_session_starts_with_no_error_and_runs_its_model(self):
+        # The second real-core case of the background check: the benchmark client's session names its own agent model,
+        # which the catalog lists. It starts with no error, and its typed run goes to that model.
         await self.serve(
             BENCHMARK_SESSION,
             [
                 [chunk("Your order is on its way.", finish="stop")],  # the backend: the typed run's round
                 _decision_chunks('{"action":"speak","speech":"Your order is on its way."}'),  # the writer
             ],
-            core=profile,
+            models=("benchmark/agent-model",),
         )
         await asyncio.gather(*self.live_session.delegation.checks)  # the start's settings check
         typed = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Where is my order?"}]}
@@ -489,11 +497,12 @@ class ClientToolsEndToEndTests(EngineHarness):
 
     async def test_history_shows_the_backend_busy_while_a_delegation_waits_for_the_app(self):
         # The backend's busy flag comes from the adapter's work note.
-        # At the core's client-tool deadline (0.2 s here, core.yaml client_tool_timeout_seconds) the core's work ends
+        # At the core's client-tool deadline (0.2 s here, the core's client_tool_timeout_seconds) the core's work ends
         # and nothing runs there any more, but the delegation still waits for the app in the work note: when the
         # voice's app wait (0.4 s here) runs out, it says the app-wait line once and keeps the delegation watched, so a
         # late result is still said, and the flag stays on.
-        live_config = replace(LIVE_CONFIG, delegation=replace(LIVE_CONFIG.delegation, app_wait_seconds=0.4))
+        delegation = LIVE_CONFIG.delegation.model_copy(update={"app_wait_seconds": 0.4})
+        live_config = LIVE_CONFIG.model_copy(update={"delegation": delegation})
         await self.serve(
             RESPONSES_SESSION,
             [_decision_chunks('{"action":"delegate","speech":"Let me check."}'), tool_call_round()],
@@ -696,6 +705,31 @@ class ClientModeEndToEndTests(EngineHarness):
         # stay silent, so the client's update is said as written.
         self.assertEqual(" ".join(self.tts.spoken), "Background fact.")
 
+    async def test_empty_thinking_for_a_delegation_cancels_its_waiting_lead_in(self):
+        # The Live API's recipe: a delay at the start, then empty thinking that names the announced delegation.
+        session = {**self.CLIENT_SESSION, "delegation": {"type": "client", "acknowledgement_delay_ms": 300}}
+        script = [
+            _decision_chunks('{"action":"delegate","speech":"One moment."}'),
+            _decision_chunks('{"action":"speak","speech":"It is sunny today."}'),
+        ]
+        await self.serve(session, script)
+        await self.stt.say("What is the weather?")
+        delegation_id = (await self.ws.wait_for("session.delegation.created"))["delegation"]["id"]
+        quiet = {"type": "session.thinking.append", "event_id": "quiet", "delegation_id": delegation_id, "content": ""}
+        self.ws.send(quiet)
+        self.assertEqual((await self.ws.wait_for("session.thinking.appended", timeout=3))["client_event_id"], "quiet")
+        self.assertEqual(self.engines[0].voice.acknowledgements.pending, {})
+        await asyncio.sleep(0.5)  # past the delay
+        self.ws.send(
+            {"type": "session.commentary.append", "delegation_id": delegation_id, "content": "Weather: sunny, 72."}
+        )
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "sunny" in e["delta"])
+        self.assertEqual(" ".join(self.tts.spoken), "It is sunny today.")
+        self.assertNotIn("One moment.", self.chat.requests[1]["messages"][-1]["content"])  # never told
+        messages = (await self.history())["frontend"]["messages"]
+        context = [message["content"] for message in messages if message["kind"] == "app_context"]
+        self.assertEqual(context, [PROMPTS.context_label + "Weather: sunny, 72."])  # the commentary only
+
     async def test_history_has_no_backend_when_the_client_runs_it(self):
         await self.serve(self.CLIENT_SESSION, [])
         history = await self.history()
@@ -756,6 +790,11 @@ class _IdleFrontend:
 
 class WebRTCEndToEndTests(unittest.IsolatedAsyncioTestCase):
     """The real engine over a real WebRTC session: Pipecat's transport on the live connection."""
+
+    def setUp(self):
+        # The shared audio recorder's switches at their defaults, whatever the environment sets: nothing records.
+        self.enterContext(patch.object(audio_recorder, "ENABLE_ASR_DUMP", False))
+        self.enterContext(patch.object(audio_recorder, "ENABLE_TTS_DUMP", False))
 
     async def test_reply_audio_reaches_the_media_track_and_the_final_event_precedes_channel_close(self):
         import httpx
@@ -861,6 +900,27 @@ class LifecycleTests(EngineHarness):
             await self.server
         self.assertEqual(self.gateway.sessions, {})
         self.assertIsNone(self.engines[0].runner_task and (None if self.engines[0].runner_task.done() else 1))
+        # Pipecat's transport stopped with the pipeline; the gateway closed the socket once the final event went out.
+        self.assertEqual((self.ws.closed, self.ws.sent_at_close[-1]), (True, "session.closed"))
+
+    async def test_a_client_that_leaves_ends_the_session_by_its_close_code(self):
+        for code, reason in ((1000, "remote_hangup"), (1001, "remote_hangup"), (1006, "connection_lost")):
+            with self.subTest(code=code):
+                await self.serve(RESPONSES_SESSION, [])
+                self.ws.leave(code)
+                async with asyncio.timeout(10):
+                    await self.server
+                [closed] = [event for event in self.ws.from_server if event["type"] == "session.closed"]
+                self.assertEqual((closed["reason"], self.engines[-1].runner_task.done()), (reason, True))
+
+    async def test_a_command_sent_before_the_session_started_runs_once_it_is_active(self):
+        # Pipecat's transport reads the socket from the pipeline's start, before the session is active.
+        mute = {"type": "session.input_audio.mute", "event_id": "early"}
+        await self.serve(RESPONSES_SESSION, [], early=[mute])
+        muted = await self.ws.wait_for("session.input_audio.muted")
+        self.assertEqual(muted["client_event_id"], "early")
+        self.assertEqual(self.ws.kinds()[:2], ["session.started", "session.input_audio.muted"])
+        self.assertNotIn("error", self.ws.kinds())
 
     async def test_a_session_that_cannot_start_reports_an_error_and_closes(self):
         self.stt, self.tts = FakeSTT(), FakeTTS()
@@ -915,6 +975,37 @@ class VoiceServiceFailureTests(EngineHarness):
         )
         self.assertEqual(self.ws.kinds()[-1], "session.closed")
 
+    async def test_a_voice_that_gives_three_lines_in_a_row_no_audio_ends_the_call(self):
+        # Pipecat's own text-to-speech, at the example's limit: the line, said once more, and the next line all end
+        # with no audio. The first two are notices; the third writes the service off, and the session closes.
+        script = [
+            _decision_chunks('{"action":"speak","speech":"Hello there."}'),
+            _decision_chunks('{"action":"speak","speech":"Are you there?"}'),
+        ]
+        dead = partial(ToneTTS, silent={"Hello there.", "Are you there?"}, stop_frame_timeout_s=0.2)
+        await self.serve(RESPONSES_SESSION, script, tts=dead)
+
+        def notices():
+            return [(e["code"], e["message"]) for e in self.ws.from_server if e["type"] == "info"]
+
+        await self.stt.say("Hi.")
+        async with asyncio.timeout(5):  # the line and the line said once more, each with no audio
+            while len(notices()) < 2:
+                await asyncio.sleep(0.01)
+        await self.stt.say("Hello?")
+        closed = await self.ws.wait_for("session.closed", timeout=15)
+        self.assertEqual((closed["reason"], closed.get("client_event_id")), ("connection_lost", None))
+        spoken = [sentence for _, sentence in self.tts.spoken]
+        self.assertEqual(spoken, ["Hello there.", "Hello there.", "Are you there?"])
+        self.assertEqual([code for code, _ in notices()], ["pipeline_error"] * 2)
+        self.assertTrue(all(message.endswith("completed with no audio") for _, message in notices()))
+        errors = [event["error"] for event in self.ws.from_server if event["type"] == "error"]
+        self.assertEqual(
+            [(error["code"], error["message"]) for error in errors],
+            [("pipeline_error", "3 consecutive TTS contexts completed with no audio")],
+        )
+        self.assertEqual(self.ws.kinds()[-1], "session.closed")
+
 
 class StartOnceTests(EngineHarness):
     """Who starts what in a live session: each loop runs once.
@@ -950,20 +1041,22 @@ class CloseOwnerTests(EngineHarness):
         await self.serve(RESPONSES_SESSION, [])
         # Closed here while the session is active, the adapter's pipeline end would ask the session to close, and the
         # session's own close would then close the side too; that request is held, so the adapter's close runs alone.
-        with patch.object(self.engines[0].session, "request_close"):
+        with patch.object(self.engines[0].session, "request_close") as held:
             await self.parts[0].frontend.close()
         delegation = self.live_session.delegation
         placer = self.im().placer  # the IM session's loop in the core
         self.assertFalse(placer.done(), "the adapter's close stopped the delegation side's work")
         await delegation.close()
         self.assertTrue(placer.done())
+        # The held request ends the session, as in a call: with the adapter closed, nothing reads the client's socket.
+        self.engines[0].session.request_close(*held.call_args.args)
 
 
 class CallerAudioTests(EngineHarness):
     async def test_websocket_caller_audio_enters_the_pipeline_at_the_cascade_rate(self):
-        # The cascade hears the caller at 16 kHz (LIVE_AUDIO_IN_RATE). Audio from a primary
-        # WebSocket comes at the 24 kHz the gateway exchanges with the adapter, and the gate resamples it to the
-        # cascade's rate before the pipeline sees it.
+        # The cascade hears the caller at 16 kHz (LIVE_AUDIO_IN_RATE). Audio from a primary WebSocket comes in its
+        # wire format, here the default 24 kHz PCM16, and the transport's serializer resamples it to the cascade's
+        # rate before the pipeline sees it.
         await self.serve(RESPONSES_SESSION, [])
         gate, frames = self.engines[0].gate, []
 
@@ -981,6 +1074,48 @@ class CallerAudioTests(EngineHarness):
         self.assertEqual(LIVE_AUDIO_IN_RATE, 16000)
 
 
+class ReplyAudioTests(EngineHarness):
+    async def test_a_lines_first_word_reaches_the_transcript_when_the_output_resamples_its_audio(self):
+        # At 16 kHz the WebSocket's output resamples the reply audio and sends it in whole 100 ms packets, so the first
+        # word's text reaches what reads the call after the output before its audio, and waits there for that audio.
+        session = {**RESPONSES_SESSION, "audio": {"format": {"type": "audio/pcm", "rate": 16000}}}
+        await self.serve(session, [_decision_chunks('{"action":"speak","speech":"Hello there."}')])
+        await self.stt.say("Hi.")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "there." in e["delta"])
+        spoken = [e["delta"].strip() for e in self.ws.from_server if e["type"] == "session.output_transcript.delta"]
+        self.assertEqual(spoken, ["Hello", "there."])
+
+
+class LatencyLogTests(EngineHarness):
+    async def test_each_turn_logs_its_latency_and_breakdown_and_the_metrics_pass_the_whole_pipeline(self):
+        logged = []
+        sink = logger.add(lambda message: logged.append(message.record["message"]), level="INFO")
+        self.addCleanup(logger.remove, sink)
+        await self.serve(RESPONSES_SESSION, [_decision_chunks('{"action":"speak","speech":"Hello there."}')])
+        engine, passed = self.engines[0], []
+        last = engine.frontend.processors[-1]  # the assistant aggregator
+
+        class PassedMetrics(BaseObserver):
+            async def on_push_frame(self, data):
+                if isinstance(data.frame, MetricsFrame) and data.source is last:
+                    passed.extend(data.frame.data)
+
+        engine.task.add_observer(PassedMetrics())
+        await self.stt.push_frame(VADUserStoppedSpeakingFrame(stop_secs=0.2))  # the caller's speech ended
+        await self.stt.say("Hi.")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "there." in e["delta"])
+        latency = [line for line in logged if line.startswith("User-to-bot latency: ")]
+        breakdown = [line for line in logged if line.startswith("Latency breakdown: ")]
+        self.assertEqual((len(latency), len(breakdown)), (1, 1))  # one turn, one line
+        self.assertIn("endpointing wait", breakdown[0])  # from the caller's silence to the bot's first audio
+        self.assertTrue(breakdown[0].endswith("TOTAL"))
+        # The talker's time to first byte passed every processor of the session's pipeline, the output's included.
+        talker = engine.voice.talker.name
+        self.assertTrue([data for data in passed if isinstance(data, TTFBMetricsData) and data.processor == talker])
+        spoken = [e["delta"].strip() for e in self.ws.from_server if e["type"] == "session.output_transcript.delta"]
+        self.assertEqual(spoken, ["Hello", "there."])  # the call is as it was
+
+
 class ContextMeterTests(unittest.TestCase):
     def test_the_cascade_reports_how_much_conversation_its_talker_holds(self):
         from types import SimpleNamespace
@@ -988,8 +1123,7 @@ class ContextMeterTests(unittest.TestCase):
         from pipecat.processors.aggregators.llm_context import LLMContext
 
         from examples.frontend_backend_live.delegation_core.items import message_text
-        from examples.frontend_backend_live.spoken import AsRecorded
-        from examples.frontend_backend_live.voice import Voice, Writer
+        from examples.frontend_backend_live.voice import Voice
         from tests.unit.frontend_helpers import Port
 
         engine = SimpleNamespace(voice=None)
@@ -999,10 +1133,8 @@ class ContextMeterTests(unittest.TestCase):
             prompts=PROMPTS,
             lines=LINES,
             json_rules=PROMPTS.json_rules,
-            resume_note=PROMPTS.resume_note,
+            empty_turn_note=PROMPTS.empty_turn_note,
             delegation=Port(),
-            wording=Writer(),
-            cut_memory=AsRecorded(),
             item_text=message_text,
         )
         engine.voice.context = LLMContext([{"role": "user", "content": "hi"}])

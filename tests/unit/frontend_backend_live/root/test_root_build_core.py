@@ -2,16 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D101, D102, D103, D105, D107
-"""The delegation core built from its own settings: ``build_core`` and its profiles."""
+"""The delegation core built from its own settings: ``build_core``, the shipped settings and the UI bot's."""
 
 import asyncio
 import json
 import subprocess
 import sys
 import unittest
-from dataclasses import replace
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import ModuleType
 from unittest.mock import patch
 
@@ -27,10 +25,9 @@ from examples.frontend_backend_live.delegation_core.config import (
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.shared.delegation_contract import ModelEndpoint
 from tests.unit.contracts.base import ContractCase
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, EXAMPLE_SETTINGS, core_block
 
-FBL = Path(__file__).resolve().parents[4] / "src/examples/frontend_backend_live"
-SHIPPED = CoreSettings.load(FBL / "core.yaml", CORE_TEXTS)
+SHIPPED = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS)
 DEFAULT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1")
 DEFAULTS = BackendTask("test/model", "Take orders.", [])
 
@@ -42,7 +39,7 @@ def endpoints(model):
 def settings(**backend) -> CoreSettings:
     """The shipped core settings with another ``backend`` section (by default one ``scripted`` adapter, no tools)."""
     raw = {"slot": "thinker-llm", "prompt": "thinker", "adapter": "scripted", "one_shot_adapter": "scripted"}
-    return replace(SHIPPED, backend=BackendChoice.parse({**raw, **backend}))
+    return SHIPPED.model_copy(update={"backend": BackendChoice.model_validate({**raw, **backend})})
 
 
 # --------------------------------------------------------------------------------------------- test sources
@@ -149,14 +146,6 @@ class Format(Recorder):
     pass
 
 
-class Items(Recorder):
-    pass
-
-
-class Notes(Recorder):
-    pass
-
-
 class CafeLike(Recorder):
     label = "cafe"
 
@@ -173,16 +162,15 @@ def module(name: str, **attributes) -> dict:
 
 
 def im_results(**tables) -> dict:
-    """A stand-in of the IM's tables (``im/results.py``), as the builder reads them: ``plain``, ``items`` by default."""
+    """A stand-in of the IM's table of result formats (``im/results.py``), as the builder reads it: ``plain``."""
     return module(
-        "examples.frontend_backend_live.delegation_core.im.results",
-        **{"RESULT_FORMATS": {"plain": Format}, "CALL_REPORTS": {"items": Items}, **tables},
+        "examples.frontend_backend_live.delegation_core.im.results", **{"RESULT_FORMATS": {"plain": Format}, **tables}
     )
 
 
 class BuilderCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        # The IM's tables of result formats and of backend-call reports, as the builder reads them.
+        # The IM's table of result formats, as the builder reads it.
         self.enterContext(patch.dict(sys.modules, im_results()))
 
     def build(self, configured=None, **kwargs) -> DelegationCore:
@@ -235,22 +223,15 @@ class AdapterChoiceTests(BuilderCase):
     def test_the_result_format_is_picked_by_name_with_its_note(self):
         formats = {"plain": Format, "speak_display": Format}
         with patch.dict(sys.modules, im_results(RESULT_FORMATS=formats)):
-            core = self.build(replace(settings(), delegation=DelegationSettings(result_format="speak_display")))
+            core = self.build(
+                settings().model_copy(update={"delegation": DelegationSettings(result_format="speak_display")})
+            )
         self.assertIsInstance(core.result_format, Format)
         self.assertEqual(core.result_format.args, (SHIPPED.texts.result_formats["speak_display"],))
         with self.assertRaisesRegex(ValueError, "Unknown result format 'speak_display'"):
-            self.build(replace(settings(), delegation=DelegationSettings(result_format="speak_display")))
+            self.build(settings().model_copy(update={"delegation": DelegationSettings(result_format="speak_display")}))
 
-    def test_the_backend_call_reports_are_picked_by_name(self):
-        reports = {"items": Items, "notes": Notes}
-        with patch.dict(sys.modules, im_results(CALL_REPORTS=reports)):
-            self.assertIsInstance(self.build().call_reports, Items)  # the default: official mcp_call items
-            core = self.build(replace(settings(), delegation=DelegationSettings(backend_calls="notes")))
-        self.assertIsInstance(core.call_reports, Notes)
-        with self.assertRaisesRegex(ValueError, "Unknown backend call report 'logs'; known: items"):
-            self.build(replace(settings(), delegation=DelegationSettings(backend_calls="logs")))
-
-    def test_tool_sources_are_named_by_the_profile_and_fresh_for_each_session(self):
+    def test_tool_sources_are_named_by_the_settings_and_fresh_for_each_session(self):
         tables = module("examples.frontend_backend_live.delegation_core.backend.tools", TOOL_SOURCES={"cafe": CafeLike})
         with patch.dict(sys.modules, tables):
             core = self.build(settings(tools={"cafe": {"currency": "USD"}}))
@@ -275,7 +256,6 @@ class CoreTests(BuilderCase):
             first.kwargs,
             {
                 "result_format": core.result_format,
-                "call_reports": core.call_reports,
                 "output_steps": (),  # the settings name no app output step
                 "observe": log_trace,
             },
@@ -304,13 +284,16 @@ class CoreTests(BuilderCase):
         # gateway sizes its close of the delegation part from it.
         delegation = SHIPPED.delegation
         self.assertEqual(self.build().close_seconds, delegation.close_grace_seconds + delegation.stop_timeout_seconds)
-        no_grace = replace(SHIPPED, delegation=replace(delegation, close_grace_seconds=None))
+        no_grace = SHIPPED.model_copy(
+            update={"delegation": delegation.model_copy(update={"close_grace_seconds": None})}
+        )
         self.assertEqual(  # with no grace, running work may finish, within its backstop
-            self.build(replace(no_grace, backend=settings().backend)).close_seconds,
+            self.build(no_grace.model_copy(update={"backend": settings().backend})).close_seconds,
             delegation.work_timeout_seconds + delegation.stop_timeout_seconds,
         )
-        unbounded = replace(no_grace, delegation=replace(no_grace.delegation, work_timeout_seconds=None))
-        self.assertIsNone(self.build(replace(unbounded, backend=settings().backend)).close_seconds)
+        unbounded_delegation = no_grace.delegation.model_copy(update={"work_timeout_seconds": None})
+        unbounded = no_grace.model_copy(update={"delegation": unbounded_delegation, "backend": settings().backend})
+        self.assertIsNone(self.build(unbounded).close_seconds)
 
     def test_describe_gives_the_choices_and_the_sources_own_description(self):
         core = self.build(settings(one_shot_adapter="other", other={}))
@@ -340,20 +323,18 @@ class CoreTests(BuilderCase):
 # ---------------------------------------------------------------------------------------- crossings
 class CrossingTests(unittest.TestCase):
     def test_the_core_builds_with_no_module_of_the_frontend_loaded(self):
-        # A fresh interpreter: build a core from the shipped file with a test table, then list what got imported.
-        script = f"""
+        # A fresh interpreter: build a core from the shipped settings with a test table, then list what got imported.
+        script = """
 import sys
-from dataclasses import replace
-from pathlib import Path
 from examples.frontend_backend_live.delegation_core.app import build_core
 from examples.frontend_backend_live.delegation_core.config import BackendChoice, CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.shared.delegation_contract import ModelEndpoint
 from tests.unit.frontend_backend_live.root.test_root_build_core import ADAPTERS
-from tests.unit.core_helpers import CORE_TEXTS
-settings = CoreSettings.load(Path({str(FBL / "core.yaml")!r}), CORE_TEXTS)
-raw = {{"slot": "s", "prompt": "p", "adapter": "scripted", "one_shot_adapter": "scripted"}}
-settings = replace(settings, backend=BackendChoice.parse(raw))
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS
+settings = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS)
+raw = {"slot": "s", "prompt": "p", "adapter": "scripted", "one_shot_adapter": "scripted"}
+settings = settings.model_copy(update={"backend": BackendChoice.model_validate(raw)})
 endpoint = ModelEndpoint(model="m", base_url="http://localhost:1/v1")
 build_core(settings, endpoints=lambda model: endpoint, defaults=BackendTask("m", "x", []), adapters=ADAPTERS)
 held = ("examples", "examples.frontend_backend_live")  # the packages that hold the core
@@ -375,42 +356,52 @@ print(sorted(name for name in loaded if name not in held and name != core and no
         self.assertEqual(done.stdout.strip(), "[]")
 
 
-# ------------------------------------------------------------------------------------------------ the profiles
-class ProfileTests(unittest.TestCase):
-    def test_the_ui_bot_profile_writes_the_envelope_and_runs_the_cafes_tools_and_prompt(self):
-        ui_bot = CoreSettings.load(FBL / "core.ui-bot.yaml", CORE_TEXTS)
+# ------------------------------------------------------------------------------------------------ the settings
+def ui_bot_core(settings: dict) -> CoreSettings:
+    """The UI bot's core of the example's ``settings``: the core's, with ``ui_bot.core`` merged over them.
+
+    The frontend's schema is imported here, so the crossing test's interpreter, which imports this module, loads none.
+    """
+    from examples.frontend_backend_live.config_manager.schema import ExampleConfig
+
+    return CoreSettings.parse(ExampleConfig.model_validate(settings).ui_bot_core, CORE_TEXTS)
+
+
+class SettingsTests(unittest.TestCase):
+    def test_the_ui_bots_core_writes_the_envelope_and_runs_the_cafes_tools_and_prompt(self):
+        ui_bot = ui_bot_core(EXAMPLE_SETTINGS)
         self.assertEqual({name: dict(block) for name, block in ui_bot.backend.tools.items()}, {"cafe": {}})
         self.assertEqual((ui_bot.backend.prompt, SHIPPED.backend.prompt), ("cafe", "generic"))
-        self.assertEqual(replace(ui_bot.backend, prompt="generic", tools=SHIPPED.backend.tools), SHIPPED.backend)
+        self.assertEqual(
+            ui_bot.backend.model_copy(update={"prompt": "generic", "tools": SHIPPED.backend.tools}), SHIPPED.backend
+        )
         self.assertEqual(ui_bot.delegation.result_format, "speak_display")
-        self.assertEqual(replace(ui_bot.delegation, result_format="plain"), SHIPPED.delegation)
+        self.assertEqual(ui_bot.delegation.model_copy(update={"result_format": "plain"}), SHIPPED.delegation)
         self.assertEqual(ui_bot.texts, SHIPPED.texts)
         self.assertEqual(ui_bot.backend.blocks, SHIPPED.backend.blocks)
 
-    def test_a_profile_waits_for_the_app_writes_no_notes_and_runs_unlisted_models(self):
-        changes = (
-            "delegation: {client_tool_timeout_seconds: null, progress_note_seconds: 0, result_format: plain}\n"
-            "backend: {llm: {conductor: steer, unlisted_models: fallback}}\n"
-        )
-        with TemporaryDirectory() as folder:
-            profile = Path(folder) / "core.custom.yaml"
-            profile.write_text(f"extends: {FBL / 'core.yaml'}\n{changes}", encoding="utf-8")
-            bench = CoreSettings.load(profile, CORE_TEXTS)
+    def test_the_ui_bots_core_stays_on_the_backend_llm_whatever_adapter_the_core_runs(self):
+        for adapter in ("llm-agent", "harness"):
+            with self.subTest(adapter):
+                settings = {**EXAMPLE_SETTINGS, "core": core_block(backend={"adapter": adapter})}
+                self.assertEqual(CoreSettings.parse(settings["core"], CORE_TEXTS).backend.adapter, adapter)
+                self.assertEqual(ui_bot_core(settings).backend, ui_bot_core(EXAMPLE_SETTINGS).backend)
+
+    def test_settings_that_wait_for_the_app_and_write_no_notes(self):
+        changes = {"client_tool_timeout_seconds": None, "progress_note_seconds": 0, "result_format": "plain"}
+        bench = CoreSettings.parse(core_block(delegation=changes), CORE_TEXTS)
         delegation = bench.delegation
         self.assertIsNone(delegation.client_tool_timeout_seconds)
         self.assertEqual((delegation.progress_note_seconds, delegation.result_format), (0.0, "plain"))
-        llm = dict(bench.backend.blocks["llm"])
-        self.assertEqual((llm["conductor"], llm["unlisted_models"]), ("steer", "fallback"))
-        self.assertEqual({**dict(SHIPPED.backend.blocks["llm"]), "unlisted_models": "fallback"}, llm)
+        self.assertEqual(bench.backend, SHIPPED.backend)
 
-    def test_the_shipped_core_reports_an_unlisted_model(self):
-        self.assertEqual(SHIPPED.backend.blocks["llm"]["unlisted_models"], "report")
+    def test_the_shipped_core_runs_the_backend_llm_for_sessions_and_stateless_requests(self):
         self.assertEqual((SHIPPED.backend.adapter, SHIPPED.backend.one_shot_adapter), ("llm", "llm"))
 
 
 # ------------------------------------------------------------------------------------------------ the real core
 class RealCoreTests(ContractCase, unittest.IsolatedAsyncioTestCase):
-    """A core built from the shipped file, end to end, on the real IM and backend LLM."""
+    """A core built from the shipped settings, end to end, on the real IM and backend LLM."""
 
     async def ask(self, client, params):
         stream = await client.create_response({"stream": True, **params})
@@ -427,7 +418,7 @@ class RealCoreTests(ContractCase, unittest.IsolatedAsyncioTestCase):
         service = ResponsesService(core.session, stateless_session=core.one_shot_session, backend=core)
         return LocalResponsesClient(service)
 
-    async def test_the_backend_llm_builds_from_the_shipped_file(self):
+    async def test_the_backend_llm_builds_from_the_shipped_settings(self):
         core = build_core(SHIPPED, endpoints=endpoints, defaults=DEFAULTS)
         self.addAsyncCleanup(core.aclose)
         self.assertEqual(type(core.source).__name__, "LlmSource")

@@ -29,7 +29,8 @@ def resolve_endpoint(entry: dict, body: dict, prefix: str = "", *, slot: str) ->
     NVIDIA Cloud LLM URL (``utils.NVCF_LLM_BASE_URL``). An entry can set ``api_key_env`` to the name of the environment
     variable that holds its key, for endpoints that do not use ``NVIDIA_API_KEY``. ``extra_params`` carries every
     sampling and reasoning setting (``temperature``, ``max_tokens``, ``extra_body`` ...) because ``settings.yaml``
-    writes them there.
+    writes them there. The talker's own fields come from the entry alone: ``response_format``, its decision format, and
+    ``service_key``, the entry's services key (``key``), by which the cascade's settings name the talker's style.
 
     Args:
         entry: The selected catalog entry (``{}`` when the slot lists none).
@@ -66,6 +67,7 @@ def resolve_endpoint(entry: dict, body: dict, prefix: str = "", *, slot: str) ->
         api_key=_api_key(entry, slot),
         extra_params=extra,
         response_format=str(entry.get("response_format") or "json_schema"),
+        service_key=str(entry.get("key") or ""),
     )
 
 
@@ -133,8 +135,7 @@ class ExampleCatalog:
         The slot's own entries come first, then the other slots', so a model keeps the settings its slot gives it.
 
         Raises:
-            LookupError: The catalog lists no entry for ``model`` (the backend reports it, or falls back where its
-                settings say so).
+            LookupError: The catalog lists no entry for ``model`` (the backend reports it).
             ValueError: The entry's key variable is empty.
         """
         own = self.offered.get(slot, [])

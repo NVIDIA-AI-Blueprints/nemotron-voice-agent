@@ -20,13 +20,12 @@ from loguru import logger
 
 from gateways.live.gateway import security
 from gateways.live.gateway.settings import LiveSettings
-from gateways.live.ports import AdapterFactory, CoreHook, MediaConnection, SessionParts
+from gateways.live.ports import AdapterFactory, CoreHook, MediaConnection, PrimarySocket, SessionParts
 from gateways.live.protocol import ProtocolError, SessionConfig
 from gateways.live.session import LiveProtocolSession
 from gateways.live.session.session import no_core
 
 if TYPE_CHECKING:
-    from gateways.live.media.audio import WireCodec
     from gateways.live.server_delegation.responses_client import ResponsesClient
 
 # The ICE servers of a WebRTC session's peer, for the request that creates it: ``{urls, username?, credential?}``
@@ -179,13 +178,14 @@ class LiveGateway:
         transport: str,
         ice_servers: list[dict] | None,
         *,
-        codec: WireCodec | None = None,
+        socket: PrimarySocket | None = None,
     ) -> LiveProtocolSession:
         """Build the parts and the session for a new connection, within the concurrent-session limit.
 
         A place is taken before the parts are built, and the parts are built with no lock held, so a slow factory never
         holds up another connection. ``ice_servers`` are a WebRTC session's, for the peer connection the factory makes
-        and the parts carry (``None`` on a WebSocket), and ``codec`` is a primary WebSocket's wire audio codec.
+        and the parts carry (``None`` on a WebSocket), and ``socket`` is a WebSocket session's primary socket, which
+        the session's frontend adapter reads.
 
         Raises:
             ProtocolError: A full server (``rate_limit_exceeded``), a factory's own refusal, a factory that failed
@@ -214,7 +214,7 @@ class LiveGateway:
                     transport,
                     parts,
                     core=self.core,
-                    codec=codec,
+                    socket=socket,
                     max_session_seconds=self.settings.max_session_seconds,
                     max_appends_per_minute=self.settings.max_appends_per_minute,
                     on_closed=self._on_closed,

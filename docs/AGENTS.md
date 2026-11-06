@@ -111,12 +111,8 @@ Style Guide above.
 - Keep each `src/examples/<example>/README.md` aligned with that example's
   pipeline, prompts, service catalogs, supported transports, and deployment
   profiles.
-- Keep `docs/design/architecture.md` aligned with the Frontend/Backend Live
-  example's ports (`src/gateways/live/ports.py`,
-  `src/examples/frontend_backend_live/delegation_core/backend/port.py`), its
-  tables of implementations, and its configuration files, and keep the README
-  of `src/examples/frontend_backend_live/delegation_core/` aligned with its
-  package.
+- Keep the README of `src/examples/frontend_backend_live/delegation_core/`
+  aligned with its package.
 
 ## Documentation Sources and Maintenance
 

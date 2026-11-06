@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""How results and backend-run calls reach the wire: the result formats and call reports, chosen by name.
+"""How results and backend-run calls reach the wire: the result formats, chosen by name, and the call reports.
 
-The IM's own work tools reach the wire by what they are, whatever ``delegation.backend_calls`` says: ``show`` is always
-an ``mcp_call`` item, so the display reaches the screen, and a control call such as ``cancel_work`` never is.
+A call the backend runs is an official ``mcp_call`` item, and so is ``show``, so the display reaches the screen; a
+control call of the IM's own, such as ``cancel_work``, never is.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ class SpeakDisplay(ResultFormat):
 
 
 class CallReports:
-    """``items``: a call the backend runs is an official ``mcp_call`` item, from its start to its outcome."""
+    """A call the backend runs is an official ``mcp_call`` item, from its start to its outcome."""
 
     def started(self, task: TaskRun, call: dict, label: str) -> None:
         """The call starts: its item, ``in_progress``, labeled with its tool source."""
@@ -63,18 +63,5 @@ class ControlCalls(CallReports):
         """Nothing on the wire."""
 
 
-class CallNotes(CallReports):
-    """``notes``: a call the backend runs shows only as a progress note, its step line, when it ends."""
-
-    def started(self, task: TaskRun, call: dict, label: str) -> None:
-        """Nothing on the wire yet."""
-
-    def ended(self, task: TaskRun, call_id: str, output: str, outcome: Outcome) -> None:
-        """The call's step line as a note."""
-        task.progress(task.step_line(call_id))
-
-
 # The result formats by the name ``delegation.result_format`` gives; the core's builder picks one.
 RESULT_FORMATS: Mapping[str, type[ResultFormat]] = {"plain": ResultFormat, "speak_display": SpeakDisplay}
-# How backend-run calls reach the wire, by the name ``delegation.backend_calls`` gives; picked at build.
-CALL_REPORTS: Mapping[str, type[CallReports]] = {"items": CallReports, "notes": CallNotes}

@@ -4,18 +4,23 @@
 """One call's voice: which run of the talker each one is, what its decision does, and what the backend sends.
 
 The talker is Pipecat's LLM service in the pipeline (``examples.frontend_backend_live.talker``), its memory the context
-the aggregators keep, bounded by its token budget (:meth:`Voice.bound`). :class:`Voice` is what the talker asks before
-and after each run (``talker.Calls``):
+the aggregators keep, bounded by its token budget (:meth:`Voice.bound`). Each request starts from the messages Pipecat
+builds from that context, so the context holds only what the calls read: a line nobody heard takes the items it said
+out of it, and Pipecat's note on a caller turn with no words leaves it once the talker's run has taken it up.
+:class:`Voice` is what the talker asks before and after each run (``talker.Calls``):
 
-* **Which call.** Caller words not decided yet, or an instruction, make a routing call; a line waiting to be said (a
-  lead-in, the holding line, a line said once more) is said with no model call; what is owed (results, commentary,
-  fixed lines) makes one relay; a progress line comes last. A run with nothing to do sends no request. A turn with no
-  words right after a cut (Pipecat's empty-turn run, ``speech.resume_after_noise``) says the cut line's unheard rest.
+* **Which call.** Caller words not decided yet, an instruction, or Pipecat's note on a caller turn with no words that
+  cut the bot off (its empty-turn run) make a routing call; a line waiting to be said (a lead-in, the holding line, a
+  line said once more) is said with no model call; what is owed (results, commentary, fixed lines) makes one relay; a
+  progress line comes last. A run with nothing to do sends no request. A line the caller cut stays in the context as
+  far as it played, with the cut mark, and is never said again word for word: the talker decides what to say.
 * **What the decision does.** Each call carries its plan (:class:`Routing`, :class:`Relay`, :class:`Progress`,
   :class:`Saying`), which acts on the decision, a cancellation or a failure. A routing ``speak`` has streamed;
-  ``delegate`` hands the turn over with its speech as the lead-in (``examples.frontend_backend_live.handoffs``);
-  ``wait`` says nothing, but resumes a line the turn's words cut. Output that cannot be used, or a call that fails (from
-  the pipeline's error event), gives the holding line while work is open, else a delegation with no lead-in.
+  ``delegate`` hands the turn over with its speech as the lead-in (``examples.frontend_backend_live.handoffs``), when
+  there is a request to hand over; ``wait`` says nothing. Output that cannot be used, or a call that fails (from the
+  pipeline's error event), gives the holding line while work is open, else a delegation with no lead-in. The
+  tool-calling talker makes the move with a routing tool's call, which Pipecat then runs and writes into the context
+  with its result (kinds :data:`CALL` and :data:`CALL_RESULT`); only a routing call's request reads them.
 * **Speech when idle.** The voice listens on the session's delegation part (``gateways.live.ports.DelegationPort``)
   through the delegation reader (``examples.frontend_backend_live.delegations``). Each result and each piece of
   commentary is owed and runs the talker as Pipecat's own backend connector delivers
@@ -25,13 +30,14 @@ and after each run (``talker.Calls``):
   into the talker's context with that line, right before it (:meth:`Voice.written`). Thinking and typed questions are
   written with no run. A fixed line (an ending's, the refusal, the app-wait line) and a progress line wait the same
   way.
-* **Worded early.** With the ``writer`` wording, what is owed is worded as soon as it is queued, even while the caller
-  speaks, a turn is decided or a line plays: one relay of the talker, run out of band
-  (``examples.frontend_backend_live.talker.DecisionReplyMixin.run_call``). The relay at idle says that line with no
-  request while its stamp holds: the same items, the same notes, and nothing else moved since. A caller turn alone
-  keeps the stamp; a line, an instruction, thinking, a cut, a new request or a new item moves it, and a move cuts a
-  wording under way short. Everything owed is worded again once no caller turn waits or is decided, so after a reply
-  or a lead-in, while that line plays.
+* **Worded early.** What is owed is worded as soon as it is queued, even while the caller speaks, a turn is decided or
+  a line plays: one relay of the talker, run out of band
+  (``examples.frontend_backend_live.talker.DecisionReplyMixin.run_call``) on the context, the voice's appends on their
+  way to it and the lines in flight, which read as said, as they will be once they play. The relay at idle says that
+  line with no request while its stamp holds: the same items, the same notes, and nothing else moved since. A caller
+  turn alone keeps the stamp; a line, an instruction, thinking, a cut, a new request or a new item moves it, and a move
+  cuts a wording under way short. Everything owed is worded again once no caller turn waits or is decided, so after a
+  reply or a lead-in, while that line plays.
 
 The voice keeps the lines it said (``examples.frontend_backend_live.spoken``) and the records the delegations read: the
 work note and the heard log.
@@ -45,10 +51,11 @@ import time
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Protocol
+from typing import TYPE_CHECKING, ClassVar
 
 from loguru import logger
 from pipecat.frames.frames import InterruptionFrame, LLMMessagesAppendFrame
+from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext
 
 from examples.frontend_backend_live.delegations import DelegationReader, ReadyResult
@@ -56,14 +63,14 @@ from examples.frontend_backend_live.display import NullDisplay
 from examples.frontend_backend_live.handoffs import Acknowledgements, HandOffs
 from examples.frontend_backend_live.heard_log import HeardLog
 from examples.frontend_backend_live.models.decision import ACTIONS, CallSpec, TalkerDecision, decision_from_output_text
-from examples.frontend_backend_live.normalizer import TurnNormalizer
-from examples.frontend_backend_live.spoken import CutMemory, Line, LineKind, SpokenLines
+from examples.frontend_backend_live.spoken import Line, LineKind, SpokenLines
 from examples.frontend_backend_live.talker import (
+    CALL_FIELDS,
     Layout,
     TalkerCall,
     after_failure,
     floored,
-    plain_speech,
+    message_text,
     progress_line,
     relay_line,
 )
@@ -78,16 +85,8 @@ if TYPE_CHECKING:
     from examples.frontend_backend_live.config_manager.schema import LiveConfig
     from examples.frontend_backend_live.display import DisplaySink
     from examples.frontend_backend_live.prompts import FixedLines, PromptSet
-    from examples.frontend_backend_live.talker import TalkerChat
+    from examples.frontend_backend_live.talker import ResponseFormat, TalkerChat
     from gateways.live.ports import DelegationPort
-
-
-def message_text(message: dict) -> str:
-    """A context message's text, its parts joined when the content is a list."""
-    content = message.get("content") or ""
-    if isinstance(content, str):
-        return content
-    return "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
 
 
 def message_tokens(message: dict) -> int:
@@ -108,11 +107,14 @@ class Kind:
 
 CALLER = Kind("caller", "user", turn=True)  # the user aggregator's
 SPOKEN = Kind("spoken", "assistant")  # what a line played: the assistant aggregator's
+CALL = Kind("call", "assistant")  # a routing tool's call the talker made: the assistant aggregator's
+CALL_RESULT = Kind("call_result", "tool")  # that call's result: the assistant aggregator's
 RESULT = Kind("result", "user", reference=True)  # a backend result
 APP_CONTEXT = Kind("app_context", "user", reference=True)  # commentary, thinking, the greeting's instructions
 TYPED = Kind("typed", "user", reference=True)  # a question the application typed itself
-# The messages the aggregators write, by role; any other the voice did not write is a note no call reads.
-WRITTEN = {"user": CALLER, "assistant": SPOKEN}
+# The messages the aggregators write, by role (a call by its ``tool_calls``); any other the voice did not write is a
+# note no call reads.
+WRITTEN = {"user": CALLER, "assistant": SPOKEN, "tool": CALL_RESULT}
 
 
 # ---------------------------------------------------------------------------------------------- what is owed
@@ -156,20 +158,23 @@ LINE_KIND_ORDER = (LineKind.RESULT, LineKind.COMMENTARY, LineKind.NOTICE)
 
 
 def as_written(items: Sequence[Owed]) -> str:
-    """The items as the backend or the application wrote them, as plain spoken sentences, in order."""
-    return " ".join(line for line in (plain_speech(item.said.unworded) for item in items) if line)
+    """The items as the backend or the application wrote them, in order, each starting a line.
+
+    The text-to-speech strips their Markdown as it speaks them (``examples.frontend_backend_live.media.services``); it
+    finds a list marker or a heading only at a line's start, so an item that opens with one keeps it there.
+    """
+    return "\n".join(text for text in (item.said.unworded.strip() for item in items) if text)
 
 
 # ---------------------------------------------------------------------------------------------- the plans
 # Each call of the talker carries its plan, which meets its decision, a cut by a result, a cancellation and a failure.
 @dataclass
 class Routing:
-    """A routing call: a decision on the caller's undecided turns, or an instruction."""
+    """A routing call: a decision on the caller's undecided turns, an instruction, or a caller turn with no words."""
 
     covers: tuple[dict, ...]  # the caller turns it decides
-    request: str  # the words a delegation carries as its request
+    request: str  # the words a delegation carries as its request: none for a turn with no words alone
     work_open: bool  # whether work was open when it began: a failure holds instead of delegating
-    cut: Line | None  # the line the turns' words cut, which a wait resumes
 
     streams: ClassVar[bool] = True
 
@@ -187,7 +192,9 @@ class Routing:
 
     def finished(self, voice: Voice, call: TalkerCall, decision: TalkerDecision | None) -> str:
         """Carry the decision out; the hand-off starts with nothing awaited before it."""
-        if call.said:  # its words already went to speech: the turn is answered, whatever followed
+        # Its words already went to speech: the turn is answered, whatever followed, but a delegate call made with them
+        # still hands the turn over (Voice._delegated).
+        if call.said and not (decision.action == "delegate" and decision.call_id):
             decision = TalkerDecision("speak", call.said, decision.diagnostics)
         decision = floored(decision, work_open=self.work_open, holding=voice.lines.holding)
         voice.decided_by(self)
@@ -328,7 +335,7 @@ class Progress:
 
 @dataclass
 class Saying:
-    """A line said with no model call: a lead-in, a fixed line, a resumed rest, a line said once more."""
+    """A line said with no model call: a lead-in, a fixed line, a line said once more."""
 
     line: Line
 
@@ -362,43 +369,6 @@ class Saying:
 
     def recover(self, voice: Voice) -> None:
         """Nothing."""
-
-
-# ---------------------------------------------------------------------------------------------- the result wordings
-class ResultWording(Protocol):
-    """How what is owed becomes one line, by the name ``delegation.result_wording`` gives."""
-
-    offers_progress: ClassVar[bool]  # whether a quiet spell may bring a progress line
-    words_early: ClassVar[bool]  # whether what is owed is worded as soon as it is queued
-
-    def call(self, voice: Voice, batch: list[Owed]) -> TalkerCall | None:
-        """The call that says ``batch``, which holds at least one worded item."""
-
-
-class Writer:
-    """``writer``: the talker's relay words every worded item in one line, with the writer's rules."""
-
-    offers_progress: ClassVar[bool] = True
-    words_early: ClassVar[bool] = True
-
-    def call(self, voice: Voice, batch: list[Owed]) -> TalkerCall | None:
-        """The line worded early while its stamp holds, else the relay: the conversation, then the update."""
-        return voice.relay(batch)
-
-
-class AsWritten:
-    """``as_written``: every worded item said as written, cleaned for speech; no progress line."""
-
-    offers_progress: ClassVar[bool] = False
-    words_early: ClassVar[bool] = False
-
-    def call(self, voice: Voice, batch: list[Owed]) -> TalkerCall | None:
-        """The items as written, said with no model call."""
-        line = voice.delivered(batch, voice.joined(batch, as_written([item for item in batch if item.worded])))
-        return voice.saying(line) if line else None
-
-
-RESULT_WORDINGS: dict[str, type[ResultWording]] = {"writer": Writer, "as_written": AsWritten}
 
 
 # ---------------------------------------------------------------------------------------------- the voice
@@ -448,20 +418,6 @@ class EarlyLine:
             self.task.cancel()
 
 
-class OneShot:
-    """The talker's one-shot calls as a decision maker, for the normalizer: the same layout and format, no stream."""
-
-    def __init__(self, talker: TalkerChat, layout: Layout):
-        """Call ``talker`` out of band, with ``layout``'s messages."""
-        self.talker, self.layout = talker, layout
-
-    async def complete(self, instructions: str, history: list[dict], spec: CallSpec) -> TalkerDecision:
-        """One decision for ``history`` under ``instructions``: a call bound to Pipecat's ``run_inference``."""
-        messages = self.layout.chat_messages(instructions, history)
-        call = TalkerCall(spec=spec, messages=messages, format=self.talker.response_format)
-        return decision_from_output_text(await self.talker.run_call(call) or "", {})
-
-
 class Voice:
     """One call's voice: chooses each run of the talker and acts on its decision; says what the backend sends."""
 
@@ -472,10 +428,8 @@ class Voice:
         prompts: PromptSet,
         lines: FixedLines,
         json_rules: str,
-        resume_note: str,
+        empty_turn_note: str,
         delegation: DelegationPort,
-        wording: ResultWording,
-        cut_memory: CutMemory,
         item_text: Callable[[dict], str],
         reports_sentences: bool = True,
         display: DisplaySink | None = None,
@@ -485,14 +439,13 @@ class Voice:
         """Wire the call's records and its delegation part; the talker is bound by :meth:`bind`.
 
         Args:
-            config: The validated ``frontend.cascade`` block of ``config.yaml``.
+            config: The validated ``frontend.cascade`` block of the example's settings.
             prompts: The prompt set of the session's read of the example's prompt file.
             lines: The voice's fixed lines.
             json_rules: The decision rules, after every call's instructions.
-            resume_note: The note Pipecat writes for a turn with no words that cut a line (``EmptyUserTurnConfig``).
+            empty_turn_note: The note Pipecat writes for a caller turn with no words that cut the bot off
+                (``EmptyUserTurnConfig``), which the talker's run on that turn reads.
             delegation: The session's delegation part.
-            wording: How what is owed becomes one line (``delegation.result_wording``).
-            cut_memory: What the talker's context keeps of a line cut while it played (``speech.heard_words``).
             item_text: A message item's text, which the delegation reader reads results with.
             reports_sentences: Whether the text-to-speech's mode reports each sentence after its audio
                 (``examples.frontend_backend_live.media.services.SpeechMode``).
@@ -501,10 +454,9 @@ class Voice:
             clock: The call's one clock.
         """
         self.config, self.prompts, self.lines, self.delegation = config, prompts, lines, delegation
-        self.resume_note, self.wording, self.observe, self.clock = resume_note, wording, observe, clock
+        self.empty_turn_note, self.observe, self.clock = empty_turn_note, observe, clock
         self.layout = Layout(prompts, json_rules)
         self.display = display or NullDisplay()
-        speech = config.speech
         self.routing_spec = CallSpec("talker", ACTIONS, prompts.call_hints.talker)
         self.answer_spec = CallSpec("writer", ("speak",), prompts.call_hints.answer)
         self.progress_spec = CallSpec("writer", ("speak",), prompts.call_hints.progress)
@@ -517,14 +469,7 @@ class Voice:
         self.floor = Floor(clock)
         self.worknote = WorkNote(prompts, tracks=delegation.reports_events, clock=clock, observe=observe)
         self.heard_log = HeardLog(prompts)
-        self.spoken = SpokenLines(
-            self,
-            cut_memory=cut_memory,
-            start_timeout_seconds=speech.start_timeout_seconds,
-            retry_silent_lines=speech.retry_silent_lines,
-            reports_sentences=reports_sentences,
-            observe=observe,
-        )
+        self.spoken = SpokenLines(self, reports_sentences=reports_sentences, observe=observe)
         self.acknowledgements = Acknowledgements(self.floor, self._lead_in, observe=observe)
         self.handoffs = HandOffs(
             delegation,
@@ -548,15 +493,15 @@ class Voice:
         )
         self.worknote.on_answer = self.result_arrived
         self.talker: TalkerChat | None = None
+        self.routing_format: ResponseFormat | None = None  # how a routing call asks for its decision: the talker's
         self.context: LLMContext | None = None
-        self.normalizer: TurnNormalizer | None = None
         self.instructions: list[str] = []  # the seed's system and developer texts, then each instruction append
         self.seed_roles: list[str] = []  # the role of each of the seed's texts among them
         self.kinds: dict[int, tuple[dict, Kind]] = {}  # the context's messages the voice wrote, by identity
         self.decided: dict[int, dict] = {}  # the caller turns a routing call decided, by identity
-        self.noted: dict[int, Line | None] = {}  # the caller turns noted in the heard log: the line each one cut
-        self.unsaid: set[int] = set()  # the worded items' messages not said yet: no call reads them
-        self.sent: list[dict] = []  # the voice's appends on their way to the context, which the calls read already
+        self.noted: dict[int, dict] = {}  # the caller turns noted in the heard log, by identity
+        self.unsaid: set[int] = set()  # the worded items' messages not said yet: kept out of the context
+        self.sent: list[dict] = []  # the voice's appends on their way to the context
         self._writes: list[dict] = []  # the items' messages that go into the context with the line just handed
         self.owed: deque[Owed | Turnover] = deque()
         self.early: EarlyLine | None = None  # what is owed, worded early
@@ -569,8 +514,6 @@ class Voice:
         self.responses = 0  # the talker's responses so far: each one's number
         self.run_requested = False
         self.version = 0  # moves with what every wording reads but caller turns: lines, instructions, thinking
-        self._on_purpose = False  # the next interruption is an instruction's
-        self._handled_notes: dict[int, dict] = {}  # Pipecat's empty-turn notes already acted on, by identity
         self._offered_at = float("-inf")  # when the quiet task last offered a progress line
         self._made = 0
         self._tasks: set[asyncio.Task] = set()
@@ -583,8 +526,8 @@ class Voice:
         """Take the host's seed: its system and developer texts are the instructions; the rest starts the context.
 
         The bound never drops the instructions, as the Live port requires (``gateways.live.ports.FrontendAdapter``). A
-        user message under one of the set's labels is that kind of reference data again; the seed's caller turns are
-        history.
+        user message under one of the set's labels is that kind of reference data again, a developer message as the
+        voice writes its own; the seed's caller turns are history.
         """
         conversation = []
         labels = {self.prompts.result_label: RESULT, self.prompts.context_label: APP_CONTEXT}
@@ -594,10 +537,11 @@ class Voice:
                 self.instructions.append(text)
                 self.seed_roles.append(message["role"])
                 continue
-            conversation.append(message)
             kind = next((kind for label, kind in labels.items() if text.startswith(label)), None)
             if message.get("role") == "user" and kind is not None:
+                message = {**message, "role": "developer"}
                 self._register(message, kind)
+            conversation.append(message)
             self.decided[id(message)] = message
         return conversation
 
@@ -606,16 +550,20 @@ class Voice:
         self.display = self.reader.display = self.handoffs.display = display
 
     def bind(self, talker: TalkerChat, context: LLMContext) -> None:
-        """Run ``talker`` on ``context``: the talker asks this voice before and after each run."""
+        """Run ``talker`` on ``context``: the talker asks this voice before and after each run.
+
+        A routing call asks for its decision in the talker's routing format (``DecisionReplyMixin.routing_format``),
+        whose rules follow its instructions; every other call asks at the services entry's level (``response_format``).
+        """
         self.talker, self.context = talker, context
-        talker.calls = self
-        if self.config.normalizer.enabled:
-            self.normalizer = TurnNormalizer(OneShot(talker, self.layout), self.prompts, self.config.normalizer)
+        self.routing_format = talker.routing_format(self.prompts)
+        self.layout.routing_rules = self.routing_format.rules(self.prompts)
+        talker.bind(self)
 
     def start(self) -> None:
         """Start the quiet task that offers progress lines. Once only; the host that built the voice starts it."""
         progress_after = self.config.delegation.progress_after_seconds
-        if self._quiet_task is None and progress_after is not None and self.wording.offers_progress:
+        if self._quiet_task is None and progress_after is not None:
             self._quiet_task = asyncio.create_task(self._quiet(progress_after), name="delegation-progress")
 
     async def close(self) -> None:
@@ -624,7 +572,6 @@ class Voice:
         self.reader.close()
         self.acknowledgements.drop_all()
         self.handoffs.close()
-        self.spoken.close()
         if self.early is not None:
             self.early.cut()
         tasks = [*self._tasks, *([self._quiet_task] if self._quiet_task else [])]
@@ -640,37 +587,52 @@ class Voice:
         self.kinds[id(message)] = (message, kind)
 
     def kind_of(self, message: dict) -> Kind | None:
-        """What a context message is: one the voice wrote, a caller turn, a line that played, or none (a note)."""
+        """What a context message is: one the voice wrote, one an aggregator wrote, or none (a note)."""
         registered = self.kinds.get(id(message))
         if registered is not None and registered[0] is message:
             return registered[1]
+        if message.get("tool_calls"):
+            return CALL
         return WRITTEN.get(message.get("role"))
 
-    def conversation(self, *, labeled: bool = False) -> list[dict]:
-        """The context as the talker's calls read it: each message's role, text and kind, items not said yet left out.
+    @staticmethod
+    def as_read(message: dict, kind: Kind) -> dict:
+        """``message`` as the talker's calls read it: its kind's role, its text, and a tool call's fields."""
+        fields = {name: message[name] for name in CALL_FIELDS if name in message}
+        return {"role": kind.role, "content": message_text(message), **fields}
 
-        The context is bounded first (:meth:`bound`). The voice's own appends count from the moment it queues them, as
-        they reach the context only behind the audio queued before them.
+    def conversation(self, *, labeled: bool = False) -> list[dict]:
+        """A view of what the talker's calls read: each message as they read it (:meth:`as_read`) with its kind.
+
+        It changes nothing. It reads the context, then the voice's own appends, which count from the moment it queues
+        them, as they reach the context only behind the audio queued before them. Pipecat's notes and the items not
+        said yet are left out.
 
         ``labeled``: the routing call's view, with the caller label in front of a caller turn right after reference
         data, so a caller's "yes" right after a result reads as the caller's. Each message's kind decides, never its
         text.
         """
-        self.bound()
         history, after_reference = [], False
+        for message in self._read():
+            kind = self.kind_of(message)
+            read = self.as_read(message, kind)
+            if labeled and after_reference and kind.turn:
+                read["content"] = self.prompts.caller_label + read["content"]
+            after_reference = kind.reference
+            history.append({**read, "kind": kind.name})
+        return history
+
+    def _read(self) -> list[dict]:
+        """The messages the calls read, in the context's roles: the context, then the voice's appends on their way.
+
+        Left out: Pipecat's note on a caller turn with no words, which only that turn's run reads, in its runtime data;
+        and an item not said yet, whose message a line nobody heard took out of the context, should its append still
+        reach it.
+        """
         messages = list(self.context.get_messages()) if self.context else []
         held = {id(message) for message in messages}
-        self.sent = [message for message in self.sent if id(message) not in held]  # in the context now
-        for message in [*messages, *self.sent]:
-            kind = self.kind_of(message)
-            if kind is None or id(message) in self.unsaid:
-                continue
-            content = message_text(message)
-            if labeled and after_reference and kind.turn:
-                content = self.prompts.caller_label + content
-            after_reference = kind.reference
-            history.append({"role": kind.role, "content": content, "kind": kind.name})
-        return history
+        on_the_way = [message for message in self.sent if id(message) not in held]
+        return [m for m in [*messages, *on_the_way] if self.kind_of(m) is not None and id(m) not in self.unsaid]
 
     def bound(self) -> None:
         """Above ``memory.compact_at`` of ``memory.context_tokens``, drop the oldest turn groups from the context.
@@ -686,11 +648,12 @@ class Voice:
         limit = memory.compact_at * memory.context_tokens
         messages = self.context.get_messages()
         held = {id(message) for message in messages}
+        self.sent = [message for message in self.sent if id(message) not in held]  # in the context now
         pinned = [
             {"role": self.seed_roles[i] if i < len(self.seed_roles) else "developer", "content": text}
             for i, text in enumerate(self.instructions)
         ]
-        tokens = sum(map(message_tokens, pinned)) + sum(self._tokens(m) for m in self.sent if id(m) not in held)
+        tokens = sum(map(message_tokens, pinned)) + sum(map(self._tokens, self.sent))
         tokens += sum(
             message_tokens({"role": SPOKEN.role, "content": line.text}) for line in self.spoken.lines.values()
         )
@@ -714,16 +677,25 @@ class Voice:
             return
         for index in dropped:
             key = id(messages[index])
-            for records in (self.kinds, self.decided, self.noted, self._handled_notes):
+            for records in (self.kinds, self.decided, self.noted):
                 records.pop(key, None)
         self.context.set_messages([message for index, message in enumerate(messages) if index not in dropped])
+
+    def _tidy(self) -> None:
+        """Ready the context for a request: it gives up any item not said yet, and is bounded (:meth:`bound`).
+
+        A line nobody heard takes its items out of the context at once (:meth:`owe_again`); an item's append on its way
+        can still reach the context after that.
+        """
+        self._take_out(self.unsaid)
+        self.bound()
 
     def _tokens(self, message: dict) -> int:
         """The estimated tokens of ``message`` as the talker's calls read it; none for a note or an item not said."""
         kind = self.kind_of(message)
         if kind is None or id(message) in self.unsaid:
             return 0
-        return message_tokens({"role": kind.role, "content": message_text(message)})
+        return message_tokens(self.as_read(message, kind))
 
     def runtime_data(self) -> str:
         """The routing call's runtime data now, with no turn named."""
@@ -761,16 +733,18 @@ class Voice:
 
     # ------------------------------------------------------------------------------ the talker's calls (talker.Calls)
     async def next_call(self, context: LLMContext) -> TalkerCall | None:
-        """The call this run of the talker makes, by the rules in the module docstring; ``None``: no request."""
+        """The call this run of the talker makes, by the rules in the module docstring; ``None``: no request.
+
+        Pipecat builds the call's request from ``context``: the run settles the routing tools' deferred results and
+        takes Pipecat's notes out of it first, and each call readies it right before its request (:meth:`_tidy`).
+        """
         self.run_requested = False
         call = None
-        resumed = self._resumed(context)
+        self._settle_results(context)
+        note = self._empty_turn(context)
         undecided = self._undecided()
-        if resumed is not None:
-            self.observe("line.resumed")
-            call = self.saying(resumed)
-        elif undecided or self.instruction_due:
-            call = await self._routing(undecided)
+        if note or undecided or self.instruction_due:
+            call = await self._routing(undecided, note)
         elif self.waiting_lines:
             call = self.saying(self._next_line())
         elif any(isinstance(entry, Owed) for entry in self.owed):
@@ -785,47 +759,55 @@ class Voice:
             call = self._progress()
         self.call = call
         if call is not None and call.spec is not None:
-            call.format = self.talker.response_format
             call.deadline = asyncio.get_running_loop().time() + self.config.reliability.talker_attempt_timeout_seconds
         self._moved()
         return call
 
-    def _resumed(self, context: LLMContext) -> Line | None:
-        """After Pipecat's note for a turn with no words that cut a line, that line's unheard rest, once."""
-        messages = context.get_messages()
-        note = messages[-1] if messages else None
-        if note is None or self._handled_notes.get(id(note)) is note or self.kind_of(note) is not None:
-            return None
-        if note.get("content") != self.resume_note:
-            return None
-        self._handled_notes[id(note)] = note
-        return self.spoken.rest()
+    def _settle_results(self, context: LLMContext) -> None:
+        """Settle each routing tool call's result that Pipecat deferred in the call's place, as one that came first.
 
-    async def _routing(self, undecided: list[dict]) -> TalkerCall:
-        """The routing call on the caller's undecided turns (and an instruction): heard, normalized, then laid out."""
+        A result that comes after the conversation moved on is Pipecat's note of its own (``async_tool_messages``),
+        which the run takes out of the context (:meth:`_empty_turn`): its result replaces the call's placeholder.
+        """
+        messages = context.get_messages()
+        placeholders = {m.get("tool_call_id"): m for m in messages if self.kind_of(m) is CALL_RESULT}
+        for message in messages:
+            payload = async_tool_messages.parse_message(message) if self.kind_of(message) is None else None
+            if payload is not None and payload.kind == "final" and payload.tool_call_id in placeholders:
+                placeholders[payload.tool_call_id]["content"] = payload.result
+
+    def _empty_turn(self, context: LLMContext) -> str:
+        """Pipecat's note on a caller turn with no words when the run is that turn's own, else nothing.
+
+        The run takes every note out of the context: the turn's own goes in its runtime data, and one that something
+        followed into the context before a run had no run of its own.
+        """
+        messages = list(context.get_messages())
+        notes = [message for message in messages if self.kind_of(message) is None]
+        if not notes:
+            return ""
+        own = notes[-1] is messages[-1] and messages[-1].get("content") == self.empty_turn_note
+        context.set_messages([message for message in messages if self.kind_of(message) is not None])
+        return self.empty_turn_note if own else ""
+
+    async def _routing(self, undecided: list[dict], note: str = "") -> TalkerCall:
+        """The routing call on the caller's undecided turns (an instruction, a turn with no words): heard, laid out.
+
+        ``note`` is Pipecat's note on a caller turn with no words, which the runtime data carries where the newest turn
+        would be. With no words and no instruction, a delegation has no request to carry.
+        """
         for message in undecided:
             if id(message) not in self.noted:
                 self.heard_log.caller(message_text(message))
-                self.noted[id(message)] = self.spoken.caller_spoke()
-        if undecided and self.normalizer is not None:
-            await self._normalize(undecided[-1])
+                self.noted[id(message)] = message
         turn = " ".join(message_text(message) for message in undecided)
-        request = turn or (self.instructions[-1] if self.instructions else "")
-        cut = next((self.noted[id(m)] for m in undecided if self.noted.get(id(m)) is not None), None)
-        plan = Routing(tuple(undecided), request, bool(self.worknote.open()), cut)
-        messages = self.layout.routing(
-            "\n\n".join(self.instructions), self.conversation(labeled=True), self.worknote.line(), turn
+        request = turn or (self.instructions[-1] if self.instruction_due else "")
+        plan = Routing(tuple(undecided), request, bool(self.worknote.open()))
+        self._tidy()
+        routing = self.layout.routing("\n\n".join(self.instructions), self.worknote.line(), turn, note)
+        return TalkerCall(
+            spec=self.routing_spec, request=routing, streams=plan.streams, format=self.routing_format, plan=plan
         )
-        return TalkerCall(spec=self.routing_spec, messages=messages, streams=plan.streams, plan=plan)
-
-    async def _normalize(self, message: dict) -> None:
-        """Rewrite the newest caller turn in written form, where its prompt finds details to rewrite."""
-        heard = message_text(message)
-        normalized, diagnostics = await self.normalizer.normalize(self.conversation(), heard)
-        self.observe("normalizer.completed", heard=heard, normalized=normalized, **diagnostics)
-        if normalized != heard:
-            message["content"] = normalized
-            self.heard_log.replace_caller(heard, normalized)
 
     def _take(self) -> list[Owed]:
         """Everything owed, oldest first; ends and handovers are applied in their turn.
@@ -849,9 +831,9 @@ class Voice:
             self.spoken.carry_told(entry.delegation_id, entry.taker)
 
     def _said_by(self, batch: list[Owed]) -> TalkerCall | None:
-        """The call that says ``batch``: the result wording's, or the fixed lines as written when none is worded."""
+        """The call that says ``batch``: the relay's, or the fixed lines as written when none is worded."""
         if any(item.worded for item in batch):
-            return self.wording.call(self, batch)
+            return self.relay(batch)
         line = self.delivered(batch, self.joined(batch, ""))
         return self.saying(line) if line else None
 
@@ -864,14 +846,15 @@ class Voice:
                 self.observe("answer.worded_early", items=len(batch))
                 line = self.delivered(batch, self.joined(batch, early.words))
                 return self.saying(line) if line else None
-        return self._relay_call(batch, self.conversation())
+        self._tidy()
+        return self._relay_call(batch, [dict(message) for message in self.context.get_messages()])
 
     def _relay_call(self, batch: Sequence[Owed], history: list[dict]) -> TalkerCall:
         """The relay that words ``batch``: the writer's frame and rules, ``history``, then the update."""
         content, note = self._update(batch)
-        messages = self.layout.relay("\n\n".join(self.instructions), history, content, note)
+        relay = self.layout.relay("\n\n".join(self.instructions), content, note)
         plan = Relay(tuple(batch), content, history, note, self.version)
-        return TalkerCall(spec=self.answer_spec, messages=messages, format=self.talker.response_format, plan=plan)
+        return TalkerCall(spec=self.answer_spec, request=relay, format=self.talker.response_format, plan=plan)
 
     def _update(self, batch: Sequence[Owed]) -> tuple[str, str]:
         """The update a relay of ``batch`` words: its items' text, and its note on what the caller already heard."""
@@ -892,7 +875,7 @@ class Voice:
 
     def _word_early(self) -> None:
         """Word what is owed now, out of band, unless a wording of it stands; see the module docstring."""
-        if self.talker is None or self._closed or not self.wording.words_early:
+        if self.talker is None or self._closed:
             return
         batch = tuple(entry for entry in self.owed if isinstance(entry, Owed))
         early = self.early
@@ -909,15 +892,21 @@ class Voice:
             return  # they go to speech in the next run, before what is owed: worded once they are in flight
         # The lines in flight read as said, as they will be once they play.
         in_flight = [{"role": SPOKEN.role, "content": line.text} for line in self.spoken.lines.values()]
-        call = self._relay_call(batch, [*self.conversation(), *in_flight])
+        self._tidy()
+        history = [*(dict(message) for message in self._read()), *in_flight]
+        call = self._relay_call(batch, history)
         self.early = EarlyLine(batch, stamp)
-        self.early.task = asyncio.get_running_loop().create_task(self._words(self.early, call), name="early-wording")
+        words = self._words(self.early, call, LLMContext(list(history)))
+        self.early.task = asyncio.get_running_loop().create_task(words, name="early-wording")
 
-    async def _words(self, early: EarlyLine, call: TalkerCall) -> None:
-        """Word ``early`` with ``call``, a relay run out of band; a failure holds the items as written."""
+    async def _words(self, early: EarlyLine, call: TalkerCall, context: LLMContext) -> None:
+        """Word ``early`` with ``call``, a relay run out of band on ``context``; a failure holds the items as written.
+
+        ``context`` is the conversation the relay reads, with the lines in flight.
+        """
         try:
             async with asyncio.timeout(self.config.reliability.talker_attempt_timeout_seconds):
-                reply = await self.talker.run_call(call)
+                reply = await self.talker.run_call(call, context)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -975,8 +964,10 @@ class Voice:
         update = self.worknote.offer(entry.id)
         self.observe("progress.offered", delegation_id=entry.id)
         note = self.layout.note(self.spoken.told_text(entry.id))
-        messages = self.layout.progress("\n\n".join(self.instructions), self.conversation(), update, note)
-        return TalkerCall(spec=self.progress_spec, messages=messages, plan=Progress(entry, self.version))
+        self._tidy()
+        progress = self.layout.progress("\n\n".join(self.instructions), update, note)
+        plan = Progress(entry, self.version)
+        return TalkerCall(spec=self.progress_spec, request=progress, format=self.talker.response_format, plan=plan)
 
     def speaking(self, call: TalkerCall, text: str) -> None:
         """A routing ``speak``'s words went on to speech: they are this response's line."""
@@ -1000,7 +991,7 @@ class Voice:
         line = self.spoken.lines.get(self.responses) if call is not None and call.said else None
         if line is not None:
             if not decision.diagnostics.get("recovery"):  # a fallback keeps the words that went out
-                line.text = decision.speech  # the whole line, for its resume, its count and the heard log
+                line.text = decision.speech  # the whole line, for its count and the heard log
                 self.heard_log.replace_agent(line.number, line.text)
             self.bound()
             self._move()
@@ -1012,20 +1003,24 @@ class Voice:
         return self.hand(reply)
 
     def _delegated(self, plan: Routing, call: TalkerCall | None, decision: TalkerDecision) -> str:
-        """The turn goes to the delegation part, the decision's speech as its lead-in."""
-        self.handoffs.delegate(plan.request, decision.speech, decided_at=self.floor.caller_starts)
-        return ""
+        """The turn goes to the delegation part, the decision's speech as its lead-in; with no request, nothing does.
+
+        Words of the call that already went to speech answer the turn as a reply does (:meth:`_spoke`), and its hand-off
+        says no lead-in of its own. A ``delegate`` call's handler settles once the hand-off is answered
+        (:meth:`hand_off`).
+        """
+        lead_in, text = decision.speech, ""
+        if call is not None and call.said:
+            lead_in, text = "", self._spoke(plan, call, TalkerDecision("speak", call.said, decision.diagnostics))
+        if plan.request:
+            decided_at = self.floor.caller_starts
+            self.handoffs.delegate(plan.request, lead_in, decided_at=decided_at, call_id=decision.call_id)
+        return text
 
     def _waited(self, plan: Routing, call: TalkerCall | None, decision: TalkerDecision) -> str:
-        """Nothing is said for the turn; a line its words cut says its unheard rest once."""
+        """Nothing is said for the turn."""
         self.observe("talker.waited")
-        if plan.cut is None or not self.config.speech.resume_after_noise:
-            return ""
-        rest = self.spoken.rest(plan.cut)
-        if rest is None:
-            return ""
-        self.observe("line.resumed")
-        return self.hand(rest)
+        return ""
 
     def decided_by(self, plan: Routing) -> None:
         """The call's caller turns are decided, and an instruction it read with them."""
@@ -1055,12 +1050,17 @@ class Voice:
     def _write_with(self, line: Line) -> None:
         """The items ``line`` says are on their way into the context now, out of where a line nobody heard left them."""
         self._writes = [item.message for item in line.items if item.worded]
-        ids = {id(message) for message in self._writes}
+        if self._writes:
+            self._take_out({id(message) for message in self._writes})
+            self.sent += self._writes
+
+    def _take_out(self, ids: set[int]) -> None:
+        """The messages ``ids`` leave the talker's context and the voice's appends on their way to it."""
         if not ids:
             return
         if self.context is not None and any(id(message) in ids for message in self.context.get_messages()):
             self.context.set_messages([message for message in self.context.get_messages() if id(message) not in ids])
-        self.sent = [message for message in self.sent if id(message) not in ids] + self._writes
+        self.sent = [message for message in self.sent if id(message) not in ids]
 
     def written(self) -> list[dict]:
         """The developer messages that go into the context right before the line just handed: the items it says."""
@@ -1096,6 +1096,13 @@ class Voice:
             self.failures.popleft().plan.recover(self)
         self._after_call()
 
+    async def hand_off(self, call_id: str) -> bool | None:
+        """Whether the delegation part accepted the turn the ``delegate`` call ``call_id`` delegated, once it answered.
+
+        ``None``: the call handed nothing over (``handoffs.HandOffs.hand_off``).
+        """
+        return await self.handoffs.hand_off(call_id)
+
     def response_started(self) -> int:
         """The talker starts a response: its number."""
         self.responses += 1
@@ -1107,8 +1114,7 @@ class Voice:
 
     def interrupted(self) -> None:
         """An interruption passed the talker: it drops the responses started so far that have not played."""
-        self.spoken.interrupted(self.responses, on_purpose=self._on_purpose)
-        self._on_purpose = False
+        self.spoken.interrupted(self.responses)
         self._drop_retries()
 
     def _drop_retries(self) -> None:
@@ -1184,11 +1190,12 @@ class Voice:
         self.say(line)
 
     def owe_again(self, items: Sequence[Owed]) -> None:
-        """``items`` are owed again, first."""
+        """``items`` are owed again, first: until a line says them, their messages are out of the context."""
         for item in reversed(items):
             self.owed.appendleft(item)
             if item.worded:
                 self.unsaid.add(id(item.message))
+        self._take_out({id(item.message) for item in items if item.worded})
 
     def _done(self, items: Sequence[Owed]) -> None:
         """``items`` are not said again: the work note counts each result among them as said."""
@@ -1262,8 +1269,13 @@ class Voice:
         self._owe(Turnover(delegation_id, taker))
 
     def commentary(self, text: str, delegation_id: str | None = None) -> None:
-        """The application's commentary (a fact to say); ``delegation_id``: the client delegation it answers."""
+        """The application's commentary (a fact to say); ``delegation_id``: the client delegation it answers.
+
+        It drops every pending lead-in; an empty (blank) one does only that.
+        """
         self.acknowledgements.drop_all()
+        if not text.strip():
+            return
         self._worded(ReadyResult(delegation_id or "", self._own_id("commentary"), text), text)
 
     def greet(self, instructions: str) -> None:
@@ -1280,8 +1292,13 @@ class Voice:
         self.request_run()
 
     def thinking(self, text: str) -> None:
-        """Silent context for later decisions and for the next delegation; nothing is spoken."""
+        """Silent context for later decisions and for the next delegation; nothing is spoken.
+
+        It drops every pending lead-in; an empty (blank) one does only that.
+        """
         self.acknowledgements.drop_all()
+        if not text.strip():
+            return
         self.heard_log.context(text)
         self._append({"role": "developer", "content": self.prompts.context_label + text}, APP_CONTEXT, run=False)
         self._move()
@@ -1291,11 +1308,15 @@ class Voice:
         self._append({"role": "developer", "content": self.prompts.context_label + text}, TYPED, run=False)
 
     async def instruction(self, text: str) -> None:
-        """Steer behavior: pin the direction, cut the line in progress for good, and decide it in turn."""
+        """Steer behavior: pin the direction, cut the line in progress, and decide it in turn.
+
+        An empty (blank) instruction gives no direction, so it does nothing.
+        """
+        if not text.strip():
+            return
         self.instructions.append(text)
         self.heard_log.instruction(text)
         self.instruction_due = True
-        self._on_purpose = True
         self._move()
         if self.talker is not None:
             # An interruption at the talker, not at the pipeline's start: the caller's turn in progress stays.
@@ -1311,7 +1332,9 @@ class Voice:
     ) -> None:
         """Hear the pipeline's events: each assistant turn's end, the caller's idle spells, and its errors.
 
-        At each assistant turn's end, a line an interruption cut gets the cut mark, and the context is bounded
+        At each assistant turn's end, a line an interruption cut settles with the words the turn recorded and gets the
+        cut mark (:meth:`cut_marked`); a line that ended keeps only the words the turn recorded in the heard log, as a
+        cut one does, when a sentence of it got no audio (``SpokenLines.end_played``); and the context is bounded
         (:meth:`bound`). The voice's fallback for a failed call runs from the pipeline's error event.
         """
 
@@ -1319,6 +1342,9 @@ class Voice:
         async def on_assistant_turn_stopped(aggregator, message):
             if message.interrupted:
                 self.cut_marked(aggregator.context, message.content)
+            elif line := self.spoken.end_played(message.content):
+                self.heard_log.partly(line.number, line.heard)
+                self._moved()
             self.bound()
 
         @user.event_handler("on_user_turn_idle")
@@ -1340,19 +1366,19 @@ class Voice:
             self.request_run()
 
     def cut_marked(self, context: LLMContext, played: str) -> None:
-        """A line was cut after ``played``: the context's record of it ends with the cut mark.
+        """A line was cut after ``played``: it settles with those words, and its context record gets the cut mark.
 
-        With ``speech.heard_words: estimated``, it keeps the words its audio likely carried past what played. A
-        stitched line reports its words only at its end: one cut while it played is kept whole, as the heard log keeps
-        it, or, with ``estimated``, as the words its audio likely carried.
+        ``played`` is the words the assistant aggregator recorded; ``SpokenLines.cut_played`` settles the line with
+        them. A stitched line reports its words only at its end: one cut while it played is kept whole, as the heard log
+        keeps it.
         """
-        kept = self.spoken.kept(played)
+        kept = self.spoken.cut_played(played)
         if not kept:
             return
         if not played:
             context.add_message({"role": "assistant", "content": kept.rstrip() + self.prompts.cut_mark})
         else:
-            message = next((each for each in reversed(context.get_messages()) if each.get("role") == "assistant"), None)
+            message = next((each for each in reversed(context.get_messages()) if self.kind_of(each) is SPOKEN), None)
             if message is None or message_text(message) != played:
                 return
             message["content"] = kept.rstrip() + self.prompts.cut_mark

@@ -8,8 +8,6 @@ timing, stops and every response the client reads; the adapter owns model rounds
 worker sessions. Only Responses shapes and the types below pass between them. There are three levels:
 :class:`AdapterSource` (one per delegation core, chosen by ``backend.adapter``), :class:`BackendAdapter` (one per IM
 session, with its :class:`Conductor` and ``max_running``) and :class:`BackendRun` (one per task).
-With ``delegation.hold_answers_while_deciding``, a task whose held answer becomes a progress note gets
-:meth:`BackendAdapter.start` again, so one task can run in more than one :class:`BackendRun`.
 
 **Works and tasks.** One request, or several joined requests, is one Work. A Work holds one or more tasks, and a task
 is one worker: one :class:`BackendRun`, which reads and reports through its own :class:`TaskContext`. A conductor may
@@ -434,10 +432,10 @@ class Conductor(Protocol):
     * While an arrival waits for its decision, the IM's commit gate refuses every open Work's new calls, since the
       conductor has not yet said which Work the arrival concerns; calls already running are never cut.
 
-    The backend LLM's conductor is a rule (``backend.llm.conductor``: ``steer`` or ``start_each``); the LLM agent's is
-    one model call per ``decide()``, or none while no Work is open (``backend.llm-agent.conductor.when_idle``); the
-    harness's is an agent session in a runtime process of its own. When they run one task at a time (``max_running``
-    1), theirs is the steer rule: every request joins the newest open Work or starts one, with no model call.
+    The backend LLM's conductor is the steer rule (``conductors.SteerOpenWork``). The LLM agent's is one model call per
+    ``decide()``, and the harness's an agent session in a runtime process of its own, one prompt per ``decide()``; each
+    places every request, also while no Work is open. When they run one task at a time (``max_running`` 1), theirs is
+    the steer rule: every request joins the newest open Work or starts one, with no model call.
     """
 
     async def decide(self, given: ConductorInput, place: Place) -> None:

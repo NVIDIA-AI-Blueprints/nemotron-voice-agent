@@ -88,6 +88,12 @@ class TranscriptTests(unittest.TestCase):
         log.cut(2, "Your order number is")
         self.assertEqual(log.transcript(), [line(WORDS.agent, "Your order number is" + CUT)])
 
+    def test_a_result_a_sentence_of_which_got_no_audio_keeps_what_played_without_the_cut_mark(self):
+        log = HeardLog(PROMPTS)
+        log.agent(1, "Your total is five dollars. Anything else?", result=True)
+        log.partly(1, "Anything else?")
+        self.assertEqual(log.transcript(), [line(WORDS.agent, "Anything else?")])
+
     def test_the_oldest_lines_go_past_the_cap(self):
         log = HeardLog(PROMPTS)
         for n in range(200):
@@ -144,17 +150,6 @@ class TranscriptTests(unittest.TestCase):
         for n in range(200):  # past the cap the line still ends the input
             log.caller(f"Turn {n}: " + "words " * 10)
         self.assertEqual(text_of(log.delegation_input(unheard=True)[0]).splitlines()[-1], WORDS.unheard)
-
-    def test_the_normalizers_rewrite_replaces_the_newest_caller_turn_noted_with_its_words(self):
-        log = HeardLog(PROMPTS)
-        log.caller("two bags")
-        log.agent(1, "Okay.")
-        log.caller("two bags")
-        log.replace_caller("two bags", "2 bags")
-        log.replace_caller("missing", "x")
-        self.assertEqual(
-            log.transcript(), [line(WORDS.caller, "two bags"), line(WORDS.agent, "Okay."), line(WORDS.caller, "2 bags")]
-        )
 
 
 class DelegationTests(unittest.IsolatedAsyncioTestCase):

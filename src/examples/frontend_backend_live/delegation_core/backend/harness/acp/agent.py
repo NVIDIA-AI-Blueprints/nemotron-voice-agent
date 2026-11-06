@@ -5,9 +5,9 @@
 
 ACP leaves agent-specific behavior to each agent: where a session's instructions go, mid-turn steering, tool call
 titles, when a turn answered, and turns per process. On its own, :class:`AcpAgent` keeps to the protocol
-(``agent: acp``): instructions open the first prompt, a newer request goes as the next prompt or by a cancel and a fresh
-session, a chunk with no message id belongs to the message being streamed (message ids are not stable ACP), a tool
-call's title is its name, and a turn that ended ``end_turn`` answered. A subclass lives in its own package, is named in
+(``agent: acp``): instructions open the first prompt, a newer request goes by a cancel and a re-prompt, a chunk
+with no message id belongs to the message being streamed (message ids are not stable ACP), a tool call's title is its
+name, and a turn that ended ``end_turn`` answered. A subclass lives in its own package, is named in
 ``acp/agents.py``, and sets ``name`` and ``keys``, which :meth:`AcpAgent.check_keys` reads.
 """
 
@@ -60,7 +60,7 @@ class AcpAgent:
 
     @property
     def native_steer(self) -> bool:
-        """Whether it takes a steer in the middle of a turn."""
+        """Whether it takes a steer in the middle of a turn: its runs steer with it, or else cancel and re-prompt."""
         return self.steer_command is not None
 
     def environment(self) -> Mapping[str, str]:
@@ -79,7 +79,7 @@ class AcpAgent:
         """A mid-turn steer's text as the agent gets it: its steer command, then ``text``.
 
         Raises:
-            RuntimeError: The agent has no mid-turn steer (the settings refuse ``native_command`` for it).
+            RuntimeError: The agent has no mid-turn steer (its run never steers it: it cancels and re-prompts).
         """
         if self.steer_command is None:
             raise RuntimeError(f"The {self.name} agent takes no steer in the middle of a turn")

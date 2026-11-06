@@ -6,7 +6,6 @@
 """Tests for the worker run on a session double: rounds, the turn parse, app calls, steering and stops."""
 
 import asyncio
-import dataclasses
 import json
 import unittest
 
@@ -62,7 +61,7 @@ class MisroutingTask(FakeTaskContext):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.texts = dataclasses.replace(self.texts, misrouted_output="{name} belongs to the app.")
+        self.texts = self.texts.model_copy(update={"misrouted_output": "{name} belongs to the app."})
 
     def route(self, call):
         return "backend"  # the IM routes even the app's function to the backend (it never should)
@@ -140,8 +139,8 @@ class TurnParseTests(Harness):
         self.assertEqual(
             events[-1]["response"]["usage"], {"input_tokens": 80, "output_tokens": 20, "total_tokens": 100}
         )
-        self.assertTrue(session.retired)  # released once answered
-        self.assertEqual(len(self.host.bridge.closed), 1)
+        self.assertIs(self.host.kept.session, session)  # kept for the next task of the call, its door open
+        self.assertEqual((session.retired, self.host.bridge.closed), (False, []))
 
     async def replay(self, scenario):
         """Replay one recorded turn of the real Hermes wire on a new session."""
@@ -476,43 +475,67 @@ class SteeringTests(Harness):
         self.assertEqual(self.task.settled, [("steer_1", "not_applied")])
         self.assertEqual(len(session.texts("prompt")), 1)
 
-    async def test_next_prompt_waits_for_the_turns_end_and_an_answer_leaves_it_with_the_im(self):
-        session = await self.open(steer="next_prompt")
+    async def test_an_agent_with_no_steer_of_its_own_is_cancelled_and_its_session_takes_the_batch_next(self):
+        # The turn took the cancel (it ended cancelled), so nothing of ours is pending in the session, which holds the
+        # history: its next prompt is the batch alone.
+        session = await self.open(harness=plain())
         collector = self.collecting()
-        self.task.steer_with(STEERING)
+        session.say("m1", "Let me ", "look.", thought=False)
+        steering = self.task.steer_with(STEERING)
         self.run.steer()
-        await asyncio.sleep(0.05)
-        self.assertEqual(session.texts("steer"), [])
-        session.say("m1", "Old ", "answer.")
-        session.end(1, usage=USAGE)
-        events = await collector
-        self.assertEqual(said(events, "final_answer"), ["Old answer."])
-        self.assertEqual(self.task.settled, [("steer_1", "not_applied")])
-
-    async def test_next_prompt_carries_on_a_turn_that_ended_without_an_answer(self):
-        session = await self.open(steer="next_prompt")
-        collector = self.collecting()
-        self.task.steer_with(STEERING)
-        self.run.steer()
-        session.say("m1", "Let me ", "look.")
-        session.put(ToolCard("tc1", "mcp__w1__lookup", {}))
-        session.put(ToolCardEnd("tc1", False, "ok"))
-        session.end(1, usage=USAGE)  # no message after its last tool call: no answer, so the steering goes on with it
+        await until(lambda: session.cancels == 1)
+        session.end(1, "cancelled", USAGE)
         await until(lambda: len(session.texts("prompt")) == 2)
+        self.assertEqual(len(self.host.runtime.client.sessions), 1)
+        self.assertEqual(session.texts("prompt")[1], self.host.renderer.steering(steering))
         self.assertEqual(self.task.settled, [("steer_1", "applied")])
-        self.assertIn("Make it two.", session.texts("prompt")[1])
-        session.say("m2", "Two ", "found.")
-        session.end(2, usage={"totalTokens": 200})
+        session.say("m2", "Two ", "it is.", thought=False)
+        session.end(2, usage={"totalTokens": 180})
         events = await collector
-        self.assertEqual(said(events, "final_answer"), ["Two found."])
+        self.assertEqual(said(events, "commentary"), ["Let me look."])  # the cancelled turn's text, before the batch
+        self.assertEqual(said(events, "final_answer"), ["Two it is."])
+        self.assertFalse(session.retired)
 
-    async def test_cancel_reprompt_cancels_then_a_fresh_session_carries_the_history_with_the_batch(self):
-        session = await self.open(steer="cancel_reprompt")
+    async def test_the_cancelled_turns_held_app_call_ends_not_run_and_its_open_cards_hold_up_no_later_call(self):
+        # Before it took the cancel, the turn announced two calls, and the bridge held the app's behind the other.
+        session = await self.open(harness=plain())
         collector = self.collecting()
         self.task.steer_with(STEERING)
         self.run.steer()
         await until(lambda: session.cancels == 1)
-        session.end(1, "cancelled", USAGE)
+        session.put(ToolCard("tc1", "Looking up", {}))
+        session.put(ToolCard("tc2", "Getting the menu", {}))
+        stale = asyncio.ensure_future(self.run.door.call("get_menu", {"page": 1}))
+        await until(lambda: self.run.app_queue)
+        session.end(1, "cancelled", USAGE)  # the cards never ended: ACP leaves a cancelled turn's calls to the client
+        self.assertEqual(await asyncio.wait_for(stale, 1), self.task.texts.not_run_output)
+        session.put(ToolCard("tc3", "Getting the menu", {}))
+        call = asyncio.ensure_future(self.run.door.call("get_menu", {"page": 2}))
+        [forwarded] = items(await asyncio.wait_for(collector, 2), "function_call")
+        self.assertEqual(forwarded["arguments"], '{"page": 2}')  # the next turn's app call goes to the app
+        self.assertFalse(call.done())  # it waits for the app's output
+
+    async def test_a_turn_that_ended_before_a_cancel_went_out_leaves_the_batch_to_the_same_session(self):
+        session = await self.open(harness=plain())
+        collector = self.collecting()
+        steering = self.task.steer_with(STEERING)
+        self.run.steer()
+        session.end(1)  # the turn ended with no answer before the run took the batch: no cancel goes out
+        await until(lambda: len(session.texts("prompt")) == 2)
+        self.assertEqual((session.cancels, len(self.host.runtime.client.sessions)), (0, 1))
+        self.assertEqual(session.texts("prompt")[1], self.host.renderer.steering(steering))
+        session.say("m1", "Two ", "it is.", thought=False)
+        session.end(2)
+        self.assertEqual(said(await collector, "final_answer"), ["Two it is."])
+
+    async def test_a_turn_that_ended_otherwise_after_the_cancel_went_out_leaves_the_batch_to_a_fresh_session(self):
+        # It may have ended before the cancel reached the agent, which then takes the cancel for its next prompt.
+        session = await self.open(harness=plain())
+        collector = self.collecting()
+        self.task.steer_with(STEERING)
+        self.run.steer()
+        await until(lambda: session.cancels == 1)
+        session.end(1)  # end_turn, with no message: no answer
         client = self.host.runtime.client
         await until(lambda: len(client.sessions) == 2)
         fresh = client.sessions[1]
@@ -630,10 +653,10 @@ class OverBudgetTask(FakeTaskContext):
 
 
 class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
-    """``backend.harness.session: call``: the session of a task that answered takes the next task that fits."""
+    """The session of a task that answered takes the next task that fits; any other task opens a fresh session."""
 
     def setUp(self):
-        self.use(settings(session="call"))
+        self.use(settings())
 
     def use(self, harness):
         self.host = FakeHost(harness, tools=(Lookup(),))
@@ -686,33 +709,35 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         self.client.sessions[-1].end(1, "cancelled", USAGE)  # the runtime ended the turn itself: the task failed
         with self.assertRaises(HarnessTurnError):
             [event async for event in events]
-        self.use(settings(session="call", turn_timeout_seconds=0.2))
+        self.use(settings(turn_timeout_seconds=0.2))
         _, events = await self.start(FakeTaskContext(declared=[MENU_FUNCTION]))
         with self.assertRaisesRegex(HarnessTurnError, "ran past"):
             [event async for event in events]
         self.assertIsNone(self.host.kept)
         self.assertTrue(all(session.retired for session in self.client.sessions))
 
-    async def test_a_session_cancelled_for_a_reprompt_is_never_kept(self):
-        self.use(settings(session="call", steer="cancel_reprompt"))
+    async def test_a_session_whose_turn_took_the_cancel_answers_the_batch_and_serves_the_next_task(self):
+        self.use(plain())
         task = FakeTaskContext(declared=[MENU_FUNCTION])
         run, events = await self.start(task)
-        cancelled = self.client.sessions[-1]
+        session = self.client.sessions[-1]
         collector = asyncio.ensure_future(read_all(events))
         task.steer_with(STEERING)
         run.steer()
-        await until(lambda: cancelled.cancels == 1)
-        cancelled.end(1, "cancelled", USAGE)
-        await until(lambda: len(self.client.sessions) == 2)
-        fresh = self.client.sessions[1]
-        fresh.say("m1", "Two ", "it is.")
-        fresh.end(1, usage=USAGE)
-        self.assertEqual(said(await collector, "final_answer"), ["Two it is."])
-        self.assertTrue(cancelled.retired)
-        self.assertIs(self.host.kept.session, fresh)  # the session that read the history with the batch, and answered
+        await until(lambda: session.cancels == 1)
+        session.end(1, "cancelled", USAGE)  # the turn took the cancel: nothing of ours is pending in the session
+        await until(lambda: len(session.texts("prompt")) == 2)
+        session.say("m1", "Two ", "it is.")
+        session.end(2, usage=LATER_USAGE)
+        rest = await collector
+        self.assertEqual(said(rest, "final_answer"), ["Two it is."])
+        self.assertIs(self.host.kept.session, session)
+        # What it read and wrote is the task's view, so the next task's prompt is only its new request.
+        await self.start(self.next_task([*task.history(), *finished_items(rest)]))
+        self.assertEqual((len(self.client.sessions), session.texts("prompt")[2]), (1, "And black tea?"))
 
-    async def test_a_session_sent_a_cancel_is_never_kept_even_when_its_turn_answered(self):
-        self.use(settings(session="call", steer="cancel_reprompt"))
+    async def test_a_session_whose_turn_answered_before_the_cancel_took_is_never_kept(self):
+        self.use(plain())
         task = FakeTaskContext(declared=[MENU_FUNCTION])
         run, events = await self.start(task)
         session = self.client.sessions[-1]
@@ -733,7 +758,7 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
             "an item trimmed": lambda view: view[1:],
         }.items():
             with self.subTest(name):
-                self.use(settings(session="call"))
+                self.use(settings())
                 session, view = await self.answered()
                 await self.start(self.next_task(cut(view)))
                 fresh = self.client.sessions[-1]
@@ -748,7 +773,7 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
             "another toolset": {"declared": [MENU_FUNCTION, USER_FUNCTION]},
         }.items():
             with self.subTest(name):
-                self.use(settings(session="call"))
+                self.use(settings())
                 session, view = await self.answered()
                 task = FakeTaskContext(history=[*view, NEXT], task_id="W2.1", **{"declared": [MENU_FUNCTION], **kwargs})
                 run, _ = await self.start(task)
@@ -779,7 +804,7 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((one.retired, two.retired), (True, False))
 
     async def test_a_kept_session_holds_no_turn_and_a_full_process_gives_the_next_task_a_fresh_session(self):
-        self.use(settings(session="call", max_running=1, turns_per_process=1))
+        self.use(settings(max_running=1, turns_per_process=1))
         session, view = await self.answered()
         runtime = self.host.runtime
         self.assertEqual(runtime.places, 0)  # an idle session holds no turn of its process
@@ -801,7 +826,7 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.host.kept, self.host.runtime.places), (None, 0))
 
     async def test_steering_waits_when_the_kept_session_does_not_fit_and_the_fresh_one_fails_to_open(self):
-        self.use(settings(session="call", ready_timeout_seconds=0.05))
+        self.use(settings(ready_timeout_seconds=0.05))
         session, view = await self.answered()
         task = self.next_task(view[1:])  # an item left the history: the kept session does not fit
         steering = task.steer_with(STEERING)  # it came before the run opened a session
@@ -811,14 +836,6 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session.retired)
         self.assertEqual(task.settled, [])  # no session read it: it still waits, and the IM starts it as a follow-up
         self.assertIs(task.take_boundary_input().steering, steering)
-
-    async def test_under_task_no_session_is_ever_kept(self):
-        self.use(settings())
-        session, view = await self.answered()
-        self.assertIsNone(self.host.kept)
-        self.assertTrue(session.retired)
-        await self.start(self.next_task(view))
-        self.assertEqual(len(self.client.sessions), 2)
 
 
 class Runs:
@@ -845,7 +862,7 @@ class SessionReuseUnderTheImTests(IMCase):
 
     def setUp(self):
         super().setUp()
-        self.host = FakeHost(settings(session="call"))
+        self.host = FakeHost(settings())
         self.client = self.host.runtime.client
         self.runs = Runs(self.host)
 
@@ -911,6 +928,51 @@ class SessionReuseUnderTheImTests(IMCase):
         session.end(3, usage={"totalTokens": 180})
         self.assertEqual(said(await read_all(newer.stream), "final_answer"), ["Two teas."])
         self.assertEqual(im.ledger.delegations["D2"].work, "W2")
+
+    async def test_a_request_that_joins_a_plain_agents_work_lands_in_its_session_which_takes_the_next_work(self):
+        self.host = FakeHost(plain())
+        self.client, self.runs = self.host.runtime.client, Runs(self.host)
+        im = self.session(self.runs)
+        im.admit(ask("Find teas."), delegation_id="D1")
+        session = await self.prompted(1)
+        session.say("m1", "Let me ", "look.", thought=False)
+        newer = im.admit(ask("Make it two."), delegation_id="D2")  # it joins the running Work: the turn is cancelled
+        await until(lambda: session.cancels == 1)
+        session.end(1, "cancelled", USAGE)
+        await self.prompted(2)
+        self.assertTrue(session.texts("prompt")[1].startswith("Make it two.\n"))  # the request alone, with its records
+        session.say("m2", "Two ", "teas.", thought=False)
+        session.end(2, usage=LATER_USAGE)
+        self.assertEqual(said(await read_all(newer.stream), "final_answer"), ["Two teas."])
+        im.admit(ask("And black?"), delegation_id="D3")
+        await self.prompted(3)
+        self.assertEqual(len(self.client.sessions), 1)  # the cancelled turn's text and the request are in its record
+        self.assertTrue(session.texts("prompt")[2].startswith("And black?\n"))
+
+    async def test_an_answer_across_the_cancel_leaves_the_request_a_fresh_session_with_the_earlier_steps(self):
+        self.host = FakeHost(plain())
+        self.client, self.runs = self.host.runtime.client, Runs(self.host)
+        im = self.session(self.runs)
+        menu = {"tools": [MENU_FUNCTION]}
+        first = im.admit(ask("Find teas."), delegation_id="D1", settings=menu)
+        session = await self.prompted(1)
+        call = asyncio.ensure_future(self.runs.runs[0].door.call("get_menu", {"page": 1}))
+        outputs = app_outputs(await read_all(first.stream), "green, black")
+        rest = im.admit_client_request(outputs, delegation_id="D1", settings=menu)
+        self.assertEqual(await call, "green, black")
+        newer = im.admit(ask("Make it two."), delegation_id="D2", settings=menu)  # it joins the running Work
+        await until(lambda: session.cancels == 1)
+        session.say("m2", "Green ", "tea.", thought=False)
+        session.end(1, usage=USAGE)  # the turn answered before the cancel reached the agent
+        self.assertEqual(said(await read_all(rest.stream), "final_answer"), ["Green tea."])
+        fresh = await self.prompted(1, index=1)  # the request starts the next Work, in a session of its own
+        self.assertTrue(session.retired)
+        prompt = fresh.texts("prompt")[0]
+        self.assertIn('get_menu with {"page": 1}', prompt)  # the earlier step and its result, then the request
+        self.assertLess(prompt.index("green, black"), prompt.index("Make it two."))
+        fresh.say("m3", "Two ", "teas.", thought=False)
+        fresh.end(1, usage=LATER_USAGE)
+        self.assertEqual(said(await read_all(newer.stream), "final_answer"), ["Two teas."])
 
 
 if __name__ == "__main__":

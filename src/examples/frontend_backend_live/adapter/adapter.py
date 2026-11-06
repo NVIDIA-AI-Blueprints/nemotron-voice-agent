@@ -28,9 +28,8 @@ from examples.frontend_backend_live.adapter.readiness import EndpointReadiness
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
 from examples.frontend_backend_live.frontend import FrontendSpec, build_frontend
 from examples.frontend_backend_live.media.services import build_stt, build_tts, named_mode, speech_server
-from examples.frontend_backend_live.media.turns import TURN_ENDS, TurnEnd
+from examples.frontend_backend_live.media.turns import SmartTurn
 from examples.frontend_backend_live.prompts import Prompts, load_prompts
-from examples.frontend_backend_live.spoken import CUT_MEMORIES, AsRecorded, CutMemory
 from examples.frontend_backend_live.talker import (
     LLM_SERVICES,
     RESPONSE_FORMATS,
@@ -39,7 +38,7 @@ from examples.frontend_backend_live.talker import (
     ResponseFormat,
     TalkerChat,
 )
-from examples.frontend_backend_live.voice import RESULT_WORDINGS, ResultWording, Voice, Writer
+from examples.frontend_backend_live.voice import Voice
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, build_user_aggregator_params
 from gateways.live.protocol import SessionConfig
 
@@ -75,33 +74,31 @@ class CascadeAdapterSettings:
     """
 
     live: LiveConfig
-    talker: type[TalkerChat]  # ``provider``: the talker's service
-    turn_end: TurnEnd  # ``speech.turn_end``, with the block's seconds
-    wording: type[ResultWording]  # ``delegation.result_wording``
-    cut_memory: type[CutMemory]  # ``speech.heard_words``
+    talkers: Callable[[str], type[TalkerChat]]  # the talker's service, by the style the block names for its model
+    turn_end: SmartTurn  # the caller's turns, with the speech block's settings
     response_formats: Callable[[str], ResponseFormat]  # the talker's level, by the name its services entry gives
     message_text: Callable[[dict], str]  # a message item's text, which the voice reads results with
 
     @classmethod
     def parse(cls, block: Mapping[str, Any], *, pick: Callable[..., Any], message_text: Callable[[dict], str]) -> Self:
-        """Validate the class's settings: the ``frontend.cascade`` block, read once (``LiveConfig.parse``).
+        """Validate the class's settings: the ``frontend.cascade`` block, read once (:class:`LiveConfig`).
 
         ``pick`` and ``message_text`` are the delegation core's (``examples.frontend_backend_live.delegation_core``),
         which the composition root hands in.
 
         Raises:
-            ConfigError: The block, or a part of it, is malformed, or a key belongs elsewhere (the message says where).
-            ValueError: ``provider`` names no talker service, ``speech.turn_end`` no turn end,
-                ``delegation.result_wording`` no result wording or ``speech.heard_words`` no cut memory (each message
-                lists the known ones), or the turn end refuses its seconds.
+            ValueError: The block, or a part of it, is malformed (a pydantic ``ValidationError`` names each key at
+                fault), ``talker_style`` names a style the talker does not have (the message lists the known ones),
+                or the caller's turns refuse the speech block's seconds.
         """
-        live = LiveConfig.parse(block)
+        live = LiveConfig.model_validate(block)
+        talkers = partial(pick, LLM_SERVICES, kind="talker_style")
+        for style in live.talker_style.values():
+            talkers(style)
         return cls(
             live=live,
-            talker=pick(LLM_SERVICES, live.provider, "frontend.cascade.provider"),
-            turn_end=pick(TURN_ENDS, live.speech.turn_end, "speech.turn_end")(live.speech),
-            wording=pick(RESULT_WORDINGS, live.delegation.result_wording, "delegation.result_wording"),
-            cut_memory=pick(CUT_MEMORIES, live.speech.heard_words, "speech.heard_words"),
+            talkers=talkers,
+            turn_end=SmartTurn(live.speech),
             response_formats=partial(pick, RESPONSE_FORMATS, kind="response_format"),
             message_text=message_text,
         )
@@ -129,8 +126,6 @@ class CascadeAdapter(PipelineHost):
         user_params=None,
         talker: type[TalkerChat] = TalkerChat,
         response_format: ResponseFormat = RESPONSE_FORMATS[JsonSchema.name],
-        wording: type[ResultWording] = Writer,
-        cut_memory: type[CutMemory] = AsRecorded,
         frontend_client=None,
     ):
         """Hold everything the session needs; nothing runs until :meth:`start`.
@@ -146,12 +141,10 @@ class CascadeAdapter(PipelineHost):
             stt: The speech-to-text service.
             tts: The text-to-speech service.
             item_text: A message item's text, which the voice reads results with (the settings' ``message_text``).
-            user_params: The user aggregator's parameters, from the turn end. Without them the session gets the
+            user_params: The user aggregator's parameters, from the caller's turns. Without them the session gets the
                 shared ones.
-            talker: The talker's service (``provider``).
+            talker: The talker's service, of the style the block names for its model (``talker_style``).
             response_format: The talker's level, which its services entry names.
-            wording: The voice's result wording (``delegation.result_wording``).
-            cut_memory: What the voice keeps of a cut line (``speech.heard_words``).
             frontend_client: Optional injected chat client for the talker.
         """
         super().__init__()
@@ -160,8 +153,7 @@ class CascadeAdapter(PipelineHost):
         self.transport, self.connection, self.frontend_endpoint = transport, connection, frontend_endpoint
         self.instructions, self.stt, self.tts, self.user_params = instructions, stt, tts, user_params
         self.prompts, self.talker = prompts, talker
-        self.item_text, self.response_format = item_text, response_format
-        self.wording, self.cut_memory, self.frontend_client = wording, cut_memory, frontend_client
+        self.item_text, self.response_format, self.frontend_client = item_text, response_format, frontend_client
         self.frontend: Frontend | None = None
         self.voice: Voice | None = None
         self._closed = False
@@ -178,12 +170,17 @@ class CascadeAdapter(PipelineHost):
     ) -> CascadeAdapter:
         """Build one session's adapter: the talker's endpoint and instructions, and its own speech services.
 
-        The session's voice reaches the text-to-speech through the services' body overrides, and the text-to-speech
-        speaks in its catalog entry's synthesis mode. The turn end (``speech.turn_end``) builds the speech-to-text and
-        the user aggregator's settings, which share its VAD stop. Nothing connects until :meth:`start`.
+        The talker's style is the one ``talker_style`` names for its endpoint's services key, and its endpoint names
+        its level (``response_format``). The session's voice reaches the text-to-speech through the services' body
+        overrides, and the text-to-speech speaks in its catalog entry's synthesis mode. The caller's turns (``speech``)
+        build the user aggregator's settings. Nothing connects until :meth:`start`.
 
         The session reads the example's prompt file once, here: a session that sets no or blank instructions gets the
         talker prompt that ``prompt`` names, and the cascade gets the file's prompt set and lines.
+
+        Raises:
+            ValueError: The talker's services entry names a ``response_format`` the talker does not have (the message
+                lists the known ones).
         """
         live = settings.live
         prompts = load_prompts()
@@ -198,14 +195,12 @@ class CascadeAdapter(PipelineHost):
             frontend_endpoint=endpoint,
             instructions=own_instructions(session) or prompts.text("Talker", live.prompt),
             prompts=prompts,
-            stt=build_stt(overrides, catalog.service("asr"), settings.turn_end),
+            stt=build_stt(overrides, catalog.service("asr")),
             tts=build_tts(overrides, catalog.service("tts")),
             item_text=settings.message_text,
             user_params=settings.turn_end.user_params(welcome_enabled=False),
-            talker=settings.talker,
+            talker=settings.talkers(live.style_of(endpoint.service_key)),
             response_format=settings.response_formats(endpoint.response_format),
-            wording=settings.wording,
-            cut_memory=settings.cut_memory,
         )
 
     @classmethod
@@ -216,13 +211,13 @@ class CascadeAdapter(PipelineHost):
         tts_mode = named_mode(catalog.service("tts").get("synthesis_mode")).synthesis_mode
         return {
             "frontend": {
-                "provider": live.provider,
+                "talker_style": live.style_of(endpoint.service_key),
                 "slot": live.slot,
                 "model": endpoint.model,
                 "base_url": endpoint.base_url,
                 "prompt": live.prompt,
             },
-            "speech": {"tts_mode": tts_mode, "turn_end": live.speech.turn_end, **settings.turn_end.describe()},
+            "speech": {"tts_mode": tts_mode, **settings.turn_end.describe()},
         }
 
     @classmethod
@@ -260,8 +255,6 @@ class CascadeAdapter(PipelineHost):
             tts=self.tts,
             user_params=self.user_params or build_user_aggregator_params(False),
             delegation=delegation,
-            wording=self.wording,
-            cut_memory=self.cut_memory,
             item_text=self.item_text,
         )
         edges = self.edges(
@@ -279,14 +272,14 @@ class CascadeAdapter(PipelineHost):
         """Return the tokens the talker's next routing call sends now, for the session's context meter.
 
         The count is Pipecat's estimate of a context (``LLMContextSummarizationUtil.estimate_context_tokens``), the one
-        its own context summary measures with.
+        its own context summary measures with. The request is the routing call's from the talker's labeled view, which
+        reads in the roles the call sends.
         """
         if self.voice is None:
             return None
         voice = self.voice
-        messages = voice.layout.routing(
-            "\n\n".join(voice.instructions), voice.conversation(labeled=True), voice.worknote.line(), ""
-        )
+        routing = voice.layout.routing("\n\n".join(voice.instructions), voice.worknote.line(), "")
+        messages = routing.messages(voice.conversation(labeled=True))
         return LLMContextSummarizationUtil.estimate_context_tokens(LLMContext(messages))
 
     def context_window_tokens(self) -> int | None:
@@ -320,8 +313,9 @@ class CascadeAdapter(PipelineHost):
 
         ``messages`` is the talker's history as its next routing call sends it (the set labels a caller turn that
         follows reference data), and ``prompt`` the instructions that call sends, as ``{source, text}`` parts in order,
-        the decision rules after them. Each message carries its kind (``examples.frontend_backend_live.voice.Kind``).
-        The delegation part adds the backend's part.
+        the routing call's rules after them (the decision rules, or the tool-calling talker's ``tool_rules``). Each
+        message carries its kind (``examples.frontend_backend_live.voice.Kind``), and a routing tool's call or result
+        its tool fields. The delegation part adds the backend's part.
         """
         if self.voice is None:
             return None
@@ -335,8 +329,8 @@ class CascadeAdapter(PipelineHost):
         """The talker's routing instructions by source, as the talker lays them out (``Layout.routing_parts``).
 
         The client's instructions are the seed's system message, then the seed's developer items and each instruction
-        append, joined as the voice joins them; the decision rules come after them, and the runtime data the call sends
-        after the conversation last.
+        append, joined as the voice joins them; the routing call's rules come after them (``Layout.routing_rules``),
+        and the runtime data the call sends after the conversation last.
         """
         own = own_instructions(self.config)
         base = "session.instructions" if own else f"agent_prompts.Talker.{self.live_config.prompt}"
@@ -345,7 +339,7 @@ class CascadeAdapter(PipelineHost):
         instructions += [PromptPart("session.instructions.append", text, "\n\n") for text in appended]
         layout = self.voice.layout
         parts = [{"source": part.source, "text": part.text} for part in layout.routing_parts(instructions)]
-        parts.append({"source": "agent_prompts.Cascade.json_rules", "text": layout.json_rules})
+        parts.append({"source": layout.routing_rules.source, "text": layout.routing_rules.text})
         parts.append({"source": "runtime data, after the conversation", "text": self.voice.runtime_data()})
         return parts
 

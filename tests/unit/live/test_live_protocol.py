@@ -3,15 +3,13 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The live protocol on its own: the startup schema, the error events and the wire audio codecs."""
+"""The live protocol on its own: the startup schema and the error events."""
 
 import unittest
 
-import numpy as np
 from pydantic import ValidationError
 
 from gateways.live.events import error_event, event
-from gateways.live.media.audio import ALaw, MuLaw, WireCodec
 from gateways.live.protocol import AudioFormat, ProtocolError, SessionConfig, validation_error
 
 TEXT = {"type": "input_text", "text": "hi"}
@@ -57,6 +55,12 @@ class SchemaTests(unittest.TestCase):
         ):
             with self.subTest(session=session):
                 SessionConfig(model="live-1", **session)
+
+    def test_a_wire_format_without_a_rate_takes_its_own(self):
+        self.assertEqual(
+            [AudioFormat(type=kind).rate for kind in ("audio/pcm", "audio/pcmu", "audio/pcma")], [24000, 8000, 8000]
+        )
+        self.assertEqual(SessionConfig(model="m", audio={"format": {"type": "audio/pcma"}}).audio.format.rate, 8000)
 
     def test_a_refused_setting_names_its_param(self):
         server_events = "session.client.data_channel.allowed_server_events"
@@ -114,6 +118,25 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("'decisions'", str(start_error(delegation={"type": "decisions"})))
         self.assertIn("Decisions triggers are not supported", str(start_error(triggers=[{"type": "decisions"}])))
 
+    def test_the_acknowledgement_delay_is_at_most_800_ms_in_either_delegation_type(self):
+        param = "session.delegation.acknowledgement_delay_ms"
+        refused = {
+            "type": "invalid_request_error",
+            "code": "invalid_value",
+            "message": f"Invalid value for '{param}': Input should be less than or equal to 800",
+            "param": param,
+        }
+        for delegation in ({"type": "client"}, responses()):
+            with self.subTest(type=delegation["type"]):
+                longest = SessionConfig(model="live-1", delegation={**delegation, "acknowledgement_delay_ms": 800})
+                self.assertEqual(longest.delegation.acknowledgement_delay_ms, 800)
+                started = start_error(delegation={**delegation, "acknowledgement_delay_ms": 801})
+                self.assertEqual(error_event(started)["error"], refused)
+                # A session.update is held to the same range.
+                with self.assertRaises(ProtocolError) as updated:
+                    longest.updated({"delegation": {"acknowledgement_delay_ms": 801}})
+                self.assertEqual(error_event(updated.exception)["error"], refused)
+
 
 class ErrorEventTests(unittest.TestCase):
     def test_every_event_has_a_fresh_id_and_an_error_takes_its_type_from_its_code(self):
@@ -129,56 +152,6 @@ class ErrorEventTests(unittest.TestCase):
         )
         for code in ("server_error", "pipeline_error"):
             self.assertEqual(error_event(ProtocolError("down", code))["error"]["type"], "server_error")
-
-
-def reference(sample: int, alaw: bool) -> int:
-    """ITU-T G.711 of one 16-bit sample, as the CCITT reference (Sun g711.c) encodes it: A-law or mu-law."""
-    if alaw:
-        pcm, mask = (sample >> 3, 0xD5) if sample >= 0 else (-(sample >> 3) - 1, 0x55)
-        segment = sum(pcm > end for end in (0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF))
-        code = 0x7F if segment >= 8 else (segment << 4) | ((pcm >> (1 if segment < 2 else segment)) & 0xF)
-        return code ^ mask
-    pcm, mask = (-(sample >> 2), 0x7F) if sample < 0 else (sample >> 2, 0xFF)
-    pcm = min(pcm, 8159) + 33
-    segment = sum(pcm > end for end in (0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF))
-    return (0x7F if segment >= 8 else (segment << 4) | ((pcm >> (segment + 1)) & 0xF)) ^ mask
-
-
-class CodecTests(unittest.TestCase):
-    def test_wire_audio_converts_to_24_khz_pcm_and_back(self):
-        self.assertEqual(
-            [AudioFormat(type=kind).rate for kind in ("audio/pcm", "audio/pcmu", "audio/pcma")], [24000, 8000, 8000]
-        )
-        self.assertEqual(SessionConfig(model="m", audio={"format": {"type": "audio/pcma"}}).audio.format.rate, 8000)
-        for audio_format, wire in (
-            (AudioFormat(type="audio/pcm", rate=16000), b"\x10\x20" * 1600),
-            (AudioFormat(type="audio/pcmu"), bytes(range(160)) * 2),
-            (AudioFormat(type="audio/pcma"), bytes(range(160)) * 2),
-        ):
-            with self.subTest(audio_format=audio_format.type):
-                codec = WireCodec(audio_format)
-                pcm = codec.decode(wire)
-                self.assertEqual(len(pcm) % 2, 0)
-                self.assertGreater(len(pcm), len(wire))  # resampled up to 24 kHz
-                self.assertTrue(0 < len(codec.encode(pcm)) <= len(wire))
-        with self.assertRaises(ValueError):
-            WireCodec().decode(b"\x01")  # an incomplete PCM sample
-
-    def test_the_g711_encoders_match_the_reference_on_every_16_bit_sample(self):
-        samples = np.arange(-32768, 32768, dtype="<i2")
-        for codec, alaw in ((MuLaw(), False), (ALaw(), True)):
-            with self.subTest(alaw=alaw):
-                encoded = np.frombuffer(codec.encode(samples.tobytes()), dtype=np.uint8)
-                expected = np.array([reference(int(sample), alaw) for sample in samples], dtype=np.uint8)
-                self.assertEqual(int(np.count_nonzero(encoded != expected)), 0)
-
-    def test_known_g711_codes_and_a_lossless_round_trip_of_every_code(self):
-        known = {MuLaw(): {0: 0xFF, 32767: 0x80, -32768: 0x00}, ALaw(): {0: 0xD5, -1: 0x55, 32767: 0xAA}}
-        for codec, codes in known.items():
-            for sample, code in codes.items():
-                self.assertEqual(codec.encode(np.array([sample], dtype="<i2").tobytes())[0], code, (codec, sample))
-            decoded = codec.decode(bytes(range(256)))
-            self.assertEqual(codec.decode(codec.encode(decoded)), decoded)
 
 
 if __name__ == "__main__":

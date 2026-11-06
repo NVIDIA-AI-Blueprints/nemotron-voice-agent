@@ -3,9 +3,10 @@
 
 # ruff: noqa: D100, D101, D102, D103
 
-"""A reply's speech on its way out: the text-to-speech, a stitched line's text hold, and the pre-roll."""
+"""The speech services, and a reply's speech on its way out: a stitched line's text hold, and the pre-roll."""
 
 import unittest
+from unittest.mock import patch
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -17,12 +18,16 @@ from pipecat.frames.frames import (
     TTSTextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.nvidia.stt import NvidiaSTTService
+from pipecat.services.stt_latency import NVIDIA_TTFS_P99
 from pipecat.tests.utils import SleepFrame, run_test
 
 from examples.frontend_backend_live.media.preroll import SpeechPreroll
-from examples.frontend_backend_live.media.services import LineTextHold, build_tts
+from examples.frontend_backend_live.media.services import LineTextHold, build_stt, build_tts
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_markdown_text_transform
 
 MAGPIE = {"server": "magpie-tts:50051", "synthesis_mode": "per_sentence"}  # an entry as the registry's settings give it
+NEMOTRON_ASR = {"server": "nemotron-asr:50052"}
 
 
 def audio(ms: int) -> TTSAudioRawFrame:
@@ -45,9 +50,29 @@ def preroll(ms: int) -> tuple[SpeechPreroll, list]:
 
 
 class SpeechTests(unittest.IsolatedAsyncioTestCase):
+    def test_the_speech_to_text_is_pipecats_nvidia_service_with_its_own_budget_for_the_final(self):
+        stt = build_stt({}, NEMOTRON_ASR)  # as the other examples build it
+        self.assertIsInstance(stt, NvidiaSTTService)
+        self.assertEqual(stt.service_metadata_frame().ttfs_p99_latency, NVIDIA_TTFS_P99)
+
+    def test_the_speech_to_text_finalizes_a_stretch_of_speech_after_320_ms_of_silence(self):
+        with patch("examples.frontend_backend_live.media.services.NvidiaSTTService") as service:
+            build_stt({}, NEMOTRON_ASR)
+        self.assertEqual(service.call_args.kwargs["stop_history"], 320)  # as the other examples
+
     def test_the_text_to_speech_speaks_the_sessions_language_else_its_entrys(self):
         self.assertEqual(build_tts({"tts_language_code": "DE-de"}, MAGPIE).settings.language, "de-DE")
         self.assertEqual(build_tts({}, {**MAGPIE, "language_code": "fr-FR"}).settings.language, "fr-FR")
+
+    def test_the_text_to_speech_keeps_pipecats_limit_of_contexts_with_no_audio(self):
+        with patch("examples.frontend_backend_live.media.services.NvidiaTTSService") as service:
+            build_tts({}, MAGPIE)
+        self.assertNotIn("max_consecutive_zero_audio_contexts", service.call_args.kwargs)  # as the other examples
+
+    def test_the_text_to_speech_strips_markdown_with_the_shared_transform(self):
+        with patch("examples.frontend_backend_live.media.services.NvidiaTTSService") as service:
+            build_tts({}, MAGPIE)
+        self.assertEqual(service.call_args.kwargs["text_transforms"], [("*", nemotron_speech_markdown_text_transform)])
 
     async def test_a_stitched_lines_text_follows_all_of_its_audio_and_a_cut_drops_it(self):
         one, two = (TTSTextFrame(text=text, text_type=TextType.SENTENCE) for text in ("One.", "Two."))

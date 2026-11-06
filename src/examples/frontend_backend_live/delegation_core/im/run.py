@@ -9,10 +9,8 @@ round completes, so a failed attempt writes nothing. A Work's response belongs t
 landed in it; while that response waits for the app's outputs, the other tasks' items are held in order.
 
 The commit gate refuses every call a task routes while a newer request waits to land in it, or waits for the
-conductor's decision, so the backend re-plans with the newer request; a call that already runs is never cut. With
-``delegation.hold_answers_while_deciding``, an answer a task gives while a request waits for the conductor's decision
-waits for that decision too: steered into the task, the answer is progress and the task runs one more round with the
-request, in a new run of its adapter; placed elsewhere, it is written then; a stop drops it.
+conductor's decision, so the backend re-plans with the newer request; a call that already runs is never cut. An answer
+is written when its round completes; the frontend words a result that newer requests may change.
 """
 
 from __future__ import annotations
@@ -60,8 +58,9 @@ OFFICIAL_REASONS = frozenset({"max_output_tokens", "content_filter"})
 TOO_MANY_REQUESTS = 429
 # How much of a request's text the work records show: its newest words.
 RECORD_TEXT_CHARS = 300
-# The display tool always shows as an mcp_call item; the IM's control tools (cancel_work) never reach the wire.
-DISPLAY_REPORTS = CallReports()
+# A call the backend runs, the display tool's included, shows as an official mcp_call item; the IM's control tools
+# (cancel_work) never reach the wire.
+ITEM_REPORTS = CallReports()
 CONTROL_REPORTS = ControlCalls()
 
 
@@ -168,7 +167,6 @@ class TaskRun:
         self.answered = False  # its last round gave an answer
         self.answers = 0
         self.held = False  # its round's calls were refused while the conductor decides: it waits for the decision
-        self.held_answer: dict | None = None  # its answer, given while the conductor decides: it waits for the decision
         self.completed = False  # its run ended as it should: with an answer, or (one-shot) with the app's calls
         self.stop_reason: StopReason | None = None  # a stop was requested: nothing more of it is written
         self.stopped: StopOutcome | None = None
@@ -179,7 +177,7 @@ class TaskRun:
         self.driver: asyncio.Task | None = None
         shown = self.session.result_format.tools()
         self.displays = frozenset(shown)  # its work tools whose items are the display
-        names = tuple(dict.fromkeys((*shown, *self.session.settings.work_tools)))
+        names = tuple(dict.fromkeys((*shown, *self.session.work_tools)))
         self.work_tools = WorkTools(names, self.texts, self.cancel_own, self.session.settings.display_label)
         self._readers: dict[str, Callable[[dict], None]] = {
             "response.created": self._attempt_opened,
@@ -200,9 +198,6 @@ class TaskRun:
             self.run = self.work.task_started(self)
             while True:
                 await self._read_events()
-                if self.held_answer is not None and await self._decided_on_answer():
-                    self.run = self.session.backend.start(self)  # one more round, with the newer request
-                    continue
                 if self.stop_reason is not None or not self.app_calls:
                     break
                 if self._gated():
@@ -275,28 +270,6 @@ class TaskRun:
         self.app_calls = {}
         return True
 
-    async def _decided_on_answer(self) -> bool:
-        """Wait for the conductor's decision, then release the held answer; ``True`` when the task runs on.
-
-        Newer input the decision steered into this task makes the answer progress, and the task runs one more round
-        with it; otherwise the answer is written now. A stop meanwhile has dropped it (``request_stop``).
-        """
-        await self.session.decided()
-        if self.held_answer is None:
-            return False
-        if self.unapplied():
-            self.session.commentary(self, self._release_answer("commentary"))
-            return True
-        self._answer(self._release_answer("written"))
-        return False
-
-    def _release_answer(self, how: str) -> dict | None:
-        """The held answer leaves the hold ``how``: written, commentary or dropped (``None``: none was held)."""
-        answer, self.held_answer = self.held_answer, None
-        if answer is not None:
-            self.trace("im.answer.released", how=how)
-        return answer
-
     async def _wait_for_app(self) -> None:
         """Wait, holding no slot, for the app's outputs; then for a slot again."""
         self.session.release(self)
@@ -341,7 +314,6 @@ class TaskRun:
         self.stop_reason = reason
         self.record.stop.move("stop_requested")
         self.session.unschedule(self)
-        self._release_answer("dropped")
         return True
 
     async def confirm_stop(self) -> StopOutcome:
@@ -403,16 +375,8 @@ class TaskRun:
                 self.session.action(self, call)
         refused = any(self.routes.get(call.get("call_id", "")) == "refused" for call in calls)
         self.held = refused and self.session.waits_for_decision and self.stop_reason is None
-        if answer is not None and self._holds_answers():
-            self.held_answer = answer
-            self.trace("im.answer.held")
-        elif answer is not None:
+        if answer is not None:
             self._answer(answer)
-
-    def _holds_answers(self) -> bool:
-        """Whether its answer waits for the conductor's decision now (``delegation.hold_answers_while_deciding``)."""
-        holds = self.session.settings.hold_answers_while_deciding
-        return holds and self.session.waits_for_decision and self.stop_reason is None
 
     def _answer(self, message: dict) -> None:
         """Its answer: the round answered, and the Work writes it."""
@@ -517,7 +481,7 @@ class TaskRun:
         self._step(call_id, "not_run", call.get("name", ""))
 
     def tool_started(self, call: dict, source: str) -> None:
-        """A call the backend runs starts: reported as ``delegation.backend_calls`` says."""
+        """A call the backend runs starts: an official ``mcp_call`` item, unless it is one of the IM's control tools."""
         call_id = call.get("call_id", "")
         if call_id in self.started_calls or self.routes.get(call_id) == "refused":
             return
@@ -547,10 +511,8 @@ class TaskRun:
             reports.ended(self, call_id, output, outcome)
 
     def _reports(self, name: str) -> CallReports:
-        """How a call reaches the wire: the display always as an item; the IM's control tools never; others as set."""
-        if name in self.displays:
-            return DISPLAY_REPORTS
-        return CONTROL_REPORTS if name in self.work_tools.names else self.session.call_reports
+        """How a call reaches the wire: the IM's control tools never; the display and every other call as an item."""
+        return CONTROL_REPORTS if name in self.work_tools.names and name not in self.displays else ITEM_REPORTS
 
     def progress(self, text: str) -> None:
         """Activity that is not model text: a progress note (never history)."""

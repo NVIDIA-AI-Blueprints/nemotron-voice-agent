@@ -3,7 +3,7 @@
 
 """The delegation core's builder: one core from its own settings, every implementation chosen by name.
 
-A composition root loads ``config.CoreSettings``, resolves the default model of ``backend.slot`` and the instructions of
+A composition root reads ``config.CoreSettings``, resolves the default model of ``backend.slot`` and the instructions of
 ``backend.prompt`` from the example's catalog, calls :func:`build_core`, and reaches the core only through the
 in-process Responses API client (``api/local.py``).
 """
@@ -51,13 +51,12 @@ class DelegationCore:
         *,
         defaults: BackendTask,
         result_format: Any,
-        call_reports: Any,
         output_steps: AppOutputSteps = lambda observe: (),
         observe: Callable[..., Any] = log_trace,
     ):
         """Hold what each IM session is built from (see :func:`build_core`, which makes these choices)."""
         self.settings, self.source, self.one_shot_source = settings, source, one_shot_source
-        self.defaults, self.result_format, self.call_reports = defaults, result_format, call_reports
+        self.defaults, self.result_format = defaults, result_format
         self.output_steps, self.observe = output_steps, observe
 
     def session(self) -> IMSession:
@@ -68,7 +67,6 @@ class DelegationCore:
             self.settings.delegation,
             self.settings.texts,
             result_format=self.result_format,
-            call_reports=self.call_reports,
             output_steps=self.output_steps(self.observe),
             observe=self.observe,
         )
@@ -123,7 +121,7 @@ def tool_sources(blocks: Mapping[str, Mapping[str, Any]]) -> ToolSources:
     """
     if not blocks:
         return lambda: ()
-    # The tool sources load only when a profile names one.
+    # The tool sources load only when the core's settings name one.
     from examples.frontend_backend_live.delegation_core.backend.tools import TOOL_SOURCES
 
     classes = {name: pick(TOOL_SOURCES, name, "tool source") for name in blocks}
@@ -138,7 +136,7 @@ def app_output_steps(blocks: Mapping[str, Mapping[str, Any]]) -> AppOutputSteps:
     """
     if not blocks:
         return lambda observe: ()
-    # The steps load only when the core's file names one.
+    # The steps load only when the core's settings name one.
     from examples.frontend_backend_live.delegation_core.backend.output_steps import APP_OUTPUT_STEPS
 
     classes = {name: pick(APP_OUTPUT_STEPS, name, "app output step") for name in blocks}
@@ -161,7 +159,7 @@ def build_core(
     """Build one delegation core from its own settings, every choice made once, by name.
 
     Args:
-        settings: The core's own settings (``CoreSettings.load``).
+        settings: The core's own settings (``CoreSettings.parse``).
         endpoints: A model name to its endpoint; ``None`` gives the default the root resolved from ``backend.slot``.
         defaults: What a request leaves out: the default model and the instructions the root resolved from
             ``backend.prompt``.
@@ -171,7 +169,7 @@ def build_core(
     Raises:
         ValueError: ``backend`` names an adapter, a tool source or an app output step the tables do not hold, or has a
             block for no adapter of the table; an adapter's or a step's block is refused; the one-shot source cannot
-            serve one-shot sessions; or the result format or the backend call report is unknown.
+            serve one-shot sessions; or the result format is unknown.
     """
     backend = settings.backend
     unknown = sorted(set(backend.blocks) - set(adapters))
@@ -198,18 +196,16 @@ def build_core(
             f"backend.one_shot_adapter {backend.one_shot_adapter!r} cannot serve one-shot sessions: name an adapter "
             "whose source offers new_one_shot(), such as llm"
         )
-    from examples.frontend_backend_live.delegation_core.im.results import CALL_REPORTS, RESULT_FORMATS
+    from examples.frontend_backend_live.delegation_core.im.results import RESULT_FORMATS
 
     name = settings.delegation.result_format
     result_format = pick(RESULT_FORMATS, name, "result format")(settings.texts.result_formats[name])
-    call_reports = pick(CALL_REPORTS, settings.delegation.backend_calls, "backend call report")()
     return DelegationCore(
         settings,
         sources[backend.adapter],
         one_shot_source,
         defaults=defaults,
         result_format=result_format,
-        call_reports=call_reports,
         output_steps=steps,
         observe=observe,
     )

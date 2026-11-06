@@ -3,7 +3,7 @@
 
 """What a frontend adapter class offers the composition root, so a second adapter is one class and one table entry.
 
-``frontend.adapter`` in ``config.yaml`` names an entry of ``FRONTEND_ADAPTERS``. The root reads the
+``frontend.adapter`` in the example's settings names an entry of ``FRONTEND_ADAPTERS``. The root reads the
 example's catalog once, waits until the class's services are ready, then builds one adapter per session:
 
 1. ``Settings.parse(block, pick=..., message_text=...)``: the class's own block (``frontend.<name>``), unknown keys

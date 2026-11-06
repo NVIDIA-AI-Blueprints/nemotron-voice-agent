@@ -247,6 +247,8 @@ tts = NvidiaTTSService(
 )
 ```
 
+The Frontend/Backend Live example uses this transform, because its voice can say a backend's text as written.
+
 ### Voice Cloning / Zero-Shot
 
 Magpie TTS Zeroshot clones a voice from a short reference clip using Pipecat's `NvidiaTTSService(zero_shot_audio_prompt_file=...)`. Set the path only in catalog YAML (`services.yaml`); it is not accepted from the client session body. Refer to [voice cloning](https://docs.nvidia.com/nim/speech/latest/tts/voice-cloning.html) for details.

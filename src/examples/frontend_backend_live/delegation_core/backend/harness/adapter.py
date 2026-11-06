@@ -7,9 +7,9 @@ When the IM asks for the conductor, the conductor's and the workers' processes s
 workers' process opens and retires one idle session, so the first request pays neither ``initialize`` nor a cold first
 ``session/new`` (an agent's first session in a process may take seconds longer while it loads its caches). Each session
 holds one of its process's ``turns_per_process`` places until its prompts end, also while it waits for the app; when a
-role's processes are full, the next session opens another. A session kept for a later task (``backend.harness.session``)
-holds no place while it waits, and takes one again when a task takes it. With ``max_running`` 1 the conductor is the
-steer rule, so only the workers' processes start.
+role's processes are full, the next session opens another. The session of a task that answered is kept in the
+adapter's one slot for the next task (``sessions.py``): it holds no place while it waits, and takes one again when a
+task takes it. With ``max_running`` 1 the conductor is the steer rule, so only the workers' processes start.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ class HarnessAdapter:
         self._conductor: HarnessConductor | None = None
         self._shared: dict[str, list[asyncio.Task]] = {}  # each role's processes, opening or open
         self._runs: set[WorkerRun] = set()
-        self.kept: KeptSession | None = None  # the session the session policy keeps for a later task
+        self.kept: KeptSession | None = None  # the session of a task that answered, kept for the next task
 
     # ------------------------------------------------------------------------------------------------ the port
     def conductor(self) -> HarnessConductor | SteerOpenWork:
@@ -73,7 +73,13 @@ class HarnessAdapter:
         return self._conductor or SteerOpenWork()
 
     def start(self, task: TaskContext) -> WorkerRun:
-        """Run one task: a ``WorkerRun``; nothing is opened before its ``events()``."""
+        """Run one task: a ``WorkerRun``; nothing is opened before its ``events()``.
+
+        The agent runs the task on its own model, so a request that names a model the harness does not serve is logged.
+        """
+        model, served = task.request().get("model"), self.source.endpoint().model
+        if model not in (None, served):
+            logger.info(f"harness.other_model task={task.task_id} model={model!r}: the agent runs its own model")
         run = WorkerRun(task, self)
         self._runs.add(run)
         return run
@@ -130,6 +136,18 @@ class HarnessAdapter:
         if self._full(runtime) or not runtime.client.alive:
             return False
         runtime.places += 1
+        return True
+
+    def take_kept(self) -> KeptSession | None:
+        """The session kept for the next task, which leaves the slot: two tasks never share a session."""
+        kept, self.kept = self.kept, None
+        return kept
+
+    def keep(self, kept: KeptSession) -> bool:
+        """Keep ``kept`` while no session is kept: the first session kept stays, and the run retires a later one."""
+        if self.kept is not None:
+            return False
+        self.kept = kept
         return True
 
     def _full(self, process: RuntimeProcess) -> bool:

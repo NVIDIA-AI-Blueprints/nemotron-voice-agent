@@ -11,6 +11,7 @@ and this module, because the core is its own package; the tests of the other par
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 import httpx
@@ -23,13 +24,34 @@ from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.shared.delegation_contract import ModelEndpoint
 
 # The core's texts as the example's prompts.yaml words them (agent_prompts.Core), which a root hands to
-# CoreSettings.load with the core's file. They are read here as a root reads them, so the core's tests load no module of
-# the frontend.
+# CoreSettings.parse with the core's settings. They are read here as a root reads them, so the core's tests load no
+# module of the frontend.
 PROMPTS_YAML = Path(__file__).resolve().parents[2] / "src/examples/frontend_backend_live/prompts.yaml"
 CORE_TEXTS = {
     name: entry["content"]
     for name, entry in yaml.safe_load(PROMPTS_YAML.read_text(encoding="utf-8"))["agent_prompts"]["Core"].items()
 }
+# The example's own settings as examples_registry.yaml holds them (the config block of its entry), and the core's
+# settings among them, read from the file as the registry reads it.
+REGISTRY_YAML = Path(__file__).resolve().parents[2] / "examples_registry.yaml"
+REGISTRY = yaml.safe_load(REGISTRY_YAML.read_text(encoding="utf-8"))
+EXAMPLE_SETTINGS = REGISTRY["examples"]["frontend-backend-live"]["config"]
+CORE_BLOCK = EXAMPLE_SETTINGS["core"]
+
+
+def merged(base, changes):
+    """``changes`` over ``base``, as the example merges settings: mappings key by key, anything else replaces."""
+    if not isinstance(base, dict) or not isinstance(changes, dict):
+        return deepcopy(changes)
+    result = deepcopy(base)
+    for key, value in changes.items():
+        result[key] = merged(result[key], value) if key in result else deepcopy(value)
+    return result
+
+
+def core_block(**changes) -> dict:
+    """The core's settings of the registry's block, with ``changes`` (its top-level blocks) merged over them."""
+    return merged(CORE_BLOCK, changes)
 
 
 def answer_text(event: dict) -> str | None:

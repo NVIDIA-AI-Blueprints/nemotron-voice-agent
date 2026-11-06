@@ -33,7 +33,7 @@ class HeardLogEdgeTests(unittest.IsolatedAsyncioTestCase):
             call.output.pause_at = hold_after_first_audio
             call.output.playing.set()  # the silent line ends with no audio: it waits to be said once more
             await call.until(lambda: call.voice.waiting_lines, "the silent line waiting for its retry")
-            await call.until(lambda: any(line.heard for line in call.voice.spoken.lines.values()), "the reply plays")
+            await call.until(lambda: call.assistant.aggregation_string() == "Sure thing.", "the reply plays")
             call.output.pause_at = lambda frame: False
             await call.say("Book it.")  # the caller cuts the reply in; the silent line was never heard
             call.output.playing.set()

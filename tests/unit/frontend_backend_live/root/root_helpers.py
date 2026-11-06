@@ -92,15 +92,11 @@ def clear_root_caches(case: unittest.TestCase) -> None:
 
 
 def stub_root(**changes) -> factory.Root:
-    """A root state with the stub adapter class, the shipped files and :data:`CATALOG`."""
-    from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
-    from examples.frontend_backend_live.delegation_core.config import CoreSettings
-    from examples.frontend_backend_live.delegation_core.profiles import load_profile
-    from tests.unit.core_helpers import CORE_TEXTS
-
-    core = CoreSettings.load(CONFIG_PATH.with_name("core.yaml"), CORE_TEXTS)
+    """A root state with the stub adapter class, the shipped settings and :data:`CATALOG`."""
+    config = factory.example_config()
+    core = factory.core_settings(config.core)
     values = {
-        "config": load_live_config(load_profile, CONFIG_PATH),
+        "config": config,
         "core": core,
         "adapter": StubAdapter,
         "settings": StubSettings({"display_label": core.delegation.display_label}),

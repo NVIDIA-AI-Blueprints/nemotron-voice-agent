@@ -18,13 +18,15 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.workers.runner import WorkerRunner
 
-from examples.frontend_backend_live.adapter.bridge import LiveWebSocketAudioOutput
+from examples.frontend_backend_live.adapter.bridge import LiveWebSocketSilence
+from examples.frontend_backend_live.adapter.serializer import LiveFrameSerializer
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask, settings_for
-from gateways.live.gateway.websocket import wire_codec
+from gateways.live.gateway.websocket import PrimarySocketView
 from gateways.live.protocol import SessionConfig
 from gateways.live.server_delegation.passthrough import ServerDelegation, request_settings
 from gateways.live.session import LiveProtocolSession
-from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
+from tests.unit.frontend_backend_live.adapter.adapter_helpers import FakeSocket
+from tests.unit.live_helpers import ClientSocket, Collector, FakeAdapter, responses_config
 
 ADAPTER_SENDS = ("session.input_transcript.delta", "session.output_transcript.delta")
 DELEGATION_SENDS = ("session.delegation.created", "response.event")
@@ -37,10 +39,15 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
     async def start(self, transport="websocket", adapter=None):
         """Start a session whose adapter (and core) is a fake; a sideband connection attaches once it is active."""
         config, self.adapter = responses_config(), adapter or FakeAdapter()
-        codec = wire_codec(config) if transport == "websocket" else None  # only the WebSocket edge hands one in
-        self.session = LiveProtocolSession(config, transport, self.adapter.parts(), core=self.adapter.core, codec=codec)
         self.primary, self.sideband = Collector(), Collector()
-        self.session.subscribe(self.primary.send, "primary")
+        parts, core = self.adapter.parts(), self.adapter.core
+        if transport == "websocket":  # as the WebSocket edge makes it: the socket the frontend adapter reads
+            socket = PrimarySocketView(ClientSocket(self.primary), config.with_wire_format().audio.format)
+            self.session = LiveProtocolSession(config, transport, parts, core=core, socket=socket)
+            socket.attach(self.session)
+        else:
+            self.session = LiveProtocolSession(config, transport, parts, core=core)
+            self.session.subscribe(self.primary.send, "primary")
         await self.session.start("start_1")
         self.session.subscribe(self.sideband.send, "sideband")
         self.addAsyncCleanup(self.session.close)
@@ -61,23 +68,24 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
             await collector.wait_for(DELEGATION_SENDS[-1])  # each connection is sent its events in order
             self.assertEqual(collector.kinds(), [*before, *ADAPTER_SENDS, *DELEGATION_SENDS])
 
-    async def test_reply_audio_goes_to_the_primary_connection_only_at_the_exchange_rate(self):
+    async def test_reply_audio_goes_to_the_primary_connection_only_as_it_came(self):
         await self.start()
         port = self.adapter.session
-        with self.assertRaises(ValueError):
-            await port.send_output_audio(bytes(3200), 16000)
-        await port.send_output_audio(bytes(4800), 24000)  # 100 ms at the exchange rate
+        await port.send_output_audio(b"")  # an empty chunk sends nothing
+        await port.send_output_audio(bytes(range(256)) * 4)  # audio in the wire format, which the adapter encoded
         await port.emit(ADAPTER_SENDS[0], delta="Hi ", start_ms=0, end_ms=120)
         await self.sideband.wait_for(ADAPTER_SENDS[0])
         await self.primary.wait_for(ADAPTER_SENDS[0])
         self.assertEqual(self.sideband.kinds(), [ADAPTER_SENDS[0]])
         audio = [event for event in self.primary.events if event["type"] == "session.output_audio.delta"]
         self.assertEqual([set(event) for event in audio], [{"type", "delta"}])  # one packet, with no event id
-        self.assertEqual(len(base64.b64decode(audio[0]["delta"])), 4800)  # the default wire format: 24 kHz PCM16
+        self.assertEqual(base64.b64decode(audio[0]["delta"]), bytes(range(256)) * 4)
 
     async def test_a_reply_audio_send_that_fails_is_reported_and_the_adapter_asks_to_close(self):
         await self.start(transport="webrtc")  # WebRTC carries reply audio on its media track: no event can carry it
-        worker = PipelineWorker(Pipeline([LiveWebSocketAudioOutput(self.adapter.session)]), idle_timeout_secs=None)
+        port = self.adapter.session  # a WebSocket edge's output on it: the silence goes nowhere
+        silence = LiveWebSocketSilence(port, LiveFrameSerializer(FakeSocket(), port, 16000))
+        worker = PipelineWorker(Pipeline([silence]), idle_timeout_secs=None)
         runner = WorkerRunner(handle_sigint=False)
         await runner.add_workers(worker)
         running = asyncio.create_task(runner.run())

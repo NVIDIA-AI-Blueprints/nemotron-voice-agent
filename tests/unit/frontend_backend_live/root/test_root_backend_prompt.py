@@ -5,14 +5,13 @@
 """What the backend reads when a request sets no instructions: the Live core's generic prompt, the UI bot's cafe one."""
 
 import asyncio
-import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import yaml
 
 from examples.frontend_backend_live import factory, pipeline
-from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH
 from examples.frontend_backend_live.delegation_core.app import build_core
 from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
 from examples.frontend_backend_live.delegation_core.im.input import compose
@@ -22,7 +21,8 @@ from tests.unit.frontend_backend_live.root.root_helpers import CATALOG, StubAdap
 
 USER = {"type": "message", "role": "user", "content": "What can you do for me?"}
 # The example's prompts.yaml as written.
-AGENT_PROMPTS = yaml.safe_load(CONFIG_PATH.with_name("prompts.yaml").read_text(encoding="utf-8"))["agent_prompts"]
+AGENT_PROMPTS = yaml.safe_load(Path(factory.__file__).with_name("prompts.yaml").read_text(encoding="utf-8"))
+AGENT_PROMPTS = AGENT_PROMPTS["agent_prompts"]
 
 
 def entry(group: str, name: str) -> str:
@@ -54,9 +54,6 @@ class DefaultPromptTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(factory.ExampleCatalog, "read", return_value=CATALOG))
         for root in (factory, pipeline):
             self.enterContext(patch.object(root, "frontend_adapters", return_value={"cascade": StubAdapter}))
-        self.enterContext(patch.dict(os.environ))
-        for name in ("CORE_CONFIG_PATH", "LIVE_CONFIG_PATH"):
-            os.environ.pop(name, None)
 
     async def system_message(self, build) -> str:
         """The instructions the backend model gets for one request that sets none, on the core that ``build`` makes."""

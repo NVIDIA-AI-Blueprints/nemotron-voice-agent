@@ -7,9 +7,8 @@ Admission is one step: a request is refused before anything changes, or its dele
 opens ``queued``. The conductor places arrivals one ``decide()`` call at a time, and the session re-checks and answers
 every decision; what a ``decide()`` leaves unplaced joins the newest open Work, or starts one when none is open, so a
 conductor's failure never starts work beside open work. While an arrival waits for its decision, the commit gate holds
-every open Work's new calls, since any of them may be the one the caller changed, and with
-``delegation.hold_answers_while_deciding`` their answers too. A typed run steers running work as a spoken request does,
-a deliberate deviation from the Live API, which queues it.
+every open Work's new calls, since any of them may be the one the caller changed. A typed run steers running work as a
+spoken request does, a deliberate deviation from the Live API, which queues it.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -47,7 +46,7 @@ from examples.frontend_backend_live.delegation_core.im.input import (
     with_parts,
 )
 from examples.frontend_backend_live.delegation_core.im.notes import ProgressNotes
-from examples.frontend_backend_live.delegation_core.im.results import CallReports, ResultFormat
+from examples.frontend_backend_live.delegation_core.im.results import ResultFormat
 from examples.frontend_backend_live.delegation_core.im.run import Parked, TaskRun, WorkRun, brief_message
 from examples.frontend_backend_live.delegation_core.im.stop import AtClose, ForNewerRequest
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseBook, ResponseStream
@@ -130,6 +129,10 @@ class Decisions:
 class IMSession:
     """The interaction manager of one conversation: admission, placement, Works and their tasks, records, close."""
 
+    # The IM's work tools every task gets, after its result format's (texts.work_tools): cancel_work stops the task
+    # after its current step.
+    work_tools: ClassVar[tuple[str, ...]] = ("cancel_work",)
+
     def __init__(
         self,
         backend: BackendAdapter,
@@ -138,7 +141,6 @@ class IMSession:
         texts: Texts,
         *,
         result_format: ResultFormat | None = None,
-        call_reports: CallReports | None = None,
         output_steps: Sequence[AppOutputStep] = (),
         observe: Callable[..., None] = _noop,
     ):
@@ -152,18 +154,15 @@ class IMSession:
                 model's input.
             result_format: The class ``delegation.result_format`` names, built with its note; the core's builder
                 picks it from ``im/results.RESULT_FORMATS`` (default ``plain``).
-            call_reports: The class ``delegation.backend_calls`` names, picked from ``im/results.CALL_REPORTS``
-                (default ``items``).
             output_steps: The steps the app's outputs take before the tasks read them (``backend.app_output_steps``),
                 this session's own, in order; none by default.
             observe: Optional ``observe(kind, **fields)`` hook for traces.
         """
         self.backend, self.defaults, self.settings, self.texts = backend, defaults, settings, texts
         self.result_format = result_format if result_format is not None else ResultFormat()
-        self.call_reports = call_reports if call_reports is not None else CallReports()
         self.observe = observe
-        self.caller_note = texts.caller_notes[settings.caller_note]
-        self.voice_note = texts.voice_notes[settings.voice_note]
+        self.caller_note = texts.caller_notes["default"]
+        self.voice_note = texts.voice_notes["default"]
         self.output_steps = tuple(output_steps)
         self.ledger = WorkLedger(uid("conv"))
         self.book = ResponseBook(self.ledger)
@@ -209,10 +208,7 @@ class IMSession:
 
     @property
     def waits_for_decision(self) -> bool:
-        """Whether a request waits for the conductor's decision: the commit gate holds every open Work's calls.
-
-        With ``delegation.hold_answers_while_deciding``, the answers the open Works' tasks give wait for it too.
-        """
+        """Whether a request waits for the conductor's decision: the commit gate holds every open Work's calls."""
         return not self._decided.is_set()
 
     async def decided(self) -> None:
@@ -377,7 +373,7 @@ class IMSession:
         for delegation in taken:
             self.arrivals.remove(delegation)
         if not self.arrivals and not self._decided.is_set():
-            self._decided.set()  # the commit gate lets the open Works' calls (and held answers) go again
+            self._decided.set()  # the commit gate lets the open Works' calls go again
             self.observe("im.decided", delegation_ids=taken)
         return taken
 
@@ -394,8 +390,7 @@ class IMSession:
     def _over_limit(self, tasks: int) -> bool:
         """Whether ``tasks`` new tasks and the running and queued tasks of open Works are more than ``max_running``.
 
-        Checked only when more than one task may run at once: with one, a rule places (the steer rule, or the backend
-        LLM's own, whose ``start_each`` queues Works on purpose).
+        Checked only when more than one task may run at once: with one, the steer rule places.
         """
         limit = self.backend.max_running
         active = sum(task.record.state in ("queued", "running") for work in self.works.values() for task in work.tasks)

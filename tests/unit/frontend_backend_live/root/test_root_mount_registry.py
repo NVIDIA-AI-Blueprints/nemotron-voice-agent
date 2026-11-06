@@ -58,6 +58,19 @@ class RegistryTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaisesRegex(RuntimeError, message):
                 examples_registry._load_examples({"examples": {"x": entry(live=bad)}})
 
+    def test_an_examples_own_settings_are_a_mapping_its_code_reads_as_a_copy(self):
+        settings = {"frontend": {"adapter": "cascade"}}
+        loaded = examples_registry._load_examples({"examples": {"x": entry(config=settings), "y": entry()}})
+        self.assertEqual((loaded["x"]["config"], loaded["y"]["config"]), (settings, {}))
+        for bad in (["frontend"], None, "frontend"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(RuntimeError, "config must be a mapping"):
+                examples_registry._load_examples({"examples": {"x": entry(config=bad)}})
+        copy = examples_registry.example_config(FBL)
+        copy["core"]["backend"]["adapter"] = "harness"  # the example's own copy: the registry keeps its settings
+        self.assertEqual(examples_registry.example_config(FBL)["core"]["backend"]["adapter"], "llm")
+        with self.assertRaises(KeyError):
+            examples_registry.example_config("no-such-example")
+
     def test_live_settings_are_checked_when_the_registry_loads(self):
         values = {"max_sessions": 3, "max_delegate_rounds": 1, "ice_urls": ["stun:stun.example:3478"]}
         loaded = examples_registry._load_examples({"examples": {"x": entry(live={**HOOKS, "settings": values})}})

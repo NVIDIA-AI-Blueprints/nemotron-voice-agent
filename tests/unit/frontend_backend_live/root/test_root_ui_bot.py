@@ -9,6 +9,7 @@ import json
 import os
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import yaml
@@ -16,20 +17,19 @@ from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 
 from examples.frontend_backend_live import pipeline
-from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
-from examples.frontend_backend_live.delegation_core.profiles import load_profile
-from examples.frontend_backend_live.factory import adapter_block, ui_bot_core, with_display_label
+from examples.frontend_backend_live.factory import adapter_block, example_config, ui_bot_core, with_display_label
 from examples.frontend_backend_live.frontend import build_frontend
-from examples.frontend_backend_live.talker import TalkerChat
+from examples.frontend_backend_live.models.endpoints import ExampleCatalog
+from examples.frontend_backend_live.talker import TalkerChat, TalkerTools
 from gateways.realtime.lifecycle import announce_response, finish_response
 from gateways.realtime.serializer import RealtimeFrameSerializer
 from tests.unit.cascade_helpers import FakeSTT, transcript_turns
-from tests.unit.frontend_backend_live.root.root_helpers import CATALOG
+from tests.unit.frontend_backend_live.root.root_helpers import CATALOG, FRONT
 from tests.unit.frontend_helpers import Acts, Port, ScriptedChat, SentenceTTS, SpeakingOutput, decision
 
 # The example's prompts.yaml as written.
-PROMPTS_FILE = yaml.safe_load(CONFIG_PATH.with_name("prompts.yaml").read_text(encoding="utf-8"))
+PROMPTS_FILE = yaml.safe_load(Path(pipeline.__file__).with_name("prompts.yaml").read_text(encoding="utf-8"))
 
 
 class RecordingOutput(SpeakingOutput):
@@ -74,9 +74,9 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
         self.chat, self.body = ScriptedChat(), {"pipeline_mode": "frontend-backend-live"}
         self.frontends, self.running = [], asyncio.Event()
         self.transport, self.stt, self.tts = FakeTransport(), FakeSTT(), SentenceTTS()
-        config = load_live_config(load_profile, CONFIG_PATH)
+        config = example_config()
         core = ui_bot_core(config)
-        cascade = LiveConfig.parse(with_display_label(adapter_block(config), core))
+        cascade = LiveConfig.model_validate(with_display_label(adapter_block(config), core))
         case = self
 
         class ScriptedTalker(TalkerChat):
@@ -98,7 +98,7 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
                 case.events.append("core closed")
 
         class TurnEnd:
-            """The turn end the speech settings name: the whole-call tests' turn detection, with the bot's welcome."""
+            """The caller's turns the speech settings build: the whole-call tests' turn detection, with the welcome."""
 
             def __init__(self, speech):
                 pass
@@ -126,13 +126,14 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
             built.worker.add_event_handler("on_pipeline_started", lambda worker, frame: case.running.set())
             return built
 
-        root = pipeline.BotRoot(cascade, ScriptedTalker, core, config.ui_bot.channel, CATALOG)
+        root = pipeline.BotRoot(cascade, core, config.ui_bot.channel, CATALOG)
+        self.enterContext(patch.dict(pipeline.LLM_SERVICES, {"json": ScriptedTalker}))
         for name, value in {
             "bot_root": lambda: root,
             "create_transport": AsyncMock(side_effect=lambda runner_args: case.transport),
-            "build_stt": lambda body, entry, turn_end: case.stt,
+            "build_stt": lambda body, entry: case.stt,
             "build_tts": lambda body, entry: case.tts,
-            "TURN_ENDS": {cascade.speech.turn_end: TurnEnd},
+            "SmartTurn": TurnEnd,
             "build_core": lambda settings, *, endpoints, defaults: Core(),
             "core_client": lambda core: "client",
             "ServerDelegation": Delegation,
@@ -253,6 +254,43 @@ class RealtimeGreetingTests(BotCase):
 
         await self.run_bot(during_run)
         self.assertEqual(self.tts.spoken, [])
+
+
+class StyleTests(BotCase):
+    """The bot's talker is the service the cascade's ``talker_style`` names for its model, as a live session's is."""
+
+    def styled(self, style: str) -> None:
+        """The bot's model is the entry ``front``, and the cascade names ``style`` for it."""
+        state = pipeline.bot_root()
+        cascade = state.cascade.model_copy(update={"talker_style": {"front": style}})
+        catalog = ExampleCatalog({**CATALOG.offered, "llm": [{**FRONT, "key": "front"}]})
+        root = replace(state, cascade=cascade, catalog=catalog)
+        self.enterContext(patch.object(pipeline, "bot_root", lambda: root))
+
+    async def test_the_json_talker_unless_the_cascade_names_another(self):
+        frontend = await self.run_bot()
+        talker = frontend.voice.talker  # the scripted JSON talker
+        self.assertTrue(isinstance(talker, TalkerChat) and not isinstance(talker, TalkerTools))
+        self.assertEqual(frontend.voice.routing_format.name, "json_schema")
+
+    async def test_a_model_the_cascade_names_tools_for_gets_the_tool_calling_talker(self):
+        case = self
+
+        class ScriptedTools(TalkerTools):
+            def create_client(self, api_key=None, base_url=None, **kwargs):
+                return case.chat
+
+        self.enterContext(patch.dict(pipeline.LLM_SERVICES, {"tools": ScriptedTools}))
+        self.styled("tools")
+        frontend = await self.run_bot()
+        self.assertIs(type(frontend.voice.talker), ScriptedTools)
+        self.assertEqual(frontend.voice.routing_format.name, "tools")
+        self.assertEqual(set(frontend.voice.talker._functions), {"delegate", "wait"})
+
+    async def test_an_unknown_style_stops_the_session(self):
+        self.styled("chat-completions")
+        with self.assertRaisesRegex(ValueError, "^Unknown talker_style 'chat-completions'; known: json, tools$"):
+            await pipeline.bot(RunnerArguments(body=dict(self.body)))
 
 
 class CloseTests(BotCase):

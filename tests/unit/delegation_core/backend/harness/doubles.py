@@ -22,6 +22,7 @@ from typing import Any
 from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
 from examples.frontend_backend_live.delegation_core.backend.harness.acp.hermes import HermesAgent
 from examples.frontend_backend_live.delegation_core.backend.harness.acp.updates import SessionUpdates
+from examples.frontend_backend_live.delegation_core.backend.harness.adapter import HarnessAdapter
 from examples.frontend_backend_live.delegation_core.backend.harness.bridge import Door
 from examples.frontend_backend_live.delegation_core.backend.harness.protocol import (
     McpServer,
@@ -33,16 +34,14 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
 from examples.frontend_backend_live.delegation_core.backend.harness.render import Renderer
 from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessSettings
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SHIPPED = CoreSettings.load(
-    Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live/core.yaml", CORE_TEXTS
-)
+SHIPPED = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS)
 # The harness's prompts as prompts.yaml words them: every harness block carries them.
 PROMPTS = dict(SHIPPED.backend.blocks["harness"]["prompts"])
-# The agent classes' blocks as core.yaml and prompts.yaml word them: Hermes's holds its command guard, which has no
-# default.
+# The agent classes' blocks as the shipped settings and prompts.yaml word them: Hermes's holds its command guard, which
+# has no default.
 AGENT_BLOCKS = {name: dict(block) for name, block in SHIPPED.backend.blocks["harness"]["agents"].items()}
 
 # The core's own control tools and conductor prompt, as prompts.yaml words them.
@@ -86,7 +85,7 @@ def vocabulary() -> ControlVocabulary:
 
 
 def hermes(**block: Any) -> HermesAgent:
-    """The Hermes agent class with core.yaml's block, ``block`` over it."""
+    """The Hermes agent class with the shipped block, ``block`` over it."""
     return HermesAgent.from_settings({**AGENT_BLOCKS["hermes"], **block})
 
 
@@ -96,22 +95,21 @@ def wire(scenario: str) -> list[dict]:
 
 
 def settings(**block: Any) -> HarnessSettings:
-    """Test settings: the shipped prompts and agent blocks; Hermes and its steer unless ``block`` names others."""
+    """Test settings: the shipped prompts and agent blocks; Hermes, which steers mid-turn, unless ``block`` says so."""
     base = {
         "prompts": PROMPTS,
         "agents": AGENT_BLOCKS,
         "agent": "hermes",
-        "steer": "native_command",
         "command": ["runtime", "acp"],
         "ready_timeout_seconds": 1,
         "stop_timeout_seconds": 0.5,
     }
-    return HarnessSettings.parse({**base, **block})
+    return HarnessSettings.model_validate({**base, **block})
 
 
 def plain(**block: Any) -> HarnessSettings:
-    """Test settings for a plain ACP agent: no mid-turn steer of its own."""
-    return settings(**{"agent": "acp", "steer": "next_prompt", **block})
+    """Test settings for a plain ACP agent: no mid-turn steer of its own, so a newer request cancels and re-prompts."""
+    return settings(**{"agent": "acp", **block})
 
 
 _SCRATCH: list[Path] = []
@@ -285,7 +283,7 @@ class FakeHost:
         self.conductor_role = Role("conductor", "c")
         self.runtime = FakeRuntime()
         self.closed = False
-        self.kept = None  # the session the session policy keeps for a later task
+        self.kept = None  # the session of a task that answered, kept for the next task
 
     async def shared(self, role: Role) -> FakeRuntime:
         self.runtime.places += 1
@@ -297,6 +295,10 @@ class FakeHost:
             return False
         runtime.places += 1
         return True
+
+    # The adapter's own slot for the session kept for the next task.
+    take_kept = HarnessAdapter.take_kept
+    keep = HarnessAdapter.keep
 
 
 async def until(condition, timeout: float = 2.0) -> None:

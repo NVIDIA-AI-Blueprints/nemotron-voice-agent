@@ -6,10 +6,11 @@
 """The harness's settings and source: every name resolved by a table, every refusal at build, the YAML switch."""
 
 import asyncio
-import dataclasses
 import json
 import unittest
 from pathlib import Path
+
+from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.app import build_core
 from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
@@ -18,6 +19,7 @@ from examples.frontend_backend_live.delegation_core.backend.harness import (
     HarnessConductor,
     HarnessSettings,
     HarnessSource,
+    WorkerRun,
 )
 from examples.frontend_backend_live.delegation_core.backend.harness.acp import AcpAgent, AcpProtocol
 from examples.frontend_backend_live.delegation_core.backend.harness.acp.agents import AGENTS
@@ -27,17 +29,12 @@ from examples.frontend_backend_live.delegation_core.backend.harness.acp.transpor
     WebSocketTransport,
 )
 from examples.frontend_backend_live.delegation_core.backend.harness.permissions import Reject
-from examples.frontend_backend_live.delegation_core.backend.harness.sessions import PerCall, PerTask
-from examples.frontend_backend_live.delegation_core.backend.harness.steering import (
-    CancelReprompt,
-    NativeCommand,
-    NextPrompt,
-)
+from examples.frontend_backend_live.delegation_core.backend.harness.steering import CancelReprompt, NativeCommand
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.shared.delegation_contract import ModelEndpoint
 from tests.unit.contracts.backend import FakeTaskContext
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, core_block
 from tests.unit.delegation_core.backend.harness.doubles import (
     AGENT_BLOCKS,
     PROMPTS,
@@ -49,12 +46,25 @@ from tests.unit.delegation_core.backend.harness.doubles import (
 )
 
 REPO = Path(__file__).resolve().parents[5]
+# How a refused unknown key reads: its place, then the refusal.
+EXTRA = "{}\n.*Extra inputs are not permitted"
 FBL = REPO / "src" / "examples" / "frontend_backend_live"
 ENDPOINT = ModelEndpoint(model="scripted/model", base_url="http://127.0.0.1:1/v1", api_key="secret-key-value")
 
 
 def lookup(model):
     return ENDPOINT
+
+
+class ModelTask(FakeTaskContext):
+    """A task whose request names ``model``."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def request(self):
+        return {**super().request(), "model": self.model}
 
 
 def scratch_root(block):
@@ -69,7 +79,7 @@ def with_prompts(block):
 
 def parse(block):
     """The settings of ``block``, with the shipped prompts and agent blocks."""
-    return HarnessSettings.parse(with_prompts(block))
+    return HarnessSettings.model_validate(with_prompts(block))
 
 
 class SettingsTests(unittest.TestCase):
@@ -78,7 +88,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIsInstance(settings.protocol, AcpProtocol)
         self.assertIs(settings.protocol.transport, StdioTransport)
         self.assertIs(type(settings.agent), AcpAgent)
-        self.assertIsInstance(settings.steering, NextPrompt)  # a plain agent takes no steer in the middle of a turn
+        self.assertIsInstance(settings.steering, CancelReprompt)  # a plain agent takes no steer in the middle of a turn
         self.assertIsInstance(settings.permission, Reject)
         self.assertEqual((settings.max_running, settings.turns_per_process), (3, None))
         self.assertEqual(settings.bridge.url(8791), "http://127.0.0.1:8791")
@@ -86,17 +96,14 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual((settings.env, settings.pass_env), ({}, ("PATH", "LANG", "LC_ALL", "TZ")))
 
     def test_each_name_picks_its_class(self):
-        for name, cls in {"next_prompt": NextPrompt, "cancel_reprompt": CancelReprompt}.items():
-            with self.subTest(name):
-                self.assertIsInstance(parse({"command": ["x"], "steer": name}).steering, cls)
         websocket = parse({"transport": "websocket", "url": "ws://agent.example:8790/acp"})
         self.assertIs(websocket.protocol.transport, WebSocketTransport)
         self.assertEqual(sorted(AGENTS), ["acp", "hermes"])
 
     def test_the_hermes_agent_class_is_chosen_by_name_with_its_own_block(self):
-        settings = parse({"command": ["hermes", "acp"], "agent": "hermes", "steer": "native_command"})
+        settings = parse({"command": ["hermes", "acp"], "agent": "hermes"})
         self.assertIsInstance(settings.agent, HermesAgent)
-        self.assertIsInstance(settings.steering, NativeCommand)
+        self.assertIsInstance(settings.steering, NativeCommand)  # the agent class takes a steer in the middle of a turn
         self.assertEqual(settings.turns_per_process, 4)  # Hermes's own limit
         self.assertEqual((settings.agent.instructions_file, settings.agent.steer_command), (".hermes.md", "/steer "))
         block = {**AGENT_BLOCKS["hermes"], "instructions_file": "AGENTS.md", "steer_command": "/queue "}
@@ -105,24 +112,17 @@ class SettingsTests(unittest.TestCase):
         lower = parse({"command": ["x"], "agent": "hermes", "max_running": 2, "turns_per_process": 2})
         self.assertEqual(lower.turns_per_process, 2)
 
-    def test_each_task_opens_a_session_of_its_own_unless_call_keeps_an_answered_one_for_the_next(self):
-        default, call = parse({"command": ["x"]}), parse({"command": ["x"], "session": "call"})
-        self.assertIsInstance(default.sessions, PerTask)
-        self.assertIsInstance(call.sessions, PerCall)
-        self.assertEqual((default.describe()["session"], call.describe()["session"]), ("task", "call"))
-
     def test_the_description_shows_the_url_without_what_may_carry_a_credential(self):
         settings = parse({"transport": "websocket", "url": "wss://u:p@h:9/acp?token=t#f"})
         self.assertEqual(settings.describe()["url"], "wss://h:9/acp")
         self.assertEqual(settings.url, "wss://u:p@h:9/acp?token=t#f")  # the transport connects to the URL as written
         self.assertIsNone(parse({"command": ["x"]}).describe()["url"])
 
-    def test_core_yamls_harness_block_parses(self):
-        block = CoreSettings.load(FBL / "core.yaml", CORE_TEXTS).backend.blocks["harness"]
-        settings = HarnessSettings.parse(block)
+    def test_the_shipped_harness_block_parses(self):
+        block = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS).backend.blocks["harness"]
+        settings = HarnessSettings.model_validate(block)
         self.assertIsInstance(settings.agent, HermesAgent)
         self.assertIsInstance(settings.steering, NativeCommand)
-        self.assertIsInstance(settings.sessions, PerTask)
         self.assertEqual(settings.command, ("hermes", "acp"))
         self.assertEqual(settings.bridge.advertise, "http://127.0.0.1:8791")
         self.assertEqual(settings.runtime_label, "hermes")
@@ -131,7 +131,7 @@ class SettingsTests(unittest.TestCase):
     def test_a_bad_block_fails_when_the_core_is_built(self):
         hermes = {"command": ["x"], "agent": "hermes", "agents": AGENT_BLOCKS}
         cases = {
-            "an unknown key": ({"command": ["x"], "yolo": True}, "unknown keys: yolo"),
+            "an unknown key": ({"command": ["x"], "yolo": True}, EXTRA.format("yolo")),
             "an unknown protocol": ({"command": ["x"], "protocol": "a2a"}, "Unknown harness protocol 'a2a'"),
             "an unknown transport": ({"command": ["x"], "transport": "grpc"}, "Unknown harness transport"),
             "an unknown agent": ({"command": ["x"], "agent": "hermez"}, "Unknown harness agent 'hermez'"),
@@ -144,38 +144,38 @@ class SettingsTests(unittest.TestCase):
             "a file Hermes never reads": ({**hermes, "agents": {"hermes": {"instructions_file": "notes.md"}}}, "reads"),
             "a folder for a file": ({**hermes, "agents": {"hermes": {"instructions_file": ".git"}}}, "reads"),
             "the parent folder": ({**hermes, "agents": {"hermes": {"instructions_file": ".."}}}, "reads"),
-            "agents not a mapping": ({"command": ["x"], "agents": ["hermes"]}, "map agent names to their blocks"),
-            "a steer a plain agent cannot take": ({"command": ["x"], "steer": "native_command"}, "takes none"),
-            "an unknown steering": ({"command": ["x"], "steer": "redirect"}, "Unknown harness steering"),
-            "an unknown session": ({"command": ["x"], "session": "forever"}, "Unknown harness session 'forever'"),
+            "agents not a mapping": ({"command": ["x"], "agents": ["hermes"]}, "agents\n.*valid dict"),
+            "a steer: the agent class picks it": ({"command": ["x"], "steer": "native_command"}, EXTRA.format("steer")),
+            "a session rule": ({"command": ["x"], "session": "task"}, EXTRA.format("session")),
             "an unknown permission": ({"command": ["x"], "permission": "yolo"}, "Unknown permission answer"),
             "no command to start": ({}, "must name the agent to start"),
-            "a command as one text": ({"command": "hermes acp"}, "command must be a list"),
+            "a command as one text": ({"command": "hermes acp"}, "command\n.*valid tuple"),
             "a URL with stdio": ({"command": ["x"], "url": "ws://h:1/acp"}, "transport websocket"),
-            "a URL that is not text": ({"transport": "websocket", "url": 8790}, "URL or null"),
+            "a URL that is not text": ({"transport": "websocket", "url": 8790}, "url\n.*valid string"),
             "a URL it cannot read": ({"transport": "websocket", "url": "ws://[::1/acp"}, "URL or null"),
             "no URL to connect to": ({"transport": "websocket"}, "ws:// or wss:// URL"),
             "more tasks than a process runs": ({**hermes, "max_running": 5}, "not be over turns_per_process"),
-            "a fraction of tasks": ({"command": ["x"], "max_running": 2.5}, "whole number"),
-            "no turn at all": ({"command": ["x"], "turns_per_process": 0}, "whole number"),
-            "a negative wait": ({"command": ["x"], "turn_timeout_seconds": -1}, "positive"),
+            "a fraction of tasks": ({"command": ["x"], "max_running": 2.5}, "max_running\n.*valid integer"),
+            "no turn at all": ({"command": ["x"], "turns_per_process": 0}, "turns_per_process\n.*equal to 1"),
+            "a negative wait": ({"command": ["x"], "turn_timeout_seconds": -1}, "turn_timeout_seconds\n.*than 0"),
             "a bridge without a port": ({"command": ["x"], "bridge": {"bind": "localhost"}}, "host:port"),
             "a relative work root": ({"command": ["x"], "work_root": "work"}, "absolute path"),
             "an unknown template field": ({"command": ["x"], "prompts": {**PROMPTS, "user": "{who}"}}, "names a field"),
             "a prompt left out": (
                 {"command": ["x"], "prompts": {key: text for key, text in PROMPTS.items() if key != "unnamed_call"}},
-                "prompts is missing unnamed_call",
+                "prompts.unnamed_call\n.*Field required",
             ),
-            "no prompts": ({"command": ["x"]}, "prompts is missing conductor_input"),
-            "an unknown prompt": ({"command": ["x"], "prompts": {"hello": "x"}}, "unknown keys: hello"),
-            "an env value that is not text": ({"command": ["x"], "env": {"A": 1}}, "variable names to text"),
-            "pass_env as one text": ({"command": ["x"], "pass_env": "PATH"}, "pass_env must be a list"),
-            "an empty runtime label": ({"command": ["x"], "runtime_label": " "}, "runtime_label must be non-empty"),
-            "not a mapping": ("hermes", "must be a mapping"),
+            "an unknown prompt": ({"command": ["x"], "prompts": {"hello": "x"}}, EXTRA.format("prompts.hello")),
+            "an env value that is not text": ({"command": ["x"], "env": {"A": 1}}, "env.A\n.*valid string"),
+            "pass_env as one text": ({"command": ["x"], "pass_env": "PATH"}, "pass_env\n.*valid tuple"),
+            "an empty runtime label": ({"command": ["x"], "runtime_label": " "}, "runtime_label\n.*non-empty text"),
+            "not a mapping": ("hermes", "Input should be a valid dictionary"),
         }
         for name, (block, message) in cases.items():
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):
-                HarnessSettings.parse(block)
+                HarnessSettings.model_validate({"prompts": PROMPTS, **block} if isinstance(block, dict) else block)
+        with self.assertRaisesRegex(ValueError, "prompts\n.*Field required"):  # the prompts have no default
+            HarnessSettings.model_validate({"command": ["x"]})
 
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
@@ -214,6 +214,17 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "cannot serve the model 'other/model'"):
             await source.check_model("other/model")
 
+    async def test_its_agent_runs_a_task_that_names_another_model_on_its_own_model_and_the_name_is_logged(self):
+        source, logged = self.build(), []
+        adapter = source.new()
+        self.addCleanup(logger.remove, logger.add(logged.append, level="INFO", format="{message}"))
+        for model in ("scripted/model", "other/model"):
+            self.assertIsInstance(adapter.start(ModelTask(model)), WorkerRun)  # nothing opens before its events()
+        lines = [line.strip() for line in logged if "harness.other_model" in line]
+        self.assertEqual(lines, ["harness.other_model task=W1.1 model='other/model': the agent runs its own model"])
+        await adapter.close()
+        await source.aclose()
+
     def test_it_reports_the_settings_a_runtime_that_owns_its_calls_cannot_honor(self):
         source = self.build()
         benchmark_body = {
@@ -244,16 +255,18 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoreSwitchTests(unittest.IsolatedAsyncioTestCase):
-    async def test_the_harness_profile_switches_the_core_to_the_harness_with_no_other_change(self):
-        # It is the agent's profile with the harness for its adapter, so every worker gets the envelope.
-        settings = CoreSettings.load(FBL / "core.harness.yaml", CORE_TEXTS)
-        agent = CoreSettings.load(FBL / "core.agent.yaml", CORE_TEXTS)
+    async def test_the_harness_setup_switches_the_core_to_the_harness_with_no_other_change(self):
+        # The adapter, with the envelope every worker gets (speak_display): the shipped block names how to reach the
+        # operator's Hermes, and stateless requests stay on llm.
+        harness = core_block(backend={"adapter": "harness"}, delegation={"result_format": "speak_display"})
+        settings = CoreSettings.parse(harness, CORE_TEXTS)
+        shipped = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS)
         self.assertEqual((settings.backend.adapter, settings.backend.one_shot_adapter), ("harness", "llm"))
-        self.assertEqual(dataclasses.replace(settings.backend, adapter=agent.backend.adapter), agent.backend)
-        self.assertEqual(settings.delegation, agent.delegation)
+        self.assertEqual(settings.backend.model_copy(update={"adapter": shipped.backend.adapter}), shipped.backend)
         self.assertEqual(settings.delegation.result_format, "speak_display")
+        self.assertEqual(settings.delegation.model_copy(update={"result_format": "plain"}), shipped.delegation)
         blocks = {**settings.backend.blocks, "harness": scratch_root(settings.backend.blocks["harness"])}
-        settings = dataclasses.replace(settings, backend=dataclasses.replace(settings.backend, blocks=blocks))
+        settings = settings.model_copy(update={"backend": settings.backend.model_copy(update={"blocks": blocks})})
         core = build_core(settings, endpoints=lookup, defaults=BackendTask("scripted/model", "Help.", []))
         self.assertIsInstance(core.source, HarnessSource)
         self.assertEqual(core.describe()["adapter"], "harness")
@@ -348,7 +361,7 @@ class WarmUpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(runtimes["conductor"].client.sessions), 1)  # the conductor's own session, no warm-up
 
     async def test_a_warm_up_session_that_fails_leaves_the_process_usable(self):
-        self.adapter.settings = dataclasses.replace(self.adapter.settings, ready_timeout_seconds=0.05)
+        self.adapter.settings = self.adapter.settings.model_copy(update={"ready_timeout_seconds": 0.05})
         self.adapter.bridge = FakeBridge(lists=False)  # the runtime never lists the door's tools
         self.adapter._warm(self.adapter.workers, first_session=True)
         workers = await self.adapter.shared(self.adapter.workers)
@@ -408,7 +421,7 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.adapter.opener.opened), 2)
 
     async def test_an_agent_with_no_turn_limit_serves_every_session_of_a_role_from_one_process(self):
-        self.adapter.settings = dataclasses.replace(self.adapter.settings, turns_per_process=None)
+        self.adapter.settings = self.adapter.settings.model_copy(update={"turns_per_process": None})
         workers = self.adapter.workers
         processes = {id(await self.adapter.shared(workers)) for _ in range(5)}
         self.assertEqual((len(processes), len(self.adapter.opener.opened)), (1, 1))
@@ -436,10 +449,10 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class KeptSessionTests(unittest.IsolatedAsyncioTestCase):
-    """With ``session: call`` the session a task answered in waits in the adapter's slot until a task or the close."""
+    """The session a task answered in waits in the adapter's slot until a task or the close."""
 
     async def asyncSetUp(self):
-        block = {"command": ["/nonexistent/runtime"], "agent": "hermes", "session": "call"}
+        block = {"command": ["/nonexistent/runtime"], "agent": "hermes"}
         self.source = HarnessSource.from_settings(
             scratch_root(block), endpoints=lookup, tools=lambda: [], vocabulary=vocabulary()
         )

@@ -6,8 +6,9 @@
 It is a ``port.AdapterSource`` but not a ``port.OneShotSource``: the source ``backend.one_shot_adapter`` names serves
 stateless requests. Building it checks the block, loads the classes it names and sweeps stale work folders; it starts no
 runtime process and binds no port, and the bridge starts with the first runtime process. The harness serves one model
-name, the default endpoint's, and reports the request settings a runtime that owns its model calls cannot honor;
-instructions and functions are fixed when a worker starts, so a later change reaches only new workers.
+name, the default endpoint's, and its agent runs every task on its own model, which its operator chose (a task whose
+request names another model is logged); it reports the request settings a runtime that owns its model calls cannot
+honor. Instructions and functions are fixed when a worker starts, so a later change reaches only new workers.
 """
 
 from __future__ import annotations
@@ -59,9 +60,9 @@ class HarnessSource:
 
         Raises:
             ValueError: The block has an unknown key, a value of the wrong kind, a name no table has, or a setting the
-                runtime cannot run with (see :meth:`HarnessSettings.parse`).
+                runtime cannot run with (see :class:`HarnessSettings`).
         """
-        settings = HarnessSettings.parse(block)
+        settings = HarnessSettings.model_validate(block)
         WorkFolder.sweep(settings.work_root)
         return cls(settings, endpoints=endpoints, tools=tools, vocabulary=vocabulary)
 

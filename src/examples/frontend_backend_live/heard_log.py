@@ -50,10 +50,9 @@ class Noted:
     seq: int  # its place among every entry ever noted
     kind: Heard  # what the line is, labeled in the set's words
     text: str
-    caller: bool = False  # a caller turn, which a normalizer's rewrite may replace
     line: int | None = None  # the voice's line, for playout's corrections
     result: bool = False  # the line said backend results
-    cut: bool = False  # the line was cut: it keeps only what played
+    cut: bool = False  # the line was cut, or a sentence of it got no audio: it keeps only what played
     pinned: bool = False  # an instruction: every later delegation carries it, outside the size cap
 
 
@@ -86,7 +85,7 @@ class HeardLog:
 
     def caller(self, text: str) -> None:
         """A caller turn ended."""
-        self._note(Heard.CALLER, text, caller=True)
+        self._note(Heard.CALLER, text)
 
     def agent(self, line: int, text: str, *, result: bool = False) -> None:
         """The voice handed line ``line`` to speech; ``result`` when it said backend results."""
@@ -103,13 +102,6 @@ class HeardLog:
     def _note(self, kind: Heard, text: str, **fields) -> None:
         self.entries.append(Noted(self._noted, kind, text, **fields))
         self._noted += 1
-
-    def replace_caller(self, original: str, text: str) -> None:
-        """Replace the newest caller turn noted as ``original`` with ``text`` (the normalizer rewrote it)."""
-        for entry in reversed(self.entries):
-            if entry.caller and entry.text == original:
-                entry.text = text
-                return
 
     def replace_agent(self, line: int, text: str) -> None:
         """Line ``line`` says ``text`` now: a streamed reply's words so far, then the whole reply."""
@@ -128,6 +120,12 @@ class HeardLog:
         for entry in self.entries:
             if entry.line == line:
                 entry.text, entry.cut = heard.rstrip() + self.cut_mark, True
+
+    def partly(self, line: int, heard: str) -> None:
+        """Line ``line`` was heard only as ``heard``: a sentence of it got no audio."""
+        for entry in self.entries:
+            if entry.line == line:
+                entry.text, entry.cut = heard, True
 
     def unsay(self, line: int) -> None:
         """Nobody heard line ``line``: it leaves the log, unless a delegation carried it already."""

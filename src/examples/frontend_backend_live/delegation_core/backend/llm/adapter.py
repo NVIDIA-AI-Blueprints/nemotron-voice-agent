@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One IM session's backend LLM: its rule conductor, one task at a time, and one provider per model."""
+"""One IM session's backend LLM: the steer rule for its conductor, one task at a time, and one provider per model."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import asyncio
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, ClassVar
 
+from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
 from examples.frontend_backend_live.delegation_core.backend.port import Conductor, TaskContext, ToolSource
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend
 
@@ -30,14 +31,14 @@ class LlmAdapter:
         self.providers: dict[str | None, Backend] = {}
 
     def conductor(self) -> Conductor:
-        """The session's conductor: the rule ``backend.llm.conductor`` names."""
-        return self.source.settings.conductor()
+        """The session's conductor: the steer rule, which places each request with no model call."""
+        return SteerOpenWork()
 
     def provider(self, model: str | None) -> Backend:
         """The provider of ``model`` in this session, made on its first round (one per model).
 
         Raises:
-            ValueError: The catalog does not list ``model`` and ``unlisted_models`` reports it.
+            ValueError: The catalog does not list ``model``.
         """
         if model not in self.providers:
             self.providers[model] = self.source.make_provider(self.source.endpoint(model))

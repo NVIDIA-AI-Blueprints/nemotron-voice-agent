@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib
 import os
 from collections.abc import Callable
+from copy import deepcopy
 from functools import cache
 from pathlib import Path
 from typing import Any, NamedTuple, TypedDict
@@ -55,6 +56,7 @@ class ExampleEntry(TypedDict):
     welcome_message: bool
     bot: str
     live: LiveHooks | None
+    config: dict[str, Any]  # the example's own settings, which its code validates; {} without a config block
 
 
 class EnrichedExample(ExampleEntry):
@@ -320,6 +322,14 @@ def _parse_live(example_id: str, entry: dict) -> LiveHooks | None:
     return {**hooks, "settings": _parse_live_settings(example_id, live.get("settings", {}))}
 
 
+def _parse_config(example_id: str, entry: dict) -> dict[str, Any]:
+    """The example's own settings (``config``): a mapping that the example's code validates, ``{}`` without one."""
+    config = entry.get("config", {})
+    if not isinstance(config, dict):
+        raise RuntimeError(f"Example {example_id!r} config must be a mapping of the example's own settings")
+    return config
+
+
 def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
     if not isinstance(entry, dict):
         raise RuntimeError(f"Example {example_id!r} must be a mapping")
@@ -343,6 +353,7 @@ def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
         "welcome_message": welcome_message,
         "bot": bot_spec,
         "live": _parse_live(example_id, entry),
+        "config": _parse_config(example_id, entry),
     }
 
 
@@ -486,6 +497,17 @@ def activity_check_config(example_key: str = "") -> ActivityCheckConfig | None:
     """Return a copy of the selected example's activity-check configuration."""
     config = find(example_key)["activity_check"]
     return dict(config) if config else None
+
+
+def example_config(example_key: str) -> dict[str, Any]:
+    """Return a copy of an example's own settings (its ``config`` block; ``{}`` without one), by its registry key.
+
+    The example's code validates them; an unknown key is its error.
+
+    Raises:
+        KeyError: The registry has no example ``example_key``.
+    """
+    return deepcopy(EXAMPLES[example_key]["config"])
 
 
 def visible_options() -> list[dict]:

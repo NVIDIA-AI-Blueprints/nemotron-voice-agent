@@ -76,7 +76,7 @@ class AgentSource:
             ValueError: The block has an unknown key, a value of the wrong kind or a name no table has, or the catalog
                 does not list the conductor's model.
         """
-        return cls(AgentSettings.parse(block), endpoints=endpoints, tools=tools, vocabulary=vocabulary)
+        return cls(AgentSettings.model_validate(block), endpoints=endpoints, tools=tools, vocabulary=vocabulary)
 
     def _conductor_endpoint(self) -> ModelEndpoint:
         """The conductor's endpoint: its model's, with the conductor's own temperature when it sets one."""
@@ -106,11 +106,7 @@ class AgentSource:
             "base_url": default.base_url,
             "max_running": self.settings.max_running,
             "conductor": rule.name if rule is not None else conductor,
-            "worker": {
-                "provider": worker.provider.name,
-                "unlisted_models": worker.unlisted_models.name,
-                "max_tool_rounds": worker.max_tool_rounds,
-            },
+            "worker": worker.describe(),
             "tools": [tool for source in self.tools() for tool in source.tools()],
         }
 

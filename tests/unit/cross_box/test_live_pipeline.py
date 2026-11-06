@@ -5,6 +5,7 @@
 
 import asyncio
 import base64
+import json
 import unittest
 from types import SimpleNamespace
 
@@ -14,8 +15,8 @@ from pipecat.frames.frames import (
     ErrorFrame,
     InputAudioRawFrame,
     InterruptionFrame,
-    OutputAudioRawFrame,
     TranscriptionFrame,
+    TTSAudioRawFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
     UserStartedSpeakingFrame,
@@ -26,25 +27,22 @@ from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.workers.runner import WorkerRunner
 
-from examples.frontend_backend_live.adapter.bridge import (
-    LiveEventObserver,
-    LiveInputGate,
-    LiveWebSocketAudioOutput,
-    audio_ms,
-)
-from gateways.live.gateway.websocket import wire_codec
-from gateways.live.media.audio import WireCodec
-from gateways.live.protocol import AudioFormat
+from examples.frontend_backend_live.adapter.bridge import LiveEventObserver, LiveInputGate, audio_ms
+from examples.frontend_backend_live.adapter.pipeline_host import WebSocketEdges
+from examples.frontend_backend_live.adapter.serializer import LiveFrameSerializer
+from gateways.live.gateway.websocket import PrimarySocketView
+from gateways.live.protocol import ProtocolError
 from gateways.live.session import LiveProtocolSession
-from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
+from tests.unit.live_helpers import ClientSocket, Collector, FakeAdapter, responses_config
 
 
 async def started_session(config=None):
-    config = config or responses_config()
-    adapter = FakeAdapter()  # the session's frontend adapter and, through the gateway's core hook, its core
-    session = LiveProtocolSession(config, "websocket", adapter.parts(), core=adapter.core, codec=wire_codec(config))
-    collector = Collector()
-    collector.key = session.subscribe(collector.send, "primary")  # the connection's key, which its commands name
+    config = (config or responses_config()).with_wire_format()
+    adapter, collector = FakeAdapter(), Collector()  # the adapter is also the session's core, through its core hook
+    socket = PrimarySocketView(ClientSocket(collector), config.audio.format)  # the primary, as the edge makes it
+    session = LiveProtocolSession(config, "websocket", adapter.parts(), core=adapter.core, socket=socket)
+    socket.attach(session)
+    collector.key = socket.connection  # the connection's key, which its commands name
     await session.start()
     return session, collector
 
@@ -191,7 +189,8 @@ class WebSocketOutputTests(unittest.IsolatedAsyncioTestCase):
     async def start(self, config=None):
         session, self.collector = await started_session(config)
         self.addAsyncCleanup(session.close)
-        self.output, self.probe = LiveWebSocketAudioOutput(session.adapter_view), Probe()
+        _, outputs = WebSocketEdges().ends(session.adapter_view, None, 16000)
+        self.output, self.probe = outputs, Probe()  # Pipecat's output transport, then the silence between lines
         return session
 
     def audio_events(self):
@@ -199,7 +198,7 @@ class WebSocketOutputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_it_emits_a_steady_clock_of_100ms_packets_including_silence(self):
         await self.start()
-        await run_pipeline([self.output, self.probe], [], settle=0.55)
+        await run_pipeline([*self.output, self.probe], [], settle=0.55)
         packets = self.audio_events()
         self.assertGreaterEqual(len(packets), 4)
         for packet in packets:
@@ -209,9 +208,9 @@ class WebSocketOutputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reply_audio_is_sent_in_order_and_reports_speaking_state(self):
         await self.start()
-        tone = OutputAudioRawFrame(audio=b"\x10\x10" * 4800, sample_rate=24000, num_channels=1)  # 200 ms
+        tone = TTSAudioRawFrame(audio=b"\x10\x10" * 4800, sample_rate=24000, num_channels=1)  # 200 ms
         await run_pipeline(
-            [self.output, self.probe],
+            [*self.output, self.probe],
             [TTSStartedFrame(), tone, TTSStoppedFrame()],
             settle=0.8,
         )
@@ -228,9 +227,9 @@ class WebSocketOutputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_barge_in_drops_audio_that_was_not_sent_yet(self):
         await self.start()
-        long_reply = OutputAudioRawFrame(audio=b"\x10\x10" * 24000, sample_rate=24000, num_channels=1)  # 1 s
+        long_reply = TTSAudioRawFrame(audio=b"\x10\x10" * 24000, sample_rate=24000, num_channels=1)  # 1 s
         await run_pipeline(
-            [self.output, self.probe],
+            [*self.output, self.probe],
             [TTSStartedFrame(), long_reply, InterruptionFrame()],
             settle=0.5,
         )
@@ -239,14 +238,51 @@ class WebSocketOutputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_g711_sessions_get_g711_packets(self):
         config = responses_config(audio={"format": {"type": "audio/pcmu", "rate": 8000}})
-        session = await self.start(config)
-        self.assertEqual(session.codec.format, AudioFormat(type="audio/pcmu", rate=8000))
-        await run_pipeline([self.output, self.probe], [], settle=0.35)
-        sizes = [len(base64.b64decode(p["delta"])) for p in self.audio_events()]
-        # 100 ms at 8 kHz is 800 one-byte samples; a stateful resampler's first packet can be a few samples short.
-        self.assertGreaterEqual(min(sizes), 700)
-        self.assertLessEqual(max(sizes), 800)
-        self.assertEqual(WireCodec(config.audio.format).format.type, "audio/pcmu")
+        await self.start(config)
+        tone = TTSAudioRawFrame(audio=b"\x10\x10" * 4800, sample_rate=24000, num_channels=1)  # 200 ms
+        await run_pipeline([*self.output, self.probe], [TTSStartedFrame(), tone, TTSStoppedFrame()], settle=0.35)
+        packets = [base64.b64decode(p["delta"]) for p in self.audio_events()]
+        # 100 ms at 8 kHz is 800 one-byte samples, mu-law: silence is 0xFF, the reply's tone is not.
+        self.assertEqual({len(packet) for packet in packets}, {800})
+        self.assertIn(b"\xff" * 800, packets)
+        self.assertEqual(sum(len(packet) for packet in packets if set(packet) != {0xFF}), 1600)
+
+
+class SerializerOnTheSocketTests(unittest.IsolatedAsyncioTestCase):
+    """The serializer reading a session's primary socket, as Pipecat's WebSocket transport hands it each frame."""
+
+    async def start(self, config=None):
+        self.session, self.collector = await started_session(config)
+        self.addAsyncCleanup(self.session.close)
+        self.serializer = LiveFrameSerializer(self.session.socket, self.session.adapter_view, 16000)
+
+    def errors(self):
+        events = self.collector.events
+        return [(e["error"]["message"], e.get("client_event_id")) for e in events if e["type"] == "error"]
+
+    async def test_caller_audio_becomes_a_frame_and_every_other_event_runs_as_a_command(self):
+        await self.start(responses_config(audio={"format": {"type": "audio/pcm", "rate": 16000}}))
+        append = {"type": "session.input_audio.append", "audio": base64.b64encode(bytes(3200)).decode()}
+        frame = await self.serializer.deserialize(json.dumps(append))
+        self.assertEqual((frame.audio, frame.sample_rate, frame.num_channels), (bytes(3200), 16000, 1))
+        mute = {"type": "session.input_audio.mute", "event_id": "m"}
+        self.assertIsNone(await self.serializer.deserialize(json.dumps(mute)))
+        self.assertEqual((await self.collector.wait_for("session.input_audio.muted"))["client_event_id"], "m")
+        self.assertTrue(self.session.frontend.muted)
+
+    async def test_the_limits_hold_and_nothing_raises(self):
+        await self.start()
+        big = {"type": "session.input_audio.append", "event_id": "big", "audio": "A" * 128_004}
+        for data in (json.dumps(big), "not json", b"\x00\x01"):
+            self.assertIsNone(await self.serializer.deserialize(data))
+        await self.session.fanout.drain()
+        binary = "Binary frames are not supported: send each event as a JSON text frame"
+        oversized = "Invalid or oversized audio chunk: at most 128000 characters"
+        self.assertEqual(self.errors(), [(oversized, "big"), ("Invalid JSON event", None), (binary, None)])
+        # An event over 1 MiB ends the connection: the gateway answers it, then closes the session.
+        self.assertIsNone(await self.serializer.deserialize("x" * (2**20 + 1)))
+        with self.assertRaisesRegex(ProtocolError, "WebSocket event exceeds 1 MiB"):
+            await self.session.socket.wait_closed()
 
 
 if __name__ == "__main__":

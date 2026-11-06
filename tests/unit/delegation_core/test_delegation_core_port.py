@@ -3,14 +3,11 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The core's settings file and its profiles, the conductor's control vocabulary, and the names a core is built from."""
+"""The core's settings, the conductor's control vocabulary, and the names a core is built from."""
 
 import copy
 import json
-import tempfile
 import unittest
-from dataclasses import replace
-from pathlib import Path
 
 from examples.frontend_backend_live.delegation_core.app import build_core
 from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
@@ -68,12 +65,12 @@ class CoreSettingsTests(unittest.TestCase):
         words = {**WORDS, "texts": {**WORDS["texts"], **texts}}
         return CoreSettings.parse(data if delegation is None else {**data, "delegation": delegation}, words)
 
-    def test_a_file_that_sets_little_gets_the_defaults_and_keeps_each_adapters_block(self):
-        settings = self.parsed(backend={**BACKEND, "llm": {"conductor": "steer"}, "tools": {"cafe": {}}})
+    def test_settings_that_set_little_get_the_defaults_and_keep_each_adapters_block(self):
+        settings = self.parsed(backend={**BACKEND, "llm": {"max_tool_rounds": 5}, "tools": {"cafe": {}}})
         self.assertEqual((settings.backend.adapter, settings.backend.one_shot_adapter), ("llm", "llm"))
-        self.assertEqual(dict(settings.backend.blocks["llm"]), {"conductor": "steer"})
+        self.assertEqual(dict(settings.backend.blocks["llm"]), {"max_tool_rounds": 5})
         self.assertEqual(list(settings.backend.tools), ["cafe"])
-        defaults = {"client_tool_timeout_seconds": 60.0, "work_timeout_seconds": 600.0, "backend_calls": "items"}
+        defaults = {"client_tool_timeout_seconds": 60.0, "work_timeout_seconds": 600.0, "result_format": "plain"}
         defaults |= {"display_label": "delegation_core", "records_max_works": 5}
         defaults |= {"context_tokens": 24_000, "tool_output_chars": 8000}
         self.assertEqual({name: getattr(settings.delegation, name) for name in defaults}, defaults)
@@ -88,10 +85,10 @@ class CoreSettingsTests(unittest.TestCase):
             "a boolean count": ({"context_tokens": True}, None),
             "no room for a tool output": ({"tool_output_chars": 0}, None),
             "a negative wait": ({"stop_timeout_seconds": -1}, None),
-            "an unknown caller note": ({"caller_note": "c9"}, None),
-            "an unknown voice note": ({"voice_note": "v9"}, None),
+            "a caller note, which is the default one": ({"caller_note": "default"}, None),
+            "a voice note, which is the default one": ({"voice_note": "default"}, None),
             "an unknown format": ({"result_format": "html"}, None),
-            "an unknown work tool": ({"work_tools": ["run_shell"]}, None),
+            "work tools, which always hold cancel_work": ({"work_tools": ["cancel_work"]}, None),
             "a scalar adapter block": (None, {**BACKEND, "llm": "fast"}),
             "a scalar step block": (None, {**BACKEND, "app_output_steps": {"spell": "on"}}),
             "no slot": (None, {"prompt": "p"}),
@@ -115,7 +112,7 @@ class CoreSettingsTests(unittest.TestCase):
             "refusal_reasons": ({"ended": "ended"}, "refusal_reasons must hold exactly"),
             "no_work": ({**reasons, "no_work": "no such work"}, "no_work must hold {work}"),
             "over_limit": ({**reasons, "over_limit": "too many"}, "over_limit must hold {max_running}"),
-            "round_cap_note": (" ", "round_cap_note must be non-empty"),
+            "round_cap_note": (" ", "round_cap_note\n.*must be non-empty"),
         }
         for key, (value, message) in cases.items():
             with self.subTest(key), self.assertRaisesRegex(ValueError, message):
@@ -123,38 +120,12 @@ class CoreSettingsTests(unittest.TestCase):
         settings = self.parsed(outcomes={**outcomes, "refused": "Not applied: {reason}"})
         self.assertEqual(settings.texts.refusal("no_task", task="W1.7", work="W1"), "Not applied: no task W1.7 in W1")
 
-    def test_a_profile_merges_mappings_over_the_file_it_extends_and_replaces_the_rest(self):
-        with tempfile.TemporaryDirectory() as folder:
-            files = {
-                "core.yaml": {"backend": {**BACKEND, "llm": {"conductor": "steer"}}},
-                "core.agent.yaml": {
-                    "extends": "core.yaml",
-                    "delegation": {"result_format": "speak_display", "client_tool_timeout_seconds": None},
-                    "backend": {"adapter": "llm-agent", "llm-agent": {"max_running": 3}},
-                },
-                "core.harness.yaml": {"extends": "core.agent.yaml", "backend": {"adapter": "harness"}},
-                "a.yaml": {"extends": "b.yaml"},
-                "b.yaml": {"extends": "a.yaml"},
-                "c.yaml": {"extends": "missing.yaml"},
-            }
-            for name, data in files.items():
-                (Path(folder) / name).write_text(json.dumps(data), encoding="utf-8")  # JSON is YAML
-            settings = CoreSettings.load(Path(folder) / "core.harness.yaml", CORE_TEXTS)
-            for name, message in (("a.yaml", "extends itself"), ("c.yaml", "Cannot read")):
-                with self.subTest(name), self.assertRaisesRegex(ValueError, message):
-                    CoreSettings.load(Path(folder) / name, CORE_TEXTS)
-        self.assertEqual((settings.backend.adapter, sorted(settings.backend.blocks)), ("harness", ["llm", "llm-agent"]))
-        self.assertEqual(settings.texts.conductor_prompt, TEXTS.conductor_prompt)  # the texts come from prompts.yaml
-        self.assertEqual(settings.texts.handover_line, TEXTS.handover_line)
-        self.assertEqual(settings.delegation.result_format, "speak_display")
-        self.assertIsNone(settings.delegation.client_tool_timeout_seconds)
-
     def test_a_core_that_names_an_unknown_adapter_or_app_output_step_fails_when_it_is_built(self):
         cases = {
             "Unknown backend adapter 'hermes'; known: harness, llm, llm-agent": {**BACKEND, "adapter": "hermes"},
             "Unknown app output step 'spell'": {**BACKEND, "app_output_steps": {"spell": {}}},
         }
         for message, backend in cases.items():
-            settings = replace(CORE_SETTINGS, backend=BackendChoice.parse(backend))
+            settings = CORE_SETTINGS.model_copy(update={"backend": BackendChoice.model_validate(backend)})
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
                 build_core(settings, endpoints=lambda model: None, defaults=DEFAULTS)

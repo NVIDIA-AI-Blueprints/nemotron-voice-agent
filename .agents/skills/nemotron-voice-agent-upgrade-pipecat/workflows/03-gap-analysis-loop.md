@@ -26,8 +26,10 @@ and cite the `source_url`.
 > companion-package symbols resolve to their new home per the change inventory, either the companion API or
 > in-core `pipecat.*`), `frontend_backend_agent` (planner, TTS filter, tool handlers, tools schema),
 > `multilingual` (processor and ASR/TTS settings), `frontend_backend_live` (`media/turns.py`, the talker's mixin on
-> the LLM service's hooks in `talker.py`, the aggregators' events and frames in `voice.py`, the media processors, the
-> Live sessions' pipeline host, `LiveWebRTCConnection`), and dead code.
+> the LLM service's hooks in `talker.py`, the tool-calling talker's function registration in `TalkerTools` and its
+> handlers in `tool_handlers.py`, the aggregators' events and frames in `voice.py`, the media processors, the Live
+> sessions' pipeline host, the WebSocket's `FrameSerializer` on `FastAPIWebsocketTransport` in `adapter/serializer.py`,
+> `LiveWebRTCConnection`), and dead code.
 > E. Report `✅ PASS: {what}` or `❌ GAP: {what} — repo has X, new uses Y — File:Symbol`.
 
 **Cross-cutting** (one agent): shared plumbing (`src/examples/shared/`), `src/server.py` wiring,

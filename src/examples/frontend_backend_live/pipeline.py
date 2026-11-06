@@ -4,7 +4,8 @@
 """Frontend/Backend Live pipeline: STT -> the talker (Pipecat's LLM service) -> TTS, with a delegation core of its own.
 
 A session's talker prompt is the ``prompts.yaml`` entry it selects, as in every example. Its backend prompt and server
-tools are those of ``ui_bot.core_config``, and the channel context that ``ui_bot.channel`` names follows both prompts.
+tools are those of its own core (the core's settings with ``ui_bot.core`` merged over them, in the example's
+``examples_registry.yaml`` entry), and the channel context that ``ui_bot.channel`` names follows both prompts.
 """
 
 from __future__ import annotations
@@ -22,18 +23,17 @@ from pipecat.services.nvidia.tts import NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from examples.frontend_backend_live.config_manager.loader import load_live_config
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
 from examples.frontend_backend_live.delegation_core.app import build_core
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.items import message_text
-from examples.frontend_backend_live.delegation_core.profiles import load_profile
 from examples.frontend_backend_live.delegation_core.tables import pick
 from examples.frontend_backend_live.factory import (
     adapter_block,
     backend_defaults,
     core_client,
     endpoint_lookup,
+    example_config,
     frontend_adapters,
     once,
     ui_bot_core,
@@ -43,12 +43,10 @@ from examples.frontend_backend_live.factory import (
 from examples.frontend_backend_live.frontend import FrontendEdges, FrontendSpec, build_frontend
 from examples.frontend_backend_live.media.services import build_stt, build_tts
 from examples.frontend_backend_live.media.task_cards import RtviTaskCards
-from examples.frontend_backend_live.media.turns import TURN_ENDS
+from examples.frontend_backend_live.media.turns import SmartTurn
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts import load_prompts
-from examples.frontend_backend_live.spoken import CUT_MEMORIES
-from examples.frontend_backend_live.talker import LLM_SERVICES, RESPONSE_FORMATS, TalkerChat
-from examples.frontend_backend_live.voice import RESULT_WORDINGS
+from examples.frontend_backend_live.talker import LLM_SERVICES, RESPONSE_FORMATS
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.pipeline_utils import (
     build_pipeline_params,
@@ -74,10 +72,9 @@ BACKEND_BODY_PREFIX = "thinker_"
 
 @dataclass(frozen=True)
 class BotRoot:
-    """What the UI bot reads once: the cascade's settings and talker service, its core and channel, and the catalog."""
+    """What the UI bot reads once: the cascade's settings, its core and channel, and the catalog."""
 
     cascade: LiveConfig
-    talker: type[TalkerChat]  # frontend.cascade.provider
     core: CoreSettings
     channel: str  # ui_bot.channel: the agent_prompts.Channel entry after the talker and backend prompts
     catalog: ExampleCatalog
@@ -85,21 +82,19 @@ class BotRoot:
 
 @once
 def bot_root() -> BotRoot:
-    """Read the bot's files and the bound example's catalog, once; it blocks, so the bot calls it in a thread.
+    """Read the bot's settings and the bound example's catalog, once; it blocks, so the bot calls it in a thread.
 
-    The core profile is the one ``ui_bot.core_config`` names.
+    The bot's core is the core's settings with ``ui_bot.core`` merged over them.
 
     Raises:
-        ConfigError: ``config.yaml`` is malformed.
-        ValueError: ``frontend.adapter`` names no frontend adapter, ``frontend.cascade.provider`` no talker service, or
-            the core profile is malformed.
+        ValueError: The example's settings are malformed, ``frontend.adapter`` names no frontend adapter, or the
+            bot's core is malformed.
     """
-    config = load_live_config(load_profile)
-    pick(frontend_adapters(), config.adapter, "frontend adapter")  # an unknown frontend.adapter is refused
+    config = example_config()
+    pick(frontend_adapters(), config.frontend.adapter, "frontend adapter")  # an unknown frontend.adapter is refused
     core = ui_bot_core(config)
-    cascade = LiveConfig.parse(with_display_label(adapter_block(config), core))
-    talker = pick(LLM_SERVICES, cascade.provider, "frontend.cascade.provider")
-    return BotRoot(cascade, talker, core, config.ui_bot.channel, ExampleCatalog.read())
+    cascade = LiveConfig.model_validate(with_display_label(adapter_block(config), core))
+    return BotRoot(cascade, core, config.ui_bot.channel, ExampleCatalog.read())
 
 
 def backend_overrides(body: dict) -> dict:
@@ -141,17 +136,21 @@ async def bot(runner_args: RunnerArguments) -> None:
     channel = prompts.text("Channel", state.channel)
     core_settings, backend_instructions = state.core, ui_bot_instructions(prompts, channel)
 
-    # The model behind each role comes from its services slot; the session body (UI) can override any field.
+    # The model behind each role comes from its services slot; the session body (UI) can override any field. The
+    # cascade's settings name the talker's style by its services key, and its services entry names its level.
     frontend_endpoint = catalog.model(cascade.slot, body)
+    talker_style = cascade.style_of(frontend_endpoint.service_key)
+    talker = pick(LLM_SERVICES, talker_style, "talker_style")
+    response_format = pick(RESPONSE_FORMATS, frontend_endpoint.response_format, "response_format")
     endpoints = endpoint_lookup(catalog, core_settings.backend.slot, backend_overrides(body))
     logger.info(
-        f"Frontend: provider={cascade.provider}, model={frontend_endpoint.model}, prompt={prompt_key}, "
-        f"extra_params={frontend_endpoint.extra_params or '(none)'}"
+        f"Frontend: talker_style={talker_style}, model={frontend_endpoint.model}, "
+        f"prompt={prompt_key}, extra_params={frontend_endpoint.extra_params or '(none)'}"
     )
     logger.info(f"Backend: adapter={core_settings.backend.adapter}, model={endpoints(None).model}")
-    # The turn end (speech.turn_end) builds the speech-to-text and the turn detection, as in a live session.
-    turn_end = pick(TURN_ENDS, cascade.speech.turn_end, "speech.turn_end")(cascade.speech)
-    stt = build_stt(body, catalog.service("asr"), turn_end)
+    # The caller's turns (speech) build the turn detection, as in a live session.
+    turn_end = SmartTurn(cascade.speech)
+    stt = build_stt(body, catalog.service("asr"))
     tts = build_tts(body, catalog.service("tts"))
 
     default_llm = catalog.entry(cascade.slot)
@@ -162,7 +161,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     seed = (system_prompt, f"{talker_prompt}\n\n{channel}")
     messages = [{"role": "system", "content": text} for text in seed if text]
 
-    # The bot's own delegation core runs the tools its core profile names on the server. Its server delegation has no
+    # The bot's own delegation core runs the tools its core settings name on the server. Its server delegation has no
     # Live sink, so each delegation's events go to the voice only, and the core runs every request on its defaults.
     defaults = backend_defaults(core_settings, endpoints, backend_instructions)
     core = build_core(core_settings, endpoints=endpoints, defaults=defaults)
@@ -214,11 +213,10 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # The frontend's one build, between the RTVI transport's edges; the RTVI client gets Pipecat's own transcript. The
     # voice shows each delegation as a task card in the UI, the display part of its result included.
-    response_format = pick(RESPONSE_FORMATS, frontend_endpoint.response_format, "response_format")
     frontend = build_frontend(
         FrontendSpec(
             config=cascade,
-            talker=state.talker.from_config(frontend_endpoint, cascade.reliability, response_format),
+            talker=talker.from_config(frontend_endpoint, cascade.reliability, response_format),
             prompts=prompts.cascade,
             lines=prompts.lines,
             seed=messages,
@@ -226,8 +224,6 @@ async def bot(runner_args: RunnerArguments) -> None:
             tts=tts,
             user_params=turn_end.user_params(welcome_enabled),
             delegation=delegation,
-            wording=pick(RESULT_WORDINGS, cascade.delegation.result_wording, "delegation.result_wording"),
-            cut_memory=pick(CUT_MEMORIES, cascade.speech.heard_words, "speech.heard_words"),
             item_text=message_text,
             display=lambda worker: RtviTaskCards(worker.queue_frame),
         ),
