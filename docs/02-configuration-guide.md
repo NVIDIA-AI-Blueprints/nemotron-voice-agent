@@ -24,10 +24,13 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
+| [Use the Live Gateway](how-to/use-live-gateway.md) | Live sessions at `/v1/live` for Pipecat apps and other clients of the Frontend/Backend Live example |
+| [Frontend/Backend Live](../src/examples/frontend_backend_live/README.md#configuration) | The Frontend/Backend Live example's settings, such as its backend adapter, in the `config` block of its `examples_registry.yaml` entry |
+| [Connect an Agent Harness](how-to/connect-an-agent-harness.md) | Deploy Hermes or another Agent Client Protocol (ACP) agent for the Frontend/Backend Live example's harness backend |
 
 ## Welcome Message
 
-When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, Omni Assistant Subagents, and Frontend/Backend Agent examples.
+When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, Omni Assistant Subagents, and Frontend/Backend Agent examples, and to the Frontend/Backend Live example's repository UI bot.
 
 - **Per example (backend-only):** set `welcome_message: false` on an example in [`examples_registry.yaml`](../examples_registry.yaml). The default is `true` when the key is omitted.
 - **Global override:** set `ENABLE_WELCOME_MESSAGE` in `.env`. When set, `ENABLE_WELCOME_MESSAGE` overrides every example's registry value. For example, the `generic-assistant/server-perf` profile uses it to disable the greeting.

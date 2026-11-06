@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib
 import os
 from collections.abc import Callable
+from copy import deepcopy
 from functools import cache
 from pathlib import Path
 from typing import Any, NamedTuple, TypedDict
@@ -32,6 +33,15 @@ class ActivityCheckConfig(TypedDict, total=False):
     warning_completion_timeout_s: float
 
 
+class LiveHooks(TypedDict):
+    """An example's ``live:`` block: its hooks, each a lazily imported ``module.path:callable``, and ``settings``."""
+
+    factory: str  # builds one live session's parts (``gateways.live.ports.AdapterFactory``)
+    describe: str  # the example's half of ``GET /v1/live/info``
+    core: str  # builds the client of the process's one delegation core
+    settings: dict[str, int | list[str]]  # values for ``gateways.live.gateway.settings.LiveSettings``
+
+
 class ExampleEntry(TypedDict):
     """Raw registry entry for one example."""
 
@@ -45,6 +55,8 @@ class ExampleEntry(TypedDict):
     defaults: dict[str, list[str] | str]
     welcome_message: bool
     bot: str
+    live: LiveHooks | None
+    config: dict[str, Any]  # the example's own settings, which its code validates; {} without a config block
 
 
 class EnrichedExample(ExampleEntry):
@@ -67,34 +79,45 @@ class PromptDefault(TypedDict, total=False):
 
 _SRC_ROOT = Path(__file__).resolve().parent
 _REGISTRY_PATH = _SRC_ROOT.parent / "examples_registry.yaml"
+# The hooks of an example's ``live:`` block, in order.
+LIVE_HOOKS: tuple[str, ...] = ("factory", "describe", "core")
+# The gateway settings that ``live.settings`` can set: the limits, each a whole number of at least 1, and the lists.
+LIVE_LIMITS: tuple[str, ...] = ("max_sessions", "max_session_seconds", "max_appends_per_minute", "max_delegate_rounds")
+LIVE_LISTS: tuple[str, ...] = ("ice_urls", "allowed_hosts")
 
 
-def _split_bot_spec(spec: str) -> tuple[str, str]:
+def _split_spec(spec: str, what: str = "Example bot") -> tuple[str, str]:
     module_path, separator, attr = spec.partition(":")
     if not (separator and module_path and attr):
-        raise RuntimeError(f"Example bot must be 'module.path:attr' (got {spec!r})")
+        raise RuntimeError(f"{what} must be 'module.path:attr' (got {spec!r})")
     return module_path, attr
 
 
 @cache
-def _resolve_bot(spec: str) -> Callable[..., Any]:
-    """Resolve a ``module.path:callable`` string only when the bot is used."""
-    module_path, attr = _split_bot_spec(spec)
+def resolve_hook(spec: str, what: str = "Example bot") -> Callable[..., Any]:
+    """Resolve a ``module.path:callable`` string only when it is used: an example's bot, or one of its Live hooks.
+
+    ``what`` names the setting in the errors.
+
+    Raises:
+        RuntimeError: ``spec`` is not ``module.path:attr``, or names something that cannot be called.
+    """
+    module_path, attr = _split_spec(spec, what)
     module = importlib.import_module(module_path)
-    bot = getattr(module, attr, None)
-    if not callable(bot):
-        raise RuntimeError(f"Example bot target is not callable: {spec!r}")
-    return bot
+    target = getattr(module, attr, None)
+    if not callable(target):
+        raise RuntimeError(f"{what} target is not callable: {spec!r}")
+    return target
 
 
 def resolve_bot(example: EnrichedExample) -> Callable[..., Any]:
     """Return the lazily imported bot callable for an example."""
-    return _resolve_bot(example["bot"])
+    return resolve_hook(example["bot"])
 
 
 def example_module_file(example: EnrichedExample) -> Path:
     """Return the module file path for an example's bot spec without importing it."""
-    module_path, _ = _split_bot_spec(example["bot"])
+    module_path, _ = _split_spec(example["bot"])
     module_parts = Path(*module_path.split("."))
     module_file = (_SRC_ROOT / module_parts).with_suffix(".py")
     if module_file.is_file():
@@ -263,6 +286,50 @@ def _parse_defaults(example_id: str, entry: dict) -> dict[str, list[str] | str]:
     return parsed
 
 
+def _parse_live_settings(example_id: str, settings: Any) -> dict[str, int | list[str]]:
+    """The ``live.settings`` mapping: each of :data:`LIVE_LIMITS` and :data:`LIVE_LISTS` it sets, checked."""
+    if not isinstance(settings, dict):
+        raise RuntimeError(f"Example {example_id!r} live.settings must be a mapping")
+    parsed: dict[str, int | list[str]] = {}
+    for key, value in settings.items():
+        if key in LIVE_LIMITS:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise RuntimeError(f"Example {example_id!r} live.settings.{key} must be a whole number of at least 1")
+            parsed[key] = value
+        elif key in LIVE_LISTS:
+            parsed[key] = _parse_str_list(example_id, f"live.settings.{key}", value)
+        else:
+            raise RuntimeError(
+                f"Example {example_id!r} live.settings has an unknown key {key!r}; "
+                f"the keys are {', '.join(LIVE_LIMITS + LIVE_LISTS)}"
+            )
+    return parsed
+
+
+def _parse_live(example_id: str, entry: dict) -> LiveHooks | None:
+    """The example's ``live:`` block: each of :data:`LIVE_HOOKS`, and ``settings``; ``None`` without one."""
+    live = entry.get("live")
+    if live is None:
+        return None
+    if not isinstance(live, dict) or set(live) - {"settings"} != set(LIVE_HOOKS):
+        raise RuntimeError(
+            f"Example {example_id!r} live must name {', '.join(LIVE_HOOKS)}, each 'module.path:callable', "
+            "and can add settings"
+        )
+    hooks = {name: str(live[name] or "").strip() for name in LIVE_HOOKS}
+    for name, spec in hooks.items():
+        _split_spec(spec, f"Example {example_id!r} live.{name}")
+    return {**hooks, "settings": _parse_live_settings(example_id, live.get("settings", {}))}
+
+
+def _parse_config(example_id: str, entry: dict) -> dict[str, Any]:
+    """The example's own settings (``config``): a mapping that the example's code validates, ``{}`` without one."""
+    config = entry.get("config", {})
+    if not isinstance(config, dict):
+        raise RuntimeError(f"Example {example_id!r} config must be a mapping of the example's own settings")
+    return config
+
+
 def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
     if not isinstance(entry, dict):
         raise RuntimeError(f"Example {example_id!r} must be a mapping")
@@ -285,6 +352,8 @@ def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
         "defaults": _parse_defaults(example_id, entry),
         "welcome_message": welcome_message,
         "bot": bot_spec,
+        "live": _parse_live(example_id, entry),
+        "config": _parse_config(example_id, entry),
     }
 
 
@@ -398,6 +467,15 @@ def find(value: str = "", *, ignore_lock: bool = False) -> EnrichedExample:
     return _lookup_by_key(_SELECTION.default_key)
 
 
+def live_example() -> EnrichedExample | None:
+    """Return the selected example (:func:`find`) when it has a ``live`` block, else ``None``.
+
+    Only that example serves the Live API: a deployment of another example serves no Live route, whatever its settings.
+    """
+    selected = find()
+    return selected if selected["live"] is not None else None
+
+
 def metadata(example: EnrichedExample) -> dict:
     """Return the client payload for an example, with its service and prompt defaults resolved."""
     defaults = _resolve_service_defaults(example)
@@ -419,6 +497,17 @@ def activity_check_config(example_key: str = "") -> ActivityCheckConfig | None:
     """Return a copy of the selected example's activity-check configuration."""
     config = find(example_key)["activity_check"]
     return dict(config) if config else None
+
+
+def example_config(example_key: str) -> dict[str, Any]:
+    """Return a copy of an example's own settings (its ``config`` block; ``{}`` without one), by its registry key.
+
+    The example's code validates them; an unknown key is its error.
+
+    Raises:
+        KeyError: The registry has no example ``example_key``.
+    """
+    return deepcopy(EXAMPLES[example_key]["config"])
 
 
 def visible_options() -> list[dict]:

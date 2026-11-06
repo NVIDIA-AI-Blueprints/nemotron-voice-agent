@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
+- **Frontend/Backend Live example.** On every caller turn, a talker replies, delegates the turn to a backend, or waits. The backend can be an LLM, an LLM agent, or an agent that you deploy, such as Hermes. Cloud, `/server`, and `/single-gpu` recipes serve the Bluebird Cafe ordering assistant.
+- **Live gateway.** Only the `frontend-backend-live` profiles serve live sessions at `/v1/live`, over WebRTC or WebSocket, when `LIVE_API_TOKEN` sets a bearer token, or without one when `LIVE_ENABLED=true`. The server does the delegated work in Responses mode, and the client app does it in client mode.
+- **Nemotron 3.5 Super VL on NVIDIA Cloud.** The `nemotron-super` catalog entry is also served from NVIDIA Cloud, with a **Reasoning Effort** setting. It is the Frontend/Backend Live backend's default on the cloud and `/server` recipes. On `/server`, it runs as a NIM on GPUs `1` and `2`, so that recipe needs three GPUs.
 
 ### Changed
 
@@ -16,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pipecat 1.15.** The server moves from Pipecat 1.12 to `pipecat-ai` 1.15.0, including Silero VAD state retention and the current service APIs. The browser packages were updated for compatibility with that server.
 - **Omni vLLM 0.33.0.** The Omni vLLM service moves from 0.20.0 to 0.33.0.
 - **Scaling metric names.** `llm_ttft` is reported as `llm_ttfb`. `vad_smart_turn` is reported as `turn_taking_latency`, measured from the VAD stop to the LLM request for any configured turn strategy. Result files that still contain `llm_ttft` remain readable.
+- **Readiness checks for every self-hosted LLM.** Before a repository UI or Realtime gateway session starts, the server checks every self-hosted LLM that the example uses, including the Frontend/Backend Agent's Thinker LLM.
 
 ## [2.3.1] - 2026-10-29
 

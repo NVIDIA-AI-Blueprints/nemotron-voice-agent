@@ -53,9 +53,18 @@ benchmark = [
     "datasets>=2.19.0",
     "huggingface-hub>=0.23.0",
 ]
+# The protocol packages of the Frontend/Backend Live harness backend adapter (`core.backend.adapter: harness`): Hermes
+# over ACP, tools over MCP. Imported only by src/examples/frontend_backend_live/delegation_core/backend/harness, and
+# installed in the app image. Install with:
+#   uv sync --group harness
+harness = [
+    "agent-client-protocol==0.9.0",
+    "mcp>=2.2.0",
+]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "." lets tests import shared doubles as tests.unit.<module>, also when run as `uv run pytest` (as CI does)
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 120

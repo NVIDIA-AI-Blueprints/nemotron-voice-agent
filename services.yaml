@@ -37,6 +37,8 @@ server:
       supported_languages: [en, de, es, fr, it, ja, zh]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-super
+      nvcf:
+        settings: nemotron-super-nvcf
     nemotron-bolt-4b:
       name: "Nemotron 3.5 Bolt E4B"
       model_id: "nvidia/nemotron-3.5-bolt-e4b"

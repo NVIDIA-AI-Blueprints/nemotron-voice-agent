@@ -12,6 +12,8 @@ This section covers pipeline configurations for optimizing the performance and u
 
 By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete. If the model still has not finalized after the Smart Turn silence fallback (default **1.0 s**, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
 
+> The [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md#configuration) sets its own turn detection in `frontend.cascade.speech` of its settings, the `config` block of its `examples_registry.yaml` entry: `vad_start_seconds` (0.12 s of speech marks the caller as speaking and starts their turn while the bot is silent), `vad_stop_seconds`, `turn_silence_seconds`, and `interrupt_min_words` (the words that start the caller's turn while the bot speaks). The variables in this section do not apply to it. For how its turns start and end, refer to [Turns and Interruptions](../../src/examples/frontend_backend_live/README.md#turns-and-interruptions).
+
 ### How It Works
 
 1. The user speaks, and ASR emits interim transcripts as audio streams in.
@@ -52,6 +54,7 @@ We use context summarization logic for our examples to always **pin the initial 
 
 - **Generic** and **Multilingual** assistants **summarize** older history: once the conversation grows past the recent window, the older turns are condensed into a single pinned summary message (an additional LLM call after the turn), and the most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
 - **Frontend/Backend Agent** uses a plain **sliding window**: older non-prompt messages are dropped, keeping only the most recent `CHAT_HISTORY_RECENT_TURNS` messages.
+- **Frontend/Backend Live** does not read `CHAT_HISTORY_RECENT_TURNS`. Its talker keeps a token budget, `frontend.cascade.memory.context_tokens` in the example's settings, and drops the oldest turns, never the prompt, after the history passes the `compact_at` share of that budget. The backend's history budget is the core's `delegation.context_tokens`. For details, refer to [Use the Live Gateway → Errors and Limits](use-live-gateway.md#errors-and-limits).
 
 ### Configuration
 
@@ -60,7 +63,7 @@ We use context summarization logic for our examples to always **pin the initial 
 | `CHAT_HISTORY_RECENT_TURNS` | `10` (Generic / Multilingual), `20` (Frontend/Backend Agent) | Most recent non-prompt turns kept before older history is summarized (Generic/Multilingual) or dropped (Frontend/Backend Agent) |
 
 ```bash
-# Override the per-example default (applies to whichever example is running)
+# Override the per-example default (applies to whichever example is running, except Frontend/Backend Live)
 CHAT_HISTORY_RECENT_TURNS=10
 ```
 

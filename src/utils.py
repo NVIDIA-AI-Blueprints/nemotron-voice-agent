@@ -37,6 +37,7 @@ class _ExampleBinding(NamedTuple):
 
 _NO_BINDING = _ExampleBinding(None, {}, {}, frozenset())
 _service_context: ContextVar[_ExampleBinding | None] = ContextVar("service_context", default=None)
+_listed_services: ContextVar[dict | None] = ContextVar("listed_services", default=None)
 _active_binding: _ExampleBinding = _NO_BINDING
 
 
@@ -962,6 +963,21 @@ def build_services_api_response() -> dict:
             entries[0]["selected"] = True
         result[category] = entries
     return result
+
+
+def set_listed_services(services: dict | None) -> None:
+    """Bind the services as ``GET /api/services`` lists them to the current context; ``None`` unbinds them."""
+    _listed_services.set(services)
+
+
+def listed_services() -> dict:
+    """The services :func:`set_listed_services` bound to the current context, else :func:`build_services_api_response`.
+
+    ``GET /api/services`` leaves out a self-hosted entry whose service is offline, unless its slot has nothing else,
+    so the first entry of each slot it lists is the one the repository UI selects.
+    """
+    services = _listed_services.get()
+    return build_services_api_response() if services is None else services
 
 
 def parse_json_dict(raw: object, label: str = "JSON") -> dict:

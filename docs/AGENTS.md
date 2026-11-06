@@ -111,6 +111,8 @@ Style Guide above.
 - Keep each `src/examples/<example>/README.md` aligned with that example's
   pipeline, prompts, service catalogs, supported transports, and deployment
   profiles.
+- Keep the README of `src/examples/frontend_backend_live/delegation_core/`
+  aligned with its package.
 
 ## Documentation Sources and Maintenance
 

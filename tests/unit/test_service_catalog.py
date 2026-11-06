@@ -743,14 +743,14 @@ class RepositoryCatalogTests(unittest.TestCase):
     def test_super_is_an_optional_llm_on_every_self_hosted_recipe(self) -> None:
         catalog = utils.load_yaml_file(Path("services.yaml"))
         compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker" / "docker-compose.nemotron35-super-vl.yaml")
-        for recipe, service, profile in (
-            ("server", "nemotron-35-super-vl", "nemotron-35-super-vl"),
-            ("single-gpu", "nemotron-35-super-vl-vllm", "nemotron-35-super-vl-single-gpu"),
+        for recipe, service, profiles in (
+            ("server", "nemotron-35-super-vl", ["nemotron-35-super-vl", "frontend-backend-live/server"]),
+            ("single-gpu", "nemotron-35-super-vl-vllm", ["nemotron-35-super-vl-single-gpu"]),
         ):
             with self.subTest(recipe=recipe):
                 entry = catalog[recipe]["llm"]["nemotron-super"]
                 self.assertEqual(urlparse(entry["base_url"]).hostname, service)
-                self.assertEqual(compose["services"][service]["profiles"], [profile])
+                self.assertEqual(compose["services"][service]["profiles"], profiles)
         for key in ("generic-assistant", "multilingual-assistant"):
             with self.subTest(example=key):
                 llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]

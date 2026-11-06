@@ -39,7 +39,8 @@ Per example (browser `client/` or benchmarking harness):
 - **Connect**: start a WebRTC session and confirm the transport handshake (most version-sensitive: SmallWebRTC /
   serializer / runner).
 - **Exercise**: VAD/turn fires → ASR transcript → LLM response → TTS playback → RTVI messages render. Also
-  `omni_assistant_subagents` (subagent bus routing) and `frontend_backend_agent` (planner, tools, TTS filter).
+  `omni_assistant_subagents` (subagent bus routing), `frontend_backend_agent` (planner, tools, TTS filter), and
+  `frontend_backend_live` (talker replies, delegations, task cards).
 - **Observe**: server/Compose logs + browser console for frame exceptions, RTVI mismatches, transport drops,
   observer errors.
 - **Fix & re-run** (max 3/example): diagnose (query `pipecat-docs` MCP if unclear) → fix code/`.env` →

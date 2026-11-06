@@ -10,12 +10,12 @@ Models are declared in the root [`services.yaml`](../../services.yaml), and each
 
 ## Models
 
-Five models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning, Nemotron 3.5 Bolt E4B, and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. Nemotron 3.5 Super VL is self-hosted only, and the examples use it as a text LLM. Nemotron 3.5 Bolt 74B is self-hosted on single-GPU hosts only, and the examples use it as a text LLM.
+Five models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning, Nemotron 3.5 Super VL, Nemotron 3.5 Bolt E4B, and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. The examples use Nemotron 3.5 Super VL as a text LLM. Nemotron 3.5 Bolt 74B is self-hosted on single-GPU hosts only, and the examples use it as a text LLM.
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
-| **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks, available self-hosted | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
+| **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
 | **Nemotron 3.5 Bolt 74B A9B**: higher-capability alternative, available self-hosted on single-GPU hosts only | [`docker-compose.nemotron35-bolt.yaml`](../../docker/docker-compose.nemotron35-bolt.yaml) (`nemotron-35-bolt-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB) |
 | **Nemotron 3.5 Bolt E4B**: compact conversational and tool-calling small language model (SLM) with a low time to first token (TTFT), 8B total and 4B effective | [`docker-compose.nemotron35-bolt-e4b.yaml`](../../docker/docker-compose.nemotron35-bolt-e4b.yaml) (`nemotron-35-bolt-e4b` NIM, `nemotron-35-bolt-e4b-vllm` vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b) |
 | **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni-nim.yaml`](../../docker/docker-compose.nemotron3-omni-nim.yaml) (NIM), [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
@@ -25,7 +25,7 @@ Each model is exposed as one or more **catalog keys** in `services.yaml`:
 | Model | Catalog keys |
 |-------|--------------|
 | Nemotron 3.5 Lightning | `nemotron-lightning` |
-| Nemotron 3.5 Super VL | `nemotron-super` (self-hosted only) |
+| Nemotron 3.5 Super VL | `nemotron-super` |
 | Nemotron 3.5 Bolt 74B | `nemotron-bolt-74b` (self-hosted single-GPU only) |
 | Nemotron 3.5 Bolt E4B | `nemotron-bolt-4b` |
 | Nemotron 3 Nano Omni | `nemotron-omni-nvfp4` |
@@ -39,7 +39,7 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 | Built-in LLM | Supported language bases |
 | --- | --- |
 | Nemotron 3.5 Lightning (`nemotron-lightning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
-| Nemotron 3.5 Super VL (`nemotron-super`, self-hosted) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
+| Nemotron 3.5 Super VL (`nemotron-super`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
 | Nemotron 3.5 Bolt 74B (`nemotron-bolt-74b`, self-hosted single-GPU) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 | Nemotron 3.5 Bolt E4B (`nemotron-bolt-4b`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 
@@ -47,7 +47,7 @@ The source of truth for the built-in capability metadata is the NVIDIA [Nemotron
 
 > **Known limitation (Japanese and Chinese on single-GPU).** Magpie TTS on NeMo-Speech.cpp does not advertise `ja-JP` or `zh-CN`. On `multilingual-assistant/single-gpu`, Voice Settings does not show Japanese or Chinese with any built-in LLM, including Nemotron 3.5 Bolt E4B and Nemotron 3.5 Bolt 74B.
 
-> **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages. For multilingual deployments where language fidelity matters, start the **Nemotron 3.5 Super VL** sidecar (see [Run Nemotron 3.5 Super VL](#run-nemotron-35-super-vl)) and select `nemotron-super` in the Services tab. The Generic and Multilingual assistants list it after Lightning. It stays more reliably in the target language and reads more naturally across languages.
+> **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages. For multilingual deployments where language fidelity matters, use **Nemotron 3.5 Super VL** on NVIDIA Cloud or start its sidecar (see [Run Nemotron 3.5 Super VL](#run-nemotron-35-super-vl)) and select `nemotron-super` in the Services tab. The Generic and Multilingual assistants list it after Lightning. It stays more reliably in the target language and reads more naturally across languages.
 
 ## Hardware Requirements and Deployment Configs
 
@@ -84,6 +84,8 @@ The `*/single-gpu` vLLM services select the model checkpoint and precision from 
 | Bolt E4B on DGX Spark or Jetson Thor | BF16 with NVFP4 DFlash | Free unified memory minus headroom, capped at `0.75`. Requires at least 24 GiB usable. On Thor, FlashInfer compiles one kernel at a time (`MAX_JOBS=1`). | Bolt E4B + ASR + TTS -> `0`, Lightning scaled to zero |
 | Bolt E4B on Hopper, Ada, or Ampere (SM80+) | BF16 | Free VRAM minus headroom, capped at `0.90`. Requires at least 24 GiB usable. | Bolt E4B + ASR + TTS -> `0`, Lightning scaled to zero |
 
+The `frontend-backend-agent/single-gpu` and `frontend-backend-live/single-gpu` recipes run Lightning in their own service, `nvidia-llm-vllm-lightning-frontend-backend`, on vLLM's Model Runner V1 (`VLLM_USE_V2_MODEL_RUNNER: "0"`). On a Blackwell workstation or DGX Spark, they serve NVFP4 without DFlash or DSpark.
+
 These values are startup checks used by the planner, not guarantees that every workload will fit. Model weights, KV cache, speech services, context length, and concurrency must all fit within the selected budget.
 
 Server recipes use model-specific NIM profiles and scaling controls instead of the single-GPU VRAM planner. Standard `*/server` services leave `NIM_MODEL_PROFILE` unset so NIM automatically chooses a compatible profile for the visible GPU. The dedicated `generic-assistant/server-perf` benchmark instead pins an NVFP4 TP2 profile for two Blackwell LLM GPUs.
@@ -101,7 +103,7 @@ Update each service's `device_ids` under `deploy.resources.reservations.devices`
 
 ### Run Nemotron 3.5 Super VL
 
-Super VL is an optional sidecar. It is not part of any example profile, so add its profile next to the example's. Lightning stays the default LLM; select `nemotron-super` in the Services tab to use Super.
+Super VL is available from NVIDIA Cloud (`nemotron-super` with `NVIDIA_API_KEY` set) and as a self-hosted sidecar. The `frontend-backend-live/server` recipe starts the server NIM for its backend. For the other examples, the sidecar is optional, so add its profile next to the example's. Lightning stays their default LLM; select `nemotron-super` in the Services tab to use Super.
 
 ```bash
 # Server: NIM on GPUs 1 and 2. Lightning can keep running on GPU 0.
@@ -215,7 +217,7 @@ docker run --rm --gpus '"device=0"' \
 
 Nemotron LLMs support a chain-of-thought "thinking" mode. Catalog entries reference a [`settings.yaml`](../../settings.yaml) profile that exposes **Reasoning**, **Reasoning Budget**, **Temperature**, **Top P**, **Max Tokens**, and **Seed** under the active LLM in the Services tab. Omni uses `nemotron-omni-nim` / `nemotron-omni-vllm`, whose temperature range goes up to 2.0; its `OMNI_TEMPERATURE`, `OMNI_TOP_P`, and `OMNI_MAX_TOKENS` env values still apply until a user sets the parameter.
 
-For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. Each serving engine names the budget field differently: `nemotron-nim` sends `reasoning_budget` and `nemotron-vllm` sends `thinking_token_budget`. Lightning uses `nemotron-nim` on the server NIM and NVIDIA Cloud, and `nemotron-vllm` on the single-GPU vLLM service. Super VL and Bolt 74B use `nemotron-super`, which has no **Reasoning Budget**. Bolt E4B adds **Conversational Mode** and picks its budget field per endpoint (refer to [Run Nemotron 3.5 Bolt E4B](#run-nemotron-35-bolt-e4b)). When **Max Tokens** is set, every **Reasoning Budget** stays 64 tokens under it, and under 192 **Max Tokens** the backend turns **Reasoning** off for the session, so reasoning cannot use up the tokens for the spoken answer. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
+For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. Each serving engine names the budget field differently: `nemotron-nim` sends `reasoning_budget` and `nemotron-vllm` sends `thinking_token_budget`. Lightning uses `nemotron-nim` on the server NIM and NVIDIA Cloud, and `nemotron-vllm` on the single-GPU vLLM service. Self-hosted Super VL and Bolt 74B use `nemotron-super`, which has no **Reasoning Budget**. On NVIDIA Cloud, `nvcf: {settings: nemotron-super-nvcf}` gives Super VL `nemotron-nim` with a 1,024-token **Reasoning Budget**, plus **Reasoning Effort** (`low`, `medium`, or `high`, `medium` by default), which the backend sends as `reasoning_effort` only while **Reasoning** is on. Bolt E4B adds **Conversational Mode** and picks its budget field per endpoint (refer to [Run Nemotron 3.5 Bolt E4B](#run-nemotron-35-bolt-e4b)). When **Max Tokens** is set, every **Reasoning Budget** stays 64 tokens under it, and under 192 **Max Tokens** the backend turns **Reasoning** off for the session, so reasoning cannot use up the tokens for the spoken answer. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. The Frontend/Backend Live backend defaults to `nemotron-super`: Super VL on NVIDIA Cloud for the Cloud recipe, and the Super VL NIM for the Server recipe. Its `settings` in `examples_registry.yaml` turn reasoning **ON** at temperature 0 and 4,096 max tokens. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
 
 > **Known limitation (Reasoning OFF with tool calling).** With reasoning **OFF** (`enable_thinking: false`), smaller models such as **Nemotron 3.5 Lightning 30B A3B** can occasionally emit tool-selection planning text (function names, argument math, or prompt rules) as normal assistant `content` before or instead of the structured tool call, which TTS then speaks aloud. Once this planning text enters the conversation history, subsequent turns in the same session can continue repeating that pattern. Start a new session to clear the conversation context, or enable **Reasoning** / switch to **Nemotron 3.5 Super VL** for tool-heavy sessions.
 

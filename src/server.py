@@ -76,6 +76,7 @@ from examples.shared.speaker import speaker_diarization_requested
 from examples.shared.subagents import load_subagent_registry
 from utils import (
     LOCAL_SPEECH_PORTS,
+    NVCF_LLM_BASE_URL,
     PROJECT_ROOT,
     SELF_HOSTED_SOURCE,
     build_services_api_response,
@@ -89,6 +90,7 @@ from utils import (
     parse_endpoint,
     service_catalog_sources,
     set_active_services,
+    set_listed_services,
     set_service_context,
 )
 from webcam_frame_store import store_webcam_frame, webcam_client_config
@@ -105,6 +107,9 @@ _failed_service_targets: set[str] = set()
 _NIM_READY_PATH = "/v1/health/ready"
 _LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 _TURN_LISTEN_PORT = 3478
+# Each LLM slot an example may use: the session field that holds its base URL (filled from the UI's choice of entry,
+# as utils' catalog hydration writes it) and its name in readiness messages.
+_LLM_SLOTS = {"llm": ("base_url", "LLM"), "thinker-llm": ("thinker_base_url", "Thinker LLM")}
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
@@ -324,8 +329,9 @@ def _get_default_asr_catalog() -> tuple[str, str, str]:
     )
 
 
-def _get_default_llm_base_url() -> str:
-    return load_service_entry("llm", "").get("base_url", "https://integrate.api.nvidia.com/v1")
+def _get_default_llm_base_url(slot: str = "llm") -> str:
+    """Return the base URL of the default catalog entry of an LLM slot (``llm``, ``thinker-llm``)."""
+    return load_service_entry(slot, "").get("base_url", NVCF_LLM_BASE_URL)
 
 
 def _store_session_config(config: dict) -> str:
@@ -440,13 +446,18 @@ def _local_speech_ready_url(label: str, server: str) -> str:
 
 
 def _llm_health_url(base_url: str) -> str:
-    """Return the readiness URL of the self-hosted LLM at ``base_url`` or its ``streaming_url``, or ``""``."""
+    """Return the readiness URL of the self-hosted LLM at ``base_url`` or its ``streaming_url``, or ``""``.
+
+    Every LLM slot's entries are read (a bound example's catalog is keyed by slot, such as ``thinker-llm``); only an
+    LLM's entry has a ``base_url``.
+    """
     entry = next(
         (
             entry
             for source, catalog in service_catalog_sources()
             if source == SELF_HOSTED_SOURCE
-            for entry in catalog.get("llm", {}).values()
+            for section in catalog.values()
+            for entry in section.values()
             if base_url in (entry.get("base_url"), entry.get("streaming_url")) and entry.get("health_path")
         ),
         None,
@@ -544,10 +555,10 @@ def _status_probe(slot: str, entry: dict) -> tuple[str, bool] | None:
     return None
 
 
-def _probe_status(target: str, expects_ready_json: bool) -> ServiceStatus:
+def _probe_status(address: str, expects_ready_json: bool) -> ServiceStatus:
     timeout = _STATUS_PROBE_TIMEOUT_SECS
-    status = _probe_http(target, expects_ready_json, timeout) if "://" in target else _probe_tcp(target, timeout)
-    return _remembered_status(target, status)
+    status = _probe_http(address, expects_ready_json, timeout) if "://" in address else _probe_tcp(address, timeout)
+    return _remembered_status(address, status)
 
 
 async def _with_service_status(catalog: dict[str, list[dict]]) -> dict[str, list[dict]]:
@@ -594,16 +605,14 @@ async def _run_http_readiness_check(
 
 
 async def _ensure_llm_ready_for_connection(config: dict, example: dict) -> None:
-    """Run a local LLM readiness check before starting the session."""
-    if "llm" not in example["services"]:
-        return
-
-    base_url = config.get("base_url", "") or _get_default_llm_base_url()
-    health_url = _llm_health_url(base_url)
-    if not health_url:
-        return
-
-    await _run_http_readiness_check("LLM", base_url, health_url)
+    """Run a local readiness check of every LLM slot the example uses, at the base URL the session will use."""
+    for slot, (base_url_field, label) in _LLM_SLOTS.items():
+        if slot not in example["services"]:
+            continue
+        base_url = config.get(base_url_field, "") or _get_default_llm_base_url(slot)
+        health_url = _llm_health_url(base_url)
+        if health_url:
+            await _run_http_readiness_check(label, base_url, health_url)
 
 
 async def _ensure_asr_ready_for_connection(config: dict, example: dict) -> None:
@@ -689,6 +698,82 @@ async def _ensure_services_ready_for_connection(config: dict, example: dict) -> 
     await _ensure_tts_ready_for_connection(config, example)
 
 
+def _live_served() -> bool:
+    """Return whether to serve the Live API (``/v1/live``).
+
+    Its routes are open to anyone who can reach the server unless ``LIVE_API_TOKEN`` is set, so without a token they
+    are served only on request. ``LIVE_ENABLED`` decides when it is set (``1``, ``true``, ``yes`` or ``on`` serve
+    them); otherwise they are served when a token is set.
+    """
+    explicit = os.getenv("LIVE_ENABLED", "").strip().lower()
+    if explicit:
+        return explicit in {"1", "true", "yes", "on"}
+    return bool(os.getenv("LIVE_API_TOKEN", "").strip())
+
+
+def _live_listing():
+    """Return a reader of the services as ``GET /api/services`` lists them, which reads them at its first call only.
+
+    The Live hooks share one. Their root reads its catalog once per process, so a later hook call probes nothing.
+    """
+    listed: dict | None = None
+
+    async def listing() -> dict:
+        nonlocal listed
+        if listed is None:
+            listed = await _with_service_status(build_services_api_response())
+        return listed
+
+    return listing
+
+
+def _live_hook(example: dict, spec: str, what: str, listing):
+    """Return the Live hook ``spec`` names, imported on its first call and called with ``example``'s services bound.
+
+    The hook reads the catalog of the example that serves Live as ``GET /api/services`` lists it (``listing``, from
+    :func:`_live_listing`): each slot's default is the one the repository UI selects.
+    """
+
+    async def hook(*args):
+        set_service_context(example)
+        set_listed_services(await listing())
+        return await examples_registry.resolve_hook(spec, what)(*args)
+
+    return hook
+
+
+def _mount_live(app: FastAPI) -> None:
+    """Mount the Live API's routes when the selected example's ``live:`` block names its hooks and they are served.
+
+    The hooks are imported on first use, so the server starts without loading the example. When the routes are not
+    served, the mount adds only its last route under ``/v1/live``, which answers 404.
+
+    Raises:
+        ValueError: ``UVICORN_WORKERS`` is not a whole number of at least 1.
+    """
+    from gateways.live.gateway import LiveSettings
+    from gateways.live.mount import mount_live
+
+    example = examples_registry.live_example()
+    if example is None or not _live_served():
+        if example is not None:  # the selected example offers Live, and the settings leave it off
+            logger.info(
+                "The Live routes under /v1/live are not served. Set LIVE_API_TOKEN to serve them, or LIVE_ENABLED=true "
+                "to serve them without a token on a trusted network; when LIVE_ENABLED is set, it decides."
+            )
+        mount_live(app)
+        return
+    hooks, listing = example["live"], _live_listing()
+    mount_live(
+        app,
+        factory=_live_hook(example, hooks["factory"], "live.factory", listing),
+        core=_live_hook(example, hooks["core"], "live.core", listing),
+        describe=_live_hook(example, hooks["describe"], "live.describe", listing),
+        settings=LiveSettings.from_env(hooks["settings"]),
+        ice_servers=_build_ice_servers,
+    )
+
+
 def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     """Build and return the FastAPI application with all routes."""
     if prompt_file:
@@ -720,6 +805,9 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Live session protocol (``/v1/live/...``): separate from ``/v1/realtime`` below.
+    _mount_live(app)
 
     def _resolve_example(config: dict) -> dict:
         """Return the active registry entry. ``examples_registry.find()`` honors any selection lock."""
@@ -963,7 +1051,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         After ``session.update`` + the same readiness checks as ``/api/ws``,
         hands the socket to the selected example bot (``protocol=realtime``).
         """
-        from realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
+        from gateways.realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
 
         async def _ensure_ready(config: dict) -> None:
             await _ensure_services_ready_for_connection(config, _resolve_example(config))

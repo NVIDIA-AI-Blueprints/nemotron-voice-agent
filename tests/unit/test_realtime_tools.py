@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from realtime_helpers import FakeWebSocket
 
-from realtime.gateway import handle_realtime_websocket
-from realtime.session import map_session_update_to_flat_config
+from gateways.realtime.gateway import handle_realtime_websocket
+from gateways.realtime.session import map_session_update_to_flat_config
 
 
 class ToolsIgnoredTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class GatewayToolsIgnoredTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        with patch("realtime.gateway.resolve_realtime_tts_voice", return_value=None):
+        with patch("gateways.realtime.gateway.resolve_realtime_tts_voice", return_value=None):
             await handle_realtime_websocket(
                 ws,
                 sanitize_session_config=lambda data, **_: dict(data),

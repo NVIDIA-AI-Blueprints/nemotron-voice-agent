@@ -14,8 +14,8 @@ import unittest
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 
-from realtime.gateway import handle_realtime_websocket
-from realtime.transport import create_realtime_transport
+from gateways.realtime.gateway import handle_realtime_websocket
+from gateways.realtime.transport import create_realtime_transport
 
 
 def _build_test_app(
