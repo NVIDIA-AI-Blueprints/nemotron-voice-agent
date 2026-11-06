@@ -12,14 +12,13 @@ asked.
 import asyncio
 import itertools
 import unittest
-from dataclasses import replace
 
 from pipecat.frames.frames import ProposedUserStartedSpeakingFrame, ProposedUserStoppedSpeakingFrame, TTSAudioRawFrame
 from pipecat.tests.utils import SleepFrame
 
 from gateways.live.client_delegation import ClientDelegation
 from tests.unit.core_helpers import chunk
-from tests.unit.frontend_helpers import CONFIG, PROMPTS, Act, CallHarness, caller, decision
+from tests.unit.frontend_helpers import PROMPTS, Act, CallHarness, caller, decision
 
 TEXTS, LINES = PROMPTS.cascade, PROMPTS.lines
 CALLER, AGENT = TEXTS.transcript.caller, TEXTS.transcript.agent
@@ -143,25 +142,23 @@ class TurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(call.chat.requests), 3)  # a result heard in part is not said again
 
     async def test_a_result_that_arrives_while_the_caller_speaks_is_said_after_their_turn_with_no_words(self):
-        # With the resume on, the turn with no words runs the talker; with it off, the caller's idle spell asks again.
-        for resume in (True, False):
-            with self.subTest(resume_after_noise=resume):
-                config = replace(CONFIG, speech=replace(CONFIG.speech, resume_after_noise=resume))
-                call = CallHarness(decision("delegate", ""), decision("speak", "Tea is ready."), config=config)
-                while_speaking = []
-                await call.play(
-                    *caller("Tea please"),
-                    SleepFrame(0.3),
-                    ProposedUserStartedSpeakingFrame(),
-                    SleepFrame(0.05),
-                    Act(lambda call=call: call.port.answer("del_1", "Tea is ready.")),
-                    SleepFrame(0.1),
-                    Act(lambda call=call, seen=while_speaking: seen.append((len(call.chat.requests), call.said()))),
-                    ProposedUserStoppedSpeakingFrame(),
-                    SleepFrame(1.2),
-                )
-                # Worded while the caller speaks, said only after their turn, with no request of its own.
-                self.assertEqual(while_speaking, [(2, [])])
-                self.assertFalse(call.request(1)["stream"])
-                self.assertEqual(call.said(), ["Tea is ready."])
-                self.assertEqual(len(call.chat.requests), 2)
+        # The turn with no words runs the talker once, on Pipecat's note; it waits, and the result is said.
+        call = CallHarness(decision("delegate", ""), decision("speak", "Tea is ready."), decision("wait"))
+        while_speaking = []
+        await call.play(
+            *caller("Tea please"),
+            SleepFrame(0.3),
+            ProposedUserStartedSpeakingFrame(),
+            SleepFrame(0.05),
+            Act(lambda: call.port.answer("del_1", "Tea is ready.")),
+            SleepFrame(0.1),
+            Act(lambda: while_speaking.append((len(call.chat.requests), call.said()))),
+            ProposedUserStoppedSpeakingFrame(),
+            SleepFrame(1.2),
+        )
+        # Worded while the caller speaks, said only after their turn, with no request of its own.
+        self.assertEqual(while_speaking, [(2, [])])
+        self.assertFalse(call.request(1)["stream"])
+        self.assertIn(TEXTS.empty_turn_note, last(call.request(2)))
+        self.assertEqual(call.said(), ["Tea is ready."])
+        self.assertEqual(len(call.chat.requests), 3)

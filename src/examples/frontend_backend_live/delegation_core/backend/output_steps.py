@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The steps the app's function outputs take before the backend reads them, by their names in core.yaml.
+"""The steps the app's function outputs take before the backend reads them, by their names in the core's settings.
 
 A step implements ``AppOutputStep`` (``examples.frontend_backend_live.delegation_core.backend.port``) and builds itself
 from its ``backend.app_output_steps`` block; each IM session gets a fresh set. ``shape_hints``

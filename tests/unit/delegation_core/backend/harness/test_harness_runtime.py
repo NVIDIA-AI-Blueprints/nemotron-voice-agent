@@ -113,10 +113,10 @@ class WorkFolderTests(unittest.TestCase):
         block = {"prompts": PROMPTS, "agents": AGENT_BLOCKS, "command": ["hermes", "acp"]}
         block |= {"env": {"HERMES_HOME": "/srv/hermes"}, "pass_env": ["PATH", "UNSET_NAME"]}
         with mock.patch.dict(os.environ, {"HARNESS_TEST_SECRET": "must-not-pass"}):
-            plain = RuntimeOpener(HarnessSettings.parse(block)).environment()
-            hermes = RuntimeOpener(HarnessSettings.parse({**block, "agent": "hermes"})).environment()
+            plain = RuntimeOpener(HarnessSettings.model_validate(block)).environment()
+            hermes = RuntimeOpener(HarnessSettings.model_validate({**block, "agent": "hermes"})).environment()
             operator = {**block, "agent": "hermes", "env": {"HERMES_ACP_SKIP_CONFIGURED_MCP": "0"}}
-            overridden = RuntimeOpener(HarnessSettings.parse(operator)).environment()
+            overridden = RuntimeOpener(HarnessSettings.model_validate(operator)).environment()
         self.assertEqual(plain, {"PATH": os.environ["PATH"], "HERMES_HOME": "/srv/hermes"})
         self.assertEqual(hermes, {**plain, "HERMES_ACP_SKIP_CONFIGURED_MCP": "1"})  # what Hermes needs
         self.assertEqual(overridden["HERMES_ACP_SKIP_CONFIGURED_MCP"], "0")  # the configured env has the last word
@@ -132,7 +132,9 @@ class RuntimeProcessTests(unittest.IsolatedAsyncioTestCase):
         served = {"transport": "websocket", "url": url, "start_timeout_seconds": 0.5, "stop_grace_seconds": 5}
         for block, error in (({"command": ["/nonexistent/runtime"]}, FileNotFoundError), (served, TimeoutError)):
             root = scratch("harness-work-")
-            opener = RuntimeOpener(HarnessSettings.parse({"prompts": PROMPTS, "work_root": str(root), **block}))
+            opener = RuntimeOpener(
+                HarnessSettings.model_validate({"prompts": PROMPTS, "work_root": str(root), **block})
+            )
             started = time.monotonic()
             with self.subTest(error.__name__), self.assertRaises(error):
                 await opener.open(Role("workers", "w"))

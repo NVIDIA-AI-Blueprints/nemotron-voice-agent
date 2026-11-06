@@ -14,10 +14,10 @@ from unittest.mock import patch
 
 import yaml
 
-from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH
+from examples.frontend_backend_live import prompts
 from examples.frontend_backend_live.prompts import load_prompts
 
-PROMPTS_PATH = CONFIG_PATH.with_name("prompts.yaml")
+PROMPTS_PATH = Path(prompts.__file__).with_name("prompts.yaml")
 LOADED = load_prompts()
 
 

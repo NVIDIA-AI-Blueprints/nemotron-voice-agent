@@ -169,12 +169,16 @@ def _delegation_changes(patch: object, current_type: str) -> dict:
     return {key: value for key, value in patch.items() if key != "type"}
 
 
+# The longest delay before a delegation's automatic spoken acknowledgement that the Live API allows, in either type.
+MAX_ACKNOWLEDGEMENT_DELAY_MS = 800
+
+
 class ClientDelegationConfig(StrictModel):
     """Client delegation: the application does the delegated work, and the session announces each delegation."""
 
     type: Literal["client"] = "client"
     # Milliseconds before the automatic spoken acknowledgement of a delegation: 0 asks at once.
-    acknowledgement_delay_ms: int = Field(default=0, ge=0)
+    acknowledgement_delay_ms: int = Field(default=0, ge=0, le=MAX_ACKNOWLEDGEMENT_DELAY_MS)
 
     @property
     def responses(self) -> None:
@@ -201,7 +205,7 @@ class ResponsesDelegationConfig(StrictModel):
 
     type: Literal["responses"]
     responses: BackendConfig
-    acknowledgement_delay_ms: int = Field(default=0, ge=0)
+    acknowledgement_delay_ms: int = Field(default=0, ge=0, le=MAX_ACKNOWLEDGEMENT_DELAY_MS)
 
     def updated(self, patch: object) -> ResponsesDelegationConfig:
         """This delegation after a ``session.update``'s ``delegation`` block.

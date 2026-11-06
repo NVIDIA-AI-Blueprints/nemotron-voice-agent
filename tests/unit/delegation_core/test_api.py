@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103, D107
 
-"""The delegation core's Responses API end to end, through its in-process client, on a core built from core.yaml."""
+"""The delegation core's Responses API end to end, through its in-process client, on a core of the shipped settings."""
 
 import asyncio
 import contextlib
@@ -25,13 +25,12 @@ from examples.frontend_backend_live.delegation_core.backend.adapters import ADAP
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend, ProviderLimits
 from examples.frontend_backend_live.delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
-from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from examples.shared.delegation_contract import ModelEndpoint
 from tests.unit.contracts.backend import a_round, call_round, text_round
 from tests.unit.contracts.responses import ResponsesClientContract
-from tests.unit.core_helpers import CORE_TEXTS, LIMITS, FakeChat, answer_text, chunk
-from tests.unit.delegation_core.helpers import CORE_YAML, MENU, TEXTS
+from tests.unit.core_helpers import LIMITS, FakeChat, answer_text, chunk
+from tests.unit.delegation_core.helpers import CORE_SETTINGS, MENU, TEXTS
 
 ENDPOINT = ModelEndpoint(model="org/test-model", base_url="http://localhost:1/v1")
 DEFAULTS = BackendTask("org/default-model", "Default.", [])
@@ -101,18 +100,19 @@ class Rules:
 
 class CoreCase(unittest.IsolatedAsyncioTestCase):
     def core(self, *models, rules=None, stateless=True, **delegation):
-        """A core from core.yaml whose IM sessions run on ``models`` in turn, reached through its in-process client."""
-        settings, providers = CoreSettings.load(CORE_YAML, CORE_TEXTS), list(models)
-        delegation = replace(settings.delegation, **{"close_grace_seconds": 0.01, **delegation})
+        """A core of the shipped settings whose IM sessions run on ``models`` in turn, through its in-process client."""
+        settings, providers = CORE_SETTINGS, list(models)
+        delegation = settings.delegation.model_copy(update={"close_grace_seconds": 0.01, **delegation})
 
         class ScriptedLlm(LlmSource):
             @classmethod
             def from_settings(cls, block, *, endpoints, tools, vocabulary):
                 make = lambda endpoint: providers.pop(0)  # noqa: E731
-                return cls(LlmSettings.parse(block), endpoints=endpoints, tools=tools, make_provider=make)
+                return cls(LlmSettings.model_validate(block), endpoints=endpoints, tools=tools, make_provider=make)
 
         endpoints = lambda model: replace(ENDPOINT, model=model or ENDPOINT.model)  # noqa: E731
-        settings, adapters = replace(settings, delegation=delegation), {**ADAPTERS, "llm": lambda: ScriptedLlm}
+        settings = settings.model_copy(update={"delegation": delegation})
+        adapters = {**ADAPTERS, "llm": lambda: ScriptedLlm}
         core = build_core(settings, endpoints=endpoints, defaults=DEFAULTS, adapters=adapters)
         self.addAsyncCleanup(core.aclose)
         one_shot = core.one_shot_session if stateless else None

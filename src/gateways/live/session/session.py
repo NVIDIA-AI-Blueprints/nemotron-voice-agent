@@ -20,7 +20,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -34,7 +34,14 @@ from gateways.live.server_delegation import ServerDelegation
 from gateways.live.session import appends, audio_input, lifecycle, tool_calling, updates
 
 if TYPE_CHECKING:
-    from gateways.live.ports import AdapterCloseReason, CoreHook, DelegationEvents, DelegationPart, SessionParts
+    from gateways.live.ports import (
+        AdapterCloseReason,
+        CoreHook,
+        DelegationEvents,
+        DelegationPart,
+        PrimarySocket,
+        SessionParts,
+    )
 
 COMMAND_WAIT_FOR_START_SECONDS = 30
 # The events the adapter and the delegation part may send through their views (gateways.live.ports); any other is
@@ -104,18 +111,6 @@ COMMANDS: dict[str, Command] = {
 }
 
 
-class AudioCodec(Protocol):
-    """A primary WebSocket's wire audio codec, which the edge (``gateways.live.gateway.websocket``) hands in."""
-
-    exchange_rate: int  # the rate of the PCM16 that decode() returns and encode() takes
-
-    def decode(self, raw: bytes) -> bytes:
-        """Return PCM16 at ``exchange_rate`` for a chunk of wire audio."""
-
-    def encode(self, pcm: bytes) -> bytes:
-        """Return wire audio for a chunk of PCM16 at ``exchange_rate``."""
-
-
 class LiveProtocolSession:
     """The protocol state of one live session."""
 
@@ -126,7 +121,7 @@ class LiveProtocolSession:
         parts: SessionParts,
         *,
         core: CoreHook = no_core,
-        codec: AudioCodec | None = None,
+        socket: PrimarySocket | None = None,
         max_session_seconds: int = 1800,
         max_appends_per_minute: int = 64,
         on_closed: Callable[[LiveProtocolSession], Awaitable[None]] | None = None,
@@ -139,7 +134,8 @@ class LiveProtocolSession:
             parts: What serves this session: its frontend adapter and, on WebRTC, its peer connection.
             core: The gateway's hook to its one delegation core client. A ``responses`` session builds its server
                 delegation on that client; a client-mode session builds a client delegation and never asks for it.
-            codec: A primary WebSocket's wire audio codec, from the WebSocket edge; ``None`` on WebRTC.
+            socket: A WebSocket session's primary socket, from the WebSocket edge, which the frontend adapter reads;
+                ``None`` on WebRTC.
             max_session_seconds: Lifetime after which the session expires.
             max_appends_per_minute: The context appends the session accepts in any minute, the three kinds together;
                 one more is refused with ``rate_limit_exceeded``.
@@ -158,7 +154,7 @@ class LiveProtocolSession:
         # When the session accepted each recent context append (time.monotonic), oldest first: what the appends module
         # counts against max_appends_per_minute.
         self.recent_appends: deque[float] = deque()
-        self.codec = codec
+        self.socket = socket
         self.status = "created"
         self.created_at = time.time()
         self.expires_at = int(self.created_at + max_session_seconds)
@@ -264,20 +260,16 @@ class LiveProtocolSession:
         logger.warning(f"session={self.id} pipeline_error={message}")
         await self.reply_error(ProtocolError(message, "pipeline_error"), client_event_id)
 
-    async def send_output_audio(self, pcm: bytes, sample_rate: int) -> None:
-        """Send reply audio to the primary connection only, in its wire format.
+    async def send_output_audio(self, audio: bytes) -> None:
+        """Send reply audio, already in the session's wire format, to the primary connection only.
 
-        The session's codec encodes the PCM16, which must be at the codec's exchange rate. The event carries no
-        ``event_id``, as a primary WebSocket client expects; a chunk that the codec turns into no bytes sends nothing.
+        The event carries no ``event_id``, as a primary WebSocket client expects; an empty chunk sends nothing.
         """
-        if self.codec is None:
-            raise RuntimeError("Reply audio events are sent only on a primary WebSocket, which hands in the codec")
-        if sample_rate != self.codec.exchange_rate:
-            raise ValueError(f"Reply audio must be PCM16 at {self.codec.exchange_rate} Hz, not {sample_rate} Hz")
-        wire = self.codec.encode(pcm)
-        if wire:
+        if self.socket is None:
+            raise RuntimeError("Reply audio events are sent only on a primary WebSocket")
+        if audio:
             await self.publish(
-                {"type": "session.output_audio.delta", "delta": base64.b64encode(wire).decode()}, audience="primary"
+                {"type": "session.output_audio.delta", "delta": base64.b64encode(audio).decode()}, audience="primary"
             )
 
     async def advance_input_clock(self, ms: int) -> None:
@@ -320,7 +312,7 @@ class LiveProtocolSession:
         with logger.contextualize(stream_id=self.id):
             try:
                 async with self.command_lock:
-                    if source == "sideband" and self.status in {"created", "starting"}:
+                    if self.status in {"created", "starting"}:
                         await self._wait_until_ready()
                     await self._dispatch(message, source)
             except ProtocolError as exc:
@@ -335,7 +327,10 @@ class LiveProtocolSession:
                 COMMAND_CONNECTION.reset(token)
 
     async def _wait_until_ready(self) -> None:
-        """A sideband's command waits for a session that is still starting, within a limit."""
+        """A command waits for a session that is still starting, within a limit.
+
+        A sideband may attach, and the transport of a primary connection reads, before the session is active.
+        """
         try:
             async with asyncio.timeout(COMMAND_WAIT_FOR_START_SECONDS):
                 await self.ready.wait()
@@ -364,8 +359,9 @@ def _refuse_unless_allowed(kind: str, allowed: frozenset[str], part: str) -> Non
 class AdapterView:
     """The frontend adapter's narrow view of its session (:class:`gateways.live.ports.SessionPort`).
 
-    The adapter sends its transcripts, its reply audio and its failures, advances the input clock and asks for a close.
-    It may send no other event type, and the rest of the session stays out of its reach.
+    The adapter sends its transcripts, its reply audio and its failures, advances the input clock and asks for a close;
+    a WebSocket session's adapter also reads the primary socket. It may send no other event type, and the rest of the
+    session stays out of its reach.
     """
 
     def __init__(self, session: LiveProtocolSession):
@@ -377,6 +373,11 @@ class AdapterView:
     def input_ms(self) -> int:
         """Milliseconds of caller audio seen so far (the input media clock)."""
         return self._session.input_ms
+
+    @property
+    def socket(self) -> PrimarySocket | None:
+        """A WebSocket session's primary socket, which the adapter's transport reads; ``None`` on WebRTC."""
+        return self._session.socket
 
     def is_active(self) -> bool:
         """Return whether the session is active."""
@@ -391,9 +392,9 @@ class AdapterView:
         """Record that the caller's audio reached ``ms``."""
         await self._session.advance_input_clock(ms)
 
-    async def send_output_audio(self, pcm: bytes, sample_rate: int) -> None:
-        """Send reply audio (mono PCM16) to the primary connection only; the event carries no ``event_id``."""
-        await self._session.send_output_audio(pcm, sample_rate)
+    async def send_output_audio(self, audio: bytes) -> None:
+        """Send reply audio, in the session's wire format, to the primary connection only; no ``event_id``."""
+        await self._session.send_output_audio(audio)
 
     async def report_error(self, message: str, client_event_id: str | None = None, *, fatal: bool = False) -> None:
         """Report a failure, with code ``pipeline_error``.

@@ -160,8 +160,8 @@ class WorkerDoor(Door):
     def rebind(self, task: TaskContext, sources: Sequence[ToolSource]) -> bool:
         """Serve ``task`` from now on, under the same name and token, when its toolset is the one served.
 
-        A session kept for a later task keeps its door (``backend.harness.session``): the runtime keeps the tools it
-        listed, and the door's calls route, report and word their answers through ``task``. A door that holds a call,
+        A session kept for a later task keeps its door (``sessions.py``): the runtime keeps the tools it listed, and
+        the door's calls route, report and word their answers through ``task``. A door that holds a call,
         is retired, or would serve another toolset is left as it was (``False``).
         """
         app_functions, owners, served = self._compose(task, sources)

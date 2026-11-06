@@ -11,6 +11,7 @@ A responses session runs on a core that answers nothing (``tests/unit/live_helpe
 
 import asyncio
 import base64
+import json
 import unittest
 from functools import partial
 from unittest import mock
@@ -19,31 +20,35 @@ import anyio
 from loguru import logger
 
 from gateways.live.events import fanout
-from gateways.live.gateway.websocket import TRY_AGAIN_LATER, close_dropped, wire_codec
+from gateways.live.gateway.websocket import TRY_AGAIN_LATER, PrimarySocketView, close_dropped
 from gateways.live.protocol import ProtocolError, SessionConfig
 from gateways.live.session import LiveProtocolSession, lifecycle
-from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
+from gateways.live.session.audio_input import MAX_AUDIO_CHARS
+from tests.unit.live_helpers import ClientSocket, Collector, FakeAdapter, responses_config
 
 CLIENT = SessionConfig(model="live-1", delegation={"type": "client"})
 AUDIO = base64.b64encode(b"\x01\x00" * 480).decode()
 APPENDS = ("session.instructions.append", "session.thinking.append", "session.commentary.append")
 NOTE = {"type": "session.thinking.append", "delegation_id": None, "content": "x"}
+DELAY = "session.delegation.acknowledgement_delay_ms"
 
 
 class Frontend(FakeAdapter):
-    """The frontend adapter: it notes each append with its ids, the rate of the audio it is fed and the typed questions.
+    """The frontend adapter: it notes each append with its ids and the typed questions.
 
-    Its close waits for ``hold_close`` when it is set.
+    Its start waits for ``hold_start``, and its close for ``hold_close``, when it is set.
     """
 
     def __init__(self):
         super().__init__()
-        self.rates, self.typed_texts = [], []
-        self.hold_close, self.close_started = None, asyncio.Event()
+        self.typed_texts = []
+        self.hold_start = self.hold_close = None
+        self.close_started = asyncio.Event()
 
-    async def feed_audio(self, pcm, sample_rate):
-        self.rates.append(sample_rate)
-        await super().feed_audio(pcm, sample_rate)
+    async def start(self, session, delegation):
+        await super().start(session, delegation)
+        if self.hold_start is not None:
+            await self.hold_start.wait()
 
     async def append_instructions(self, text, client_event_id=None, delegation_id=None):
         self.appended.append(("instructions", text, client_event_id, delegation_id))
@@ -73,12 +78,16 @@ class SessionCase(unittest.IsolatedAsyncioTestCase):
     async def start(self, config=None, transport="websocket", **options):
         self.frontend = Frontend()
         config = config or responses_config()
-        codec = wire_codec(config) if transport == "websocket" else None  # only the WebSocket edge hands one in
-        self.session = LiveProtocolSession(
-            config, transport, self.frontend.parts(), core=self.frontend.core, codec=codec, **options
-        )
         self.primary, self.sideband = Collector(), Collector()
-        self.keys = {"primary": self.session.subscribe(self.primary.send, "primary")}
+        parts, core = self.frontend.parts(), self.frontend.core
+        if transport == "websocket":  # as the WebSocket edge makes it: the socket the frontend adapter reads
+            self.socket = PrimarySocketView(ClientSocket(self.primary), config.with_wire_format().audio.format)
+            self.session = LiveProtocolSession(config, transport, parts, core=core, socket=self.socket, **options)
+            self.socket.attach(self.session)
+            self.keys = {"primary": self.socket.connection}
+        else:
+            self.session = LiveProtocolSession(config, transport, parts, core=core, **options)
+            self.keys = {"primary": self.session.subscribe(self.primary.send, "primary")}
         await self.session.start("start_1")
         await self.primary.wait_for("session.started")
         self.keys["sideband"] = self.session.subscribe(self.sideband.send, "sideband")
@@ -112,6 +121,27 @@ class StartTests(SessionCase):
         with self.assertRaises(ProtocolError) as again:
             await self.session.start()
         self.assertEqual(again.exception.code, "session_already_started")
+
+    async def test_a_command_sent_while_the_session_starts_waits_until_it_is_active(self):
+        # A sideband may attach, and a primary WebSocket's transport reads, before the session is active.
+        frontend, primary, sideband = Frontend(), Collector(), Collector()
+        frontend.hold_start = asyncio.Event()
+        session = LiveProtocolSession(responses_config(), "websocket", frontend.parts(), core=frontend.core)
+        self.addAsyncCleanup(session.close)
+        keys = [session.subscribe(primary.send, "primary"), session.subscribe(sideband.send, "sideband")]
+        starting = asyncio.create_task(session.start("start_1"))
+        await self.until(lambda: frontend.started)
+        commands = [
+            asyncio.create_task(session.handle({"type": f"session.input_audio.{kind}", "event_id": kind}, key))
+            for kind, key in zip(("mute", "unmute"), keys, strict=True)
+        ]
+        await asyncio.sleep(0.05)
+        self.assertEqual((session.status, [command.done() for command in commands]), ("starting", [False, False]))
+        frontend.hold_start.set()
+        await asyncio.gather(starting, *commands)
+        await session.fanout.drain()
+        expected = ["session.started", "session.input_audio.muted", "session.input_audio.unmuted"]
+        self.assertEqual((primary.kinds(), sideband.kinds()), (expected, expected))
 
     async def test_usage_reports_how_full_the_frontends_context_is(self):
         for count, window, ratio in ((64_000, None, 0.5), (64_000, 256_000, 0.25), (None, None, None)):
@@ -154,17 +184,30 @@ class CommandTests(SessionCase):
             ack = self.primary.events[-1]
             self.assertEqual((ack["type"], ack["client_event_id"]), (f"session.input_audio.{kind}d", kind))
 
-    async def test_audio_is_a_primary_websocket_command_and_is_checked(self):
+    async def test_audio_comes_from_the_primary_websockets_socket_checked_and_is_no_command(self):
         await self.start()
-        await self.handle({"type": "session.input_audio.append", "audio": AUDIO})
-        self.assertEqual((len(self.frontend.audio[0]), self.frontend.rates), (960, [24000]))  # 24 kHz PCM as it came
-        for bad in ("!!!not base64", base64.b64encode(b"\x01").decode(), 5):
-            await self.handle({"type": "session.input_audio.append", "audio": bad})
-        self.assertEqual([param for _, param, _ in self.errors()], ["audio"] * 3)
-        await self.handle({"type": "session.input_audio.append", "audio": AUDIO}, "sideband")
+        append = {"type": "session.input_audio.append", "audio": AUDIO}
+        self.assertEqual(await self.socket.handle(json.dumps(append)), base64.b64decode(AUDIO))  # the wire audio
+        for event_id, bad in (
+            ("b64", "!!!not base64"),
+            ("odd", base64.b64encode(b"\x01").decode()),  # half a PCM16 sample
+            ("type", 5),
+            ("big", "A" * (MAX_AUDIO_CHARS + 4)),
+        ):
+            self.assertIsNone(await self.socket.handle(json.dumps({**append, "event_id": event_id, "audio": bad})))
+        await self.session.fanout.drain()
+        self.assertEqual(
+            self.errors(), [("invalid_value", "audio", event_id) for event_id in ("b64", "odd", "type", "big")]
+        )
+        self.assertEqual(self.sideband.kinds(), [])  # each refusal goes to the primary connection only
+        # G.711 takes one byte per sample, so every chunk is whole.
+        await self.start(responses_config(audio={"format": {"type": "audio/pcmu"}}))
+        self.assertEqual(await self.socket.handle(json.dumps({**append, "audio": "AQ=="})), b"\x01")
+        # As a command, from a sideband or a WebRTC session's primary connection, an append is refused.
+        await self.handle(append, "sideband")
         self.assertIn("only allowed on a primary WebSocket", self.sideband.events[-1]["error"]["message"])
         await self.start(transport="webrtc")
-        await self.handle({"type": "session.input_audio.append", "audio": AUDIO})
+        await self.handle(append)
         self.assertIn("only allowed on a primary WebSocket", self.primary.events[-1]["error"]["message"])
         self.assertEqual(self.frontend.audio, [])
 
@@ -227,6 +270,7 @@ class UpdateTests(SessionCase):
             self.assertEqual((updated["type"], updated["client_event_id"]), ("session.updated", "u"))
         self.assertEqual(updated["session"]["delegation"], {"type": "client", "acknowledgement_delay_ms": 250})
         await self.assert_refused(
+            ({"delegation": {"acknowledgement_delay_ms": 801}}, "invalid_value", DELAY),
             ({"delegation": {"type": "responses"}}, "immutable_field_update", "session.delegation.type"),
             ({"delegation": {"responses": {"model": "m"}}}, "unknown_parameter", "session.delegation.responses"),
             ({"delegation": {"decisions": {}}}, "unknown_parameter", "session.delegation.decisions"),
@@ -249,7 +293,9 @@ class UpdateTests(SessionCase):
             ({"delegation": None}, "immutable_field_update", "session.delegation"),
             ({"delegation": {"type": "client"}}, "immutable_field_update", "session.delegation.type"),
             ({"delegation": {"responses": {"bogus": 1}}}, "unknown_parameter", "session.delegation.responses.bogus"),
+            ({"delegation": {"acknowledgement_delay_ms": 801}}, "invalid_value", DELAY),
         )
+        self.assertEqual(self.frontend.delegation.acknowledgement_delay_ms, 400)
 
 
 class AppendTests(SessionCase):
@@ -267,7 +313,7 @@ class AppendTests(SessionCase):
         await self.start()  # responses mode: no append may name a delegation
         for fields in (
             {"content": "x"},
-            {"delegation_id": None, "content": "  "},
+            {"delegation_id": None, "content": None},
             {"delegation_id": None, "content": "x" * 3000},
             {"delegation_id": "item_known", "content": "x"},
         ):
@@ -275,6 +321,28 @@ class AppendTests(SessionCase):
         params = [param for _, param, _ in self.errors()]
         self.assertEqual(params, ["delegation_id", "content", "content", "delegation_id"])
         self.assertEqual(self.frontend.appended, [])
+
+    async def test_every_append_may_be_empty(self):
+        # The Live API sets no minimum length on an append's content; empty thinking that names a delegation is its way
+        # to cancel that delegation's pending acknowledgement.
+        await self.start(CLIENT)
+        issued = await self.frontend.delegation.delegate([])
+        await self.primary.wait_for("session.delegation.created")
+        empties = []  # each append's event id, kind, delegation id and content
+        for kind in APPENDS:
+            empties += [(f"{kind}:empty", kind, issued, ""), (f"{kind}:blank", kind, None, " ")]
+        for event_id, kind, delegation, text in empties:
+            await self.handle({"type": kind, "event_id": event_id, "delegation_id": delegation, "content": text})
+        for event_id, content in (("t1", None), ("t2", "x" * 3000)):  # still a string of at most 500 tokens
+            await self.handle({"type": APPENDS[1], "event_id": event_id, "delegation_id": None, "content": content})
+        # Each empty one reaches the frontend and is acknowledged, as any append is.
+        delivered = [(kind.split(".")[1], text, event_id, delegation) for event_id, kind, delegation, text in empties]
+        self.assertEqual(self.frontend.appended, delivered)
+        acks = [(e["type"], e["client_event_id"]) for e in self.primary.events if e["type"].endswith(".appended")]
+        self.assertEqual(acks, [(f"{kind}ed", event_id) for event_id, kind, _, _ in empties])
+        self.assertEqual(self.errors(), [("invalid_value", "content", "t1"), ("invalid_value", "content", "t2")])
+        messages = [e["error"]["message"] for e in self.primary.events if e["type"] == "error"]
+        self.assertEqual(messages, ["content must be a string of at most 500 tokens"] * 2)
 
     async def test_a_client_mode_append_may_name_only_a_delegation_the_session_announced(self):
         await self.start(CLIENT)
@@ -295,11 +363,11 @@ class AppendTests(SessionCase):
         await self.start(max_appends_per_minute=2)
         with mock.patch("gateways.live.session.appends.time") as clock:  # the appends' clock only
             for at, kind, event_id, content in (
-                (0, APPENDS[0], "blank", " "),  # refused by its own check: not counted
-                (0, APPENDS[0], "a", "x"),
+                (0, APPENDS[0], "bad", None),  # refused by its own check: not counted
+                (0, APPENDS[0], "a", ""),  # an empty append counts like any other
                 (50, APPENDS[1], "b", "x"),
                 (59, APPENDS[2], "c", "x"),  # the three kinds count against one limit
-                (59, APPENDS[2], "blank2", " "),  # past the limit, its own check comes first
+                (59, APPENDS[2], "bad2", None),  # past the limit, its own check comes first
                 (61, APPENDS[2], "d", "x"),  # "a" has left the minute
                 (62, APPENDS[0], "e", "x"),  # "b" is still in it: the minute slides with each append
             ):
@@ -309,9 +377,7 @@ class AppendTests(SessionCase):
         self.assertEqual(acks, ["a", "b", "d"])
         self.assertEqual([event_id for *_, event_id, _ in self.frontend.appended], ["a", "b", "d"])
         refused, limited = [(code, event_id) for code, _, event_id in self.errors()], "rate_limit_exceeded"
-        self.assertEqual(
-            refused, [("invalid_value", "blank"), (limited, "c"), ("invalid_value", "blank2"), (limited, "e")]
-        )
+        self.assertEqual(refused, [("invalid_value", "bad"), (limited, "c"), ("invalid_value", "bad2"), (limited, "e")])
         self.assertEqual(self.primary.events[4]["error"]["message"], "Too many appends: at most 2 per minute")
 
 

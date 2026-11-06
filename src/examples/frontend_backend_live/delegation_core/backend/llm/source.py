@@ -68,7 +68,7 @@ class LlmSource:
         Raises:
             ValueError: The block has an unknown key, a value of the wrong kind, or a name no table has.
         """
-        return cls(LlmSettings.parse(block), endpoints=endpoints, tools=tools)
+        return cls(LlmSettings.model_validate(block), endpoints=endpoints, tools=tools)
 
     def describe(self) -> dict:
         """What it serves, as plain JSON for ``GET /v1/live/info``: no credentials."""
@@ -83,7 +83,7 @@ class LlmSource:
         }
 
     async def check_model(self, model: str) -> None:
-        """Raise ``ValueError`` if it cannot serve ``model``: the catalog does not list it and ``report`` holds."""
+        """Raise ``ValueError`` if it cannot serve ``model``: the catalog does not list it."""
         self.endpoint(model)
 
     def unsupported(self, settings: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -91,12 +91,17 @@ class LlmSource:
         return self.settings.provider.unsupported(settings)
 
     def endpoint(self, model: str | None) -> ModelEndpoint:
-        """The endpoint ``model`` runs on, by the catalog and the unlisted-model policy.
+        """The endpoint ``model`` runs on, by the catalog.
 
         Raises:
-            ValueError: The catalog does not list ``model`` and the policy reports it.
+            ValueError: The catalog does not list ``model``.
         """
-        return self.settings.unlisted_models.endpoint(model, self.endpoints)
+        try:
+            return self.endpoints(model)
+        except LookupError:
+            raise ValueError(
+                f"The backend does not serve the model {model!r}: it is not in the model catalog"
+            ) from None
 
     def new(self) -> LlmAdapter:
         """The backend of a new IM session."""

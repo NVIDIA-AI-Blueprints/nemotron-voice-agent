@@ -6,14 +6,11 @@ default, the backend adapter is the backend large language model (LLM), directly
 Python package in the example's folder: it imports nothing from the Live gateway
 ([`src/gateways/live/`](../../../gateways/live/)), the example's frontend adapter, or Pipecat. Only the example's
 composition roots import it: they build it in process, and they hand the frontend adapter the helpers that the two
-share, the one copy of `pick` ([`tables.py`](tables.py)), the profile loader ([`profiles.py`](profiles.py)), and
-`message_text` ([`items.py`](items.py)). It has its own settings file (`core.yaml`), tests, and README, and it keeps
-its records in memory. The core, the gateway, and the frontend adapter share one copy of the ids, the token estimate,
-the delegation contract's constants, and the model endpoint type. These helpers are in modules of
-[`src/examples/shared/`](../../shared/) that import only the standard library.
-
-For the design, including the interaction manager (IM), the backend port, the three backend adapters, and how to extend
-each part, refer to the [Frontend/Backend Live Architecture](../../../../docs/design/architecture.md) page.
+share, the one copy of `pick` ([`tables.py`](tables.py)) and `message_text` ([`items.py`](items.py)). It has its own
+settings (the `core` block of the example's settings), tests, and README, and it keeps its records in memory. The core,
+the gateway, and the frontend adapter share one copy of the ids, the token estimate, the delegation contract's
+constants, and the model endpoint type. These helpers are in modules of [`src/examples/shared/`](../../shared/) that
+import only the standard library.
 
 ## How Callers Reach the Core
 
@@ -39,39 +36,41 @@ In the [Frontend/Backend Live example](../README.md), the composition root build
 core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the
 gateway's [server delegation](../../../../docs/how-to/use-live-gateway.md#server-delegation), in a conversation of its
 own. A client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one
-stateless request. The repository UI bot builds a core of its own for each bot session, from `core.ui-bot.yaml`,
-which sets the cafe's `backend.prompt` and `backend.tools`.
+stateless request. The repository UI bot builds a core of its own for each bot session, from the core's settings with
+`ui_bot.core` merged over them, which set the cafe's `backend.prompt` and `backend.tools`.
 
 ## Build and Configure the Core
 
 `build_core(settings, *, endpoints, defaults)` in [`app.py`](app.py) builds one `DelegationCore`, choosing every
 implementation by name. The example's composition root, [`factory.py`](../factory.py),
-loads the settings and the core's texts with `CoreSettings.load`, resolves the default model of `backend.slot` and the
-instructions of `backend.prompt` from the example's `prompts.yaml`, and hands the core to the gateway through
-`LocalResponsesClient`.
+reads the settings and the core's texts with `CoreSettings.parse(settings, texts)`, resolves the default model of
+`backend.slot` and the instructions of `backend.prompt` from the example's `prompts.yaml`, and hands the core to the
+gateway through `LocalResponsesClient`.
 
-The core's settings are their own file, [`core.yaml`](../core.yaml) in the example's
-folder. Set `CORE_CONFIG_PATH` to use another file, such as one of the profiles that
-[Configuration](../../../../docs/design/architecture.md#configuration) lists. The root reads the file once, on first
-use, so an edit takes effect at the next restart. A profile names the file it builds on with `extends` and sets only
-what differs, and an unknown key stops the load. The file has the following blocks:
+The core's settings are the `core` block of the example's settings, in the `config` block of its entry in
+[`examples_registry.yaml`](../../../../examples_registry.yaml), as the example's
+[Configuration](../README.md#configuration) describes. The server reads them when it starts, so an edit takes effect at
+the next restart. The block must set `backend.slot` and `backend.prompt`. Every other key that it leaves out keeps
+its default, and an unknown key stops the load. The block has the following parts:
 
 - `delegation`: the IM's settings, with their defaults in `DelegationSettings` ([`config.py`](config.py)).
 - `backend`: the adapter (`adapter`) and the one that serves stateless requests (`one_shot_adapter`), both `llm` by
   default, the default model's slot and prompt (`slot` and `prompt`), the server tool sources (`tools`), the steps
-  that the app's outputs take before the backend reads them (`app_output_steps`, the ID-shape hints by default), and
-  each adapter's own block.
+  that the app's outputs take before the backend reads them (`app_output_steps`, none by default), and each adapter's
+  own block, with its defaults in the adapter's `settings.py`. The registry block shows, commented out, how to turn
+  on the ID-shape hints step (`app_output_steps.shape_hints` with its `not_found_pattern`). The hint's words are the
+  `backend.app_output_steps.shape_hints.hint` entry of `agent_prompts.Core`.
 
 The core's texts, the lines that the IM and the backend write or add to a model's input, are the `agent_prompts.Core`
-entries of the example's [`prompts.yaml`](../prompts.yaml). The root reads them with the file and hands them to
-`CoreSettings.load`, and the UI's **Prompts** tab shows them. Each entry is named by its place in the settings:
+entries of the example's [`prompts.yaml`](../prompts.yaml). The root reads them with the settings and hands both to
+`CoreSettings.parse`, and the UI's **Prompts** tab shows them. Each entry is named by its place in the settings:
 `texts.<key>` for the core's own lines, such as `texts.conductor_prompt`, and `backend.<block>.<key>` for the texts of
 a backend block, such as the harness's prompt templates (`backend.harness.prompts`). A block's texts join it only when
-the settings have the block, so you can remove an app output step without editing `prompts.yaml`. A core file that
-sets one of these places, such as `backend.harness.prompts.user`, stops the load with a message that names
-`agent_prompts.Core`.
+the settings have the block, so you can remove an app output step without editing `prompts.yaml`. Settings that set one
+of these places, such as `backend.harness.prompts.user`, stop the load with a message that names `agent_prompts.Core`.
 
-The following table lists the `delegation` settings that you are most likely to change. `core.yaml` comments every key:
+The following table lists the `delegation` settings that you are most likely to change. `DelegationSettings` comments
+every key:
 
 | Setting | Default | What it sets |
 | --- | --- | --- |
@@ -81,6 +80,9 @@ The following table lists the `delegation` settings that you are most likely to 
 | `result_format` | `plain` | `plain`, or `speak_display`, which adds a `show` item for the screen before the answer to speak. |
 | `progress_note_seconds` | `1.0` | The shortest time between two progress notes of one delegation. `0` writes none. |
 | `context_tokens` | `24000` | The backend history's budget. Over it, the oldest requests leave the history, each one whole. |
+
+Every task of a conversation gets the `cancel_work` work tool and the `default` caller and voice notes
+(`texts.caller_notes.default` and `texts.voice_notes.default`). A one-shot session offers no work tool.
 
 ## Packages
 
@@ -98,16 +100,28 @@ The following table lists the core's packages:
 `backend.adapter` chooses one adapter from the table in [`backend/adapters.py`](backend/adapters.py), which loads an
 adapter's package only when a core is built with it. The following table lists the adapters:
 
-| Adapter | Package | What it runs | Profile |
-| --- | --- | --- | --- |
-| `llm` (default) | [`backend/llm/`](backend/llm/) | The backend LLM, directly connected, with a rule conductor. It also serves stateless requests. | `core.yaml` |
-| `llm-agent` | [`backend/agent/`](backend/agent/) | A model conductor that makes one model call per decision, with backend LLM runs as its workers. While no Work is open, a request starts one with no model call (`conductor.when_idle: start`). With `max_running: 1`, the `steer` rule places each request instead. | `core.agent.yaml` |
-| `harness` | [`backend/harness/`](backend/harness/) | An external agent that its operator deploys, such as Hermes, over the Agent Client Protocol (ACP). | `core.harness.yaml` |
+| Adapter | Package | What it runs |
+| --- | --- | --- |
+| `llm` (default) | [`backend/llm/`](backend/llm/) | The backend LLM, directly connected. The steer rule places each request: it joins the newest open Work, or starts one. It also serves stateless requests. |
+| `llm-agent` | [`backend/agent/`](backend/agent/) | Backend LLM runs as workers. Above `max_running: 1`, a model conductor places every request, with one model call per decision. At `max_running: 1`, the steer rule places each request. |
+| `harness` | [`backend/harness/`](backend/harness/) | An external agent that its operator deploys, such as Hermes, over the Agent Client Protocol (ACP). Above `max_running: 1`, a conductor session of the agent places every request. At `max_running: 1`, the steer rule places each request. |
 
-To deploy Hermes or connect another ACP agent, refer to
-[Connect an Agent Harness](../../../../docs/how-to/connect-an-agent-harness.md). To add a backend adapter,
-a model provider, or a tool source, refer to
-[Extension Recipes](../../../../docs/design/architecture.md#extension-recipes).
+To choose an adapter, refer to [Choose a Backend Adapter](../README.md#choose-a-backend-adapter). To deploy Hermes or
+connect another ACP agent, refer to [Connect an Agent Harness](../../../../docs/how-to/connect-an-agent-harness.md). To
+add a backend adapter, a model provider, or a tool source, refer to [Extend the Core](#extend-the-core).
+
+## Extend the Core
+
+Each part of the core that you can add is one class and one entry in a name table, which the core's settings choose by
+name. The following table lists where to add each part. The module of each table describes what its classes implement:
+
+| Part | Table | Chosen by |
+| --- | --- | --- |
+| Backend adapter | `ADAPTERS` in [`backend/adapters.py`](backend/adapters.py), with the backend port in [`backend/port.py`](backend/port.py) | `backend.adapter` |
+| Backend model provider | `BACKENDS` in [`backend/providers/__init__.py`](backend/providers/__init__.py) | `provider` in the `llm` block, and `conductor.provider` and `worker.provider` in the `llm-agent` block |
+| Server tool source | `TOOL_SOURCES` in [`backend/tools/__init__.py`](backend/tools/__init__.py) | `backend.tools` |
+| App output step | `APP_OUTPUT_STEPS` in [`backend/output_steps.py`](backend/output_steps.py) | `backend.app_output_steps` |
+| Harness agent class | `AGENTS` in [`backend/harness/acp/agents.py`](backend/harness/acp/agents.py) | `backend.harness.agent` |
 
 ## Tests
 
@@ -118,6 +132,6 @@ with scripted backends. Run them from the repository root:
 uv run pytest tests/unit/delegation_core tests/unit/contracts -v
 ```
 
-For the other test commands and the import rule that keeps the core apart from the gateway and the frontend adapter,
-refer to [Tests](../../../../docs/design/architecture.md#tests) and
-[The Core's Import Rule](../../../../docs/design/architecture.md#the-cores-import-rule).
+[`test_core_boundary.py`](../../../../tests/unit/delegation_core/test_core_boundary.py) keeps the core apart from the
+gateway and the frontend adapter: it imports every module of the core in a fresh interpreter and fails when any
+Pipecat, gateway, or frontend module was loaded.

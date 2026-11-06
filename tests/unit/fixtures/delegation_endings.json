@@ -48,7 +48,7 @@
       "reader": {"results": {"D1": 1}, "waits": ["D1"], "endings": {"D1": "answered"}}
     },
     "queued_then_running": {
-      "about": "With one task slot (start_each), the second request is queued until the first Work ends.",
+      "about": "With one task slot, a second Work the conductor starts is queued until the first Work ends.",
       "responses": {"R1": "D1", "R2": "D2"},
       "timeline": [
         ["R1", "created queued"],

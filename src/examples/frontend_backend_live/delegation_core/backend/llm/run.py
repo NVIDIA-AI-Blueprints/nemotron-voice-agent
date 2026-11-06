@@ -251,7 +251,7 @@ class LlmRun:
         Raises:
             Exception: The task failed: a provider's error (unchanged, so a 429 stays one), a time limit, a round that
                 stayed empty or broken after its retry, a round cut short (after its ``response.incomplete``), the
-                round cap passed, or a model the catalog does not list (``unlisted_models: report``).
+                round cap passed, or a model the catalog does not list.
         """
         self.waits = False
         try:

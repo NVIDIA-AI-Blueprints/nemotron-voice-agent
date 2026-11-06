@@ -3,14 +3,13 @@
 
 """The backend LLM agent's conductor: one model call per ``decide()`` that places requests through the control tools.
 
-The round asks the model for one tool call (``parallel_tool_calls: false``).
-Each finished tool call is placed at once, and the IM's outcome line becomes that call's output in the conductor's
-memory. ``conductor.timeout_seconds`` limits the wait for the model, never a placement in progress. Requests the round
-leaves unplaced (a failed or timed-out round, a refused decision, or no decision naming them) are left to the IM, whose
-``steer`` rule places them against the Works as the round left them: a request that came with one the round started
-joins that Work. Any text the model writes is dropped. While no Work is open, ``conductor.when_idle`` may place the
-requests with no model call (``start``); such a round keeps its input in the memory, as a failed round does. Each
-model call's request and reply are logged in full at debug level.
+The model places every request, also while no Work is open. The round asks the model for one tool call
+(``parallel_tool_calls: false``). Each finished tool call is placed at once, and the IM's outcome line becomes that
+call's output in the conductor's memory. ``conductor.timeout_seconds`` limits the wait for the model, never a placement
+in progress. Requests the round leaves unplaced (a failed or timed-out round, a refused decision, or no decision naming
+them) are left to the IM, whose ``steer`` rule places them against the Works as the round left them: a request that
+came with one the round started joins that Work. Any text the model writes is dropped. Each model call's request and
+reply are logged in full at debug level.
 """
 
 from __future__ import annotations
@@ -70,7 +69,7 @@ class LlmConductor:
         self.memory = ConductorMemory(settings.memory_tokens)
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
-        """Place the new requests the model's decisions name, or the idle rule's decision; the IM places any left.
+        """Place the new requests the model's decisions name; the IM places any left.
 
         A round that fails or passes its time limit returns, so ``decide()`` raises only when it is cancelled or
         ``place`` itself raises.
@@ -80,13 +79,7 @@ class LlmConductor:
         decision_round: DecisionRound | None = None
         try:
             decision_round = DecisionRound(round_input(given))
-            decision = self.settings.when_idle.decision(given)
-            if decision is None:
-                await self._ask(given, decision_round, place)
-            else:
-                logger.debug(f"conductor.when_idle rule={self.settings.when_idle.name} decision={decision}")
-                decision_round.placed = True
-                await place(decision)
+            await self._ask(given, decision_round, place)
         except asyncio.CancelledError:
             if decision_round is not None and decision_round.placed:  # cancelled after it placed (the close)
                 self.memory.add(decision_round)  # what it placed stays remembered

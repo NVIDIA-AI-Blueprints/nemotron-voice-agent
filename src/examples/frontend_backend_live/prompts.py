@@ -16,7 +16,7 @@ no session selects, in six groups:
   (:class:`PromptSet`), each entry named by its field (``work_texts.item``);
 * ``Lines``: the lines that the voice says word for word (:class:`FixedLines`);
 * ``Core``: the delegation core's texts, each named by its place in the core's settings (``texts.handover_line``,
-  ``backend.harness.prompts.user``), which the composition roots hand to ``CoreSettings.load``.
+  ``backend.harness.prompts.user``), which the composition roots hand to ``CoreSettings.parse``.
 
 A prompt file the server was started with (``PROMPT_FILE_PATH``) replaces this whole file, as for every example, so it
 holds these entries too. Each session reads the file once when it starts, so an edit takes effect at the next session;
@@ -79,16 +79,15 @@ class CallHints:
 
     talker: str  # the routing decision
     answer: str  # the writer's call: every update it words
-    normalizer: str  # the newest caller turn, rewritten
     progress: str  # the writer's progress line: one short sentence, or empty
 
 
 @dataclass(frozen=True)
-class NormalizerPrompt:
-    """What the normalizer reads: its instructions, and the label in front of the turn it rewrites."""
+class RoutingTools:
+    """The tool-calling talker's routing tools, each as YAML: its description and its parameters, as the model reads."""
 
-    instructions: str
-    newest_turn: str
+    delegate: str  # hands the turn to the backend, with an optional lead_in
+    wait: str  # lets the turn pass in silence
 
 
 @dataclass(frozen=True)
@@ -123,7 +122,7 @@ class PromptSet:
     """The text a prompt set contributes to each call of the talker, and to each delegation's input.
 
     The voice reads the work note's texts, the labels and marks of the talker's context, and the transcript's words
-    from here; the talker's calls and the normalizer read the rest.
+    from here; the talker's calls read the rest.
     """
 
     routing: str  # appended to the client's instructions for the routing decision
@@ -142,7 +141,6 @@ class PromptSet:
     transcript: TranscriptText  # the words of each delegation's input
     writer_notes: WriterNotes
     call_hints: CallHints
-    normalizer_prompt: NormalizerPrompt
     frame_before: str  # said before the client's instructions in the routing decision
     frame_after: str  # said after them, before the routing text
     writer_frame_before: str  # said before the client's instructions in the writer's call
@@ -152,7 +150,9 @@ class PromptSet:
     decision_cue: str  # the routing decision's last line, after the runtime data: what to decide now
     newest_turn: str  # before the cue when caller turns are decided: "{turn}", their words
     json_rules: str  # the decision rules, after every call's instructions: one JSON object with action and speech
-    resume_note: str  # the note a caller turn with no words that cut a line leaves in the talker's context
+    tool_rules: str  # the tool-calling talker's rules, after its routing call's instructions in place of json_rules
+    tools: RoutingTools  # the tool-calling talker's routing tools
+    empty_turn_note: str  # Pipecat's note on a caller turn with no words that cut the bot off; the talker reads it
 
     def writer_framed(self, instructions: str) -> str:
         """The client's instructions as the writer reads them: word for word, inside the set's writer frame."""

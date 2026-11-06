@@ -5,7 +5,8 @@
 
 """Tests for the ACP layer: updates read through an agent class, the agent classes and the client on a replay.
 
-The replay plays the recorded Hermes wire (``fixtures/hermes_wire.json``) over a real byte stream to the real client.
+The replay plays the recorded Hermes wire (``fixtures/hermes_wire.json``) over a real byte stream to the real client,
+and a worker's run reads it through that client.
 """
 
 import asyncio
@@ -26,7 +27,10 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
     ToolCardEnd,
     UserText,
 )
-from tests.unit.delegation_core.backend.harness.doubles import hermes, scratch, until, wire
+from examples.frontend_backend_live.delegation_core.backend.harness.worker import WorkerRun
+from tests.unit.contracts.backend import STEERING, FakeTaskContext
+from tests.unit.delegation_core.backend.harness.doubles import FakeHost, hermes, plain, scratch, until, wire
+from tests.unit.delegation_core.helpers import finished_items, read_all
 
 LOST = "the connection to the agent is lost"  # the error a prompt to a lost connection ends with
 SERVER = McpServer("w1", "http://bridge.test/mcp", "token-1")
@@ -124,6 +128,7 @@ class Replay:
     """The recorded runtime's side of the stream: answers each request with what the real Hermes sent."""
 
     def __init__(self, scenario, *, answered=True, ask_permission=False, refuse=None):
+        self.answered = answered  # it plays each recorded turn to its end, a cancelled one after the client's cancel
         self.steps = [step for step in wire(scenario) if answered or "end" not in step]  # the runtime never answers
         self.session = next(step["session"] for step in self.steps if "session" in step)
         self.ask_permission = ask_permission
@@ -176,8 +181,15 @@ class Replay:
             if step.get("end") == recorded["prompt"]:
                 await self.send({"jsonrpc": "2.0", "id": request["id"], "result": step["result"]})
                 return
+            if "cancel" in step and self.answered:
+                await self._client_cancel()
             if "update" in step and step["update"]["sessionId"] == recorded["session"]:
                 await self.send({"jsonrpc": "2.0", "method": "session/update", "params": step["update"]})
+
+    async def _client_cancel(self):
+        """Read on until the client's ``session/cancel`` comes: ``_serve`` reads nothing while a turn plays."""
+        while not self.sent("session/cancel") and (line := await self.their_reader.readline()):
+            self.received.append(json.loads(line))
 
     async def close(self):
         self.their_writer.close()
@@ -293,6 +305,31 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         error = self.mailbox.get_nowait().error
         self.assertIn("RequestError: Internal error", error)
         self.assertIn(details, error)
+
+
+class WorkerReplayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_turn_that_took_the_cancel_leaves_the_batch_alone_to_the_same_session(self):
+        # A plain agent's run on the recorded session: the cancel ends the running turn "cancelled", and the session
+        # then answers its next prompt, which carries only the batch, since the session holds the history.
+        host, replay = FakeHost(plain()), Replay("cancel_then_prompt")
+        client = AcpClient(replay, host.settings.agent, permission=Reject(), start_timeout_seconds=5)
+        host.runtime.client = client  # the workers' process speaks to the replay
+        self.addAsyncCleanup(client.close)
+        await client.open()
+        task = FakeTaskContext()
+        run = WorkerRun(task, host)
+        events = run.events()
+        self.assertEqual((await anext(events))["type"], "response.created")
+        steering = task.steer_with(STEERING)
+        run.steer()
+        rest = await asyncio.wait_for(read_all(events), 5)
+        prompts, cancels = replay.sent("session/prompt"), replay.sent("session/cancel")
+        self.assertEqual(len(replay.sent("session/new")), 1)
+        self.assertEqual([sent["params"]["sessionId"] for sent in (*cancels, *prompts)], [replay.session] * 3)
+        self.assertEqual(prompts[1]["params"]["prompt"][0]["text"], host.renderer.steering(steering))
+        answers = [(item["phase"], item["content"][0]["text"]) for item in finished_items(rest)]
+        self.assertEqual((answers, task.settled), ([("final_answer", "ok")], [("steer_1", "applied")]))
+        self.assertEqual(host.kept.session.id, replay.session)  # the cancel it took leaves nothing pending
 
 
 if __name__ == "__main__":

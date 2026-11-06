@@ -7,6 +7,10 @@ A ``delegate`` decision reserves its work-note entry before anything awaits, so 
 then hands the heard log's input to the delegation part (``gateways.live.ports.DelegationPort``). Accepted, the entry
 takes the delegation's id and the display hears of it; refused, the entry goes and the refusal line is said. The
 lead-in is said only once the delegation is accepted, so a refused delegation never gets one, as the port requires.
+A decision the tool-calling talker made with a ``delegate`` call is handed over the same way, at once; that call's
+handler settles once the delegation part has answered (:meth:`HandOffs.hand_off`,
+``examples.frontend_backend_live.tool_handlers``), so an interruption before Pipecat runs the handler never loses the
+hand-off.
 """
 
 from __future__ import annotations
@@ -104,20 +108,38 @@ class HandOffs:
         self.delegation, self.heard_log, self.worknote, self.display = delegation, heard_log, worknote, display
         self.acknowledgements, self.refused, self.observe = acknowledgements, refused, observe
         self.tasks: set[asyncio.Task] = set()
+        self.by_call: dict[str, asyncio.Task[bool]] = {}  # the hand-offs delegate calls made, until their handlers ask
 
-    def delegate(self, request: str, lead_in: str, *, decided_at: int) -> None:
-        """Hand the turn ``request`` over; nothing awaits before the work note reserves its entry."""
+    def delegate(self, request: str, lead_in: str, *, decided_at: int, call_id: str = "") -> None:
+        """Hand the turn ``request`` over; nothing awaits before the work note reserves its entry.
+
+        ``call_id``: the ``delegate`` call that made the decision, whose handler asks how it went (:meth:`hand_off`).
+        """
         reservation = self.worknote.reserve(request)
         task = asyncio.create_task(
             self._hand_off(reservation, request, lead_in, decided_at), name="delegation-hand-off"
         )
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+        if call_id:
+            self.by_call[call_id] = task
 
-    async def _hand_off(self, reservation: str | None, request: str, lead_in: str, decided_at: int) -> None:
+    async def hand_off(self, call_id: str) -> bool | None:
+        """Whether the delegation part accepted the turn the ``delegate`` call ``call_id`` delegated, once it answered.
+
+        ``None``: the call handed nothing over, or its hand-off stopped with the voice.
+        """
+        task = self.by_call.pop(call_id, None)
+        if task is None:
+            return None
+        await asyncio.wait({task})
+        return None if task.cancelled() else task.result()
+
+    async def _hand_off(self, reservation: str | None, request: str, lead_in: str, decided_at: int) -> bool:
         """Send the delegation with the heard log's input; confirm the reserved entry, or release it when refused.
 
-        The input notes an answer that waits to be heard as it is built (:meth:`WorkNote.answer_ready`).
+        The input notes an answer that waits to be heard as it is built (:meth:`WorkNote.answer_ready`). Returns whether
+        the delegation part accepted it.
         """
         try:
             delegation_id = await self.heard_log.delegate(self.delegation, unheard=self.worknote.answer_ready())
@@ -129,14 +151,16 @@ class HandOffs:
             logger.warning(f"The delegation was refused: {type(exc).__name__}: {exc}")
             self.observe("delegation.refused", error_type=type(exc).__name__)
             self.refused()
-            return
+            return False
         self.worknote.confirm(reservation, delegation_id)
         self.display.started(delegation_id, request)
         self.observe("delegation.handed", delegation_id=delegation_id)
         delay_ms = self.delegation.acknowledgement_delay_ms
         await self.acknowledgements.acknowledge(delegation_id, lead_in.strip(), delay_ms, decided_at=decided_at)
+        return True
 
     def close(self) -> None:
         """Stop the hand-offs still running."""
         for task in tuple(self.tasks):
             task.cancel()
+        self.by_call.clear()

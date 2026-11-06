@@ -11,30 +11,27 @@ Each round is one stateless request that a one-shot session serves; only the mod
 import asyncio
 import json
 import os
-import tempfile
 import unittest
 from contextlib import contextmanager
-from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 import openai
-import yaml
 from fastapi.testclient import TestClient
 
 import examples_registry
 import server
 from examples.frontend_backend_live import factory
+from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from examples.frontend_backend_live.delegation_core.backend.providers import base as providers
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.im.input import compose
 from examples.frontend_backend_live.prompts import load_prompts
 from tests.unit.cascade_helpers import MENU_TOOL, tool_call_round
-from tests.unit.core_helpers import CORE_TEXTS, FakeChat, chunk
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, EXAMPLE_SETTINGS, FakeChat, chunk, core_block
 from tests.unit.frontend_backend_live.root.root_helpers import clear_root_caches
 from utils import clear_service_context, set_active_services
 
-CORE = Path(factory.__file__).with_name("core.yaml")
 USER = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What teas do you have?"}]}
 LATER = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "And coffee?"}]}
 FAILED = (502, "The backend could not complete the round")
@@ -44,10 +41,10 @@ def answer(text):
     return [chunk(text), chunk(finish="stop")]
 
 
-def notes(name="default"):
+def notes():
     """The notes the core adds to every task's instructions: the caller note, then the voice note."""
-    texts = CoreSettings.load(CORE, CORE_TEXTS).texts
-    return texts.caller_notes[name], texts.voice_notes[name]
+    texts = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS).texts
+    return texts.caller_notes["default"], texts.voice_notes["default"]
 
 
 class Hanging:
@@ -89,24 +86,18 @@ class ServedRoute(unittest.TestCase):
         self.enterContext(patch.object(examples_registry, "_SELECTION", locked))
         hosts = {"allowed_hosts": ["testserver"]}
         self.enterContext(patch.dict(examples_registry.EXAMPLES["frontend-backend-live"]["live"]["settings"], hosts))
-        for name in ("SERVICES_PATH", "LIVE_CONFIG_PATH", "CORE_CONFIG_PATH"):
-            os.environ.pop(name, None)
+        os.environ.pop("SERVICES_PATH", None)
         # create_app binds the selected example's services process-wide; leave no binding behind.
         self.addCleanup(clear_service_context)
         self.addCleanup(set_active_services, None)
-        folder = tempfile.TemporaryDirectory()
-        self.addCleanup(folder.cleanup)
-        self.folder = Path(folder.name)
 
-    def profile(self, **blocks) -> Path:
-        """A core profile over the shipped ``core.yaml`` that sets ``blocks`` (merged key by key)."""
-        path = self.folder / f"core.{len(list(self.folder.iterdir()))}.yaml"
-        path.write_text(yaml.safe_dump({"extends": str(CORE), **blocks}), encoding="utf-8")
-        return path
+    def settings(self, **blocks) -> dict:
+        """The example's settings with ``blocks`` merged over the shipped core settings, key by key."""
+        return {**EXAMPLE_SETTINGS, "core": core_block(**blocks)}
 
     @contextmanager
-    def served(self, client, *, core=None):
-        """The server's app on a new core (``core``: a profile), its providers' clients made as ``client``.
+    def served(self, client, *, settings=None):
+        """The server's app on a new core (``settings``: the example's), its providers' clients made as ``client``.
 
         Yields the test client and the requests the route sent to the core; ``self.service`` is the core's service.
         """
@@ -127,17 +118,17 @@ class ServedRoute(unittest.TestCase):
             return core_client
 
         with (
-            patch.dict(os.environ, {"CORE_CONFIG_PATH": str(core or CORE)}),
+            patch.dict(examples_registry.EXAMPLES["frontend-backend-live"], {"config": settings or EXAMPLE_SETTINGS}),
             patch.object(providers, "AsyncOpenAI", return_value=client),
             patch.object(factory, "core_client", spied),
             TestClient(server.create_app()) as http,
         ):
             yield http, sent
 
-    def round(self, body, *script, core=None, chat=None):
+    def round(self, body, *script, settings=None, chat=None):
         """One delegate round on a fresh core: the reply, the model client and the requests sent to the core."""
         chat = chat or FakeChat(*script)
-        with self.served(chat, core=core) as (http, sent):
+        with self.served(chat, settings=settings) as (http, sent):
             response = http.post("/v1/live/delegate", json=body)
         return response, chat, sent
 
@@ -225,7 +216,8 @@ class RoundTests(ServedRoute):
     def test_a_transient_failure_gets_the_providers_own_retries_and_no_more(self):
         # Opening the round is retried on a transient error, provider_retries times, and nothing on top.
         error = openai.APIConnectionError(request=httpx.Request("POST", "http://backend.test/v1/chat/completions"))
-        retries = CoreSettings.load(CORE, CORE_TEXTS).backend.blocks["llm"]["provider_retries"]
+        llm = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS).backend.blocks.get("llm", {})
+        retries = LlmSettings.model_validate(llm).provider_retries
         with patch(
             "examples.frontend_backend_live.delegation_core.backend.providers.retry.retry_delay", return_value=0
         ):
@@ -237,8 +229,8 @@ class RoundTests(ServedRoute):
     def test_a_round_past_the_backends_time_limit_is_a_502_and_its_model_client_is_closed(self):
         # The backend LLM times each round (backend.llm.first_event_timeout_seconds), well before the route's
         # backstop, and the one-shot session releases its model client when its response ends.
-        fast = self.profile(backend={"llm": {"first_event_timeout_seconds": 0.2}})
-        response, chat, _ = self.round({"input": [USER]}, chat=HangingChat(), core=fast)
+        fast = self.settings(backend={"llm": {"first_event_timeout_seconds": 0.2}})
+        response, chat, _ = self.round({"input": [USER]}, chat=HangingChat(), settings=fast)
         self.assertEqual((response.status_code, response.json()["detail"]), FAILED)
         self.assertTrue(chat.closed)
 
@@ -247,7 +239,7 @@ class RoundTests(ServedRoute):
 class ShutdownTests(ServedRoute):
     def test_the_servers_shutdown_closes_the_roots_core_that_served_its_rounds(self):
         # The gateway closes the core it holds through its client: the root handed the client the core's close, which
-        # releases each backend source (the shipped core.yaml has one, llm, for both kinds of session).
+        # releases each backend source (the shipped settings have one, llm, for both kinds of session).
         with self.served(FakeChat(answer("Hello."))) as (http, _):
             self.assertEqual(http.post("/v1/live/delegate", json={"input": [USER]}).status_code, 200)
             released = self.enterContext(patch.object(factory.delegation_core().source, "aclose"))
@@ -340,8 +332,8 @@ class MalformedBackendStreamTests(ServedRoute):
 
     def play(self, events, body=None):
         client = FakeResponses(events)
-        core = self.profile(backend={"llm": {"provider": "openai-responses"}})
-        response, _, _ = self.round(body or {"input": [USER]}, core=core, chat=client)
+        responses = self.settings(backend={"llm": {"provider": "openai-responses"}})
+        response, _, _ = self.round(body or {"input": [USER]}, settings=responses, chat=client)
         self.assertEqual(len(client.requests), 1)
         self.assertTrue(client.closed)
         return response

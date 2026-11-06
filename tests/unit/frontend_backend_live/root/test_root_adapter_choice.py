@@ -2,24 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D101, D102, D103, D107
-"""The frontend adapter chosen by config, and readiness."""
+"""The frontend adapter chosen by the example's settings, and readiness."""
 
 import asyncio
-import os
 import sys
 import time
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from pipecat.transports.smallwebrtc.connection import IceServer
 
+import examples_registry
 from examples.frontend_backend_live import factory, pipeline
 from examples.frontend_backend_live.adapter.connection import LiveWebRTCConnection
-from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
-from examples.frontend_backend_live.delegation_core.profiles import load_profile
 from gateways.live.protocol import ProtocolError, SessionConfig
+from tests.unit.core_helpers import EXAMPLE_SETTINGS
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,
     StubAdapter,
@@ -42,14 +39,11 @@ class AdapterChoiceTests(unittest.TestCase):
         clear_root_caches(self)
         reset_stubs()
         self.enterContext(patch.object(factory.ExampleCatalog, "read", return_value=CATALOG))
-        self.enterContext(patch.dict(os.environ))
-        for name in ("CORE_CONFIG_PATH", "LIVE_CONFIG_PATH"):
-            os.environ.pop(name, None)
 
     def test_the_named_class_parses_its_own_block_with_the_cores_display_label(self):
         with patch.object(factory, "frontend_adapters", return_value={"cascade": StubAdapter}):
             state = factory.root()
-        block = dict(load_live_config(load_profile, CONFIG_PATH).blocks["cascade"])
+        block = EXAMPLE_SETTINGS["frontend"]["cascade"]
         self.assertIs(state.adapter, StubAdapter)
         self.assertEqual(StubSettings.parsed, [{**block, "display_label": state.core.delegation.display_label}])
         self.assertIsInstance(state.readiness, StubReadiness)
@@ -62,17 +56,14 @@ class AdapterChoiceTests(unittest.TestCase):
             factory.root()
 
     def test_a_second_adapter_is_one_class_and_one_table_entry(self):
-        with TemporaryDirectory() as folder:
-            profile = Path(folder) / "config.second.yaml"
-            profile.write_text(
-                f"extends: {CONFIG_PATH}\nfrontend:\n  adapter: second\n  second: {{voice: calm}}\n", encoding="utf-8"
-            )
-            table = {"cascade": StubAdapter, "second": SecondAdapter}
-            with (
-                patch.dict(os.environ, {"LIVE_CONFIG_PATH": str(profile)}),
-                patch.object(factory, "frontend_adapters", return_value=table),
-            ):
-                state = factory.root()
+        frontend = {**EXAMPLE_SETTINGS["frontend"], "adapter": "second", "second": {"voice": "calm"}}
+        table = {"cascade": StubAdapter, "second": SecondAdapter}
+        entry = examples_registry.EXAMPLES[factory.EXAMPLE_KEY]
+        with (
+            patch.dict(entry, {"config": {**EXAMPLE_SETTINGS, "frontend": frontend}}),
+            patch.object(factory, "frontend_adapters", return_value=table),
+        ):
+            state = factory.root()
         self.assertIs(state.adapter, SecondAdapter)
         self.assertEqual(state.settings.block, {"voice": "calm", "display_label": state.core.delegation.display_label})
 
@@ -154,7 +145,7 @@ class UiBotHostTests(unittest.TestCase):
     def test_the_ui_bot_reads_the_named_adapters_block_with_the_cores_display_label(self):
         with patch.object(pipeline, "frontend_adapters", return_value={"cascade": StubAdapter}):
             state = pipeline.bot_root()
-        self.assertEqual((state.cascade.provider, state.cascade.slot), ("chat-completions", "llm"))
+        self.assertEqual(state.cascade.slot, "llm")
         self.assertEqual(state.cascade.display_label, state.core.delegation.display_label)
 
 

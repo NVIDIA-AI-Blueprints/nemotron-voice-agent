@@ -13,8 +13,7 @@ import unittest
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any
 from unittest import mock
 
@@ -34,11 +33,10 @@ from examples.frontend_backend_live.delegation_core.im.session import IMSession
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream, ResponseWriter
 from examples.frontend_backend_live.delegation_core.items import message_text
 from tests.unit.contracts.endings import normalized
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS
 
-# The core's own settings file: the IM's settings and its texts.
-CORE_YAML = Path(__file__).resolve().parents[3] / "src/examples/frontend_backend_live/core.yaml"
-CORE_SETTINGS = CoreSettings.load(CORE_YAML, CORE_TEXTS)
+# The core's own settings, as the registry's block sets them: the IM's settings and its texts.
+CORE_SETTINGS = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS)
 TEXTS = CORE_SETTINGS.texts
 DEFAULTS = BackendTask("test/model", "Do the task.", [])
 MENU = {"type": "function", "name": "get_menu", "parameters": {"type": "object", "properties": {}}}
@@ -455,7 +453,7 @@ class SteerNewest:
 
 
 class StartEach:
-    """The ``start_each`` rule: every arrival starts a Work of its own."""
+    """A conductor that starts a Work of its own for every arrival, which waits its turn for a slot."""
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
         for arrival in given.arrivals:
@@ -511,12 +509,12 @@ class IMCase(unittest.IsolatedAsyncioTestCase):
     def session(self, adapter: ScriptedAdapter, *, texts: Texts = TEXTS, **changes: Any) -> IMSession:
         """A started IM session on ``adapter``: the core's settings, which ``changes`` override, and ``texts``.
 
-        ``changes`` may also give the session's ``result_format``, ``call_reports`` and ``output_steps``.
+        ``changes`` may also give the session's ``result_format`` and ``output_steps``.
         """
-        formats = ("result_format", "call_reports", "output_steps")
+        formats = ("result_format", "output_steps")
         options = {name: changes.pop(name) for name in formats if name in changes}
         changes.setdefault("close_grace_seconds", 0.01)  # a test's last close does not wait for runs it left hanging
-        settings = replace(CORE_SETTINGS.delegation, **changes)
+        settings = CORE_SETTINGS.delegation.model_copy(update=changes)
         observe = lambda kind, **fields: self.traces.append((kind, fields))  # noqa: E731
         im = IMSession(adapter, DEFAULTS, settings, texts, **options, observe=observe)
         im.start()
@@ -527,6 +525,15 @@ class IMCase(unittest.IsolatedAsyncioTestCase):
         """Let the event loop run ``count`` times, so everything ready runs."""
         for _ in range(count):
             await asyncio.sleep(0)
+
+    async def until(self, predicate, what: str, timeout: float = 4.0) -> None:
+        """Wait until ``predicate()`` holds."""
+        try:
+            async with asyncio.timeout(timeout):
+                while not predicate():
+                    await asyncio.sleep(0.01)
+        except TimeoutError:
+            raise AssertionError(f"timed out waiting for {what}") from None
 
     async def admit_each(self, im: IMSession, *requests: str, settings: dict | None = None) -> list[ResponseStream]:
         """Admit one request per text as D1, D2 ..., letting everything ready run after each; their streams."""

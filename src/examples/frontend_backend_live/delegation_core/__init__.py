@@ -3,6 +3,6 @@
 
 """The delegation core: the work a voice frontend hands off, placed by a conductor and run on a backend adapter.
 
-It imports nothing from the live gateway, the example's frontend adapter or Pipecat; ``docs/design/architecture.md``
-describes the design and ``README.md`` beside this file is the package reference.
+It imports nothing from the live gateway, the example's frontend adapter or Pipecat; ``README.md`` beside this file is
+the package reference.
 """

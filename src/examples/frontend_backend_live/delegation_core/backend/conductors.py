@@ -1,21 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rule conductors that place the backend LLM's requests without a model call.
+"""The steer rule: the conductor that places requests without a model call.
 
-``backend.llm.conductor`` names the rule:
-
-* ``steer`` (:class:`SteerOpenWork`, the default): arrivals join the newest open Work, whether queued, running or
-  waiting for the app's outputs; with none open they start one together.
-* ``start_each`` (:class:`StartEach`): each arrival starts its own Work, which waits its turn, as in a queue.
-
-Both hold no state and place at once, so a ``decide()`` cancelled before it placed anything leaves nothing behind.
-Neither names a task, since the backend LLM runs one task per Work; a caller's stop joins the Work like any request.
+:class:`SteerOpenWork` places the backend LLM's requests, and those of the LLM agent and the harness at one task at a
+time: arrivals join the newest open Work, whether queued, running or waiting for the app's outputs; with none open they
+start one together. It holds no state and places at once, so a ``decide()`` cancelled before it placed anything leaves
+nothing behind. It names no task, since the backend LLM runs one task per Work; a caller's stop joins the Work like
+any request.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import ClassVar, get_args
 
 from examples.frontend_backend_live.delegation_core.backend.port import ConductorInput, OpenState, Place, Start, Steer
@@ -40,20 +36,3 @@ class SteerOpenWork:
             return
         newest = min(reversed(open_works), key=lambda work: work.seconds)  # on a tie, the one listed later
         await place(Steer(newest.work_id, delegations))
-
-
-class StartEach:
-    """``start_each``: each arrival starts its own Work, which waits its turn (a queue)."""
-
-    name: ClassVar[str] = "start_each"
-
-    async def decide(self, given: ConductorInput, place: Place) -> None:
-        """Place each arrival in a new Work of its own, oldest first."""
-        for arrival in given.arrivals:
-            await place(Start((arrival.delegation_id,)))
-
-
-# Each rule conductor by its name in backend.llm.conductor.
-RULE_CONDUCTORS: Mapping[str, type[SteerOpenWork] | type[StartEach]] = {
-    rule.name: rule for rule in (SteerOpenWork, StartEach)
-}

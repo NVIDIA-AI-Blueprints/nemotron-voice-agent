@@ -199,7 +199,6 @@ npx skills add .
 | How-to | [Troubleshooting](docs/06-troubleshooting.md) | Startup & deployment known issues |
 | How-to | [Realtime Gateway](docs/how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime`: how it works and how to connect |
 | How-to | [Live Gateway](docs/how-to/use-live-gateway.md) | The Frontend/Backend Live example's `/v1/live` session API: routes, delegation modes, and settings |
-| Explanation | [Frontend/Backend Live Architecture](docs/design/architecture.md) | The Live example's design, backend adapters, extension points, and deployment |
 
 Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-configuration-guide.md). They cover configuring .env, models, and prompts, enabling opentelemetry tracing, a TURN Server, and the audio recorder for debugging, plus the Realtime integrator gateway, the Live gateway, and connecting an agent harness.
 

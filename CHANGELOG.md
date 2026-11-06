@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
-- **Frontend/Backend Live example.** On every caller turn, a talker replies, delegates the turn to a backend, or waits. The backend can be an LLM, an LLM agent, or an agent that you deploy, such as Hermes. Cloud, `/server`, and `/single-gpu` recipes serve the Bluebird Cafe ordering assistant.
-- **Live gateway.** Only the `frontend-backend-live` profiles serve live sessions at `/v1/live`, over WebRTC or WebSocket, when `LIVE_API_TOKEN` sets a bearer token, or without one when `LIVE_ENABLED=true`. The server does the delegated work in Responses mode, and the client app does it in client mode.
+- **Frontend/Backend Live example.** On every caller turn, a talker replies, delegates the turn to a backend, or waits. The backend can be an LLM, an LLM agent, or an agent that you deploy, such as Hermes. Cloud, `/server`, and `/single-gpu` recipes serve the Bluebird Cafe ordering assistant. The caller's first sound starts their turn while the bot is silent, and two words do while it speaks, so a cough does not cut the bot off. Live sessions log each turn's latency and record audio when the audio recorder is on, and a call ends after three text-to-speech lines in a row with no audio.
+- **Live gateway.** Only the `frontend-backend-live` profiles serve live sessions at `/v1/live`, over WebRTC or WebSocket, when `LIVE_API_TOKEN` sets a bearer token, or without one when `LIVE_ENABLED=true`. The server does the delegated work in Responses mode, and the client app does it in client mode. The instructions, thinking, and commentary appends accept empty content.
 - **Nemotron 3.5 Super VL on NVIDIA Cloud.** The `nemotron-super` catalog entry is also served from NVIDIA Cloud, with a **Reasoning Effort** setting. It is the Frontend/Backend Live backend's default on the cloud and `/server` recipes. On `/server`, it runs as a NIM on GPUs `1` and `2`, so that recipe needs three GPUs.
 
 ### Changed

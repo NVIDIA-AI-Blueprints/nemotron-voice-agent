@@ -49,6 +49,11 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual((custom.model, custom.base_url), ("org/custom", "http://c/v1"))
         self.assertEqual(resolve_endpoint({"model_id": "org/model"}, {}, slot="llm").base_url, NVCF_LLM_BASE_URL)
 
+    def test_an_endpoint_carries_its_entrys_services_key_which_names_the_talkers_style(self):
+        listed = {**ENTRY, "id": "cloud:nemotron-lightning", "key": "nemotron-lightning"}  # as /api/services lists it
+        self.assertEqual(resolve_endpoint(listed, {}, slot="llm").service_key, "nemotron-lightning")
+        self.assertEqual(resolve_endpoint(ENTRY, {}, slot="llm").service_key, "")
+
 
 class CatalogTests(unittest.TestCase):
     def test_a_slot_gives_its_default_entry_and_a_named_model_keeps_the_settings_of_the_slot_that_asks(self):

@@ -6,11 +6,13 @@
 An append reaches the frontend adapter at once, with the ``delegation_id`` it names: ``None`` for session-wide context,
 or a client delegation this session announced (only the client delegation knows any). Its acknowledgment
 (``...appended``) follows once the adapter has taken the context, with the zero-length span at the input clock that
-appended context takes.
+appended context takes. Any append's content may be empty, as the Live API sets it no minimum length: an empty append
+adds no context, and an empty thinking or commentary append still cancels the pending automatic acknowledgements, as any
+does (empty thinking is the Live API's way to keep a delegation's acknowledgement unsaid).
 
-A session accepts at most ``max_appends_per_minute`` appends in any 60 seconds, the three kinds together (a limit of
-this server's own: the Live API limits only each append's size); one more is refused with ``rate_limit_exceeded``, and
-it neither reaches the adapter nor is acknowledged.
+A session accepts at most ``max_appends_per_minute`` appends in any 60 seconds, the three kinds together, empty ones
+included (a limit of this server's own: the Live API limits only each append's size); one more is refused with
+``rate_limit_exceeded``, and it neither reaches the adapter nor is acknowledged.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ async def instructions(session: LiveProtocolSession, message: dict, source: str,
 
 
 async def thinking(session: LiveProtocolSession, message: dict, source: str, client_event_id: str | None) -> None:
-    """``session.thinking.append``: silent context for later decisions."""
+    """``session.thinking.append``: silent context for later decisions; empty, it only cancels acknowledgements."""
     await _append(session, message, client_event_id, session.frontend.append_thinking, "session.thinking.appended")
 
 
@@ -61,10 +63,8 @@ async def _append(
     if delegation_id is not None and not session.delegation.knows(delegation_id):
         raise ProtocolError("Unknown or disallowed delegation_id", param="delegation_id")
     content = message.get("content")
-    if not isinstance(content, str) or not content.strip() or approx_tokens(content) > MAX_CONTENT_TOKENS:
-        raise ProtocolError(
-            f"content must be a nonempty string of at most {MAX_CONTENT_TOKENS} tokens", param="content"
-        )
+    if not isinstance(content, str) or approx_tokens(content) > MAX_CONTENT_TOKENS:
+        raise ProtocolError(f"content must be a string of at most {MAX_CONTENT_TOKENS} tokens", param="content")
     # Forget the appends older than the window; one past the limit is refused, and a refused append is not counted.
     now, recent = time.monotonic(), session.recent_appends
     while recent and now - recent[0] > APPEND_WINDOW_SECONDS:

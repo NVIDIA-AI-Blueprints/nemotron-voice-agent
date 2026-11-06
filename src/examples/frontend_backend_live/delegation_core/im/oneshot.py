@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import replace
 from typing import Any
 
 from examples.frontend_backend_live.delegation_core.backend.port import BackendAdapter
@@ -35,6 +34,8 @@ def _noop(kind: str, **fields: Any) -> None:
 class OneShotSession(IMSession):
     """The session of one stateless request (see the module's docstring)."""
 
+    work_tools = ()  # no work tool: the tools are the request's, as sent
+
     def __init__(
         self,
         backend: BackendAdapter,
@@ -44,12 +45,8 @@ class OneShotSession(IMSession):
         *,
         observe: Callable[..., None] = _noop,
     ):
-        """Serve one request on ``backend`` (``OneShotSource.new_one_shot()``), with the IM's defaults and texts.
-
-        It offers no work tool, whatever ``delegation.work_tools`` lists: the tools are the request's, as sent.
-        """
-        own = replace(settings, work_tools=())
-        super().__init__(backend, defaults, own, texts, result_format=ResultFormat(), observe=observe)
+        """Serve one request on ``backend`` (``OneShotSource.new_one_shot()``), with the IM's defaults and texts."""
+        super().__init__(backend, defaults, settings, texts, result_format=ResultFormat(), observe=observe)
 
     def start(self) -> None:
         """Nothing to place: the one request is its Work."""

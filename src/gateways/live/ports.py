@@ -8,8 +8,9 @@ session's parts (:class:`SessionParts`): the frontend adapter and, for a WebRTC 
 (:class:`MediaConnection`). Its ``core`` hook builds, on first use, the one delegation core client the
 gateway holds (``gateways.live.server_delegation.responses_client.ResponsesClient``); a client-mode session never asks
 for it. The frontend adapter (:class:`FrontendAdapter`) hears and speaks to the caller and reports back through
-:class:`SessionPort`. The session builds its delegation part (:class:`DelegationPart`) from ``DELEGATION_PARTS`` by its
-resolved delegation type: the server delegation in ``responses`` mode, the client delegation in client mode. The
+:class:`SessionPort`; a WebSocket session's adapter reads the caller from the primary socket the gateway accepted
+(:class:`PrimarySocket`). The session builds its delegation part (:class:`DelegationPart`) from ``DELEGATION_PARTS``
+by its resolved delegation type: the server delegation in ``responses`` mode, the client delegation in client mode. The
 adapter hands each delegation to the part through :class:`DelegationPort` and learns about it only from the official
 events handed back (:class:`DelegationEvents`). The session opens the delegation part before the frontend adapter and
 closes them in reverse order. Nothing here knows about models, prompts or Pipecat.
@@ -19,12 +20,12 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from gateways.live.protocol import BackendConfig, SessionConfig
+from gateways.live.protocol import AudioFormat, BackendConfig, SessionConfig
 
-# The sample rate of the PCM16 the gateway and a frontend adapter exchange: caller audio and reply audio.
-EXCHANGE_RATE: Final = 24_000
+if TYPE_CHECKING:
+    from starlette.websockets import WebSocketState
 
 # Why an adapter asks to close its session: only facts the adapter can know.
 AdapterCloseReason = Literal["connection_lost", "remote_hangup"]
@@ -35,6 +36,7 @@ class SessionPort(Protocol):
 
     id: str
     input_ms: int  # the input clock: milliseconds of caller audio seen so far
+    socket: PrimarySocket | None  # a WebSocket session's primary socket, which the adapter reads; None on WebRTC
 
     def is_active(self) -> bool:
         """Return whether the session is active."""
@@ -45,8 +47,8 @@ class SessionPort(Protocol):
     async def advance_input_clock(self, ms: int) -> None:
         """Record that the caller's audio reached ``ms``."""
 
-    async def send_output_audio(self, pcm: bytes, sample_rate: int) -> None:
-        """Send reply audio (mono PCM16 at :data:`EXCHANGE_RATE`) to the primary connection only; no ``event_id``."""
+    async def send_output_audio(self, audio: bytes) -> None:
+        """Send reply audio, in the session's wire format, to the primary WebSocket only; no ``event_id``."""
 
     async def report_error(self, message: str, client_event_id: str | None = None, *, fatal: bool = False) -> None:
         """Report a failure, with code ``pipeline_error``.
@@ -62,7 +64,7 @@ class SessionPort(Protocol):
 
 
 class FrontendAdapter(Protocol):
-    """Hears the caller and speaks to them for one session (gateway → adapter): the seven voice calls.
+    """Hears the caller and speaks to them for one session (gateway → adapter): the six voice calls.
 
     The rules every adapter keeps:
 
@@ -84,24 +86,28 @@ class FrontendAdapter(Protocol):
     async def set_muted(self, muted: bool) -> None:
         """Stop or resume consuming caller audio. The session and its delegation part stay active."""
 
-    async def feed_audio(self, pcm: bytes, sample_rate: int) -> None:
-        """Deliver caller audio from a primary WebSocket: mono PCM16 at ``sample_rate`` Hz."""
-
     async def append_instructions(
         self, text: str, client_event_id: str | None = None, delegation_id: str | None = None
     ) -> None:
-        """Steer behavior: interrupt current speech and evaluate the new direction."""
+        """Steer behavior: interrupt current speech and evaluate the new direction.
+
+        An empty (blank) ``text`` gives no direction, so it does nothing.
+        """
 
     async def append_thinking(
         self, text: str, client_event_id: str | None = None, delegation_id: str | None = None
     ) -> None:
-        """Retain silent context for later decisions."""
+        """Retain silent context for later decisions; an empty (blank) ``text`` retains nothing.
+
+        Empty or not, it cancels every pending acknowledgement, as :attr:`DelegationPort.acknowledgement_delay_ms` says.
+        """
 
     async def append_commentary(
         self, text: str, client_event_id: str | None = None, delegation_id: str | None = None
     ) -> None:
-        """Retain the facts and phrase them for the caller.
+        """Retain the facts and phrase them for the caller; an empty (blank) ``text`` has none to retain or phrase.
 
+        Empty or not, it cancels every pending acknowledgement, as :attr:`DelegationPort.acknowledgement_delay_ms` says.
         ``delegation_id`` names the client delegation the facts answer (client mode; the session has checked that it
         announced it), or is ``None`` for session-wide context. The other appends take it the same way.
         """
@@ -272,6 +278,32 @@ class Inspectable(Protocol):
 
         The session adds the delegation part's half under ``backend`` (:meth:`DelegationPart.history`); in client mode
         the part has none, and ``backend`` is ``None``.
+        """
+
+
+class PrimarySocket(Protocol):
+    """A WebSocket session's primary socket, which the gateway accepted, as its frontend adapter reads it.
+
+    The adapter's transport reads the client's frames with the calls a socket offers (:meth:`receive`, ``client_state``,
+    :meth:`close`) and hands each to :meth:`handle`. It sends nothing on the socket: every server event, reply audio
+    included (:meth:`SessionPort.send_output_audio`), goes out through the session, the socket's one writer. The
+    socket's ``close`` leaves it open: the gateway closes it once ``session.closed`` has gone out.
+    """
+
+    format: AudioFormat  # the session's wire audio format
+    client_state: WebSocketState  # whether the client is still connected
+
+    async def receive(self) -> dict:
+        """The client's next frame, as Starlette's ``WebSocket.receive()`` gives it."""
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        """Leave the socket open: the gateway closes it once ``session.closed`` has gone out."""
+
+    async def handle(self, data: str | bytes) -> bytes | None:
+        """Take one frame the client sent: the wire audio of ``session.input_audio.append``, or ``None``.
+
+        The session runs every other event as the primary connection's command, and answers a frame it refuses with an
+        ``error`` event. It never raises.
         """
 
 

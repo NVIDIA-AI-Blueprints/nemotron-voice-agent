@@ -7,11 +7,10 @@
 
 import asyncio
 import json
-from dataclasses import replace
 from unittest import mock
 
 from examples.frontend_backend_live.delegation_core.backend.port import Start
-from examples.frontend_backend_live.delegation_core.im.results import CallNotes, SpeakDisplay
+from examples.frontend_backend_live.delegation_core.im.results import SpeakDisplay
 from examples.frontend_backend_live.delegation_core.im.session import DelegationError
 from tests.unit.delegation_core.helpers import (
     CORE_SETTINGS,
@@ -116,12 +115,11 @@ class ResponseTests(IMCase):
                 self.assertEqual((item["output"], item["error"]), ("No teas.", error))
                 self.assertEqual(len({e["item_id"] for e in mcp if "item_id" in e} | {item["id"]}), 1)
 
-    async def test_backend_calls_as_notes_show_only_a_note_and_the_display_still_shows_under_its_label(self):
+    async def test_a_backend_call_and_the_display_are_mcp_call_items_each_under_its_own_label(self):
         adapter = ScriptedAdapter([OwnCall(), Show("Earl Grey 3.25\nSencha 4.10"), answer("Two green teas.")])
-        reports = {"call_reports": CallNotes(), "progress_note_seconds": 0.01, "display_label": "screen"}
-        im = self.session(adapter, result_format=SPEAK_DISPLAY, **reports)
-        note, shown, spoken = finished_items(await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream))
-        self.assertEqual((note["phase"], note["content"][0]["text"]), ("commentary", "lookup: done"))
+        im = self.session(adapter, result_format=SPEAK_DISPLAY, progress_note_seconds=0.01, display_label="screen")
+        call, shown, spoken = finished_items(await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream))
+        self.assertEqual((call["type"], call["server_label"], call["name"]), ("mcp_call", "cafe", "lookup"))
         self.assertEqual((shown["type"], shown["server_label"], shown["name"]), ("mcp_call", "screen", "show"))
         self.assertEqual(shown["output"], "Earl Grey 3.25\nSencha 4.10")
         self.assertEqual((spoken["phase"], spoken["content"][0]["text"]), ("final_answer", "Two green teas."))
@@ -134,13 +132,28 @@ class ResponseTests(IMCase):
         )
         for seconds, notes, written in cases:
             with self.subTest(seconds=seconds):
-                gate = asyncio.Event()
-                im = self.session(ScriptedAdapter([*notes, wait(gate), answer()]), progress_note_seconds=seconds)
-                stream = im.admit(ask("Find teas."), delegation_id="D1").stream
-                await asyncio.sleep(0.1)
-                gate.set()
-                written = [*(("commentary", note) for note in written), ("final_answer", "Done.")]
-                self.assertEqual(said(await read_all(stream)), written)
+                said_by_then = await self.said_with_notes(seconds, notes, due=len(written))
+                self.assertEqual(said_by_then, [*(("commentary", note) for note in written), ("final_answer", "Done.")])
+
+    async def said_with_notes(self, seconds: float, notes: list[ScriptStep], due: int) -> list[tuple[str, str]]:
+        """What a response says when its run gives ``notes`` at once and answers once ``due`` of them are written."""
+        gate = asyncio.Event()
+        adapter = ScriptedAdapter([*notes, wait(gate), answer()])
+        im = self.session(adapter, progress_note_seconds=seconds)
+        wired = len(self.wire.events)
+        stream = im.admit(ask("Find teas."), delegation_id="D1").stream
+        # The answer waits for the run at its gate, with only the answer left, and for the notes due by then: a slow
+        # loop makes it wait longer, never cuts an interval short.
+        await self.until(
+            lambda: (
+                bool(adapter.runs)
+                and len(adapter.runs[0].steps) == 1
+                and len(said([event for _, event in self.wire.events[wired:]])) >= due
+            ),
+            "the run at its gate with its notes written",
+        )
+        gate.set()
+        return said(await read_all(stream))
 
     async def test_notes_stay_out_of_every_history_and_the_models_commentary_stays_in(self):
         gate = asyncio.Event()
@@ -152,27 +165,21 @@ class ResponseTests(IMCase):
         self.assertNotIn("Opening the menu.", history)
         self.assertIn("Let me look.", history)
 
-    async def test_the_work_tools_follow_the_result_format_and_the_work_tools_setting(self):
-        cases = (
-            (SPEAK_DISPLAY, ("cancel_work",), ["show", "cancel_work"]),
-            (None, ("cancel_work",), ["cancel_work"]),
-            (None, (), []),
-            (SPEAK_DISPLAY, (), ["show"]),
-        )
-        for result_format, work_tools, offered in cases:
+    async def test_the_work_tools_follow_the_result_format_and_every_task_gets_cancel_work(self):
+        for result_format, offered in ((None, ["cancel_work"]), (SPEAK_DISPLAY, ["show", "cancel_work"])):
             with self.subTest(offered=offered):
                 gate = asyncio.Event()
                 adapter = ScriptedAdapter([wait(gate), answer()])
-                await self.admit_each(self.session(adapter, result_format=result_format, work_tools=work_tools), "Hi.")
+                await self.admit_each(self.session(adapter, result_format=result_format), "Hi.")
                 tools = adapter.runs[0].task.tools()
                 self.assertEqual([tool["name"] for tool in tools.tools()], offered)
                 gate.set()
-        schema, (tool,) = TEXTS.work_tools["show"], tools.tools()
+        schema, (tool, _) = TEXTS.work_tools["show"], tools.tools()
         self.assertEqual((tool["description"], tool["parameters"]), (schema["description"], dict(schema["parameters"])))
         with self.assertRaises(ValueError):  # a show call without a display
             await tools.execute("c1", "show", "{}")
-        unknown = TEXTS.unknown_tool_output.format(name="cancel_work", offered="show")  # the tools it offers
-        self.assertEqual(await tools.execute("c2", "cancel_work", "{}"), json.dumps({"error": unknown}))
+        unknown = TEXTS.unknown_tool_output.format(name="book_table", offered="show, cancel_work")  # those it offers
+        self.assertEqual(await tools.execute("c2", "book_table", "{}"), json.dumps({"error": unknown}))
 
     async def test_each_round_and_every_snapshot_read_the_composed_instructions(self):
         notes = (TEXTS.caller_notes["default"].strip(), TEXTS.voice_notes["default"].strip())
@@ -187,7 +194,7 @@ class ResponseTests(IMCase):
         default = "\n".join([DEFAULTS.instructions, *notes, TEXTS.result_formats["speak_display"]])
         self.assertEqual(adapter.runs[1].requests[0]["instructions"], default)
         adapter = ScriptedAdapter([answer()])
-        no_notes = replace(TEXTS, caller_notes={"default": ""}, voice_notes={"default": " "})
+        no_notes = TEXTS.model_copy(update={"caller_notes": {"default": ""}, "voice_notes": {"default": " "}})
         await read_all(self.session(adapter, texts=no_notes).admit(ask("Find teas."), delegation_id="D1").stream)
         self.assertEqual(adapter.runs[0].requests[0]["instructions"], DEFAULTS.instructions)  # byte for byte
 

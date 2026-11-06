@@ -2,25 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D101, D102, D103, D107
-"""The root reads its files once and builds one delegation core per process."""
+"""The root reads the example's settings once and builds one delegation core per process."""
 
 import asyncio
-import os
 import threading
 import time
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
 
+import examples_registry
 from examples.frontend_backend_live import factory
-from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from gateways.live.protocol import SessionConfig
-from tests.unit.core_helpers import CORE_TEXTS
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, EXAMPLE_SETTINGS, core_block
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,
     StubAdapter,
@@ -37,14 +35,16 @@ class RootCase(unittest.TestCase):
         reset_stubs()
         self.enterContext(patch.object(factory.ExampleCatalog, "read", return_value=CATALOG))
         self.enterContext(patch.object(factory, "frontend_adapters", return_value={"cascade": StubAdapter}))
-        self.enterContext(patch.dict(os.environ))
-        os.environ.pop("CORE_CONFIG_PATH", None)
-        os.environ.pop("LIVE_CONFIG_PATH", None)
+
+    def with_settings(self, settings: dict) -> None:
+        """The example's registry entry holds ``settings`` for the rest of the test."""
+        entry = examples_registry.EXAMPLES[factory.EXAMPLE_KEY]
+        self.enterContext(patch.dict(entry, {"config": settings}))
 
 
 class RootTests(RootCase):
-    def test_the_root_reads_its_files_once(self):
-        with patch.object(factory, "load_live_config", wraps=load_live_config) as reads:
+    def test_the_root_reads_its_settings_once(self):
+        with patch.object(examples_registry, "example_config", wraps=examples_registry.example_config) as reads:
             first, second = factory.root(), factory.root()
         self.assertIs(first, second)
         self.assertEqual(reads.call_count, 1)
@@ -53,17 +53,17 @@ class RootTests(RootCase):
         self.assertEqual(len(StubSettings.parsed), 1)
         self.assertEqual(first.settings.block["display_label"], first.core.delegation.display_label)
 
-    def test_concurrent_first_calls_read_the_files_once(self):
-        reads, started = [], threading.Event()
+    def test_concurrent_first_calls_read_the_settings_once(self):
+        reads, started, read = [], threading.Event(), examples_registry.example_config
 
-        def slow_read(load_profile, path=None):
-            reads.append(path)
+        def slow_read(example_key):
+            reads.append(example_key)
             started.set()
             time.sleep(0.1)
-            return load_live_config(load_profile, path)
+            return read(example_key)
 
         results = []
-        with patch.object(factory, "load_live_config", side_effect=slow_read):
+        with patch.object(examples_registry, "example_config", side_effect=slow_read):
             threads = [threading.Thread(target=lambda: results.append(factory.root())) for _ in range(3)]
             for thread in threads:
                 thread.start()
@@ -72,28 +72,21 @@ class RootTests(RootCase):
         self.assertEqual(len(reads), 1)
         self.assertEqual(len({id(result) for result in results}), 1)
 
-    def test_core_config_path_points_the_root_at_another_core_file(self):
-        with TemporaryDirectory() as folder:
-            profile = Path(folder) / "core.custom.yaml"
-            core_yaml = CONFIG_PATH.with_name("core.yaml")
-            profile.write_text(f"extends: {core_yaml}\ndelegation: {{display_label: screen}}\n", encoding="utf-8")
-            with patch.dict(os.environ, {"CORE_CONFIG_PATH": str(profile)}):
-                state = factory.root()
+    def test_the_registry_entrys_core_settings_reach_the_core_and_the_frontend(self):
+        self.with_settings({**EXAMPLE_SETTINGS, "core": core_block(delegation={"display_label": "screen"})})
+        state = factory.root()
         self.assertEqual((state.core.delegation.display_label, state.settings.block["display_label"]), ("screen",) * 2)
 
-    def test_a_malformed_core_file_fails_the_root_and_is_read_again_next_time(self):
-        with TemporaryDirectory() as folder:
-            broken = Path(folder) / "core.yaml"
-            broken.write_text("delegation: {nope: 1}\n", encoding="utf-8")
-            with patch.dict(os.environ, {"CORE_CONFIG_PATH": str(broken)}):
-                with self.assertRaisesRegex(ValueError, "the core's settings"):
-                    factory.root()
-                with self.assertRaisesRegex(ValueError, "the core's settings"):
-                    factory.root()  # not cached: a corrected file is read on the next use
+    def test_malformed_settings_fail_the_root_and_are_read_again_next_time(self):
+        self.with_settings({**EXAMPLE_SETTINGS, "core": core_block(delegation={"nope": 1})})
+        with self.assertRaisesRegex(ValueError, "the core's settings"):
+            factory.root()
+        with self.assertRaisesRegex(ValueError, "the core's settings"):
+            factory.root()  # not cached: corrected settings are read on the next use
 
 
 class OneCoreTests(RootCase):
-    def test_the_core_is_built_once_from_the_cores_file_with_the_roots_defaults(self):
+    def test_the_core_is_built_once_from_the_cores_settings_with_the_roots_defaults(self):
         built = []
 
         def build_core(settings, *, endpoints, defaults):
@@ -109,10 +102,11 @@ class OneCoreTests(RootCase):
         self.assertIs(first, second)
         self.assertEqual(len(built), 1)
         (settings, endpoints, defaults) = built[0]
-        self.assertEqual(settings, CoreSettings.load(CONFIG_PATH.with_name("core.yaml"), CORE_TEXTS))
+        self.assertEqual(settings, CoreSettings.parse(CORE_BLOCK, CORE_TEXTS))
         self.assertEqual((defaults.model, defaults.tools), ("org/back", []))
         # Any client: the generic backend prompt as written, with none of the cafe demo's channel context.
-        backend = yaml.safe_load(CONFIG_PATH.with_name("prompts.yaml").read_text(encoding="utf-8"))["agent_prompts"]
+        backend = yaml.safe_load(Path(factory.__file__).with_name("prompts.yaml").read_text(encoding="utf-8"))
+        backend = backend["agent_prompts"]
         self.assertEqual(defaults.instructions, backend["Backend"][settings.backend.prompt]["content"].strip())
         self.assertEqual(settings.backend.prompt, "generic")
         self.assertEqual(endpoints(None).base_url, "http://back/v1")

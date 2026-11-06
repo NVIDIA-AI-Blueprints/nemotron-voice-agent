@@ -3,11 +3,11 @@
 
 """The harness's own seams: its interfaces, the events a session reports, and their tables.
 
-Each seam is an interface with implementations named in ``backend.harness`` and resolved by a table of loaders, so a
-class loads only when a core is built with it: :class:`HarnessProtocol` (``protocol``, such as ``acp``), which opens a
-:class:`HarnessClient` per runtime process; :class:`SteerStrategy` (``steer``); :class:`SessionPolicy` (``session``);
-and :class:`PermissionAnswer` (``permission``). Everything a session reports reaches its run through one mailbox, in
-wire order: the agent's updates, each prompt's :class:`PromptEnded`, the bridge's calls and the run's own
+Each seam named in ``backend.harness`` is an interface whose implementations a table of loaders resolves, so a class
+loads only when a core is built with it: :class:`HarnessProtocol` (``protocol``, such as ``acp``), which opens a
+:class:`HarnessClient` per runtime process, and :class:`PermissionAnswer` (``permission``). The agent class picks its
+:class:`SteerStrategy` (``steering.agent_steering``). Everything a session reports reaches its run through one mailbox,
+in wire order: the agent's updates, each prompt's :class:`PromptEnded`, the bridge's calls and the run's own
 :class:`Wake`. Each event applies itself to an :class:`EventReader` (double dispatch), so no reader switches on a type.
 """
 
@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from examples.frontend_backend_live.delegation_core.backend.port import Steering
 
@@ -384,8 +384,6 @@ class Runtime(Protocol):
 class Runtimes(Protocol):
     """Where a session's runtime comes from (the adapter): a process its role shares, or the session it keeps."""
 
-    kept: KeptSession | None  # the session the session policy keeps for a later task
-
     async def shared(self, role: Role) -> Runtime:
         """A process of ``role`` with a turn free, its place taken for the caller's session.
 
@@ -396,6 +394,12 @@ class Runtimes(Protocol):
     def take_place(self, runtime: Runtime) -> bool:
         """Take a place in ``runtime`` for the session kept there, while it has a turn free and its client is alive."""
 
+    def take_kept(self) -> KeptSession | None:
+        """The session kept for the next task, which leaves the slot (two tasks never share a session); or ``None``."""
+
+    def keep(self, kept: KeptSession) -> bool:
+        """Keep ``kept``, the session of a task that answered, while none is kept; ``False``: the run retires it."""
+
 
 class Steerable(Protocol):
     """What a steering strategy asks of a worker's run (double dispatch: the strategy picks, the run carries out)."""
@@ -403,30 +407,15 @@ class Steerable(Protocol):
     def steer_in_turn(self, steering: Steering) -> None:
         """Send the batch as the agent's own mid-turn steer while the turn runs; else as the next prompt."""
 
-    def prompt_next(self, steering: Steering) -> None:
-        """Send the batch as the next prompt once the turn ends."""
-
     def reprompt(self, steering: Steering) -> None:
-        """Cancel the turn once no bridged call runs, then open a fresh session whose first prompt has the batch."""
+        """Cancel the turn once no bridged call runs; then the batch goes as the session's next prompt."""
 
 
 class SteerStrategy(Protocol):
-    """How a newer request reaches a running worker (``backend.harness.steer``)."""
-
-    native: ClassVar[bool]  # it needs the agent's own mid-turn steer
+    """How a newer request reaches a running worker: the agent class picks it (``steering.agent_steering``)."""
 
     def deliver(self, run: Steerable, steering: Steering) -> None:
         """Hand ``steering`` to ``run`` the way this strategy does."""
-
-
-class SessionPolicy(Protocol):
-    """Whether a worker's session serves more than one task (``backend.harness.session``)."""
-
-    def take(self, host: Runtimes) -> KeptSession | None:
-        """The session ``host`` keeps for the next task, taken from it; ``None``: the task opens a fresh session."""
-
-    def keep(self, host: Runtimes, kept: KeptSession) -> bool:
-        """Whether ``host`` keeps ``kept``, the session of a task that answered; ``False``: the run retires it."""
 
 
 class PermissionAnswer(Protocol):
@@ -444,21 +433,6 @@ Loader = Callable[[], Any]
 
 PROTOCOLS: Mapping[str, Loader] = {
     "acp": lambda: import_module("examples.frontend_backend_live.delegation_core.backend.harness.acp").AcpProtocol,
-}
-STEERING: Mapping[str, Loader] = {
-    "native_command": lambda: (
-        import_module("examples.frontend_backend_live.delegation_core.backend.harness.steering").NativeCommand
-    ),
-    "next_prompt": lambda: (
-        import_module("examples.frontend_backend_live.delegation_core.backend.harness.steering").NextPrompt
-    ),
-    "cancel_reprompt": lambda: (
-        import_module("examples.frontend_backend_live.delegation_core.backend.harness.steering").CancelReprompt
-    ),
-}
-SESSIONS: Mapping[str, Loader] = {
-    "task": lambda: import_module("examples.frontend_backend_live.delegation_core.backend.harness.sessions").PerTask,
-    "call": lambda: import_module("examples.frontend_backend_live.delegation_core.backend.harness.sessions").PerCall,
 }
 PERMISSIONS: Mapping[str, Loader] = {
     "reject": lambda: (

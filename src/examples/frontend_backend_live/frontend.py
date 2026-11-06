@@ -11,8 +11,9 @@ what played. The voice (``examples.frontend_backend_live.voice``) chooses each r
 backend sends. Only these differ by host:
 
 * the edges (:class:`FrontendEdges`): the UI bot's RTVI transport, with its audio recorder and its worker's RTVI and
-  latency observer, or a live session's input gate and WebRTC peer or primary WebSocket, with its output transcript
-  and its worker's event observer (``examples.frontend_backend_live.adapter.pipeline_host``);
+  latency observer, or a live session's input gate and WebRTC peer or primary WebSocket, with its output transcript,
+  its audio recorder and its worker's event and latency observers
+  (``examples.frontend_backend_live.adapter.pipeline_host``);
 * the start: the shared start handler with the bot's greeting (``examples.frontend_backend_live.pipeline``), or the
   gateway's session start (``examples.frontend_backend_live.adapter.adapter``);
 * the delegation port: the bot's own core, or the session's delegation part;
@@ -51,9 +52,7 @@ if TYPE_CHECKING:
     from examples.frontend_backend_live.config_manager.schema import LiveConfig
     from examples.frontend_backend_live.display import DisplaySink
     from examples.frontend_backend_live.prompts import FixedLines, PromptSet
-    from examples.frontend_backend_live.spoken import CutMemory
     from examples.frontend_backend_live.talker import TalkerChat
-    from examples.frontend_backend_live.voice import ResultWording
     from gateways.live.ports import DelegationPort
 
 SETUP_TIMEOUT_SECONDS = 120.0  # the time each processor gets to set up, as in the repository's other examples
@@ -91,10 +90,8 @@ class FrontendSpec:
     seed: list[dict]  # the talker's instructions (system and developer messages), then any history
     stt: FrameProcessor
     tts: FrameProcessor
-    user_params: LLMUserAggregatorParams  # the turn end's settings, with the host's welcome
+    user_params: LLMUserAggregatorParams  # the caller's turns' settings, with the host's welcome
     delegation: DelegationPort  # the bot's own core, or the session's delegation part
-    wording: type[ResultWording]  # delegation.result_wording's class
-    cut_memory: type[CutMemory]  # speech.heard_words' class
     item_text: Callable[[dict], str]  # a message item's text: the delegation core's reader, from the host's root
     # Where each delegation's display part goes, made on the pipeline's worker; nothing is shown by default.
     display: Callable[[PipelineWorker], DisplaySink] | None = None
@@ -115,10 +112,10 @@ class Frontend:
 def build_frontend(spec: FrontendSpec, edges: FrontendEdges) -> Frontend:
     """Build one call's frontend between ``edges``: its pipeline's worker and its voice; nothing has started yet.
 
-    A caller turn with no words that cut a line runs the talker with the prompt set's ``resume_note``
-    (``speech.resume_after_noise``); with the resume off, such a turn runs nothing. A processor that cannot be used
-    ends the call; the talker stays usable, since the voice answers a failed call. The host starts the voice and runs
-    the worker.
+    A caller turn with no words that cut the bot off runs the talker once with the prompt set's ``empty_turn_note``
+    (Pipecat's ``EmptyUserTurnConfig``, at most one in a row), and the talker decides what to say. A processor that
+    cannot be used ends the call; the talker stays usable, since the voice answers a failed call. The host starts the
+    voice and runs the worker.
     """
     mode = speech_mode(spec.tts)
     voice = Voice(
@@ -126,20 +123,14 @@ def build_frontend(spec: FrontendSpec, edges: FrontendEdges) -> Frontend:
         prompts=spec.prompts,
         lines=spec.lines,
         json_rules=spec.prompts.json_rules,
-        resume_note=spec.prompts.resume_note,
+        empty_turn_note=spec.prompts.empty_turn_note,
         delegation=spec.delegation,
-        wording=spec.wording(),
-        cut_memory=spec.cut_memory.from_settings(spec.config.speech),
         item_text=spec.item_text,
         reports_sentences=mode.reports_sentences,
     )
     context = LLMContext(voice.seed(spec.seed))
-    resume = EmptyUserTurnConfig(interrupted_prompt=spec.prompts.resume_note, idle_prompt=None)
-    user_params = replace(
-        spec.user_params,
-        empty_user_turn=resume if spec.config.speech.resume_after_noise else None,
-        user_idle_timeout=IDLE_RUN_SECONDS,
-    )
+    empty_turn = EmptyUserTurnConfig(interrupted_prompt=spec.prompts.empty_turn_note, idle_prompt=None)
+    user_params = replace(spec.user_params, empty_user_turn=empty_turn, user_idle_timeout=IDLE_RUN_SECONDS)
     user, assistant = LLMContextAggregatorPair(context, user_params=user_params)
     voice.bind(spec.talker, context)
     middle = [spec.stt, user, spec.talker, spec.tts, *mode.text_hold(), SpeechPreroll(spec.config.tts_preroll_ms)]

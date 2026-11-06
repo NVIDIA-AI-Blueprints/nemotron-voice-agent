@@ -110,12 +110,15 @@ def make_app(settings=None, **hooks):
 
 
 class ScriptedSocket:
-    """The server side of a primary WebSocket: it receives the scripted frames, then waits."""
+    """The server side of a primary WebSocket: it receives the scripted frames, then waits.
+
+    It notes the events it had sent when it was first closed.
+    """
 
     headers = {"host": "localhost"}  # noqa: RUF012
 
     def __init__(self, *frames):
-        self.frames, self.sent = list(frames), []
+        self.frames, self.sent, self.sent_at_close = list(frames), [], None
 
     async def accept(self):
         pass
@@ -129,7 +132,21 @@ class ScriptedSocket:
         self.sent.append(message)
 
     async def close(self, code=1000):
-        pass
+        if self.sent_at_close is None:
+            self.sent_at_close = [event["type"] for event in self.sent]
+
+
+def text_frame(message):
+    """A client's text frame, as Starlette's ``WebSocket.receive()`` gives it."""
+    return {"type": "websocket.receive", "text": message if isinstance(message, str) else json.dumps(message)}
+
+
+class SlowStart(FakeAdapter):
+    """A frontend adapter whose transport reads the socket while its start goes on, as a pipeline's does."""
+
+    async def start(self, session, delegation):
+        await super().start(session, delegation)
+        await asyncio.sleep(0.05)
 
 
 class WebSocketTests(unittest.TestCase):
@@ -192,6 +209,36 @@ class WebSocketTests(unittest.TestCase):
                 asyncio.run(run_primary_websocket(gateway, ws))
                 self.assertEqual([event["reason"] for event in ws.sent if event["type"] == "session.closed"], [reason])
                 self.assertTrue(engines[0].closed)
+
+    def test_a_frame_over_the_size_limit_gets_its_error_then_ends_the_session(self):
+        _, gateway, engines = make_app()
+        oversized = text_frame(json.dumps({**NOTE, "content": "x" * 2**20}))
+        ws = ScriptedSocket(text_frame(START), oversized, text_frame(MUTE))
+        asyncio.run(run_primary_websocket(gateway, ws))
+        self.assertEqual([event["type"] for event in ws.sent], ["session.started", "error", "session.closed"])
+        error, closed = ws.sent[1], ws.sent[2]
+        self.assertEqual(
+            (error["error"]["message"], error["client_event_id"]), ("WebSocket event exceeds 1 MiB", "start_1")
+        )
+        self.assertEqual(closed["reason"], "connection_lost")
+        self.assertEqual((engines[0].muted, engines[0].closed), (False, True))  # nothing after it is taken
+        self.assertEqual(ws.sent_at_close, ["session.started", "error", "session.closed"])
+
+    def test_a_command_sent_with_the_start_waits_for_the_session_to_become_active(self):
+        engines = []
+
+        async def factory(config, transport, ice_servers):
+            engines.append(SlowStart())
+            return engines[-1].parts()
+
+        _, gateway, _ = make_app(factory=factory)
+        bye = {"type": "websocket.disconnect", "code": 1000}
+        ws = ScriptedSocket(text_frame(START), text_frame(MUTE), bye)
+        asyncio.run(run_primary_websocket(gateway, ws))
+        kinds = ["session.started", "session.input_audio.muted", "session.closed"]
+        self.assertEqual([event["type"] for event in ws.sent], kinds)
+        self.assertEqual((ws.sent[-1]["reason"], engines[0].muted), ("remote_hangup", True))
+        self.assertEqual(ws.sent_at_close, kinds)  # the socket closes once session.closed has gone out
 
     def test_server_shutdown_closes_every_session_as_connection_lost(self):
         app, gateway, engines = make_app()

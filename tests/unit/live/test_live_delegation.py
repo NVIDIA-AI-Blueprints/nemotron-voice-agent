@@ -13,17 +13,18 @@ contract (``tests/unit/contracts/delegation_port.py``).
 
 import asyncio
 import base64
+import json
 import unittest
 from unittest import mock
 
 from gateways.live.client_delegation import ClientDelegation
-from gateways.live.gateway.websocket import wire_codec
+from gateways.live.gateway.websocket import PrimarySocketView
 from gateways.live.protocol import ProtocolError, SessionConfig
 from gateways.live.protocol.config import TOOL_TYPES
 from gateways.live.server_delegation import ServerDelegation, passthrough
 from gateways.live.session import LiveProtocolSession, lifecycle
 from tests.unit.contracts.delegation_port import DelegationPortContract
-from tests.unit.live_helpers import Collector, FakeAdapter, responses_config
+from tests.unit.live_helpers import ClientSocket, Collector, FakeAdapter, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]
 AUDIO = base64.b64encode(b"\x01\x00" * 480).decode()
@@ -163,11 +164,14 @@ class Case(unittest.IsolatedAsyncioTestCase):
     def build(self, *streams, config=None, client=None):
         self.core = Core(*streams)
         config = (config or responses_config()).with_wire_format()
-        self.session = LiveProtocolSession(
-            config, "websocket", self.core.parts(), core=self.core.core, codec=wire_codec(config)
-        )
         self.client, self.sideband = client or Collector(), Collector()
-        self.key = self.session.subscribe(self.client.send, "primary")
+        # The primary connection, as the WebSocket edge makes it: the socket the frontend adapter's transport reads.
+        self.socket = PrimarySocketView(ClientSocket(self.client), config.audio.format)
+        self.session = LiveProtocolSession(
+            config, "websocket", self.core.parts(), core=self.core.core, socket=self.socket
+        )
+        self.socket.attach(self.session)
+        self.key = self.socket.connection
         self.addAsyncCleanup(self.session.close)
 
     async def start(self, *streams, config=None, client=None):
@@ -488,8 +492,8 @@ class SenderTests(Case):
             await self.send({"type": "response.create", "event_id": "r1"})
             update = {"delegation": {"responses": {"model": "bad-model"}}}
             await self.send({"type": "session.update", "event_id": "u1", "session": update})
-            await self.send({"type": "session.input_audio.append", "audio": AUDIO})
-        self.assertEqual(len(self.core.audio), 1)
+            audio = await self.socket.handle(json.dumps({"type": "session.input_audio.append", "audio": AUDIO}))
+        self.assertEqual(audio, base64.b64decode(AUDIO))
         await self.client.wait_for("session.updated")
         self.assertEqual(self.errors(), [])
         for held in self.core.hold.values():

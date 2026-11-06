@@ -4,7 +4,7 @@
 """The IM's work tools: the tools a task gets from the IM, not from its backend.
 
 ``show`` (offered by the ``speak_display`` result format) returns the display it was given as an ``mcp_call`` item, and
-``cancel_work`` (when ``delegation.work_tools`` lists it) stops the task after its current step. Their descriptions and
+``cancel_work`` (offered to every task of a conversation) stops the task after its current step. Their descriptions and
 parameters are the core's texts (``texts.work_tools``), and so is the output of a call to a name they do not offer
 (``texts.unknown_tool_output``).
 """

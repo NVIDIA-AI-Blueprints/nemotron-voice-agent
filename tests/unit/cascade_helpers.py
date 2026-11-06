@@ -11,8 +11,6 @@ and the gateway's one core (:func:`chat_core`), its backend LLM on a scripted mo
 
 import asyncio
 import time
-from dataclasses import replace
-from pathlib import Path
 
 from pipecat.frames.frames import (
     InterruptionFrame,
@@ -51,9 +49,7 @@ from examples.shared.delegation_contract import ModelEndpoint as CoreEndpoint
 from examples.shared.observe import log_observation
 from gateways.live.ports import SessionParts
 from gateways.live.server_delegation import ServerDelegation
-from tests.unit.core_helpers import CORE_TEXTS, chunk, tool_fragment
-
-CORE_YAML = Path(__file__).resolve().parents[2] / "src/examples/frontend_backend_live/core.yaml"
+from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, chunk, tool_fragment
 
 
 class FakeSTT(FrameProcessor):
@@ -125,11 +121,11 @@ class FakeTTS(FrameProcessor):
 
 
 def _delegation(backend, *, tools=(), observe=log_observation, **delegation):
-    """The call's server delegation, as the gateway builds it, on a core ``build_core`` makes from the shipped file.
+    """The call's server delegation, as the gateway builds it, on a core ``build_core`` makes from the shipped settings.
 
     The core's backend LLM runs every round on ``backend`` (a scripted provider, ``ScriptedBackend``; or a function that
-    makes one for each IM session), with ``tools`` as each IM session's server tool sources; the core reads its own
-    ``core.yaml``, with a short close grace, and ``delegation`` sets keys of its ``delegation`` block.
+    makes one for each IM session), with ``tools`` as each IM session's server tool sources; the core has the shipped
+    settings, with a short close grace, and ``delegation`` sets keys of its ``delegation`` block.
     """
     sources = tuple(tools)
     make = backend if callable(backend) else lambda: backend
@@ -137,11 +133,12 @@ def _delegation(backend, *, tools=(), observe=log_observation, **delegation):
     class ScriptedLlm(LlmSource):
         @classmethod
         def from_settings(cls, block, *, endpoints, tools, vocabulary):
-            settings = LlmSettings.parse(block)
+            settings = LlmSettings.model_validate(block)
             return cls(settings, endpoints=endpoints, tools=lambda: list(sources), make_provider=lambda _: make())
 
-    settings = CoreSettings.load(CORE_YAML, CORE_TEXTS)
-    settings = replace(settings, delegation=replace(settings.delegation, **{"close_grace_seconds": 0.01, **delegation}))
+    settings = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS)
+    delegation = settings.delegation.model_copy(update={"close_grace_seconds": 0.01, **delegation})
+    settings = settings.model_copy(update={"delegation": delegation})
     core = build_core(
         settings,
         endpoints=lambda model: CoreEndpoint(model=model or "test/model", base_url="http://localhost:1/v1"),
@@ -170,9 +167,8 @@ def _decision_chunks(text, finish="stop"):
 # ------------------------------------------------------------- the end-to-end tests' doubles
 ENDPOINT = ModelEndpoint(model="org/org/model", base_url="http://localhost:1/v1")
 LIVE_CONFIG = LiveConfig(
-    provider="chat-completions",
     slot="llm",
-    reliability=ReliabilityConfig(provider_retries=0, client_timeout_seconds=10.0),
+    reliability=ReliabilityConfig(provider_retries=0),
 )
 STATIC_BACKEND = "Static backend prompt from config."
 MENU_TOOL = {
@@ -237,7 +233,7 @@ def chat_adapters(chat) -> dict:
     class ChatLlm(LlmSource):
         @classmethod
         def from_settings(cls, block, *, endpoints, tools, vocabulary):
-            settings = LlmSettings.parse(block)
+            settings = LlmSettings.model_validate(block)
             return cls(
                 settings,
                 endpoints=endpoints,
@@ -248,14 +244,13 @@ def chat_adapters(chat) -> dict:
     return {**ADAPTERS, "llm": lambda: ChatLlm}
 
 
-def chat_core(chat, *, instructions=STATIC_BACKEND, models=(), path=CORE_YAML, **delegation) -> DelegationCore:
-    """The one core of a whole-call test: ``build_core`` on the shipped ``core.yaml``, its backend LLM on ``chat``.
+def chat_core(chat, *, instructions=STATIC_BACKEND, models=(), core=CORE_BLOCK, **delegation) -> DelegationCore:
+    """The one core of a whole-call test: ``build_core`` on the shipped core settings, its backend LLM on ``chat``.
 
     The backend LLM runs on the scripted model client ``chat`` (:func:`chat_adapters`). The catalog lists
-    :data:`ENDPOINT`'s model and ``models``, all at its address, so the file's ``unlisted_models`` rule decides about
-    any other; a request that sets nothing gets the endpoint's model and ``instructions``. ``path`` names another core
-    file (a profile), and ``delegation`` sets keys of its ``delegation`` block; the close grace is short unless set, so
-    a closed session's work stops at once.
+    :data:`ENDPOINT`'s model and ``models``, all at its address, and the core reports any other; a request that sets
+    nothing gets the endpoint's model and ``instructions``. ``core`` gives other core settings, and ``delegation`` sets
+    keys of its ``delegation`` block; the close grace is short unless set, so a closed session's work stops at once.
     """
     listed = {ENDPOINT.model, *models}
 
@@ -264,8 +259,9 @@ def chat_core(chat, *, instructions=STATIC_BACKEND, models=(), path=CORE_YAML, *
             raise LookupError(f"The catalog lists no model {model!r}")
         return CoreEndpoint(model=model or ENDPOINT.model, base_url=ENDPOINT.base_url)
 
-    settings = CoreSettings.load(path, CORE_TEXTS)
-    settings = replace(settings, delegation=replace(settings.delegation, **{"close_grace_seconds": 0.01, **delegation}))
+    settings = CoreSettings.parse(core, CORE_TEXTS)
+    delegation = settings.delegation.model_copy(update={"close_grace_seconds": 0.01, **delegation})
+    settings = settings.model_copy(update={"delegation": delegation})
     return build_core(
         settings,
         endpoints=endpoints,
