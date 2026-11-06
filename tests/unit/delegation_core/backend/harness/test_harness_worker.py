@@ -17,7 +17,7 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
     ToolCard,
     ToolCardEnd,
 )
-from examples.frontend_backend_live.delegation_core.backend.harness.worker import HarnessTurnError, WorkerRun
+from examples.frontend_backend_live.delegation_core.backend.harness.worker import _CANCELS, HarnessTurnError, WorkerRun
 from tests.unit.contracts.backend import MENU_FUNCTION, FakeTaskContext, check_events
 from tests.unit.delegation_core.backend.harness.doubles import FakeHost, plain, settings, until, wire
 from tests.unit.delegation_core.helpers import IMCase, app_outputs, ask, finished_items, read_all
@@ -514,6 +514,27 @@ class SteeringTests(Harness):
         [forwarded] = items(await asyncio.wait_for(collector, 2), "function_call")
         self.assertEqual(forwarded["arguments"], '{"page": 2}')  # the next turn's app call goes to the app
         self.assertFalse(call.done())  # it waits for the app's output
+
+    async def test_the_cancel_sent_for_a_reprompt_is_kept_while_it_runs_and_ends_quietly_if_cancelled(self):
+        session = await self.open(harness=plain())
+        self.collecting()
+        session.say("m1", "Let me ", "look.", thought=False)
+        sent = asyncio.Event()
+
+        async def unsent_cancel():  # the cancel has not gone out yet
+            sent.set()
+            await asyncio.Event().wait()
+
+        session.cancel = unsent_cancel
+        errors = []
+        asyncio.get_running_loop().set_exception_handler(lambda loop, context: errors.append(context["message"]))
+        self.task.steer_with(STEERING)
+        self.run.steer()
+        await asyncio.wait_for(sent.wait(), 2)
+        (cancel,) = _CANCELS  # held until it ends, so it is never collected before it is sent
+        cancel.cancel()  # as at shutdown
+        await asyncio.sleep(0.05)
+        self.assertEqual((_CANCELS, errors), (set(), []))
 
     async def test_a_turn_that_ended_before_a_cancel_went_out_leaves_the_batch_to_the_same_session(self):
         session = await self.open(harness=plain())

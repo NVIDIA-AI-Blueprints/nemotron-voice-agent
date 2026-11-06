@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field, PrivateAttr, StrictStr, model_validator
 
-from examples.frontend_backend_live.delegation_core.config import Seconds, Settings, Text, WholeNumber
+from examples.frontend_backend_live.delegation_core.config import FORMAT_ERRORS, Seconds, Settings, Text, WholeNumber
 from examples.frontend_backend_live.delegation_core.tables import pick
 
 from .protocol import PERMISSIONS, PROTOCOLS
@@ -31,8 +31,14 @@ from .steering import agent_steering
 DEFAULT_WORK_ROOT = "~/.cache/delegation-core/harness"
 
 
-def _host_and_port(bind: str) -> str:
+def _address(bind: str) -> tuple[str, str]:
+    """``bind``'s host, an IPv6 one without the brackets it is written in (``[::1]:8791``), and its port."""
     host, _, port = bind.rpartition(":")
+    return host.removeprefix("[").removesuffix("]"), port
+
+
+def _host_and_port(bind: str) -> str:
+    host, port = _address(bind)
     if not host or not port.isdigit():
         raise ValueError("must be host:port")
     return bind
@@ -57,17 +63,18 @@ class Bridge(Settings):
 
     @property
     def host(self) -> str:
-        """The address it binds."""
-        return self.bind.rpartition(":")[0]
+        """The address it binds; an IPv6 one without its brackets."""
+        return _address(self.bind)[0]
 
     @property
     def port(self) -> int:
         """The port it binds (0: any free port)."""
-        return int(self.bind.rpartition(":")[2])
+        return int(_address(self.bind)[1])
 
     def url(self, bound_port: int) -> str:
-        """The bridge's base URL as the runtime reaches it."""
-        return self.advertise or f"http://{self.host}:{bound_port}"
+        """The bridge's base URL as the runtime reaches it; an IPv6 address goes in brackets."""
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        return self.advertise or f"http://{host}:{bound_port}"
 
 
 class HarnessPrompts(Settings):
@@ -101,7 +108,7 @@ class HarnessPrompts(Settings):
         for key, text in self:
             try:
                 text.format(**dict.fromkeys(FIELDS.get(key, ()), ""))
-            except (KeyError, IndexError, ValueError) as exc:
+            except FORMAT_ERRORS as exc:
                 raise ValueError(f"backend.harness.prompts.{key} names a field it is not given: {exc}") from None
         return self
 

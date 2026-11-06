@@ -12,6 +12,7 @@ and this module, because the core is its own package; the tests of the other par
 from __future__ import annotations
 
 from copy import deepcopy
+from importlib.util import find_spec
 from pathlib import Path
 
 import httpx
@@ -19,6 +20,7 @@ import yaml
 from openai import APITimeoutError
 from openai.types.chat import ChatCompletionChunk
 
+from examples.frontend_backend_live.delegation_core.backend.harness.source import GROUP_PACKAGES
 from examples.frontend_backend_live.delegation_core.backend.providers import ProviderLimits
 from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.shared.delegation_contract import ModelEndpoint
@@ -37,6 +39,10 @@ REGISTRY_YAML = Path(__file__).resolve().parents[2] / "examples_registry.yaml"
 REGISTRY = yaml.safe_load(REGISTRY_YAML.read_text(encoding="utf-8"))
 EXAMPLE_SETTINGS = REGISTRY["examples"]["frontend-backend-live"]["config"]
 CORE_BLOCK = EXAMPLE_SETTINGS["core"]
+# Whether the packages of the harness dependency group are installed: the tests that load the harness need them, and
+# are skipped without them.
+HARNESS_GROUP = all(find_spec(name) for name in GROUP_PACKAGES)
+NO_HARNESS_GROUP = "the harness dependency group is not installed: uv sync --group harness"
 
 
 def merged(base, changes):

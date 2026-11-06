@@ -14,6 +14,7 @@ honor. Instructions and functions are fixed when a worker starts, so a later cha
 from __future__ import annotations
 
 from collections.abc import Mapping
+from importlib.util import find_spec
 from typing import Any, ClassVar
 
 from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, EndpointLookup, ToolSources
@@ -24,6 +25,9 @@ from .bridge import McpBridge
 from .settings import HarnessSettings
 from .workdir import WorkFolder
 
+# The packages of the `harness` dependency group in pyproject.toml, by the names they import as: the agent protocol
+# client (agent-client-protocol) and the bridge's tool server (mcp).
+GROUP_PACKAGES = ("acp", "mcp")
 # The tool choice a runtime that picks its own tools honors.
 AUTO_CHOICE = (None, "auto")
 # The service tiers it honors: none chosen.
@@ -59,9 +63,15 @@ class HarnessSource:
         """Validate ``backend.harness`` (``block``), load the classes it names, sweep stale work folders; start nothing.
 
         Raises:
-            ValueError: The block has an unknown key, a value of the wrong kind, a name no table has, or a setting the
-                runtime cannot run with (see :class:`HarnessSettings`).
+            ValueError: The `harness` dependency group is not installed, or the block has an unknown key, a value of
+                the wrong kind, a name no table has, or a setting the runtime cannot run with (see
+                :class:`HarnessSettings`).
         """
+        if missing := [name for name in GROUP_PACKAGES if find_spec(name) is None]:
+            raise ValueError(
+                f"backend.adapter harness needs the packages of the harness dependency group (missing: "
+                f"{', '.join(missing)}): install them with `uv sync --group harness`"
+            )
         settings = HarnessSettings.model_validate(block)
         WorkFolder.sweep(settings.work_root)
         return cls(settings, endpoints=endpoints, tools=tools, vocabulary=vocabulary)

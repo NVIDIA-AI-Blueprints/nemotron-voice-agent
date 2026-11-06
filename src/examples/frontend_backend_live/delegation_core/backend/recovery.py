@@ -21,6 +21,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from examples.frontend_backend_live.delegation_core.config import FORMAT_ERRORS
+
 # A quoted example in a parameter's description: 'lee_park_42' or "#A1234567" (no spaces inside).
 _QUOTED = re.compile(r"'([^'\s]+)'|\"([^\"\s]+)\"")
 # The separators an id's groups may be joined with, and every character besides letters and digits an id may hold.
@@ -214,7 +216,7 @@ class ShapeHints:
             raise ValueError(f"{where}.hint must hold {{value}}")
         try:
             hint.format(value="")
-        except (KeyError, IndexError, ValueError) as exc:
+        except FORMAT_ERRORS as exc:
             raise ValueError(f"{where}.hint names a field it is not given: {exc}") from None
         return cls(pattern, hint, observe)
 

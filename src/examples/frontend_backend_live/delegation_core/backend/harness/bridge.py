@@ -302,14 +302,19 @@ class McpBridge:
                 streamable_http_path=MCP_PATH, host=self.settings.host, stateless_http=True
             )
             sock = socket.socket(socket.AF_INET6 if ":" in self.settings.host else socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind((self.settings.host, self.settings.port))
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((self.settings.host, self.settings.port))
+            except BaseException:
+                sock.close()
+                raise
             self.base_url = self.settings.url(sock.getsockname()[1])
             self._server = _QuietServer(self._gate(app))
             self._serving = asyncio.create_task(self._server.serve(sock), name="harness-bridge")
             async with asyncio.timeout(self.start_timeout):
                 while not self._server.started:
                     if self._serving.done():
+                        sock.close()
                         self._serving.result()  # raises what stopped it
                         raise RuntimeError("The bridge's server stopped before it started")
                     await asyncio.sleep(0.02)

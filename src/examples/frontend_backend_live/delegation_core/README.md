@@ -126,10 +126,10 @@ name. The following table lists where to add each part. The module of each table
 ## Tests
 
 The core's tests in `tests/unit/delegation_core/` and the port contract suites in `tests/unit/contracts/` run offline
-with scripted backends. Run them from the repository root:
+with scripted backends. Run them from the repository root, with the `harness` dependency group:
 
 ```bash
-uv run pytest tests/unit/delegation_core tests/unit/contracts -v
+uv run --group harness pytest tests/unit/delegation_core tests/unit/contracts -v
 ```
 
 [`test_core_boundary.py`](../../../../tests/unit/delegation_core/test_core_boundary.py) keeps the core apart from the

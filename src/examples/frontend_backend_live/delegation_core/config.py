@@ -93,6 +93,11 @@ Seconds = Annotated[float, Field(strict=True, gt=0)]
 NonNegativeSeconds = Annotated[float, Field(strict=True, ge=0)]
 
 
+# What str.format raises for a field that a template names but is not given, or that it reads past a given text
+# (``{name.x}``, ``{name[x]}``).
+FORMAT_ERRORS = (KeyError, IndexError, AttributeError, TypeError, ValueError)
+
+
 def template(text: str, names: Iterable[str], key: str) -> str:
     """``text``, the template at ``key``, which holds each field of ``names`` and names no other.
 
@@ -104,7 +109,7 @@ def template(text: str, names: Iterable[str], key: str) -> str:
             raise ValueError(f"{key} must hold {{{name}}}")
     try:
         text.format(**dict.fromkeys(names, ""))
-    except (KeyError, IndexError, ValueError) as exc:
+    except FORMAT_ERRORS as exc:
         raise ValueError(f"{key} names a field it is not given: {exc}") from None
     return text
 
@@ -350,12 +355,21 @@ def _with_texts(backend: Mapping[str, Any], texts: Mapping[str, Any]) -> dict[st
     """``backend`` with the texts of its blocks at their places: each adapter's block and each app output step's.
 
     A block that is not a mapping is left as it is, for :class:`BackendChoice` to refuse.
+
+    Raises:
+        ValueError: The settings set a place of a text, or of a block of texts (:func:`_joined`), or the core's texts
+            hold a text at ``backend`` or ``backend.app_output_steps``, the places of blocks of texts; the message names
+            it and where the core's texts are.
     """
+    if not isinstance(texts, Mapping):
+        raise ValueError(f"backend comes from {TEXTS_SOURCE}")
     own = set(BackendChoice.model_fields) - {"blocks"}
     joined = dict(backend)
     for key, block in backend.items():
         if key == "app_output_steps" and isinstance(block, Mapping):
             steps = texts.get("app_output_steps", {})
+            if not isinstance(steps, Mapping):
+                raise ValueError(f"backend.app_output_steps comes from {TEXTS_SOURCE}")
             joined[key] = {
                 name: _joined(f"backend.app_output_steps.{name}", step, steps.get(name, {}))
                 if isinstance(step, Mapping)

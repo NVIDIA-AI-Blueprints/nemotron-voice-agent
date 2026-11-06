@@ -11,6 +11,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests.unit.core_helpers import HARNESS_GROUP, NO_HARNESS_GROUP
+
 ROOT = Path(__file__).resolve().parents[3]
 CORE = "examples.frontend_backend_live.delegation_core"
 # Imports every module of the core in a fresh interpreter, then prints the names of the modules it loaded.
@@ -32,6 +34,7 @@ def outside_the_core(name: str) -> bool:
 
 
 class CoreBoundaryTests(unittest.TestCase):
+    @unittest.skipUnless(HARNESS_GROUP, NO_HARNESS_GROUP)
     def test_importing_the_core_loads_no_pipecat_no_gateway_and_no_frontend_module(self):
         path = os.pathsep.join([str(ROOT / "src"), str(ROOT)])
         done = subprocess.run(

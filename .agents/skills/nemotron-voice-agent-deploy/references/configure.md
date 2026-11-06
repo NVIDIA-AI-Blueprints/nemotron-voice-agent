@@ -7,10 +7,18 @@ Open this file only to change the configuration of a deployed agent. Edit the sm
 | File | Owns |
 | --- | --- |
 | `.env` | Feature flags, tracing, chat history, audio debugging, buffering, supported vLLM memory overrides |
-| `examples_registry.yaml` | `selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `transports`, and per example: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, `live` (the Live API hooks `factory`, `describe`, and `core`, and the gateway's limits under `live.settings`, on `frontend-backend-live` only), and `config` (the Live example's own settings, on `frontend-backend-live` only: `frontend` for the talker and the voice, where `frontend.cascade.talker_style` names the talker's style by `llm` service key, `json` by default or `tools`; `core` for the delegation core, where `core.backend.adapter` is `llm`, `llm-agent`, or `harness`, and the latter two also set `core.delegation.result_format: speak_display`; and `ui_bot` for the UI bot's channel and its core, `ui_bot.core` merged over `core`; defaults live in the example's settings models, and the core's texts are the `agent_prompts.Core` entries of the example's `prompts.yaml`) |
+| `examples_registry.yaml` | `selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `transports`, and per example: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, and, on `frontend-backend-live` only, `live` and `config` (below) |
 | `services.yaml` | Built-in LLM, ASR, and TTS entries under `server` (NIM) and `single-gpu` (vLLM and NeMo-Speech.cpp). An entry with `nvcf` is also served by NVIDIA Cloud |
 | `settings.yaml` | Editable LLM setting profiles referenced by `settings: <profile>` in `services.yaml` |
 | `src/examples/<package>/prompts.yaml` | Built-in prompts for that example |
+
+The `frontend-backend-live` entry also has the following blocks:
+
+- `live`: the Live API hooks `factory`, `describe`, and `core`, and the gateway's limits and lists under `live.settings`, such as `max_sessions` and `allowed_hosts`.
+- `config`: the Live example's own settings. Their defaults live in the example's settings models.
+  - `frontend`: the talker and the voice. `frontend.cascade.talker_style` names the talker's style for each `llm` services key: `json` by default, or `tools`.
+  - `core`: the delegation core. `core.backend.adapter` is `llm`, `llm-agent`, or `harness`. With `llm-agent` or `harness`, also set `core.delegation.result_format: speak_display`. The core's texts are the `agent_prompts.Core` entries of the example's `prompts.yaml`.
+  - `ui_bot`: the UI bot's channel and its core, with `ui_bot.core` merged over `core`.
 
 Example ids map to packages under `src/examples/`: `generic-assistant` → `generic`, `multilingual-assistant` → `multilingual`, `omni-assistant` → `omni_assistant`, `omni-assistant-subagents` → `omni_assistant_subagents`, `frontend-backend-agent` → `frontend_backend_agent`, `frontend-backend-live` → `frontend_backend_live`.
 

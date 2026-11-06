@@ -45,7 +45,8 @@ def build_stt(body: dict, default_asr: dict) -> NvidiaSTTService:
     function_id = body.get("asr_function_id", "") or default_asr.get("function_id", "")
     model = body.get("asr_model", "") or default_asr.get("model", "")
     language = body.get("asr_language_code", "") or default_asr.get("language_code", "")
-    punctuation = str(body.get("asr_automatic_punctuation", "true")).lower() != "false"
+    punctuation = default_asr.get("automatic_punctuation", True)
+    punctuation = str(body.get("asr_automatic_punctuation", punctuation)).lower() != "false"
     if function_id or model:
         kwargs["model_function_map"] = {"function_id": function_id, "model_name": model or "custom-asr"}
     kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=punctuation)

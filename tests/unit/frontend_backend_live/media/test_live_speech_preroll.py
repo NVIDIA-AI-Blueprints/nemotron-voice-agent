@@ -60,6 +60,18 @@ class SpeechTests(unittest.IsolatedAsyncioTestCase):
             build_stt({}, NEMOTRON_ASR)
         self.assertEqual(service.call_args.kwargs["stop_history"], 320)  # as the other examples
 
+    def test_the_speech_to_text_punctuates_as_the_session_asks_else_as_its_entry_says(self):
+        def punctuates(body: dict, entry: dict) -> bool:
+            with patch("examples.frontend_backend_live.media.services.NvidiaSTTService") as service:
+                build_stt(body, entry)
+            return service.call_args.kwargs["settings"].automatic_punctuation
+
+        unpunctuated = {**NEMOTRON_ASR, "automatic_punctuation": False}
+        self.assertTrue(punctuates({}, NEMOTRON_ASR))
+        self.assertFalse(punctuates({}, unpunctuated))  # a Live session's body names no punctuation
+        self.assertTrue(punctuates({"asr_automatic_punctuation": "True"}, unpunctuated))
+        self.assertFalse(punctuates({"asr_automatic_punctuation": "False"}, NEMOTRON_ASR))
+
     def test_the_text_to_speech_speaks_the_sessions_language_else_its_entrys(self):
         self.assertEqual(build_tts({"tts_language_code": "DE-de"}, MAGPIE).settings.language, "de-DE")
         self.assertEqual(build_tts({}, {**MAGPIE, "language_code": "fr-FR"}).settings.language, "fr-FR")

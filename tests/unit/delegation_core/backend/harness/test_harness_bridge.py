@@ -9,8 +9,11 @@ The core's tests may not import ``mcp``, so the client side is plain JSON-RPC ov
 """
 
 import asyncio
+import gc
 import json
+import socket
 import unittest
+import warnings
 
 import httpx
 
@@ -211,6 +214,45 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(await answer("cancel_work", {})), {"error": "cancel_work: missing work_id"})
         self.assertEqual(await answer("start_work", start), "start_work broke: RuntimeError: the IM broke")
         self.assertEqual(len(placed), 2)
+
+
+def ipv6_loopback() -> bool:
+    """Whether this host can listen on ``::1``."""
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+class BridgeBindTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(ipv6_loopback(), "this host has no IPv6 loopback")
+    async def test_an_ipv6_bind_listens_on_its_address_and_is_reached_at_its_url_in_brackets(self):
+        bridge = McpBridge(Bridge(bind="[::1]:0"))
+        await bridge.start()
+        self.addAsyncCleanup(bridge.aclose)
+        self.assertEqual(bridge.settings.host, "::1")
+        self.assertRegex(bridge.url, r"^http://\[::1\]:\d+/mcp$")
+        async with httpx.AsyncClient(timeout=10) as http:
+            response = await http.post(bridge.url, headers={"accept": ACCEPT}, json={"jsonrpc": "2.0", "id": 1})
+        self.assertEqual(response.status_code, 401)  # the bridge answered: a call with no door's token is refused
+
+    async def test_a_bind_that_fails_raises_and_closes_its_socket(self):
+        taken = socket.create_server(("127.0.0.1", 0))  # another server listens on the port
+        self.addCleanup(taken.close)
+        in_use, out_of_range = f"127.0.0.1:{taken.getsockname()[1]}", "127.0.0.1:70000"
+        for bind, error in ((in_use, OSError), (out_of_range, OverflowError)):
+            with self.subTest(bind=bind), warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ResourceWarning)
+                with self.assertRaises(error):
+                    await McpBridge(Bridge(bind=bind)).start()
+                gc.collect()
+                self.assertEqual([str(w.message) for w in caught if issubclass(w.category, ResourceWarning)], [])
+
+    def test_a_bind_with_no_host_inside_its_brackets_is_refused(self):
+        with self.assertRaises(ValueError):
+            Bridge(bind="[]:8791")
 
 
 if __name__ == "__main__":

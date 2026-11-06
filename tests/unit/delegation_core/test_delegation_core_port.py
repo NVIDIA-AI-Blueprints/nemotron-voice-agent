@@ -104,6 +104,11 @@ class CoreSettingsTests(unittest.TestCase):
             "task_line": ("Task:", "must hold {task}"),
             "unknown_tool_output": ("No {name}.", "must hold {offered}"),
             "failed_output": ("{name}: {error} {why}", "not given"),
+            "records_block": ("{records} ({records.total})", "records_block names a field it is not given"),
+            "no_task": (
+                {**reasons, "no_task": "no {task} in {work} {work[id]}"},
+                "no_task names a field it is not given",
+            ),
             "misrouted_output": ("The app's.", "must hold {name}"),
             "repeated_call_output": ("Again.", "must hold {output}"),
             "conductor_prompt": ("Place them.", "must hold {max_running}"),

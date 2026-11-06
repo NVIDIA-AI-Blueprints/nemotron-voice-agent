@@ -58,7 +58,7 @@ these commands:
 ```bash
 uvx ruff@0.15.6 check .
 uvx ruff@0.15.6 format --check .
-uv sync --dev
+uv sync --dev --group harness
 uv run pytest tests/ -v
 npm --prefix client ci
 npm --prefix client run lint

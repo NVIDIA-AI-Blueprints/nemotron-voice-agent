@@ -161,6 +161,10 @@ class SettingsTests(unittest.TestCase):
             "a bridge without a port": ({"command": ["x"], "bridge": {"bind": "localhost"}}, "host:port"),
             "a relative work root": ({"command": ["x"], "work_root": "work"}, "absolute path"),
             "an unknown template field": ({"command": ["x"], "prompts": {**PROMPTS, "user": "{who}"}}, "names a field"),
+            "a field read past its text": (
+                {"command": ["x"], "prompts": {**PROMPTS, "user": "{text.x}"}},
+                "names a field",
+            ),
             "a prompt left out": (
                 {"command": ["x"], "prompts": {key: text for key, text in PROMPTS.items() if key != "unnamed_call"}},
                 "prompts.unnamed_call\n.*Field required",

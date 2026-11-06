@@ -39,8 +39,9 @@ from pipecat.frames.frames import (
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
+from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
+from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator, LLMUserAggregatorParams
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
@@ -130,18 +131,25 @@ class Acts(FrameProcessor):
             await self.push_frame(frame, direction)
 
 
-class Interruptions(FrameProcessor):
-    """After the output's reader: counts the interruptions that passed it, on their way to the assistant aggregator."""
+class Interruptions(BaseObserver):
+    """Counts the interruptions that the assistant aggregator passed on, each once it had saved a cut line's words.
+
+    The aggregator queues its ``on_assistant_turn_stopped`` handlers before it passes an interruption on, and the
+    voice's handler waits on nothing, so it has run before the pipeline handles anything that the caller sends once
+    this count moves.
+    """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.passed = 0
 
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InterruptionFrame) and direction is FrameDirection.DOWNSTREAM:
+    async def on_push_frame(self, data: FramePushed):
+        if (
+            isinstance(data.frame, InterruptionFrame)
+            and isinstance(data.source, LLMAssistantAggregator)
+            and data.direction is FrameDirection.DOWNSTREAM
+        ):
             self.passed += 1
-        await self.push_frame(frame, direction)
 
 
 class SentenceTTS(FrameProcessor):
@@ -437,7 +445,9 @@ class CallHarness:
             item_text=message_text,
         )
         edges = FrontendEdges(
-            inputs=[Acts()], outputs=[self.output], after=[self.interruptions], worker={"idle_timeout_secs": None}
+            inputs=[Acts()],
+            outputs=[self.output],
+            worker={"idle_timeout_secs": None, "observers": [self.interruptions]},
         )
         built = build_frontend(spec, edges)
         self.worker, self.voice, self.context = built.worker, built.voice, built.context
@@ -485,8 +495,8 @@ class CallHarness:
     async def say(self, text: str) -> None:
         """The caller says ``text``: a turn with its words, proposed as a speech service with turn detection does.
 
-        The words and the turn's end come once the cut its start made has reached the output's reader, as in a call,
-        where a turn lasts far longer than the cut takes to get there.
+        The words and the turn's end come once the cut its start made has passed the assistant aggregator, as in a
+        call, where a turn lasts far longer than the cut takes to get there.
         """
         await self._start_turn()
         words = TranscriptionFrame(text=text, user_id="caller", timestamp=str(time.time()), finalized=True)
@@ -494,7 +504,7 @@ class CallHarness:
         await self.stt.push_frame(ProposedUserStoppedSpeakingFrame())
 
     async def noise(self) -> None:
-        """The caller makes a sound with no words: a turn that ends empty once its cut has reached the output."""
+        """The caller makes a sound with no words: a turn that ends empty once its cut has passed the aggregator."""
         await self._start_turn()
         await self.stt.push_frame(ProposedUserStoppedSpeakingFrame())
 
@@ -516,10 +526,12 @@ class CallHarness:
         await self.stt.push_frame(VADUserStoppedSpeakingFrame(stop_secs=0.2))
 
     async def _start_turn(self) -> None:
-        """The caller starts speaking; return once the interruption it makes has passed the output's reader."""
+        """The caller starts speaking; return once the interruption it makes has passed the assistant aggregator."""
         passed = self.interruptions.passed
         await self.stt.push_frame(ProposedUserStartedSpeakingFrame())
-        await self.until(lambda: self.interruptions.passed > passed, "the caller's interruption past the output")
+        await self.until(
+            lambda: self.interruptions.passed > passed, "the caller's interruption past the assistant aggregator"
+        )
 
     async def until(self, predicate, what: str, timeout: float = 4.0) -> None:
         """Wait until ``predicate()`` holds."""

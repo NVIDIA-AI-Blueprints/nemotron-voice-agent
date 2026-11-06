@@ -92,6 +92,10 @@ OPEN_ATTEMPTS = 2
 # How much of a refused turn's text the log keeps.
 LOGGED_TEXT_CHARS = 300
 
+# The cancels sent so that a turn takes a re-prompt, each kept until it is sent or ``stop_timeout_seconds`` passes, so
+# none is collected before it is sent.
+_CANCELS: set[asyncio.Future] = set()
+
 
 class HarnessTurnError(RuntimeError):
     """The agent's turn gave no answer the run can pass on (its text is logged, never spoken)."""
@@ -785,8 +789,10 @@ class WorkerRun:
         if self.running or self.cards_open or self.forwarded or not session.outstanding:
             return
         turn.cancelled_by_us = True
-        task = asyncio.ensure_future(session.cancel())
-        task.add_done_callback(lambda done: done.exception())
+        cancel = asyncio.ensure_future(asyncio.wait_for(session.cancel(), self.settings.stop_timeout_seconds))
+        _CANCELS.add(cancel)
+        cancel.add_done_callback(_CANCELS.discard)
+        cancel.add_done_callback(lambda done: done.cancelled() or done.exception())
 
     # ------------------------------------------------------------------------------------------------ steer delivery
     def _acked(self) -> list[_SentSteer]:

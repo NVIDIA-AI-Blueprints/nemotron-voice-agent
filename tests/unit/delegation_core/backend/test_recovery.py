@@ -149,6 +149,7 @@ class ShapeHintsTests(unittest.TestCase):
             "a pattern that does not compile": ({**SHAPE_HINTS, "not_found_pattern": "(not found"}, "regular expr"),
             "a hint with no value": ({**SHAPE_HINTS, "hint": "Try another form."}, r"must hold \{value\}"),
             "a hint naming another field": ({**SHAPE_HINTS, "hint": "{value} or {other}"}, "not given"),
+            "a hint reading past its value": ({**SHAPE_HINTS, "hint": "{value} or {value[x]}"}, "not given"),
         }
         for name, (block, message) in cases.items():
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):

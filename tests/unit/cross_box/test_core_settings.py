@@ -14,7 +14,14 @@ from examples.frontend_backend_live.delegation_core.backend.harness import Harne
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
 from examples.frontend_backend_live.delegation_core.im.session import IMSession
-from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, EXAMPLE_SETTINGS, core_block
+from tests.unit.core_helpers import (
+    CORE_BLOCK,
+    CORE_TEXTS,
+    EXAMPLE_SETTINGS,
+    HARNESS_GROUP,
+    NO_HARNESS_GROUP,
+    core_block,
+)
 
 # The cores the example runs: the Live core on each backend adapter, and the UI bot's.
 ADAPTERS = ("llm", "llm-agent", "harness")
@@ -72,6 +79,21 @@ class CoreSettingsTests(unittest.TestCase):
                 block = CoreSettings.parse(core, CORE_TEXTS).backend.blocks["harness"]
                 self.assertEqual(block["prompts"]["user"], CORE_TEXTS["backend.harness.prompts.user"])
 
+    def test_texts_that_hold_a_text_where_the_settings_have_a_block_name_where_they_are(self):
+        where = r"comes from agent_prompts\.Core in the example's prompts\.yaml"
+        others = {name: text for name, text in CORE_TEXTS.items() if not name.startswith("backend.")}
+        steps = {"shape_hints": {"not_found_pattern": "no such"}}
+        cases = {
+            "backend": ({}, {**others, "backend": "A text."}),
+            "backend.app_output_steps": (
+                {"app_output_steps": steps},
+                {**others, "backend.app_output_steps": "A text."},
+            ),
+        }
+        for place, (backend, texts) in cases.items():
+            with self.subTest(place), self.assertRaisesRegex(ValueError, rf"^{re.escape(place)} {where}"):
+                CoreSettings.parse(core_block(backend=backend), texts)
+
     def test_every_core_offers_cancel_work(self):
         # The steer rule never stops work: a caller's stop lands in the running task, which ends its own Work with the
         # cancel_work work tool, so the IM gives it to every task of a conversation and no core's settings name it.
@@ -81,6 +103,7 @@ class CoreSettingsTests(unittest.TestCase):
             with self.subTest(core=name), self.assertRaisesRegex(ValueError, "delegation.work_tools\n.*Extra inputs"):
                 CoreSettings.parse(leave_out, CORE_TEXTS)
 
+    @unittest.skipUnless(HARNESS_GROUP, NO_HARNESS_GROUP)
     def test_settings_that_run_one_task_at_a_time(self):
         # An eval task is one call: the agent's and the harness's tasks run one at a time, placed by the steer rule.
         shipped = self.settings.backend.blocks
