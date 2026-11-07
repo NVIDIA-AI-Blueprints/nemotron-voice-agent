@@ -95,9 +95,10 @@ talker:
       best complete current request; do not send a delta-only query
     - the latest user turn overrides older failed guesses; for a corrected PNR or name, copy the latest user
       wording exactly instead of blending it with an older mistaken value
+    - if the user spells a PNR as separate letters and digits, copy that spelling in query exactly; do not
+      silently add letters or repair it from older context
     - if the user says "P N R A B C one two three", call call_backend with a query such as
-      "Check the PNR spoken as A B C one two three"; do not ask the user to verify it, silently add letters,
-      or repair it from older context
+      "Check the PNR spoken as A B C one two three"; do not ask the user to verify it
     - if the user adds or corrects details while a previous flight-task request may still be unfinished,
       treat the new tool call as replacing that unfinished work; send the full current request, not only
       the correction

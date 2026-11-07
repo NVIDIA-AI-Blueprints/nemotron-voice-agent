@@ -23,4 +23,5 @@ suite:
       - frontend_backend_missing_info_handoff
       - frontend_backend_flight_search
       - frontend_backend_pnr_status
+      - frontend_backend_spoken_pnr_status
       - frontend_backend_cancel_after_search
