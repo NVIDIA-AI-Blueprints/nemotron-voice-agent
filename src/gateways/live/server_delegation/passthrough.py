@@ -4,14 +4,15 @@
 """The server delegation: passes one ``responses`` session's delegations through to the delegation core.
 
 It keeps only the session's conversation, a reader per open stream, and the call routes and pending client input; the
-core decides what a request means, whether a result is right and how a delegation ends.
+core decides what a request means, whether a result is right and how a delegation ends. A delegation's request carries
+what the frontend stated about it (:func:`stated`) beside the gateway's own metadata keys.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import dataclass
@@ -36,6 +37,36 @@ SETTINGS = "session.delegation.responses"
 MAX_OPEN_ROUTES = 512
 MAX_PENDING_RESULTS = 512
 MAX_QUEUED_ITEMS = 16
+# What the frontend may state about a delegation (its metadata pairs): at most this many pairs, each key and value a
+# string of at most these lengths, the official Responses limits per pair.
+MAX_STATED_METADATA = 8
+MAX_METADATA_KEY = 64
+MAX_METADATA_VALUE = 512
+
+
+def stated(metadata: Mapping[str, str] | None, observe: Callable[..., None] = log_observation) -> dict[str, str]:
+    """Return the pairs of ``metadata`` within the limits; any other pair is dropped with a warning and an observation.
+
+    It never raises: a refused hand-off would be spoken as a refusal, and a metadata fault must never refuse a
+    caller's request.
+    """
+    kept: dict[str, str] = {}
+    for key, value in (metadata or {}).items():
+        reason = ""
+        if not isinstance(key, str) or not isinstance(value, str):
+            reason = "not_text"
+        elif not key or len(key) > MAX_METADATA_KEY or len(value) > MAX_METADATA_VALUE:
+            reason = "too_long"
+        elif len(kept) >= MAX_STATED_METADATA:
+            reason = "too_many"
+        if reason:
+            logger.warning(f"A delegation's metadata pair {key!r} was dropped: {reason}")
+            observe("delegation.metadata_dropped", key=str(key)[:MAX_METADATA_KEY], reason=reason)
+        else:
+            kept[key] = value
+    return kept
+
+
 CONVERSATION_SECONDS = 10
 RELAY_SECONDS = 5.0
 CLOSE_SECONDS = 10.0
@@ -401,12 +432,16 @@ class ServerDelegation:
         """The session's acknowledgement delay, read when asked; 0 (at once) without a live session."""
         return self.view.acknowledgement_delay_ms if self.view is not None else 0
 
-    async def delegate(self, input: list[dict]) -> str:
-        """Delegate a request and return its delegation id once the core accepts it; a refusal raises."""
+    async def delegate(self, input: list[dict], *, metadata: Mapping[str, str] | None = None) -> str:
+        """Delegate a request and return its delegation id once the core accepts it; a refusal raises.
+
+        ``metadata``: what the frontend states about the request, added under the gateway's own keys (:func:`stated`).
+        """
         self._check_open()
         if self.listener is None:
             raise RuntimeError("listen() comes before the first delegate(): its events would reach nobody")
-        request = Request(deepcopy(input), uid("item"), offset_ms=self._clock(), starts=True)
+        pairs = stated(metadata, self.observe)
+        request = Request(deepcopy(input), uid("item"), offset_ms=self._clock(), starts=True, metadata=pairs)
         self.sender.put(request)
         try:
             return await request.outcome
@@ -432,9 +467,10 @@ class ServerDelegation:
             if not request.outcome.done():
                 request.outcome.set_exception(RuntimeError("Session is closing"))
             return False
-        metadata = {DELEGATION_ID: request.delegation_id}
+        metadata = dict(request.metadata)  # the frontend's pairs first: the gateway's own keys, written last, win
         if self.view is not None:
-            metadata = {LIVE_SESSION_ID: self.view.id, **metadata}
+            metadata[LIVE_SESSION_ID] = self.view.id
+        metadata[DELEGATION_ID] = request.delegation_id
         if request.typed_run:
             metadata[TYPED_RUN] = "true"
         params = {

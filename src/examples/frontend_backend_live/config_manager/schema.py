@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -17,6 +17,8 @@ from examples.shared.strict_settings import Seconds, WholeNumber, with_blocks
 from examples.shared.strict_settings import StrictSettings as StrictModel
 
 Name = Annotated[str, Field(strict=True, min_length=1)]
+# A switch: true or false; anything else is refused.
+Switch = Annotated[bool, Field(strict=True)]
 
 
 def merged(base: Any, changes: Any) -> Any:
@@ -46,8 +48,31 @@ class ReliabilityConfig(StrictModel):
     talker_attempt_timeout_seconds: Seconds = 10.0
 
 
+class AnswersConfig(StrictModel):
+    """How the backend's answers land: re-said, completed, capped, and reported to the backend."""
+
+    # How many times one backend answer may go unheard, its line cut before a sentence played or silent twice. The
+    # last miss drops it: the work note counts it as said and the next delegation is told the caller never heard it.
+    # null: no limit. The same default as progress_max_per_delegation, the voice's other per-item cap.
+    max_tries: WholeNumber | None = 3
+    # A line nobody heard is said again with the same words, on its own, while no newer request was made, answered or
+    # closed since it was said and it did not come out silent; otherwise, and with false, it is worded again with what
+    # else is owed.
+    requeued_as_said: Switch = True
+    # A cut answer's sentences that did not play are said once, as written, unless the turn that cut it was a request;
+    # after a reply to the caller, only when the caller's next turn is one the talker waits on.
+    unheard_rest_once: Switch = True
+    # No lead-in while an answer is due, while another lead-in waits or plays, or one that repeats the last line.
+    lead_in_skip: Switch = True
+    # The next delegation reads the questions of a cut answer that did not play.
+    unheard_questions: Switch = True
+    # A cut also settles a line still waiting for its words after a sentence with no audio (fix 2 PR 2). Off until
+    # arm A passes.
+    clear_ended_on_cut: Switch = False
+
+
 class DelegationConfig(StrictModel):
-    """What the voice does around its delegations: the app wait and spoken progress."""
+    """What the voice does around its delegations: the app wait, spoken progress, and how answers and lead-ins land."""
 
     # The app-wait line after this long; null: none. Below the core's deadline, so it comes before the work fails.
     app_wait_seconds: Seconds | None = 50.0
@@ -55,6 +80,16 @@ class DelegationConfig(StrictModel):
     progress_after_seconds: Seconds | None = 8.0
     # The progress lines offered for one delegation.
     progress_max_per_delegation: WholeNumber = 3
+    answers: AnswersConfig = Field(default_factory=AnswersConfig)
+    # A worded line that no longer ends with the backend results' last question is not said: the results are said as
+    # the backend wrote them, with no extra call. false: today's checks only.
+    keep_questions: Switch = True
+    # Experimental: how backend results are said. writer: worded by the writer; as_written: said as the backend wrote
+    # them, with no writer call (commentary is still worded).
+    result_wording: Literal["writer", "as_written"] = "writer"
+    # A caller line that holds single letters or digits in a row ends with a note joining them, "[spelled: JOHN]", in
+    # the backend's transcript only.
+    spelled_notes: Switch = True
 
 
 class MemoryConfig(StrictModel):
@@ -77,6 +112,9 @@ class SpeechConfig(StrictModel):
     turn_silence_seconds: Seconds = 1.2
     # The words that start the caller's turn while the bot speaks.
     interrupt_min_words: WholeNumber = 2
+    # A turn whose words so far end in single letters or digits in a row (a spelling) is not ended on Smart Turn's
+    # verdict: the turn_silence_seconds pause ends it, so a caller who pauses mid-spelling keeps their turn.
+    spelling_hold: Switch = True
 
 
 class LiveConfig(StrictModel):

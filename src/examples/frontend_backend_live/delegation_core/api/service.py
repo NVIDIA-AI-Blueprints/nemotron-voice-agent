@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The delegation core's Responses API endpoints as Python functions."""
+"""The delegation core's Responses API endpoints as Python functions.
+
+A delegation may state what the caller had heard (``metadata.live_reply_unheard``), which the IM keeps for its write
+gate.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from typing import Any, Protocol
 from examples.frontend_backend_live.delegation_core.im.input import request_settings
 from examples.frontend_backend_live.delegation_core.im.session import IMSession
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
-from examples.shared.delegation_contract import DELEGATION_ID, TYPED_RUN
+from examples.shared.delegation_contract import DELEGATION_ID, TYPED_RUN, ReplyUnheard
 from examples.shared.ids import approx_tokens
 
 MODEL_OWNER = "delegation_core"
@@ -140,7 +144,12 @@ class ResponsesService:
         if clients_own(input_items, metadata):
             admission = im.admit_client_request(input_items, delegation_id=delegation_id, settings=settings)
         else:
-            admission = im.admit(input_items, delegation_id=delegation_id, settings=settings)
+            admission = im.admit(
+                input_items,
+                delegation_id=delegation_id,
+                settings=settings,
+                reply_unheard=ReplyUnheard.read(metadata),
+            )
         return admission.stream
 
     async def input_tokens(self, params: dict) -> dict:

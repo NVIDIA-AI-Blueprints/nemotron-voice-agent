@@ -93,6 +93,7 @@ def build_frontend(spec: FrontendSpec, edges: FrontendEdges) -> Frontend:
         delegation=spec.delegation,
         item_text=spec.item_text,
         reports_sentences=mode.reports_sentences,
+        sentence_language=lambda: getattr(spec.tts, "text_aggregation_language", None),
     )
     context = LLMContext(voice.seed(spec.seed))
     empty_turn = EmptyUserTurnConfig(interrupted_prompt=spec.prompts.empty_turn_note, idle_prompt=None)

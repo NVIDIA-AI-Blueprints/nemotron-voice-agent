@@ -21,6 +21,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from loguru import logger
+
 from examples.frontend_backend_live.delegation_core.config import FORMAT_ERRORS
 
 # A quoted example in a parameter's description: 'lee_park_42' or "#A1234567" (no spaces inside).
@@ -176,13 +178,25 @@ def _fields(value: object) -> Iterator[tuple[str, str]]:
 class ShapeHints:
     """One session's learned id shapes and tried forms, and the hint a "not found" output gets."""
 
-    def __init__(self, not_found: str, hint: str, observe: Callable[..., None]) -> None:
+    def __init__(
+        self,
+        not_found: str,
+        hint: str,
+        observe: Callable[..., None],
+        *,
+        stop_when_futile: bool = True,
+        read_back: str | None = None,
+    ) -> None:
         """Start with nothing learned.
 
         Args:
             not_found: The pattern an app output matches when the value it was given names nothing.
             hint: The line added to such an output, with ``{value}``.
             observe: ``observe(kind, **fields)`` for traces.
+            stop_when_futile: Once a form the step suggested for a field also found nothing, no more hints for that
+                field (a tool's parameter).
+            read_back: The line added once to the output at that point, asking the backend to read the value back;
+                ``None``: no line.
         """
         self.not_found = re.compile(not_found)
         self.hint = hint
@@ -190,21 +204,34 @@ class ShapeHints:
         self.worked: dict[tuple[str, str], str] = {}  # (tool, parameter): the newest value that worked
         self.fields: dict[str, str] = {}  # field name: the newest string an app output held for it
         self.tried: dict[str, set[str]] = {}  # skeleton: every form sent or suggested in this session
+        self.stop_when_futile, self.read_back = stop_when_futile, read_back
+        self.suggested: dict[tuple[str, str], set[str]] = {}  # (tool, parameter): the forms the step suggested
+        self.futile: set[tuple[str, str]] = set()  # the fields a suggested form also failed for: no more hints
 
     @classmethod
     def from_settings(cls, block: Mapping[str, Any], *, observe: Callable[..., None]) -> ShapeHints:
         """The step of one IM session, from its ``backend.app_output_steps.shape_hints`` block.
 
         The block sets ``not_found_pattern``, the pattern of an app output that names nothing, and ``hint``, the line
-        added to such an output, with ``{value}``.
+        added to such an output, with ``{value}``. It may set ``stop_when_futile`` (a boolean, true by default) and
+        ``read_back``, the line once a suggested form also failed (``prompts.yaml`` joins it; without it, no line).
 
         Raises:
-            ValueError: The block sets another key or leaves one out, the pattern is not a regular expression, or the
-                hint does not hold ``{value}`` or names another field.
+            ValueError: The block sets another key or leaves one out, the pattern is not a regular expression, the
+                hint does not hold ``{value}`` or names another field, ``stop_when_futile`` is not a boolean, or
+                ``read_back`` is not text with no field.
         """
         where = "backend.app_output_steps.shape_hints"
-        if not isinstance(block, Mapping) or set(block) != {"not_found_pattern", "hint"}:
+        required, optional = {"not_found_pattern", "hint"}, {"stop_when_futile", "read_back"}
+        if not isinstance(block, Mapping) or not required <= set(block) <= required | optional:
             raise ValueError(f"{where} must set not_found_pattern and hint, and nothing else")
+        stop, read_back = block.get("stop_when_futile", True), block.get("read_back")
+        if not isinstance(stop, bool):
+            raise ValueError(f"{where}.stop_when_futile must be true or false")
+        if read_back is not None and (not isinstance(read_back, str) or not read_back.strip() or "{" in read_back):
+            raise ValueError(f"{where}.read_back must be non-empty text with no field")
+        if read_back is None:
+            logger.warning(f"prompts.missing_text key={where}.read_back feature=the shape hint's read-back line")
         pattern, hint = block["not_found_pattern"], block["hint"]
         if not isinstance(pattern, str) or not pattern.strip():
             raise ValueError(f"{where}.not_found_pattern must be non-empty text")
@@ -218,7 +245,7 @@ class ShapeHints:
             hint.format(value="")
         except FORMAT_ERRORS as exc:
             raise ValueError(f"{where}.hint names a field it is not given: {exc}") from None
-        return cls(pattern, hint, observe)
+        return cls(pattern, hint, observe, stop_when_futile=stop, read_back=read_back)
 
     def outputs(self, calls: Iterable[tuple[dict, dict]], tools: Iterable[Mapping] | None) -> dict[str, dict]:
         """The outputs of the app's ``calls`` (call, output item) as the backend reads them, by call id.
@@ -241,10 +268,30 @@ class ShapeHints:
                 self._learn(name, arguments, text)
         hinted = {output["call_id"]: output for _, output in calls}
         for output, name, arguments, text in failures:
+            if self._futile(name, arguments, text):
+                if self.read_back:
+                    hinted[output["call_id"]] = {**output, "output": f"{text}\n{self.read_back}"}
+                continue
             suggestion = self._suggest(name, arguments, text, examples)
             if suggestion is not None:
                 hinted[output["call_id"]] = {**output, "output": f"{text}\n{self.hint.format(value=suggestion)}"}
         return hinted
+
+    def _futile(self, name: str, arguments: Mapping[str, str], text: str) -> bool:
+        """Whether a "not found" output is the first failure of a form the step suggested: the field turns futile.
+
+        Only with ``stop_when_futile``; a field the step never hinted is never futile, and a field already futile gets
+        nothing more (its later misses pass unchanged).
+        """
+        failed = failed_value(arguments, text)
+        if not self.stop_when_futile or failed is None:
+            return False
+        key = (name, failed[0])
+        if key in self.futile or failed[1] not in self.suggested.get(key, ()):
+            return False
+        self.futile.add(key)
+        self.observe("tools.shape_hint_futile", tool=name, parameter=key[1], read_back=bool(self.read_back))
+        return True
 
     def _learn(self, name: str, arguments: Mapping[str, str], text: str) -> None:
         """A call that found something: its values worked, and its output's fields are values the app knows.
@@ -263,6 +310,8 @@ class ShapeHints:
             return
         for parameter, value in arguments.items():
             self.worked[(name, parameter)] = value
+            if value in self.suggested.get((name, parameter), ()):
+                self.observe("tools.shape_hint_worked", tool=name, parameter=parameter)
         for key, value in pairs:
             if shape_of(value) is not None:
                 self.fields[key] = value
@@ -275,6 +324,8 @@ class ShapeHints:
         if failed is None:
             return None
         parameter, value = failed
+        if self.stop_when_futile and (name, parameter) in self.futile:
+            return None
         sources = (
             ("session", self.worked.get((name, parameter))),
             ("session", self.fields.get(parameter)),
@@ -289,6 +340,7 @@ class ShapeHints:
             if suggestion in forms:
                 return None
             forms.add(suggestion)  # suggested once: a retry of the same failed form gets no second hint
+            self.suggested.setdefault((name, parameter), set()).add(suggestion)
             self.observe("tools.shape_hint", tool=name, failed=value, suggested=suggestion, source=source)
             return suggestion
         return None

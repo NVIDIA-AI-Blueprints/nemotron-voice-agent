@@ -19,9 +19,14 @@ from pipecat.frames.frames import (
 from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator
 
-from examples.frontend_backend_live.config_manager.schema import MemoryConfig
+from examples.frontend_backend_live.config_manager.schema import AnswersConfig, LiveConfig, MemoryConfig
+from examples.frontend_backend_live.delegations import ReadyResult
+from examples.frontend_backend_live.heard_log import HEARD, Unheard, UnheardHow
+from examples.frontend_backend_live.models.decision import TalkerDecision
 from examples.frontend_backend_live.spoken import Line, LineKind, Outcome
-from examples.frontend_backend_live.voice import RESULT, message_tokens
+from examples.frontend_backend_live.talker import TalkerCall
+from examples.frontend_backend_live.voice import RESULT, Owed, Relay, Routing, Saying, message_tokens
+from examples.shared.delegation_contract import REPLY_UNHEARD, ReplyUnheard
 from tests.unit.core_helpers import _timeout, chunk, tool_fragment
 from tests.unit.frontend_helpers import (
     CONFIG,
@@ -54,6 +59,11 @@ def enum(request: dict) -> list[str]:
 
 def told(text: str) -> str:
     return TEXTS.writer_notes.told.format(told=text)
+
+
+def heard_lines(voice) -> list[str]:
+    """Return the texts of the lines in ``voice``'s heard log."""
+    return [text for _, text in voice.heard_log.lines()]
 
 
 def carried(call: CallHarness) -> list[str]:
@@ -366,8 +376,9 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn({"role": "assistant", "content": "Let me see."}, call.request(3)["messages"])
 
     async def test_a_result_nobody_heard_is_said_again_once(self):
-        # The unheard line wrote its result ahead of it; the retry moves the result to right before its new line.
-        script = (decision("delegate", ""), decision("speak", "We have tea."), decision("speak", "Tea."))
+        # The unheard line wrote its result ahead of it; the retry says it again with its words, with no writer call
+        # (answers.requeued_as_said), and moves the result to right before its new line.
+        script = (decision("delegate", ""), decision("speak", "We have tea."))
         async with CallHarness(*script, decision("wait")) as call:
             await call.say("What teas?")
             await call.until(lambda: call.port.inputs, "the delegation")
@@ -378,20 +389,20 @@ class DelegationTests(unittest.IsolatedAsyncioTestCase):
             await call.until(lambda: call.tts.spoken == ["We have tea."], "the worded result on its way")
             await call.until(lambda: result in call.context.get_messages(), "the result written ahead of its line")
 
-            async def worded_again():
-                await call.until(lambda: len(call.chat.requests) == 3, "the result worded again")
+            async def owed_again():
+                await call.until(lambda: call.voice.owed, "the result owed again")
                 self.assertNotIn(result, [*call.context.get_messages(), *call.voice.sent])
 
-            await caller_speaks(call, "sorry?", worded_again)
+            await caller_speaks(call, "sorry?", owed_again)
             call.output.pause_at = lambda frame: False
             call.output.playing.set()
-            await call.until(lambda: call.said() == ["Tea."], "the result said again")
-            self.assertEqual(len(call.chat.requests), 4)
-            self.assertIn(TEXTS.update_label + "Earl Grey.", last(call.request(2)))
-            self.assertIn("sorry?", last(call.request(3)))
+            await call.until(lambda: call.said() == ["We have tea."], "the result said again")
+            self.assertEqual(len(call.chat.requests), 3)
+            self.assertIn(TEXTS.update_label + "Earl Grey.", last(call.request(1)))
+            self.assertIn("sorry?", last(call.request(2)))
             await call.quiet()
             contents = [message["content"] for message in call.context.get_messages()]
-            self.assertEqual(contents, ["What teas?", "sorry?", result["content"], "Tea."])
+            self.assertEqual(contents, ["What teas?", "sorry?", result["content"], "We have tea."])
 
     async def test_a_lead_in_is_said_though_its_result_comes_at_once(self):
         class AtOnce(Port):
@@ -436,7 +447,8 @@ class PlayoutTests(unittest.IsolatedAsyncioTestCase):
             await call.until(lambda: call.said() == ["How can I help you today?"], "the sentence that played")
             await call.quiet()
             self.assertEqual(len(tts.spoken), 2)
-            self.assertEqual(carried(call)[-1], f"{WORDS.agent}: How can I help you today?")
+            # A line that lost a sentence to missing audio is marked as cut (answers.unheard_questions).
+            self.assertEqual(carried(call)[-1], f"{WORDS.agent}: How can I help you today?{TEXTS.cut_mark}")
 
     async def test_a_result_tells_the_backend_only_what_played(self):
         tts, output = ToneTTS(silent={"Your total is five dollars."}), TransportOutput(chunk_ms=50)
@@ -446,7 +458,8 @@ class PlayoutTests(unittest.IsolatedAsyncioTestCase):
             call.port.answer("del_1", "Your total is five dollars.", "Anything else?")
             await call.until(lambda: call.said() == ["Anything else?"], "the result that played")
             await call.quiet()
-            self.assertEqual(carried(call), [f"{WORDS.agent}: Anything else?"])
+            # Marked as cut (answers.unheard_questions); the sentence with no audio asks nothing: no question note.
+            self.assertEqual(carried(call), [f"{WORDS.agent}: Anything else?{TEXTS.cut_mark}"])
 
     async def test_silent_lines_not_in_a_row_keep_the_call(self):
         # Pipecat's text-to-speech writes itself off at three audio contexts in a row with no audio.
@@ -944,3 +957,651 @@ class ToolStyleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("And a scone.", transcript)
             self.assertNotIn("delegate", transcript)
             self.assertNotIn("status", transcript)
+
+
+class MetadataPort(Port):
+    """A delegation part that also records what the frontend states about each delegation."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.metadata: list[dict] = []
+
+    async def delegate(self, input, *, metadata=None):
+        self.metadata.append(dict(metadata or {}))
+        return await super().delegate(input)
+
+
+READ_BACK = "The note is ready. Shall I save it?"
+
+
+def owed_result(text: str, delegation_id: str = "del_1") -> Owed:
+    return Owed(ReadyResult(delegation_id, f"item_{len(text)}", text), LineKind.RESULT, {"content": text}, answers=True)
+
+
+def result_line(text: str, number: int = 7) -> Line:
+    return Line(LineKind.RESULT, text, ("del_1",), results=True, number=number)
+
+
+class HeardFactTests(unittest.IsolatedAsyncioTestCase):
+    """What each delegation states the caller had not heard of the backend's answers, which the write gate reads."""
+
+    def voice(self):
+        return CallHarness().voice  # built, not run: the tests set the voice's state themselves
+
+    async def test_a_yes_said_while_the_answer_waits_in_the_queue_states_the_answer_unheard(self):
+        # The read-back waits in the voice's queue while the caller says "yes" to an older line: that delegation
+        # states the answer unheard (it ends with a period), even though the read-back plays before it is handed over.
+        read_back = "Please confirm you want to exchange only the desk lamp."
+        port = MetadataPort()
+        script = (decision("delegate", ""), decision("speak", read_back), decision("delegate", ""))
+        async with CallHarness(*script, port=port) as call:
+            await call.say("Exchange the lamp.")
+            await call.until(lambda: len(port.metadata) == 1, "the first delegation")
+            await call.stt.push_frame(ProposedUserStartedSpeakingFrame())
+            await call.until(lambda: call.voice.floor.caller_speaking, "the caller speaking")
+            call.port.answer("del_1", read_back)
+            words = TranscriptionFrame(
+                text="Yes, just the desk lamp.", user_id="caller", timestamp=str(time.time()), finalized=True
+            )
+            await call.stt.push_frame(words)
+            await call.stt.push_frame(ProposedUserStoppedSpeakingFrame())
+            await call.until(lambda: len(port.metadata) == 2, "the second delegation")
+            self.assertEqual(port.metadata, [{REPLY_UNHEARD: "none"}, {REPLY_UNHEARD: "answer"}])
+
+    async def test_every_delegation_states_the_fact_in_its_metadata(self):
+        port = MetadataPort()
+        async with CallHarness(decision("delegate", ""), port=port) as call:
+            await call.say("What teas?")
+            await call.until(lambda: port.inputs, "the delegation")
+            self.assertEqual(port.metadata, [{REPLY_UNHEARD: "none"}])
+
+    async def test_a_result_with_a_question_still_owed_makes_the_next_delegation_state_question(self):
+        voice = self.voice()
+        voice.owed.append(owed_result(READ_BACK))
+        self.assertEqual(voice.reply_unheard(), Unheard(ReplyUnheard.QUESTION, UnheardHow.WAITING))
+        voice.owed.clear()
+        voice.owed.append(owed_result("The note is saved."))
+        self.assertEqual(voice.reply_unheard(), Unheard(ReplyUnheard.ANSWER, UnheardHow.WAITING))
+
+    async def test_a_result_being_worded_waiting_or_playing_counts_as_waiting(self):
+        for where in ("worded", "waiting", "playing", "said"):
+            with self.subTest(where=where):
+                voice = self.voice()
+                if where == "worded":
+                    voice.call = TalkerCall(plan=Relay((owed_result(READ_BACK),), READ_BACK, []))
+                elif where == "waiting":
+                    voice.waiting_lines.append(result_line(READ_BACK))
+                elif where == "playing":
+                    voice.spoken.handed(result_line(READ_BACK))
+                else:
+                    voice.call = TalkerCall(plan=Saying(result_line(READ_BACK)))
+                self.assertEqual(voice.reply_unheard(), Unheard(ReplyUnheard.QUESTION, UnheardHow.WAITING))
+
+    async def test_a_result_requeued_by_three_cuts_keeps_the_fact_for_every_delegation_meanwhile(self):
+        voice = self.voice()
+        item = owed_result(READ_BACK)
+        for number in (1, 2, 3):  # each line that carries it goes unheard, and it is owed again
+            voice.spoken.handed(Line(LineKind.RESULT, READ_BACK, ("del_1",), (item,), results=True, number=number))
+            self.assertEqual(voice.sent_unheard().reply, ReplyUnheard.QUESTION)
+            voice.spoken.lines.clear()
+            voice.owed.append(item)
+            self.assertEqual(voice.sent_unheard().reply, ReplyUnheard.QUESTION)
+            voice.owed.clear()
+
+    async def test_a_line_waiting_for_its_words_after_a_silent_sentence_counts_as_waiting(self):
+        voice = self.voice()
+        voice.spoken.ended_line = result_line(READ_BACK)  # between SpokenLines.ended and end_played
+        self.assertEqual(voice.reply_unheard(), Unheard(ReplyUnheard.QUESTION, UnheardHow.WAITING))
+
+    async def test_a_question_sentence_with_no_audio_inside_a_line_that_played_states_question(self):
+        voice = self.voice()
+        line = result_line("Your note has two versions. Which one should I keep?")
+        voice.spoken.handed(line)
+        line.heard = "Your note has two versions."  # end_played reports only the first sentence
+        voice._result_settled(line, UnheardHow.NO_AUDIO)
+        self.assertEqual(voice.sent_unheard(), Unheard(ReplyUnheard.QUESTION, UnheardHow.NO_AUDIO))
+
+    async def test_lead_ins_replies_and_commentary_never_count(self):
+        voice = self.voice()
+        voice.waiting_lines.append(Line(LineKind.LEAD_IN, "Shall I look?", ("del_1",)))
+        voice.spoken.handed(Line(LineKind.REPLY, "Which one do you mean?", number=3))
+        commentary = Owed(ReadyResult("", "c1", "Want a refill?"), LineKind.COMMENTARY, {"content": "Want a refill?"})
+        voice.owed.append(commentary)
+        self.assertEqual(voice.reply_unheard(), HEARD)
+
+    async def test_an_answer_that_plays_whole_between_turn_start_and_hand_off_still_counts(self):
+        voice = self.voice()
+        voice.owed.append(owed_result(READ_BACK))
+        voice.turn_pending = voice._pending()  # what caller_started keeps
+        voice.owed.clear()  # it played whole before the hand-off
+        sent = voice.sent_unheard()
+        self.assertEqual((sent.reply, sent.from_turn_start), (ReplyUnheard.QUESTION, True))
+
+    async def test_the_turn_start_snapshot_is_cleared_once_sent(self):
+        voice = self.voice()
+        voice.owed.append(owed_result(READ_BACK))
+        voice.turn_pending = voice._pending()
+        voice.owed.clear()
+        voice.sent_unheard()
+        self.assertIsNone(voice.turn_pending)
+        self.assertEqual(voice.sent_unheard(), HEARD)
+
+    async def test_a_yes_over_the_last_word_of_a_read_back_heard_in_full_states_none(self):
+        voice = self.voice()
+        line = result_line(READ_BACK)
+        voice.spoken.handed(line)
+        line.outcome = Outcome.PLAYING
+        voice.turn_pending = voice._pending()  # the caller's "yes" starts while its last sentence plays
+        voice.spoken.lines.clear()
+        line.heard, line.outcome = READ_BACK, Outcome.CUT  # cut after its last word: every sentence played
+        self.assertEqual(voice.sent_unheard(), HEARD)
+
+    async def test_a_line_still_unsettled_at_hand_off_counts_whole(self):
+        voice = self.voice()
+        line = result_line("The note is ready. It goes in the blue folder.")
+        voice.spoken.handed(line)
+        line.outcome = Outcome.PLAYING
+        voice.turn_pending = voice._pending()
+        voice.spoken.lines.clear()  # left the record, still playing at the hand-off
+        self.assertEqual(voice.sent_unheard(), Unheard(ReplyUnheard.ANSWER, UnheardHow.WAITING, from_turn_start=True))
+
+    async def test_a_decision_that_does_not_delegate_clears_the_snapshot(self):
+        voice = self.voice()
+        voice.owed.append(owed_result(READ_BACK))
+        voice.turn_pending = voice._pending()
+        plan = Routing((), "", False)
+        plan.finished(voice, TalkerCall(plan=plan), TalkerDecision("wait"))
+        voice.owed.clear()  # the read-back then plays whole; an instruction's delegation follows
+        self.assertIsNone(voice.turn_pending)
+        self.assertEqual(voice.sent_unheard(), HEARD)
+
+
+def answers_config(**answers) -> LiveConfig:
+    """The test config with ``answers`` set in its ``delegation.answers`` block."""
+    delegation = CONFIG.delegation.model_copy(update={"answers": AnswersConfig(**answers)})
+    return CONFIG.model_copy(update={"delegation": delegation})
+
+
+class StillVoice:
+    """A built voice that is never run: runs it asks for and early wordings are noted, not made."""
+
+    def __init__(self, config=CONFIG):
+        self.observed: list[tuple[str, dict]] = []
+        self.voice = voice = CallHarness(config=config).voice
+        voice._queue = lambda frame: None
+        voice._word_early = lambda: None
+        voice.observe = lambda kind, **fields: self.observed.append((kind, fields))
+        voice.heard_log.observe = voice.observe
+
+    def delegation(self, request: str) -> str:
+        """An open delegation in the work note; its id."""
+        worknote = self.voice.worknote
+        reservation = worknote.reserve(request)
+        delegation_id = f"del_{len(worknote.entries)}"
+        worknote.confirm(reservation, delegation_id)
+        return delegation_id
+
+    def answer(self, delegation_id: str, text: str) -> Owed:
+        """A ready result of ``delegation_id``, owed."""
+        self.voice.worknote.answered(delegation_id)
+        self.voice.ready(ReadyResult(delegation_id, f"item_{len(text)}", text))
+        return self.voice.owed[-1]
+
+    def say(self, words: str | None = None) -> Line:
+        """The voice's next take, said with ``words`` (a relay's) or its own (a group's); the line handed."""
+        voice = self.voice
+        batch = voice._take()
+        if voice._resaying:
+            call = voice._said_by(batch)
+            return call.plan.line
+        return voice.delivered(batch, voice.joined(batch, words or "worded"))
+
+    def unheard(self, line: Line, *, silent: bool = False) -> None:
+        """``line`` settles not heard; ``silent``: it had been said once more after it produced no audio."""
+        line.retried = silent
+        self.voice.not_heard(line)
+
+    def kinds(self, kind: str) -> list[dict]:
+        return [fields for each, fields in self.observed if each == kind]
+
+
+class RequeueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_line_not_heard_is_said_again_with_its_words_and_no_writer_call(self):
+        still = StillVoice()
+        still.answer(still.delegation("Opening hours?"), "The gym opens at six.")
+        line = still.say("We open at six.")
+        still.unheard(line)
+        again = still.say()
+        self.assertEqual((again.text, again.items), ("We open at six.", line.items))
+        self.assertEqual(len(still.kinds("answer.resaid")), 1)
+
+    async def test_a_newer_result_owed_with_a_requeued_line_gets_its_own_relay(self):
+        still = StillVoice()
+        delegation = still.delegation("Hours and price?")
+        still.answer(delegation, "Six.")
+        line = still.say("We open at six.")
+        late = still.answer(delegation, "Ten a month.")  # a newer result of the same request: no newer request
+        still.unheard(line)
+        self.assertEqual(still.say().text, "We open at six.")  # said first, as it was
+        self.assertEqual(still.voice._take(), [late])  # the newer result, worded alone
+
+    async def test_a_requeued_line_is_not_worded_early(self):
+        still = StillVoice()
+        still.answer(still.delegation("Hours?"), "Six.")
+        line = still.say("We open at six.")
+        late = still.answer(still.delegation("Price?"), "Ten a month.")
+        still.unheard(line)
+        self.assertEqual(still.voice._fresh_owed(), (late,))
+
+    async def test_a_line_with_a_dropped_answer_never_resays_it(self):
+        still = StillVoice()
+        a, b = still.answer(still.delegation("Hours?"), "Six."), still.answer(still.delegation("Price?"), "Ten.")
+        a.tries = 2
+        line = still.say("Six, and ten a month.")
+        still.unheard(line)  # A reaches the cap and is dropped; B is owed again, fresh
+        self.assertEqual((list(still.voice.owed), b.words), ([b], ""))
+        self.assertEqual(still.voice._take(), [b])  # worded anew, alone
+        self.assertEqual(len(still.kinds("answer.dropped_unheard")), 1)
+
+    async def test_a_relay_cut_by_a_move_goes_back_behind_the_requeued_group(self):
+        still = StillVoice()
+        still.answer(still.delegation("Hours?"), "Six.")
+        line = still.say("We open at six.")
+        still.unheard(line)
+        fresh = Owed(ReadyResult("", "n1", "Card is on file."), LineKind.NOTICE)
+        Relay((fresh,), "", []).cancelled(still.voice, TalkerCall())
+        self.assertEqual(list(still.voice.owed), [*line.items, fresh])
+
+    async def test_a_requeued_line_is_worded_again_when_a_newer_request_opened(self):
+        still = StillVoice()
+        still.answer(still.delegation("Book the bike."), "Bike 4 for an hour. Shall I go ahead?")
+        line = still.say("Bike 4 for an hour. Shall I go ahead?")
+        still.unheard(line)
+        still.delegation("Make it two hours.")  # the caller asks something new before it is said again
+        self.assertEqual(still.voice._take(), list(line.items))  # made fresh: worded with what else is owed
+        self.assertFalse(still.voice._resaying)
+        self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["newer"])
+
+    async def test_a_request_opened_and_answered_before_the_resay_still_refuses_it(self):
+        still = StillVoice()
+        still.answer(still.delegation("Book the bike."), "Bike 4. Shall I go ahead?")
+        line = still.say("Bike 4. Shall I go ahead?")
+        still.unheard(line)
+        newer = still.delegation("Is there a helmet?")
+        still.voice.worknote.answered(newer)  # answered by the next take: its open requests read the same
+        still.voice._take()
+        self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["newer"])
+
+    async def test_a_line_that_came_out_silent_is_not_resaid_at_once(self):
+        still = StillVoice()
+        still.answer(still.delegation("Hours?"), "Six.")
+        still.unheard(still.say("We open at six."), silent=True)
+        line = still.say("We open at six, every day.")  # through the writer: no third empty audio context at once
+        self.assertFalse(still.voice._resaying)
+        self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["silent"])
+        still.unheard(line)
+        still.voice.heard(Line(LineKind.REPLY, "Sure.", heard="Sure."), cut=False)  # audio played since
+        self.assertEqual(still.say().text, "We open at six, every day.")
+
+    async def test_an_answer_unheard_max_tries_times_is_dropped_and_the_backend_is_told(self):
+        still = StillVoice()
+        delegation = still.delegation("Hours?")
+        still.answer(delegation, "The gym opens at six.")
+        for _ in range(3):
+            still.unheard(still.say("We open at six."))
+        voice = still.voice
+        self.assertEqual((list(voice.owed), voice.worknote.answer_ready()), ([], False))
+        self.assertNotIn(TEXTS.answer_ready_label, voice.worknote.line())
+        note = TEXTS.transcript.not_said.format(answer="The gym opens at six.")
+        self.assertEqual(heard_lines(voice)[-1], note)
+        self.assertEqual(voice.heard_log.newest.reply, ReplyUnheard.ANSWER)
+
+    async def test_commentary_is_never_dropped_by_the_cap(self):
+        still = StillVoice()
+        still.voice.commentary("Your table is ready.", "del_9")
+        for _ in range(4):
+            still.unheard(still.say("Your table is ready."))
+        self.assertEqual(len(still.voice.owed), 1)
+        self.assertEqual(still.kinds("answer.dropped_unheard"), [])
+
+    async def test_commentary_groups_cannot_starve_fresh_answers(self):
+        still = StillVoice()
+        still.voice.commentary("Your table is ready.", "del_9")
+        for _ in range(3):
+            line = still.say("Your table is ready.")
+            still.unheard(line)
+        answer = still.answer(still.delegation("Hours?"), "Six.")
+        batch = still.voice._take()
+        self.assertEqual((batch, still.voice._resaying), ([*line.items, answer], False))
+        self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["tries"])
+
+    async def test_with_one_try_an_unheard_answer_is_never_requeued(self):
+        still = StillVoice(answers_config(max_tries=1))
+        still.answer(still.delegation("Hours?"), "Six.")
+        still.unheard(still.say("We open at six."))
+        self.assertEqual((list(still.voice.owed), len(still.kinds("answer.dropped_unheard"))), ([], 1))
+
+    async def test_with_no_limit_and_requeued_as_said_off_the_voice_behaves_as_before(self):
+        still = StillVoice(answers_config(max_tries=None, requeued_as_said=False))
+        still.answer(still.delegation("Hours?"), "Six.")
+        for _ in range(5):
+            line = still.say("We open at six.")
+            still.unheard(line)
+            self.assertFalse(still.voice._resaying)
+        self.assertEqual(list(still.voice.owed), list(line.items))  # still owed, worded again each time
+        self.assertEqual(still.kinds("answer.resaid") + still.kinds("answer.dropped_unheard"), [])
+
+    async def test_with_requeued_as_said_off_reowed_items_are_fresh(self):
+        still = StillVoice(answers_config(requeued_as_said=False))
+        still.answer(still.delegation("Hours?"), "Six.")
+        line = still.say("We open at six.")
+        still.unheard(line)
+        self.assertEqual(still.voice._fresh_owed(), line.items)
+        self.assertEqual(still.voice._requeued_head(), ())
+
+    async def test_a_refused_group_is_not_a_group_again_until_a_line_carrying_it_goes_unheard(self):
+        still = StillVoice()
+        a = still.answer(still.delegation("Hours?"), "Six.")
+        still.unheard(still.say("We open at six."))
+        b = still.answer(still.delegation("Price?"), "Ten.")  # a newer request: the group is refused
+        merged = still.say("Six, and ten a month.")
+        self.assertEqual(merged.items, (a, b))
+        self.assertEqual(still.voice._requeued_head(), ())
+        still.unheard(merged)
+        self.assertEqual((still.voice._requeued_head(), a.tries, b.tries), ((a, b), 2, 1))
+
+
+class KeepQuestionTests(unittest.IsolatedAsyncioTestCase):
+    """The writer's line keeps the backend's last question last, or the results are said as the backend wrote them."""
+
+    READ_BACK = "Bike 4 for an hour, ten dollars. Shall I book it?"
+
+    async def test_a_worded_line_that_loses_the_question_says_the_result_as_written(self):
+        script = (decision("delegate", ""), decision("speak", "Bike 4 is ten dollars for an hour."))
+        async with CallHarness(*script) as call:
+            at_idle(call)
+            await call.say("A bike, please.")
+            await call.until(lambda: call.port.inputs, "the delegation")
+            call.port.answer("del_1", self.READ_BACK)
+            await call.until(lambda: call.said() == [self.READ_BACK], "the result as written")
+
+    async def test_a_line_worded_early_that_loses_the_question_is_said_as_written(self):
+        script = (decision("delegate", "One moment."), decision("speak", "Bike 4 is ten dollars for an hour."))
+        async with CallHarness(*script) as call:
+            call.output.playing.clear()  # the lead-in plays while the result is worded early
+            await call.say("A bike, please.")
+            await call.until(lambda: call.tts.spoken == ["One moment."], "the lead-in playing")
+            call.port.answer("del_1", self.READ_BACK)
+            await call.until(lambda: call.voice.early is not None and call.voice.early.words, "the early wording")
+            self.assertEqual(call.voice.early.words, self.READ_BACK)
+            call.output.playing.set()
+            await call.until(lambda: call.said() == ["One moment.", self.READ_BACK], "the result as written")
+
+    async def test_a_batch_with_commentary_is_not_checked(self):
+        still = StillVoice()
+        still.voice.commentary("The caller asked 'Is it vegan?' Tell them yes.", "del_9")
+        still.answer(still.delegation("Hours?"), "We open at six. Shall I book you in?")
+        relay = still.voice._relay_call(still.voice._take(), []).plan
+        self.assertEqual(relay.asked, "")  # commentary may be an instruction to the writer: never read aloud
+
+    async def test_as_written_results_are_said_with_no_writer_call(self):
+        still = StillVoice(as_written_config())
+        still.answer(still.delegation("Hours?"), "The gym opens at six.")
+        call = still.voice._said_by(still.voice._take())
+        self.assertEqual((call.spec, call.text), (None, "The gym opens at six."))
+        self.assertEqual(len(still.kinds("answer.as_written")), 1)
+
+    async def test_as_written_still_words_commentary(self):
+        still = StillVoice(as_written_config())
+        still.voice.commentary("Tell them their table is ready.", "del_9")
+        call = still.voice._said_by(still.voice._take())
+        self.assertIsNotNone(call.spec)  # a relay: the writer words it
+
+    async def test_a_silent_group_is_not_said_as_written_at_once(self):
+        still = StillVoice(as_written_config())
+        still.answer(still.delegation("Hours?"), "The gym opens at six.")
+        still.unheard(still.say(), silent=True)  # said as written, and it came out silent
+        call = still.voice._said_by(still.voice._take())
+        self.assertIsNotNone(call.spec)  # through a writer call first, not straight to speech
+
+
+def as_written_config() -> LiveConfig:
+    return CONFIG.model_copy(
+        update={"delegation": CONFIG.delegation.model_copy(update={"result_wording": "as_written"})}
+    )
+
+
+ANSWER = "Bike 4 is free for an hour. It costs ten dollars. Shall I book it?"
+REST = "It costs ten dollars. Shall I book it?"
+
+
+class RestTests(unittest.IsolatedAsyncioTestCase):
+    """A cut answer's unheard sentences are said once, as written, by the rules of the first decision after the cut."""
+
+    def cut(self, still: StillVoice, *, number: int = 4) -> Line:
+        """A result line cut after its first sentence; the voice holds its rest."""
+        voice = still.voice
+        line = Line(LineKind.RESULT, ANSWER, ("del_1",), results=True, number=number)
+        voice.heard_log.agent(number, ANSWER, result=True)
+        line.heard = "Bike 4 is free for an hour."
+        voice.heard(line, cut=True)
+        return line
+
+    def decide(self, still: StillVoice, action: str, *, words: bool = True, steered: bool = False) -> None:
+        """A routing decision on a caller turn (with words or none) or on an instruction."""
+        turn = {"role": "user", "content": "okay" if words else ""}
+        plan = Routing((turn,) if words else (), "okay" if words else "", False, wordless=not words, steered=steered)
+        speech = "Yes, I'm here." if action == "speak" else ""
+        plan.finished(still.voice, TalkerCall(plan=plan), TalkerDecision(action, speech))
+
+    def rest_lines(self, still: StillVoice) -> list[str]:
+        return [line.text for line in still.voice.waiting_lines if line.rest_of is not None]
+
+    def dropped(self, still: StillVoice) -> list[str]:
+        return [fields["reason"] for fields in still.kinds("answer.rest_dropped")]
+
+    async def test_a_cut_result_then_a_wait_says_the_unheard_rest_once(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "wait")
+        self.assertEqual(self.rest_lines(still), [REST])
+        self.assertEqual(len(still.kinds("answer.rest_said")), 1)
+        self.decide(still, "wait")
+        self.assertEqual(self.rest_lines(still), [REST])  # once
+
+    async def test_a_cut_result_then_a_delegate_says_no_rest_and_the_input_carries_the_cut(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "delegate")
+        self.assertEqual((self.rest_lines(still), self.dropped(still)), ([], ["delegate"]))
+        self.assertIn("Bike 4 is free for an hour." + TEXTS.cut_mark, heard_lines(still.voice)[0])
+
+    async def test_a_cut_result_then_a_speak_on_a_turn_with_no_words_says_no_rest(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "speak", words=False)
+        self.assertEqual((self.rest_lines(still), self.dropped(still)), ([], ["wordless_speak"]))
+
+    async def test_a_cut_result_then_a_speak_with_words_says_the_rest_after_the_next_wait(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "speak")  # "Are you there?" - "Yes, I'm here."
+        still.voice.on_user_idle()
+        self.assertEqual((self.rest_lines(still), len(still.kinds("answer.rest_deferred"))), ([], 1))
+        self.decide(still, "wait")  # the caller's "okay"
+        self.assertEqual(self.rest_lines(still), [REST])
+
+    async def test_a_rest_after_a_reply_to_hold_on_is_not_said_while_the_caller_is_silent(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "speak")  # "Can you wait a second?" - "Of course, take your time."
+        for _ in range(3):
+            still.voice.on_user_idle()
+        self.assertEqual(self.rest_lines(still), [])
+        self.decide(still, "delegate")
+        self.assertEqual(self.dropped(still), ["delegate"])
+
+    async def test_a_rest_after_a_reply_is_dropped_by_a_second_reply(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "speak")
+        self.decide(still, "speak")
+        self.assertEqual((self.rest_lines(still), self.dropped(still)), ([], ["speak"]))
+
+    async def test_a_rest_is_held_again_when_the_caller_speaks_before_it_plays(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "wait")
+        still.voice.caller_started()
+        self.assertEqual(self.rest_lines(still), [])
+        self.decide(still, "delegate")
+        self.assertEqual(self.dropped(still), ["delegate"])
+        self.assertIsNone(still.voice._rest)
+
+    async def test_a_held_rest_is_dropped_after_one_more_caller_turn(self):
+        still = StillVoice()
+        self.cut(still)
+        for _ in range(2):  # decided turns whose words went to speech before their call was cancelled
+            plan = Routing(({"role": "user", "content": "uh"},), "uh", False)
+            plan.cancelled(still.voice, TalkerCall(plan=plan, said="Mm."))
+        self.assertEqual((still.voice._rest, self.dropped(still)), (None, ["stale"]))
+
+    async def test_noise_starts_do_not_make_a_held_rest_stale(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "speak")
+        still.voice.caller_started()  # two starts that never become decided turns
+        still.voice.caller_started()
+        self.decide(still, "wait")
+        self.assertEqual(self.rest_lines(still), [REST])
+
+    async def test_a_rest_that_is_cut_gets_no_rest_of_its_own(self):
+        still = StillVoice()
+        line = self.cut(still)
+        self.decide(still, "wait")
+        rest = still.voice.waiting_lines[-1]
+        rest.number, rest.heard = 5, "It costs ten dollars."
+        still.voice.heard(rest, cut=True)
+        self.assertIsNone(still.voice._rest)
+        self.assertIs(rest.rest_of, line)
+
+    async def test_a_rest_heard_in_full_restores_the_cut_entry(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "wait")
+        rest = still.voice.waiting_lines[-1]
+        rest.number, rest.heard = 5, REST
+        still.voice.heard(rest, cut=False)
+        entry = still.voice.heard_log.entries[0]
+        self.assertEqual((entry.text, entry.cut, entry.lost), (ANSWER, False, ReplyUnheard.NONE))
+        self.assertEqual(heard_lines(still.voice), [])  # a result heard in full: left to the backend
+
+    async def test_a_rest_heard_after_the_cut_entry_was_carried_adds_a_now_heard_note(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "wait")
+        still.voice.heard_log.entries.clear()  # a delegation carried the cut entry
+        rest = still.voice.waiting_lines[-1]
+        rest.number, rest.heard = 5, REST
+        still.voice.heard(rest, cut=False)
+        self.assertEqual(heard_lines(still.voice), [TEXTS.transcript.now_heard.format(rest=REST)])
+
+    async def test_a_line_that_lost_a_sentence_to_missing_audio_gets_no_rest(self):
+        still = StillVoice()
+        line = Line(LineKind.RESULT, ANSWER, ("del_1",), results=True, number=4, heard="Bike 4 is free for an hour.")
+        still.voice.heard(line, cut=False)  # settled heard; the aggregator then reports fewer words (partly)
+        self.assertIsNone(still.voice._rest)
+
+    async def test_a_newer_result_or_an_instruction_drops_the_rest(self):
+        still = StillVoice()
+        self.cut(still)
+        still.voice.owed.append(owed_result("Bike 5 is free too."))
+        self.decide(still, "wait")
+        still.voice.owed.clear()
+        self.cut(still)
+        self.decide(still, "wait", steered=True)
+        self.assertEqual(self.dropped(still), ["newer_result", "steered"])
+
+    async def test_a_cut_result_names_its_unheard_question_for_the_backend(self):
+        still = StillVoice()
+        self.cut(still)
+        note = TEXTS.transcript.cut_question.format(questions="Shall I book it?")
+        expected = f"{TEXTS.transcript.agent}: Bike 4 is free for an hour.{TEXTS.cut_mark}{note}"
+        self.assertEqual(heard_lines(still.voice), [expected])
+        self.assertEqual(still.kinds("answer.question_unheard"), [{"line": 4, "questions": 1}])
+
+    async def test_the_rest_once_off_holds_no_rest(self):
+        still = StillVoice(answers_config(unheard_rest_once=False))
+        self.cut(still)
+        self.assertIsNone(still.voice._rest)
+
+    async def test_a_cut_result_then_a_wait_says_the_rest_through_the_pipeline(self):
+        script = (decision("delegate", ""), decision("speak", "Bike 4 is free. Shall I book it?"), decision("wait"))
+        async with CallHarness(*script) as call:
+            at_idle(call)
+            await call.say("A bike, please.")
+            await call.until(lambda: call.port.inputs, "the delegation")
+            audio = []
+            call.output.playing.clear()
+            call.output.pause_at = lambda frame: (
+                isinstance(frame, TTSAudioRawFrame) and len(audio.append(frame) or audio) > 1
+            )
+            call.port.answer("del_1", "Bike 4 is free. Shall I book it?")
+            await call.until(lambda: call.assistant.aggregation_string() == "Bike 4 is free.", "the first sentence")
+            call.output.pause_at = lambda frame: False
+            await call.say("mm-hmm")
+            call.output.playing.set()
+            await call.until(lambda: call.said()[-1:] == ["Shall I book it?"], "the rest, said once")
+            await call.quiet()
+            self.assertEqual(call.said(), ["Bike 4 is free." + TEXTS.cut_mark, "Shall I book it?"])
+            self.assertEqual(len(call.chat.requests), 3)  # no writer call for the rest
+
+
+class LeadInSkipTests(unittest.IsolatedAsyncioTestCase):
+    """No lead-in in front of an answer that is due, beside another lead-in, or repeating the last line."""
+
+    def lead_in(self, still: StillVoice, text: str = "One moment.", delegation_id: str = "del_2") -> list[str]:
+        still.voice._lead_in(delegation_id, text)
+        return [fields["reason"] for fields in still.kinds("acknowledgement.skipped")]
+
+    def lead_ins(self, still: StillVoice) -> list[str]:
+        return [line.text for line in still.voice.waiting_lines if line.kind is LineKind.LEAD_IN]
+
+    async def test_no_lead_in_while_a_result_waits(self):
+        still = StillVoice()
+        still.voice.owed.append(owed_result("The gym opens at six."))
+        self.assertEqual((self.lead_in(still), self.lead_ins(still)), (["answer_due"], []))
+
+    async def test_no_lead_in_while_a_result_line_plays(self):
+        still = StillVoice()
+        still.voice.spoken.handed(result_line("The gym opens at six."))
+        self.assertEqual(self.lead_in(still), ["answer_due"])
+
+    async def test_no_lead_in_while_commentary_answering_a_client_delegation_waits(self):
+        still = StillVoice()
+        still.voice.commentary("Your table is ready.", "del_9")
+        self.assertEqual(self.lead_in(still), ["answer_due"])
+
+    async def test_two_delegations_decided_while_the_bot_is_silent_queue_one_lead_in(self):
+        still = StillVoice()
+        self.lead_in(still, "Let me check.", "del_1")
+        self.assertEqual(self.lead_in(still, "Looking at that too.", "del_2"), ["lead_in_waiting"])
+        self.assertEqual(self.lead_ins(still), ["Let me check."])
+
+    async def test_a_second_request_after_a_lead_in_played_gets_its_own_lead_in(self):
+        still = StillVoice()
+        still.voice.last_handed = Line(LineKind.LEAD_IN, "Let me check.", ("del_1",))  # it played and settled
+        self.assertEqual(self.lead_in(still, "Let's look at that one next."), [])
+        self.assertEqual(self.lead_ins(still), ["Let's look at that one next."])
+
+    async def test_a_lead_in_that_repeats_the_last_line_is_skipped(self):
+        still = StillVoice()
+        still.voice.last_handed = Line(LineKind.REPLY, "One moment.")
+        self.assertEqual(self.lead_in(still, "One moment!"), ["same_as_last"])
+
+    async def test_the_lead_in_skip_off_says_every_lead_in(self):
+        still = StillVoice(answers_config(lead_in_skip=False))
+        still.voice.owed.append(owed_result("The gym opens at six."))
+        self.lead_in(still, "Let me check.", "del_1")
+        self.lead_in(still, "Let me check.", "del_2")
+        self.assertEqual(self.lead_ins(still), ["Let me check.", "Let me check."])

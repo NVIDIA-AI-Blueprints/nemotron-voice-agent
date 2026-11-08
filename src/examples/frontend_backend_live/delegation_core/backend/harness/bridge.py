@@ -16,6 +16,7 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, Outcome, TaskContext, ToolSource
+from examples.shared.delegation_contract import TOOL_ANNOTATIONS
 from examples.shared.ids import uid
 
 from .protocol import AppCall, CallRunning, CallSettled, HeldCall, Mailbox, McpServer
@@ -25,13 +26,37 @@ UNKNOWN_LABEL = "harness"
 MCP_PATH = "/mcp"
 
 
-def mcp_tool(tool: Mapping[str, Any]) -> dict:
-    """Convert a Responses function tool to an MCP tool: its name, description and JSON schema."""
-    return {
+# The MCP ToolAnnotations keys a bridge passes on, with the type each value must have.
+MCP_HINTS: dict[str, type] = {
+    "title": str,
+    "readOnlyHint": bool,
+    "destructiveHint": bool,
+    "idempotentHint": bool,
+    "openWorldHint": bool,
+}
+
+
+def mcp_annotations(tool: Mapping[str, Any]) -> dict | None:
+    """Return a tool's well-formed MCP annotations, the MCP hint keys with the right value types; ``None`` for none."""
+    given = tool.get(TOOL_ANNOTATIONS)
+    if not isinstance(given, Mapping):
+        return None
+    kept = {key: value for key, value in given.items() if isinstance(value, MCP_HINTS.get(key, ()))}
+    return kept or None
+
+
+def mcp_tool(tool: Mapping[str, Any], *, annotations: bool = False) -> dict:
+    """Convert a Responses function tool to an MCP tool: its name, description and JSON schema.
+
+    ``annotations``: also its well-formed MCP annotations (:func:`mcp_annotations`), when it has some.
+    """
+    served = {
         "name": tool["name"],
         "description": tool.get("description") or tool["name"],
         "input_schema": tool.get("parameters") or {"type": "object", "properties": {}},
     }
+    hints = mcp_annotations(tool) if annotations else None
+    return {**served, "annotations": hints} if hints else served
 
 
 class Door:
@@ -106,10 +131,15 @@ class WorkerDoor(Door):
         mailbox: Mailbox,
         *,
         tool_timeout_seconds: float,
+        annotations: bool = False,
     ):
-        """Serve ``task``'s toolset, reporting each call to its run through ``mailbox``."""
+        """Serve ``task``'s toolset, reporting each call to its run through ``mailbox``.
+
+        ``annotations``: the app's functions are listed with their MCP annotations (``harness.tool_annotations``).
+        """
         super().__init__(name)
         self.task, self.mailbox, self.limit = task, mailbox, tool_timeout_seconds
+        self.annotations = annotations
         self.app_functions, self.owners, self.served = self._compose(task, sources)
         self.held: list[HeldCall] = []
 
@@ -123,7 +153,7 @@ class WorkerDoor(Door):
         for tool in task.request().get("tools") or []:
             if tool.get("type") == "function" and tool.get("name") and tool["name"] not in app_functions:
                 app_functions.add(tool["name"])
-                served.append(mcp_tool(tool))
+                served.append(mcp_tool(tool, annotations=self.annotations))
         for source in (*sources, task.tools()):
             for tool in source.tools():
                 name = tool.get("name")
@@ -350,7 +380,12 @@ class McpBridge:
         door = self._door(ctx)
         door.listed.set()
         tools = [
-            types.Tool(name=tool["name"], description=tool["description"], input_schema=tool["input_schema"])
+            types.Tool(
+                name=tool["name"],
+                description=tool["description"],
+                input_schema=tool["input_schema"],
+                **({"annotations": types.ToolAnnotations(**tool["annotations"])} if "annotations" in tool else {}),
+            )
             for tool in door.tools()
         ]
         return types.ListToolsResult(tools=tools)

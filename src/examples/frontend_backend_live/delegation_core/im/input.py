@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
+from typing import Any
 
 from examples.shared.delegation_contract import OPTIONS
 
@@ -110,7 +111,32 @@ def with_parts(items: list[dict], *texts: str) -> list[dict]:
     return items
 
 
-def records_parts(template: str, closing: str, records: Iterable[dict]) -> tuple[str, ...]:
-    """Return the records block, one JSON line per Work, and the closing line as extra parts; none with no record."""
+# How much of a question's text the questions block shows.
+QUESTION_TEXT_CHARS = 120
+
+
+def questions_part(template: str | None, questions: Sequence[Mapping[str, Any]]) -> str:
+    """Return the questions block, one JSON line per question, newest last; "" with no question or no template.
+
+    Each question's text is cut to ``QUESTION_TEXT_CHARS``.
+    """
+    if template is None or not questions:
+        return ""
+    lines = [
+        json.dumps(
+            {**question, "question": str(question.get("question", ""))[:QUESTION_TEXT_CHARS]}, ensure_ascii=False
+        )
+        for question in questions
+    ]
+    return template.format(questions="\n".join(lines))
+
+
+def records_parts(template: str, closing: str, records: Iterable[dict], questions: str = "") -> tuple[str, ...]:
+    """Return the records block, one JSON line per Work, the questions block when given, and the closing line.
+
+    None with no record.
+    """
     lines = [json.dumps(record, ensure_ascii=False) for record in records]
-    return (template.format(records="\n".join(lines)), closing) if lines else ()
+    if not lines:
+        return ()
+    return tuple(part for part in (template.format(records="\n".join(lines)), questions, closing) if part)

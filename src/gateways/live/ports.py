@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -110,8 +110,12 @@ class DelegationPort(Protocol):
     # Milliseconds before a delegation's spoken acknowledgement, read at each hand-off; 0: at once.
     acknowledgement_delay_ms: int
 
-    async def delegate(self, input: list[dict]) -> str:
+    async def delegate(self, input: list[dict], *, metadata: Mapping[str, str] | None = None) -> str:
         """Delegate a request and return its ``delegation_id``; no event of it reaches the listener before this returns.
+
+        ``metadata`` is what the frontend states about the request, as string pairs: the server delegation adds them to
+        the request's metadata under its own keys, which win; the client delegation drops them. A part whose
+        ``delegate`` does not take the keyword is called with ``input`` alone.
 
         The server delegation returns once the core accepts the request and raises on a refusal, so a refused delegation
         never gets its lead-in spoken; the client delegation announces it to the client app and returns at once.

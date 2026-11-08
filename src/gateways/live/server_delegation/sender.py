@@ -22,6 +22,8 @@ class Request:
     starts: bool
     typed_run: bool = False
     client_event_id: str | None = None
+    # What the frontend stated about a delegation: its own metadata pairs, under the gateway's keys.
+    metadata: dict[str, str] = field(default_factory=dict)
     # The delegation id once the core accepted the request, or the refusal; cancelled when its caller gave up before it
     # was sent, or when an earlier request of its batch was refused.
     outcome: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())

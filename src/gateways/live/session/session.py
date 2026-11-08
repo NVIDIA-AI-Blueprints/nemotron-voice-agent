@@ -9,13 +9,15 @@ import asyncio
 import base64
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from examples.shared.delegation_contract import takes_metadata
 from examples.shared.ids import uid
+from examples.shared.observe import log_observation
 from gateways.live.client_delegation import ClientDelegation
 from gateways.live.events import Fanout, Timeline, client_event_allowed, error_event, event
 from gateways.live.events.fanout import Close, Send
@@ -368,6 +370,7 @@ class DelegationPortView:
     def __init__(self, part: DelegationPart):
         """Give the frontend adapter its view of the delegation ``part``."""
         self._part = part
+        self._unsupported = False  # a part that does not take metadata was observed once
 
     @property
     def target(self) -> str:
@@ -384,8 +387,17 @@ class DelegationPortView:
         """Milliseconds before the automatic spoken acknowledgement of a delegation, read when asked."""
         return self._part.acknowledgement_delay_ms
 
-    async def delegate(self, input: list[dict]) -> str:
-        """Delegate a request and return its ``delegation_id``."""
+    async def delegate(self, input: list[dict], *, metadata: Mapping[str, str] | None = None) -> str:
+        """Delegate a request and return its ``delegation_id``.
+
+        ``metadata`` reaches the part only when it is not empty and the part's ``delegate`` takes it; a part written
+        before the keyword is called with ``input`` alone, and the first such call is observed.
+        """
+        if metadata and takes_metadata(self._part.delegate):
+            return await self._part.delegate(input, metadata=metadata)
+        if metadata and not self._unsupported:
+            self._unsupported = True
+            log_observation("delegation.metadata_unsupported", port=type(self._part).__name__)
         return await self._part.delegate(input)
 
     def listen(self, listener: DelegationEvents) -> None:

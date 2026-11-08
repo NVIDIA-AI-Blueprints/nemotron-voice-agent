@@ -28,7 +28,7 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     listed,
 )
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend, BrokenStreamError, back_off
-from examples.shared.delegation_contract import TERMINALS
+from examples.shared.delegation_contract import TERMINALS, model_tool
 from examples.shared.ids import uid
 
 from .settings import LlmSettings
@@ -344,27 +344,33 @@ class LlmRun:
     def _payload(self, request: dict, history: list[dict]) -> dict:
         """Return the round's request: the current settings, the whole history, and every tool the round offers.
 
-        The capped round after ``max_tool_rounds`` offers no tool, so its model has none to call or to write out.
+        The capped round after ``max_tool_rounds`` offers no tool, so its model has none to call or to write out. A
+        round of a task whose tools the IM closed (rule E9) offers no tool either, with no note: the held call's output
+        already says what to do.
         """
         capped = self.round > self.settings.max_tool_rounds
-        tools, self.owners = ([], {}) if capped else self._round_tools(request)
+        closed = self.task.tools_closed
+        tools, self.owners = ([], {}) if capped or closed else self._round_tools(request)
         self.offered = [tool["name"] for tool in tools if tool.get("name")]
         payload = {**request, "tools": tools, "input": deepcopy(history)}
+        if capped or closed:
+            payload["tool_choice"] = "none"
+            logger.debug(f"Round {self.round} offers no tool: {'past the round cap' if capped else 'tools closed'}")
         if capped:
             note = self.task.texts.round_cap_note
-            payload["tool_choice"] = "none"
             payload["instructions"] = f"{request['instructions']}\n\n{note}" if request.get("instructions") else note
-        elif allowed_tools(request.get("tool_choice")) is not None:
+        elif not closed and allowed_tools(request.get("tool_choice")) is not None:
             payload["tool_choice"] = request["tool_choice"].get("mode") or "auto"
         return payload
 
     def _round_tools(self, request: dict) -> tuple[list[dict], dict[str, ToolSource]]:
         """Return the request's, the server sources' and the work tools, each name once (the first wins).
 
-        Under an ``allowed_tools`` tool choice, only the tools it lists, but the work tools all the same.
+        Under an ``allowed_tools`` tool choice, only the tools it lists, but the work tools all the same. The app's
+        tools go without their annotations, which no model API takes.
         """
         allowed = allowed_tools(request.get("tool_choice"))
-        tools = [tool for tool in deepcopy(list(request.get("tools") or [])) if listed(tool, allowed)]
+        tools = [model_tool(tool) for tool in request.get("tools") or [] if listed(tool, allowed)]
         names = {tool.get("name") for tool in tools}
         owners: dict[str, ToolSource] = {}
         work_tools = self.task.tools()

@@ -83,7 +83,7 @@ To run host-native without Docker, set `selection: frontend-backend-live` in [`e
 
 The example's settings are the `config` block of its entry in [`examples_registry.yaml`](../../../examples_registry.yaml), which must set `frontend.adapter` and its block, `frontend.cascade.slot`, `core.backend.slot`, `core.backend.prompt`, and `ui_bot.channel`. Every other key keeps its default, which the settings models document: [`config_manager/schema.py`](config_manager/schema.py) for `frontend`, [`delegation_core/config.py`](delegation_core/config.py) for `core.delegation`, and each backend adapter's `settings.py` for its block. The server reads the block once, so restart it after an edit. An unknown key or an invalid value refuses the sessions and routes that read it, and the server log names the key. The block has three parts:
 
-- `frontend`: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`), which sets the talker, the voice, and the caller's turns.
+- `frontend`: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`), which sets the talker, the voice, how the backend's answers land (`delegation.answers`), and the caller's turns.
 - `core`: the delegation core of live sessions, as [Build and Configure the Core](delegation_core/README.md#build-and-configure-the-core) describes.
 - `ui_bot`: the UI bot's channel context (`channel`) and its own core: `core` with `ui_bot.core` merged over it. A mapping merges key by key, while any other value, `null` included, replaces it. The shipped `ui_bot.core` keeps the bot on the `llm` adapter.
 
@@ -102,12 +102,21 @@ config:
         app_wait_seconds: 50             # the app-wait line after the app takes this long; null: none
         progress_after_seconds: 8        # a progress line after this much silent work; null: none
         progress_max_per_delegation: 3   # progress lines for one delegation
+        result_wording: writer           # writer | as_written (experimental): results said as the backend wrote them
+        spelled_notes: true              # a [spelled: …] note on caller lines in the backend's transcript
+        answers:
+          max_tries: 3                   # misses before an unheard backend answer is dropped; null: no limit
       memory:
         context_tokens: 16000            # the talker's memory budget
       speech:
         interrupt_min_words: 2           # words that start the caller's turn while the bot speaks
+        spelling_hold: true              # a turn that ends in a spelling ends only at turn_silence_seconds
       tts_preroll_ms: 300                # reply audio held before playback; 0: off
 ```
+
+The `delegation.answers` block also holds five switches: `requeued_as_said`, `unheard_rest_once`, `lead_in_skip`, and `unheard_questions` are on by default, and `clear_ended_on_cut` is off by default. [Turns and Interruptions](#turns-and-interruptions) describes what they do, and [`config_manager/schema.py`](config_manager/schema.py) comments each one. `delegation.keep_questions` (`true`) says the backend's text as written when the talker's wording of a result no longer ends with the result's last question. `delegation.result_wording` is experimental: `writer`, the default, has the talker word each result, and `as_written` says results as the backend wrote them, with no talker call. `delegation.spelled_notes` (`true`) ends a caller line that holds single letters or digits in a row with a note that joins them, such as `[spelled: B4071]`, in the backend's transcript only.
+
+The core's write gate is off by default. When you turn it on with `core.delegation.write_gate.enabled`, the core holds an app function call that can change data until the caller has heard the backend's answers in full. The commented `write_gate` block in the registry's `core` block shows its keys. For a harness, `core.backend.harness.bridge.tool_annotations` (`false`) lists the app's functions to the agent with their MCP annotations. For how the gate works, refer to [The Write Gate](delegation_core/README.md#the-write-gate).
 
 A model endpoint uses `NVIDIA_API_KEY` unless its `services.yaml` entry sets `api_key_env` to another variable. The server reads `examples_registry.yaml` from the repository root, and Compose mounts that file into the app container.
 
@@ -139,13 +148,15 @@ The `tools` style is experimental, so test a model's routing decisions on your o
 
 ### Turns and Interruptions
 
-`frontend.cascade.speech` sets the caller's turns. While the bot is silent, `vad_start_seconds` (0.12 seconds) of the caller's speech starts their turn. While the bot speaks, the caller's turn starts, and cuts the bot off, after `interrupt_min_words` words (2), so a cough or a one-word backchannel does not. Smart Turn judges each pause of `vad_stop_seconds` (0.2 seconds), and a pause of `turn_silence_seconds` (1.2 seconds) ends any turn.
+`frontend.cascade.speech` sets the caller's turns. While the bot is silent, `vad_start_seconds` (0.12 seconds) of the caller's speech starts their turn. While the bot speaks, the caller's turn starts, and cuts the bot off, after `interrupt_min_words` words (2), so a cough or a one-word backchannel does not. Smart Turn judges each pause of `vad_stop_seconds` (0.2 seconds), and a pause of `turn_silence_seconds` (1.2 seconds) ends any turn. With `spelling_hold` (`true`), a turn that ends in single letters or digits in a row, such as a spelled name or code, ends only at that `turn_silence_seconds` pause.
+
+When the caller cuts off a backend answer, the voice says its unheard sentences once, as written, if the talker waits on the caller's turn; a request, an instruction, or a newer result drops them. A line that the caller did not hear at all is said again with the same words, unless something newer happened since or it came out silent. After `answers.max_tries` (3) misses, the voice drops a backend answer and the next delegation tells the backend that the caller never heard it. The next delegation's input also names a cut answer's questions that did not play.
 
 ### Prompts
 
 [`prompts.yaml`](prompts.yaml) holds the talker prompt that the repository UI lists (`cafe`) and, in `agent_prompts`, the other texts, which the **Prompts** tab shows read-only. `Talker` and `Backend` hold the default talker and backend prompts, and `Channel` holds the UI bot's channel context. `Cascade` holds the text of the talker's calls, `Lines` holds the voice's fixed lines, and `Core` holds the delegation core's texts.
 
-Each session reads the file when it starts, but the server reads the core's texts and the Live core's default backend prompt once, so restart it after you edit them. A file that `PROMPT_FILE_PATH` names replaces the whole file, so it must hold every `agent_prompts` entry. It can leave out the `tools` style's entries in `Cascade` (`tool_frame_before`, `tool_routing`, `tool_rules`, `tools.delegate`, and `tools.wait`) when no model uses that style. An unknown entry in `Cascade` or `Lines` refuses the live and UI bot sessions, and the server log names the entry or its group.
+Each session reads the file when it starts, but the server reads the core's texts and the Live core's default backend prompt once, so restart it after you edit them. A file that `PROMPT_FILE_PATH` names replaces the whole file, so it must hold every `agent_prompts` entry. It can leave out the `tools` style's entries in `Cascade` (`tool_frame_before`, `tool_routing`, `tool_rules`, `tools.delegate`, and `tools.wait`) when no model uses that style. It can also leave out the texts added later: `transcript.not_said`, `transcript.now_heard`, `transcript.cut_question`, and `transcript.spelled` in `Cascade`, and `texts.unheard_write_output`, `texts.unheard_undeclared_output`, `texts.unheard_question_output`, and `texts.questions_block` in `Core`. The feature that needs a missing text is off, and the server log has a `prompts.missing_text` warning that names the key. An unknown entry in `Cascade` or `Lines` refuses the live and UI bot sessions, and the server log names the entry or its group.
 
 ## Customization
 
@@ -161,6 +172,6 @@ For a Live route that answers 404, a refused session, or a harness that does not
 
 Follow these practices:
 
-- **Repeat the talker's limits in the backend's instructions.** When the talker cannot word a result, the voice says the backend's text as written. So also put any limits on what the caller may hear in `delegation.responses.instructions`, or in your backend's prompt in client mode.
+- **Repeat the talker's limits in the backend's instructions.** When the talker cannot word a result, or, with `delegation.keep_questions`, its wording drops the result's last question, the voice says the backend's text as written. So also put any limits on what the caller may hear in `delegation.responses.instructions`, or in your backend's prompt in client mode.
 - **Keep the app-wait line before the deadline.** `core.delegation.client_tool_timeout_seconds` (60) is the core's deadline for the app's function outputs. Keep `frontend.cascade.delegation.app_wait_seconds` (50) below it, so the `app_wait_line` plays while the work still waits.
 - **Change the UI bot's backend with its talker prompt.** A new top-level talker prompt keeps the cafe's channel context, backend prompt, tools, and greeting lines. So also change `backend.prompt` and `backend.tools` under `ui_bot.core`, `ui_bot.channel`, and the `intro` and `greeting` lines in `agent_prompts.Lines`.

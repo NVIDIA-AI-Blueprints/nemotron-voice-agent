@@ -214,6 +214,20 @@ class WorkNote:
         later = [self.entries[each] for each in ids[min(known) + 1 :] if each not in delegation_ids]
         return tuple(entry.request for entry in later if entry.ready == 0)
 
+    def newer_state(self, delegation_ids: list[str]) -> tuple:
+        """The newer requests of ``delegation_ids``: what a line said about them stands on. Read-only.
+
+        The ids of every entry made after the oldest of them, open or answered, and the requests of those still open (as
+        :meth:`newer_requests` reads them), so a request that opened and was already answered by the next run still
+        counts as a change; a request that closed leaves the ids.
+        """
+        ids = list(self.entries)
+        known = [ids.index(delegation_id) for delegation_id in delegation_ids if delegation_id in self.entries]
+        if not known:
+            return ()
+        later = [self.entries[each] for each in ids[min(known) + 1 :] if each not in delegation_ids]
+        return tuple(entry.id for entry in later), tuple(entry.request for entry in later if entry.ready == 0)
+
     def quiet_candidate(self, max_lines: int) -> OpenWork | None:
         """Return the oldest open delegation a quiet spell may speak about: quiet, with news, and under the cap."""
         for entry in self.entries.values():

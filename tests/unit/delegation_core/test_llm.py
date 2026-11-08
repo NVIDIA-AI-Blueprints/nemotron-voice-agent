@@ -707,3 +707,41 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
                 arrivals = (a_request("d_1", "Also this."), a_request("d_2", "Also this."))
                 self.assertEqual(await decide(SteerOpenWork(), ConductorInput(arrivals, works, (), 0)), [decision])
         self.assertEqual(await decide(SteerOpenWork(), ConductorInput((), (running,), (), 0)), [])
+
+
+class ClosedToolsTests(unittest.IsolatedAsyncioTestCase):
+    """Port rule E9: a task whose tools the IM closed answers next, with no tool offered and no round-cap note."""
+
+    async def test_a_closed_task_gets_a_round_with_no_tool_and_answers(self):
+        provider, task = ScriptedProvider(text_round("I can save the note. Shall I?")), FakeTaskContext()
+        task.tools_closed = True
+        events = await drive(adapter(provider, tools=[RecordingTools()]).start(task), task)
+        payload = provider.payloads[0]
+        self.assertEqual((payload["tools"], payload["tool_choice"]), ([], "none"))
+        self.assertNotIn(task.texts.round_cap_note, payload["instructions"])
+        self.assertEqual(said(events)[-1], ("final_answer", "I can save the note. Shall I?"))
+
+    async def test_a_call_written_in_a_closed_round_does_not_fail_the_response(self):
+        provider = ScriptedProvider(call_round("get_menu", {}, "call_1"), text_round("Shall I save it?"))
+        task = FakeTaskContext()
+        task.tools_closed = True
+        task.refused.add("call_1")  # the IM refuses a declared write of a closed task at once
+        events = await drive(adapter(provider).start(task), task)
+        self.assertEqual([payload["tool_choice"] for payload in provider.payloads], ["none", "none"])
+        self.assertEqual(said(events)[-1], ("final_answer", "Shall I save it?"))
+
+    async def test_a_round_sends_the_apps_tools_without_their_annotations(self):
+        annotated = {**MENU, "annotations": {"readOnlyHint": True}}
+        provider, task = ScriptedProvider(text_round("Done.")), FakeTaskContext(declared=[annotated])
+        await drive(adapter(provider).start(task), task)
+        sent = [tool for tool in provider.payloads[0]["tools"] if tool["name"] == "get_menu"]
+        self.assertEqual(sent, [MENU])
+        self.assertIn("annotations", task.request()["tools"][0])  # the task's request keeps them
+
+    async def test_closed_tools_win_over_an_allowed_tools_choice(self):
+        choice = {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_menu"}]}
+        provider, task = ScriptedProvider(text_round("Shall I save it?")), FakeTaskContext()
+        task.tools_closed = True
+        task.request = lambda: {**FakeTaskContext().request(), "tool_choice": choice}
+        await drive(adapter(provider).start(task), task)
+        self.assertEqual((provider.payloads[0]["tools"], provider.payloads[0]["tool_choice"]), ([], "none"))

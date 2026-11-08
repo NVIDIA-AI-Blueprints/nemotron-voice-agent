@@ -15,7 +15,7 @@ The core has no HTTP routes of its own. A caller reaches it in process through `
 | `GET /v1/models/{model}` | Returns the model object when the backend serves `model`, and refuses any other model. |
 | `DELETE /v1/conversations/{id}` | Ends the conversation's IM session, which stops its work and ends every open response. |
 
-The core reads two `metadata` keys: `live_delegation_id` names the delegation, and `live_typed_run: "true"` marks a typed run. A request that names its delegation, brings no function outputs, and is not a typed run is a delegation, and any other request is the client's own. A request with no `conversation` is stateless: a one-shot IM session serves it and keeps nothing.
+The core reads three `metadata` keys: `live_delegation_id` names the delegation, `live_typed_run: "true"` marks a typed run, and `live_reply_unheard` states what of the backend's answers the caller had not heard when they spoke: `none`, `answer` (part of an answer, with no question in that part), or `question` (an unheard sentence asks). The example's frontend states `live_reply_unheard` on each delegation, and the [write gate](#the-write-gate) reads it. A request that states no value, or a value outside these three, states no fact. A request that names its delegation, brings no function outputs, and is not a typed run is a delegation, and any other request is the client's own. A request with no `conversation` is stateless: a one-shot IM session serves it and keeps nothing.
 
 In the [Frontend/Backend Live example](../README.md), the composition root builds one core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the gateway's [server delegation](../../../../docs/how-to/use-live-gateway.md#server-delegation), in a conversation of its own. A client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one stateless request. The repository UI bot builds a core of its own for each bot session, from the core's settings with `ui_bot.core` merged over them, which set the cafe's `backend.prompt` and `backend.tools`.
 
@@ -26,7 +26,7 @@ In the [Frontend/Backend Live example](../README.md), the composition root build
 The core's settings are the `core` block of the example's settings, in the `config` block of its entry in [`examples_registry.yaml`](../../../../examples_registry.yaml), as the example's [Configuration](../README.md#configuration) describes. The server reads them once, so an edit takes effect at the next restart. The block must set `backend.slot` and `backend.prompt`. Every other key that it leaves out keeps its default, and an unknown key stops the load. The block has the following parts:
 
 - `delegation`: the IM's settings, with their defaults in `DelegationSettings` ([`config.py`](config.py)).
-- `backend`: the adapter (`adapter`) and the one that serves stateless requests (`one_shot_adapter`), both `llm` by default, and the default model's slot and prompt (`slot` and `prompt`). It also sets the server tool sources (`tools`) and the steps that the app's outputs take before the backend reads them (`app_output_steps`, none by default). It also has each adapter's own block, whose defaults are in the adapter's `settings.py`. The registry block shows, commented out, how to turn on the ID-shape hints step (`app_output_steps.shape_hints` with its `not_found_pattern`). The hint's words are the `backend.app_output_steps.shape_hints.hint` entry of `agent_prompts.Core`.
+- `backend`: the adapter (`adapter`) and the one that serves stateless requests (`one_shot_adapter`), both `llm` by default, and the default model's slot and prompt (`slot` and `prompt`). It also sets the server tool sources (`tools`) and the steps that the app's outputs take before the backend reads them (`app_output_steps`, none by default). It also has each adapter's own block, whose defaults are in the adapter's `settings.py`. The registry block shows, commented out, how to turn on the ID-shape hints step (`app_output_steps.shape_hints` with its `not_found_pattern`), which stays off by default. The step suggests each other form of an ID once. With `stop_when_futile` (`true`), after a form that it suggested also finds nothing, the step gives no more hints for that field and adds one line that asks the backend to read the value back to the caller. The texts are the `backend.app_output_steps.shape_hints.hint` and `backend.app_output_steps.shape_hints.read_back` entries of `agent_prompts.Core`. Without `read_back`, no line is added.
 
 The core's texts are the lines that the IM and the backend write or add to a model's input. They are the `agent_prompts.Core` entries of the example's [`prompts.yaml`](../prompts.yaml), which the UI's **Prompts** tab shows. Each entry is named by its place in the settings. `texts.<key>` names the core's own lines, such as `texts.conductor_prompt`. `backend.<block>.<key>` names the texts of a backend block, such as the harness's prompt templates (`backend.harness.prompts`). A block's texts join it only when the settings have the block, so you can remove an app output step without editing `prompts.yaml`. Settings that set one of these places, such as `backend.harness.prompts.user`, stop the load with a message that names `agent_prompts.Core`.
 
@@ -40,8 +40,52 @@ The following table lists the `delegation` settings that you are most likely to 
 | `result_format` | `plain` | `plain`, or `speak_display`, which adds a `show` item for the screen before the answer to speak. |
 | `progress_note_seconds` | `1.0` | The shortest time between two progress notes of one delegation. `0` writes none. |
 | `context_tokens` | `24000` | The backend history's budget. Over it, the oldest requests leave the history, each one whole. |
+| `questions.shown` | `3` | The backend's newest questions that the questions block lists. `0` turns the block off. |
+
+A request that carries the work records also carries the questions block after them (`texts.questions_block`). It
+lists the backend's newest questions to the caller in this conversation, newest last. Each question shows how many of
+the backend's replies asked it (`asked`) and, when the frontend stated it, how many times the caller had heard it to the
+end when they next spoke (`heard_in_full`). A prompt file without `texts.questions_block` loads with a
+`prompts.missing_text` warning, and no block is shown.
 
 Every task of a conversation gets the `cancel_work` work tool and the caller and voice notes (`texts.caller_note` and `texts.voice_note`). A one-shot session offers no work tool.
+
+## The Write Gate
+
+The write gate keeps the backend from changing the app's data on a caller's words that answered something else. It is
+off by default, and `delegation.write_gate.enabled: true` turns it on. While it is on, the IM holds an app function
+call that can change data, and answers it with a not-run output instead of sending it to the app, when one of the
+following is true:
+
+- The caller had not heard the backend's answers in full when they last spoke, as the request's `live_reply_unheard`
+  states. `write_gate.unheard` (experimental) sets the lowest level that holds a call: `answer` (the default) or
+  `question`.
+- The backend asked a question after the caller's request was admitted.
+- A question asked earlier in the call was never heard. The gate holds a call once for each such question, and the
+  not-run output names it (`texts.unheard_question_output`).
+
+A request that states no `live_reply_unheard` is never held, so a frontend or a delegation port without the key keeps
+working as before. The gate reads what each tool does from its MCP annotations, then from the operator's lists:
+
+- An app declares a function tool's kind with an MCP `annotations` object on the tool, such as
+  `{"readOnlyHint": true}`. `readOnlyHint: true` is a read, which the gate never holds. `readOnlyHint: false` or
+  `destructiveHint: true` is a write. A write with `destructiveHint: false` is reversible, and `write_gate.reversible`
+  (`run`) lets it run. The core reads the annotations and strips them before every model call.
+- `delegation.tool_kinds.read_tools` and `delegation.tool_kinds.write_tools` list tool names or `fnmatch` patterns for
+  tools that carry no annotations. A tool's own annotations win, and a name must not be in both lists.
+- A tool that neither declares is undeclared. With `write_gate.undeclared: hold`, the default, the gate holds it at most
+  once per caller request for each tool, and it runs when the backend calls it again. Declare your read-only tools,
+  with annotations or `read_tools`, to spare them that extra backend round.
+
+When the backend calls a held declared write again for the same request, the call is not run either, and the IM closes
+the task's tools: its next round offers no tool and must answer (port rule E9 in
+[`backend/port.py`](backend/port.py)). A newer request reopens them. The not-run outputs are the
+`texts.unheard_write_output`, `texts.unheard_undeclared_output`, and `texts.unheard_question_output` entries of
+`agent_prompts.Core`. A prompt file that lacks one still loads with a `prompts.missing_text` warning: without
+`texts.unheard_write_output`, the gate stays off; without the other two, undeclared tools run and the open-question
+reason is off. The registry's `core` block shows the gate's keys, commented out. With the harness adapter,
+`backend.harness.bridge.tool_annotations: true` also lists the app's functions to the agent with their annotations.
+It is off by default, since an agent may act on them, for example by asking for permission.
 
 ## Packages
 

@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Works and tasks: what runs, what it reads, and how it reaches the wire."""
+"""Works and tasks: what runs, what it reads, and how it reaches the wire.
+
+The write gate (``IMSession.write_check``), when it is on, holds an app call not declared read-only while what the
+caller needed to hear went unheard: each tool at most once per request, the gated calls of a held round together, and a
+second attempt of a held declared write closes the task's tools (port rule E9).
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -31,7 +36,13 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     message_phase,
 )
 from examples.frontend_backend_live.delegation_core.im.conversation import TaskHistory
-from examples.frontend_backend_live.delegation_core.im.input import settings_for, task_request, user_message, with_parts
+from examples.frontend_backend_live.delegation_core.im.input import (
+    QUESTION_TEXT_CHARS,
+    settings_for,
+    task_request,
+    user_message,
+    with_parts,
+)
 from examples.frontend_backend_live.delegation_core.im.results import CallReports, ControlCalls
 from examples.frontend_backend_live.delegation_core.im.stop import AtBackstop, AtDeadline, StopReason
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter
@@ -39,15 +50,18 @@ from examples.frontend_backend_live.delegation_core.im.tools import WorkTools
 from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.delegation_core.ledger.records import Runner, Task, Work
 from examples.frontend_backend_live.delegation_core.ledger.records import Steering as SteeringRecord
+from examples.shared.delegation_contract import ends_with_question, sentences
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.delegation_core.config import Texts
-    from examples.frontend_backend_live.delegation_core.im.session import IMSession
+    from examples.frontend_backend_live.delegation_core.im.session import IMSession, WriteCheck
 
 # The reasons of a cut attempt that end the response incomplete; any other failure ends it failed.
 OFFICIAL_REASONS = frozenset({"max_output_tokens", "content_filter"})
 TOO_MANY_REQUESTS = 429
 RECORD_TEXT_CHARS = 300
+# The write gate's outcome of a checked call, by its held reason (None: it ran).
+_OUTCOME = {None: "ran", "held_again": "held_again"}
 ITEM_REPORTS = CallReports()
 CONTROL_REPORTS = ControlCalls()
 
@@ -145,6 +159,11 @@ class TaskRun:
         self.stop_reason: StopReason | None = None
         self.stopped: StopOutcome | None = None
         self.own_cancel = False
+        # The write gate's holds (the request and the tool of each), the first hold of the current round (its other
+        # gated calls join it), and whether a held declared write was called again (its next round offers no tool, E9).
+        self.holds: set[tuple[str, str]] = set()
+        self.round_hold: WriteCheck | None = None
+        self.tools_closed = False
         self.failure: Failure | None = None
         self.grant: asyncio.Future | None = None
         self.outputs_in: asyncio.Future | None = None
@@ -326,6 +345,7 @@ class TaskRun:
     def _attempt_failed(self, raw: dict) -> None:
         # A failed or cut attempt writes nothing.
         self.attempt, self.last_terminal = [], raw
+        self.round_hold = None
 
     def _round_completed(self, raw: dict) -> None:
         items, self.attempt, self.last_terminal = self.attempt, [], None
@@ -349,13 +369,14 @@ class TaskRun:
                 self.session.action(self, call)
         refused = any(self.routes.get(call.get("call_id", "")) == "refused" for call in calls)
         self.held = refused and self.session.waits_for_decision and self.stop_reason is None
+        self.round_hold = None  # the round's calls were all routed: a held round covers no later call
         if answer is not None:
             self._answer(answer)
 
     def _answer(self, message: dict) -> None:
         """Mark the round answered, and have the Work write ``message``."""
         self.answered = True
-        self.trace("im.answer.written")
+        self.trace("im.answer.written", question=any(map(ends_with_question, sentences(message_text(message)))))
         self.work.answer(self, message)
 
     @property
@@ -399,7 +420,8 @@ class TaskRun:
 
         The reasons, in order: a stop or the task's own ``cancel_work``; a function the app and a work tool both name;
         an app function the ``allowed_tools`` tool choice leaves out; newer input waiting (the commit gate); an app
-        call that repeats the newest call that ran, which this task made and the app answered, with no request since.
+        function the write gate holds (:meth:`_write_gate`); an app call that repeats the newest call that ran, which
+        this task made and the app answered, with no request since.
         """
         texts, name, settings = self.session.texts, call.get("name", ""), self.work.settings
         declared = [tool for tool in settings.tools if tool.get("type") == "function" and tool.get("name") == name]
@@ -412,15 +434,51 @@ class TaskRun:
             return texts.unlisted_output
         if self.newer_input_waits():
             return texts.not_run_output
+        if declared and (held := self._write_gate(declared[0], name)) is not None:
+            return held
         # A Work that took another request may ask for the same call again.
         if not declared or len(self.work.requests) > 1:
             return None
         return self.session.repeated_output(call, self.task_id)
 
+    def _write_gate(self, tool: dict, name: str) -> str | None:
+        """The write gate's not-run output for an app call of ``tool``; ``None``: the gate lets it run.
+
+        Each tool is held at most once per request (``holds``); a call of a round already held joins the round's hold
+        (``round_hold``), so the round costs one extra backend round. A second call of a held declared write is not run
+        and closes the task's tools (port rule E9); once they are closed, every declared write is refused at once until
+        a newer request lands in the task.
+        """
+        request = self.work.requests[-1]
+        own = (request, name) in self.holds  # this tool already had its hold for this request
+        check = self.session.write_check(tool, request, tool_held_before=own)
+        if self.tools_closed and check is not None and check.source is not None:
+            return self.session.texts.unheard_write_output
+        joined = check is not None and check.held is None and self.round_hold is not None and not own
+        if joined:  # a call the gate covers, in a round already held: held with the round's first hold
+            check = replace(check, held=self.round_hold.held, question=self.round_hold.question)
+        if check is None:
+            return None
+        self.trace(
+            "im.write_gate",
+            tool=name,
+            outcome=_OUTCOME.get(check.held, "held"),
+            reason=check.held or "",
+            reply_unheard=check.fact.level.value,
+            kind_source=check.source.value if check.source is not None else "",
+            with_round=joined,
+        )
+        if check.held == "held_again":
+            self.tools_closed = True
+        if not check.held:
+            return None
+        self.holds.add((request, name))
+        self.round_hold = self.round_hold or check
+        return self.session.not_run_output(check)
+
     def _route(self, name: str) -> Route:
         """Return who runs a call the IM lets run: the app for a function the request declared, else the backend."""
-        declared = any(tool.get("type") == "function" and tool.get("name") == name for tool in self.work.settings.tools)
-        return "app" if declared else "backend"
+        return "app" if self.work.function(name) is not None else "backend"
 
     def newer_input_waits(self) -> bool:
         """Return whether newer input waits: to land in this task, or for the conductor's decision on any Work.
@@ -433,8 +491,7 @@ class TaskRun:
         """Return who runs a call of ``name``, as its action records it, also for a refused call."""
         if name in self.work_tools.names:
             return "im"
-        declared = any(tool.get("type") == "function" and tool.get("name") == name for tool in self.work.settings.tools)
-        return "app" if declared else "backend"
+        return "app" if self.work.function(name) is not None else "backend"
 
     def _refuse(self, call: dict) -> None:
         """Refuse ``call``: its action is ``not_run``, and its output is the not-run output that says why."""
@@ -575,6 +632,12 @@ class WorkRun:
         """The requests it carries, in the order they joined it, handed-over ones included."""
         return self.record.requests
 
+    def function(self, name: str) -> dict | None:
+        """The function tool the Work's settings declare by ``name``; ``None`` when they declare none."""
+        return next(
+            (tool for tool in self.settings.tools if tool.get("type") == "function" and tool.get("name") == name), None
+        )
+
     def take_settings(self, settings: dict) -> None:
         """Take an explicit request's own settings: the Work's response is written with them from then on."""
         self.record.settings = deepcopy(settings)
@@ -647,6 +710,12 @@ class WorkRun:
 
             def written(writer: ResponseWriter) -> None:
                 writer.message(text, "final_answer")
+                for asked in self.session.questions.answer_written(text, self.requests):
+                    question = asked.text[:QUESTION_TEXT_CHARS]
+                    repeat = asked.asked > 1
+                    self.session.observe(
+                        "im.question.asked", work_id=self.id, question=question, asked=asked.asked, repeat=repeat
+                    )
                 if result.state == "final":
                     result.move("pushed")
 
@@ -751,6 +820,8 @@ class WorkRun:
         batch.landed = True
         if batch in self.batches:
             self.batches.remove(batch)
+        for task in self.open_tasks():
+            task.tools_closed = False  # a newer request gets its own first check
         for taker in batch.delegations:
             self.requests.append(taker)
             self._take_over(taker)

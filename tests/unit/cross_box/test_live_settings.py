@@ -11,11 +11,15 @@ from pathlib import Path
 
 import yaml
 
-from examples.frontend_backend_live.config_manager.schema import ExampleConfig
+from examples.frontend_backend_live.config_manager.schema import ExampleConfig, LiveConfig
 from examples.frontend_backend_live.delegation_core.backend.agent import AgentSettings
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegation_core.im.session import IMSession
+from examples.frontend_backend_live.delegations import ReadyResult
+from examples.frontend_backend_live.factory import adapter_block
 from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, EXAMPLE_SETTINGS, core_block
+from tests.unit.frontend_helpers import CallHarness
 
 REPO = Path(__file__).resolve().parents[3]
 WHERE = r"comes from agent_prompts\.Core in the example's prompts\.yaml"
@@ -86,3 +90,57 @@ class ComposeTests(unittest.TestCase):
             names = {str(item).split("=", 1)[0] for item in service.get("environment") or ()}
             with self.subTest(service=name):
                 self.assertEqual(names & {"LIVE_ENABLED", "LIVE_API_TOKEN"}, set())
+
+
+class WriteGateSettingsTests(unittest.TestCase):
+    """The write gate's settings: off by default, its modes, the operator's tool lists, and its optional texts."""
+
+    def test_the_write_gate_is_off_by_default_and_refuses_an_unknown_mode(self):
+        gate = CoreSettings.parse(CORE_BLOCK, CORE_TEXTS).delegation.write_gate
+        self.assertEqual(
+            (gate.enabled, gate.unheard, gate.undeclared, gate.reversible), (False, "answer", "hold", "run")
+        )
+        for bad in ({"unheard": "statement"}, {"undeclared": "ask"}, {"enabled": "yes"}, {"oops": True}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "write_gate"):
+                CoreSettings.parse(core_block(delegation={"write_gate": bad}), CORE_TEXTS)
+
+    def test_tool_kinds_refuse_a_blank_pattern_and_an_entry_in_both_lists(self):
+        for bad, message in (
+            ({"read_tools": [" "]}, "non-empty text"),
+            ({"read_tools": ["list_*"], "write_tools": ["list_*"]}, "list_\\* in both read_tools and write_tools"),
+        ):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, message):
+                CoreSettings.parse(core_block(delegation={"tool_kinds": bad}), CORE_TEXTS)
+
+    def test_the_shipped_registry_declares_no_tool_names(self):
+        cores = {name: core_block(backend={"adapter": name}) for name in ("llm", "llm-agent", "harness")}
+        cores["UI bot"] = ExampleConfig.model_validate(EXAMPLE_SETTINGS).ui_bot_core
+        for name, block in cores.items():
+            with self.subTest(core=name):
+                kinds = CoreSettings.parse(block, CORE_TEXTS).delegation.tool_kinds
+                self.assertEqual((kinds.read_tools, kinds.write_tools), ((), ()))
+
+    def test_a_prompt_file_without_unheard_write_output_loads_and_leaves_the_gate_off(self):
+        texts = {name: text for name, text in CORE_TEXTS.items() if not name.startswith("texts.unheard_")}
+        on = CoreSettings.parse(core_block(delegation={"write_gate": {"enabled": True}}), texts)
+        self.assertIsNone(on.texts.unheard_write_output)
+        session = IMSession(None, None, on.delegation, on.texts)
+        tool = {"type": "function", "name": "save_note", "annotations": {"readOnlyHint": False}}
+        self.assertIsNone(session.write_check(tool, "D1", tool_held_before=False))
+
+
+class AnswersSettingsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_answers_keys_reach_the_voice_through_the_composition_root(self):
+        # frontend.cascade.delegation.answers in the example's settings, read as the root reads the cascade's block.
+        cascade = {**EXAMPLE_SETTINGS["frontend"]["cascade"], "delegation": {"answers": {"max_tries": 1}}}
+        settings = {**EXAMPLE_SETTINGS, "frontend": {**EXAMPLE_SETTINGS["frontend"], "cascade": cascade}}
+        live = LiveConfig.model_validate(adapter_block(ExampleConfig.model_validate(settings)))
+        voice = CallHarness(config=live).voice
+        voice._queue = lambda frame: None
+        voice._word_early = lambda: None
+        voice.worknote.confirm(voice.worknote.reserve("Hours?"), "del_1")
+        voice.worknote.answered("del_1")
+        voice.ready(ReadyResult("del_1", "item_1", "The gym opens at six."))
+        batch = voice._take()
+        voice.not_heard(voice.delivered(batch, "We open at six."))  # the first miss drops it
+        self.assertEqual((list(voice.owed), voice.worknote.answer_ready()), ([], False))

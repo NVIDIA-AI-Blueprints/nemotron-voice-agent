@@ -150,6 +150,23 @@ class ConversationTests(CoreCase):
         self.assertEqual(page["data"][0]["content"][0]["text"], "When do you open?")
         self.assertEqual(model.payloads[0]["input"][0]["content"][0]["text"], "When do you open?")
 
+    async def test_a_delegation_states_what_was_heard_in_metadata_and_a_bad_value_states_nothing(self):
+        self.core(Model(text_round("Done.")), Model(text_round("Done.")), Model(text_round("Done.")))
+        conversation = await self.open()
+        im = self.service._session(conversation)
+        cases = (
+            ("item_1", {"live_reply_unheard": "question"}, "question"),
+            ("item_2", {"live_reply_unheard": "maybe"}, None),
+        )
+        for delegation, stated, level in cases:
+            with self.subTest(stated=stated):
+                await self.ask(self.request(conversation, metadata={"live_delegation_id": delegation, **stated}))
+                heard = im.heard(delegation)
+                self.assertEqual(heard.level.value if heard is not None else None, level)
+        # A request of the client's own names no delegation, so it states no fact.
+        await self.ask(self.request(conversation, metadata={"live_reply_unheard": "question"}))
+        self.assertTrue(all(incoming.brings is None or incoming.heard is None for incoming in im.incoming.values()))
+
     async def test_a_deleted_conversation_stops_and_is_gone(self):
         # The round still runs when the conversation is deleted.
         model = Model([asyncio.Event(), *text_round("Done.")])
