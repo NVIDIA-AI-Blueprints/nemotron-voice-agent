@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""The session's media timeline: the caller's input clock."""
+
+from __future__ import annotations
+
+
+class Timeline:
+    """The input clock: milliseconds of caller audio seen so far."""
+
+    def __init__(self) -> None:
+        """Start at 0 ms."""
+        self.input_ms = 0
+
+    def advance(self, ms: int) -> None:
+        """Move the clock to ``ms``; it never moves backwards."""
+        self.input_ms = max(self.input_ms, ms)

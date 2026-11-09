@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Where the display part of each delegation goes: the sink's contract, and a sink that shows nothing."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from examples.frontend_backend_live.delegations import Ending, ReadyResult
+
+
+class DisplaySink(Protocol):
+    """Where the display part of each delegation goes: plain calls that never wait, and nothing shown is spoken."""
+
+    def started(self, delegation_id: str, request: str) -> None:
+        """Show that a delegation started; ``request`` is what the caller asked."""
+
+    def progress(self, delegation_id: str, line: str) -> None:
+        """Show the delegation's newest progress line."""
+
+    def shown(self, delegation_id: str, item: dict) -> None:
+        """Show a display item, the ``show`` work tool's ``mcp_call``, at once."""
+
+    def answered(self, result: ReadyResult) -> None:
+        """Show a ready result at once, before it is said."""
+
+    def ended(self, delegation_id: str, how: Ending) -> None:
+        """Show that the delegation ended."""
+
+
+class NullDisplay:
+    """A ``DisplaySink`` that shows nothing."""
+
+    def started(self, delegation_id: str, request: str) -> None:
+        """Show nothing."""
+
+    def progress(self, delegation_id: str, line: str) -> None:
+        """Show nothing."""
+
+    def shown(self, delegation_id: str, item: dict) -> None:
+        """Show nothing."""
+
+    def answered(self, result: ReadyResult) -> None:
+        """Show nothing."""
+
+    def ended(self, delegation_id: str, how: Ending) -> None:
+        """Show nothing."""

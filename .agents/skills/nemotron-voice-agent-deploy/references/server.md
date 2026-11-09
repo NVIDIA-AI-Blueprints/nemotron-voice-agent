@@ -47,7 +47,7 @@ docker run --rm --gpus '"device=2,3"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 
 Confirm GPUs `2` and `3` are the same supported GPU type and that the manifest lists the exact TP2 profile before changing `NIM_MODEL_PROFILE`.
 
-Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. The optional Super VL NIM uses GPUs `1` and `2`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
+Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. The Super VL NIM uses GPUs `1` and `2`: `frontend-backend-live/server` starts it, and other recipes add it as an optional sidecar. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 
 - Server: `docker/docker-compose.nemotron-asr.yaml`, `docker/docker-compose.magpie-tts.yaml`, `docker/docker-compose.magpie-zeroshot-tts.yaml`, `docker/docker-compose.chatterbox-tts.yaml`, `docker/docker-compose.nemotron35-lightning-nim.yaml`, `docker/docker-compose.nemotron3-omni-nim.yaml`, `docker/docker-compose.nemotron35-super-vl.yaml`, `docker/docker-compose.nemotron35-bolt-e4b.yaml`
 - A `tp=N` LLM needs N free GPUs. List every index it uses and keep those GPUs free of ASR and TTS. Each target index must appear in the hardware readout. One GPU: keep everything on `0`, or use cloud.

@@ -77,7 +77,7 @@ each companion package, **bump, rename, or remove it if folded into core**. Keep
 override-dependencies` (e.g. `cryptography` CVE pin) unless newly resolved. Then:
 
 ```bash
-uv sync --dev
+uv sync --dev --group harness
 uv run python -c "import pipecat; print(pipecat.__version__)"   # + import each companion pkg still depended on
 ```
 

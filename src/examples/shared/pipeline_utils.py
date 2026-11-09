@@ -96,7 +96,7 @@ def with_realtime_observers(*observers, transport=None) -> list:
     out = list(observers)
     if transport is None:
         return out
-    from realtime.transport import realtime_lifecycle_observer
+    from gateways.realtime.transport import realtime_lifecycle_observer
 
     realtime_obs = realtime_lifecycle_observer(transport)
     if realtime_obs is not None:
@@ -171,6 +171,7 @@ def register_session_start_handlers(
     intro_tool_choice: str | None = None,
     on_start=None,
     welcome_enabled: bool = True,
+    intro=None,
 ) -> None:
     """Start the session using the correct signal for the wire protocol.
 
@@ -179,6 +180,7 @@ def register_session_start_handlers(
     ``intro_tool_choice`` for a one-off greeting context without changing the
     shared context's tool behavior for subsequent user turns. When welcome is
     off, skip the intro and (on Realtime) open the client text gate.
+    An ``intro`` coroutine function greets in place of ``intro_prompt`` and the LLM run.
     """
     from pipecat.frames.frames import LLMContextFrame, LLMRunFrame
 
@@ -196,6 +198,9 @@ def register_session_start_handlers(
             await on_start()
         if not welcome_enabled:
             logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
+        if intro is not None:
+            await intro()
             return
         context.add_message({"role": "user", "content": intro_prompt})
         if intro_tool_choice is None:
@@ -427,7 +432,7 @@ async def create_transport(runner_args: RunnerArguments):
 
     body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
     if runner_protocol(runner_args) == "realtime":
-        from realtime.transport import create_realtime_transport
+        from gateways.realtime.transport import create_realtime_transport
 
         return create_realtime_transport(
             websocket,

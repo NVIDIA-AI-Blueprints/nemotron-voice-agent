@@ -18,16 +18,16 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_output import BaseOutputTransport
 from realtime_helpers import FakeWebSocket
 
-from realtime.audio import (
+from gateways.realtime.audio import (
     PIPELINE_PCM_RATE,
     AudioResampler,
     decode_base64_audio,
     encode_base64_audio,
 )
-from realtime.events import SERVER_ERROR, SERVER_SESSION_CREATED, SERVER_SESSION_UPDATED
-from realtime.gateway import handle_realtime_websocket
-from realtime.observer import RealtimeLifecycleObserver
-from realtime.serializer import RealtimeFrameSerializer
+from gateways.realtime.events import SERVER_ERROR, SERVER_SESSION_CREATED, SERVER_SESSION_UPDATED
+from gateways.realtime.gateway import handle_realtime_websocket
+from gateways.realtime.observer import RealtimeLifecycleObserver
+from gateways.realtime.serializer import RealtimeFrameSerializer
 
 
 class AudioHelperTests(unittest.IsolatedAsyncioTestCase):
@@ -111,7 +111,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
             session_view={"audio": {"output": {"format": {"type": "audio/pcm", "rate": 16000}}}}
         )
         ser.set_emit(emit)
-        from realtime.lifecycle import announce_response
+        from gateways.realtime.lifecycle import announce_response
 
         await announce_response(ser.conversation, emit)
         emitted.clear()
@@ -149,7 +149,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
             session_view={"audio": {"output": {"format": {"type": "audio/pcm", "rate": 16000}}}}
         )
         ser.set_emit(emit)
-        from realtime.lifecycle import announce_response, finish_response
+        from gateways.realtime.lifecycle import announce_response, finish_response
 
         await announce_response(ser.conversation, emit)
         await finish_response(ser.conversation, emit, status="completed")
@@ -172,7 +172,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         )
         ser.set_emit(emit)
         observer = RealtimeLifecycleObserver(emit=emit, conversation=ser.conversation)
-        from realtime.lifecycle import announce_response
+        from gateways.realtime.lifecycle import announce_response
 
         await announce_response(ser.conversation, emit)
         await ser.serialize(
@@ -326,7 +326,9 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         ser.set_emit(emit)
-        with patch("realtime.serializer.resolve_realtime_tts_voice", return_value="Magpie-Multilingual.EN-US.Aria"):
+        with patch(
+            "gateways.realtime.serializer.resolve_realtime_tts_voice", return_value="Magpie-Multilingual.EN-US.Aria"
+        ):
             frame = await ser.deserialize(
                 json.dumps(
                     {
@@ -468,7 +470,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
             config["tts_voice_id"] = "Magpie-Multilingual.EN-US.Aria"
             return "Magpie-Multilingual.EN-US.Aria"
 
-        with patch("realtime.serializer.resolve_realtime_tts_voice", side_effect=_resolve):
+        with patch("gateways.realtime.serializer.resolve_realtime_tts_voice", side_effect=_resolve):
             frame = await ser.deserialize(json.dumps({"type": "session.update", "session": {"voice": "alloy"}}))
         from pipecat.frames.frames import TTSUpdateSettingsFrame
 
@@ -561,7 +563,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted[-1]["error"]["code"], "unsupported_response_override")
 
     async def test_append_rejects_oversized_payload(self) -> None:
-        from realtime.audio import MAX_PENDING_INPUT_BYTES
+        from gateways.realtime.audio import MAX_PENDING_INPUT_BYTES
 
         emitted: list[dict[str, Any]] = []
 
@@ -726,7 +728,7 @@ class GatewayHandoffTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("id", session_view)
             started.set()
 
-        with patch("realtime.gateway.resolve_realtime_tts_voice", return_value=None):
+        with patch("gateways.realtime.gateway.resolve_realtime_tts_voice", return_value=None):
             await handle_realtime_websocket(
                 ws,
                 sanitize_session_config=lambda data, **_: {**data, "pipeline_mode": "generic-assistant"},

@@ -25,6 +25,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
 | [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`frontend-backend-live`](../src/examples/frontend_backend_live/README.md) | Routing talker with the `/v1/live` session API and three backend adapters: the backend LLM, an LLM agent, or an agent runtime harness (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
 
@@ -75,6 +76,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant up -d               # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents up -d     # Nemotron Omni Assistant Subagents
     docker compose --profile frontend-backend-agent up -d       # Frontend/Backend Agent Airline Assistant
+    docker compose --profile frontend-backend-live up -d        # Frontend/Backend Live Cafe Assistant
     ```
 
     **4.2 Server** (workstation NIM stack, not DGX Spark or Jetson Thor):
@@ -85,7 +87,10 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant/server up -d            # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/server up -d  # Nemotron Omni Assistant Subagents
     docker compose --profile frontend-backend-agent/server up -d    # Frontend/Backend Agent Airline Assistant
+    docker compose --profile frontend-backend-live/server up -d     # Frontend/Backend Live Cafe Assistant
     ```
+
+    The `frontend-backend-live/server` recipe runs its talker on the Nemotron 3.5 Lightning NIM on GPU `0` and its backend on the Nemotron 3.5 Super VL NIM with reasoning enabled, which it starts on GPUs `1` and `2`, so it needs three GPUs. When the Super VL NIM is not running, the backend runs on the Lightning NIM. Refer to the example's [Default Models](../src/examples/frontend_backend_live/README.md#default-models).
 
     **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve those weights as W4A16 through Marlin. Blackwell workstations enable DFlash speculative decoding automatically. DGX Spark does not load a DSpark draft model due to a known issue with vLLM streaming prefill. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
 
@@ -103,11 +108,16 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
     docker compose --profile frontend-backend-agent/single-gpu up -d     # Frontend/Backend Agent
+    docker compose --profile frontend-backend-live/single-gpu up -d      # Frontend/Backend Live
     ```
 
     To verify all services are healthy, run `docker compose ps`.
 
     > **Note:** Each Docker Compose profile pins `EXAMPLE_SELECTION=<example>`, so the container runs that single example. Set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
+    >
+    > **Note:** The `frontend-backend-live` profiles serve the Live session routes (`/v1/live`) when you set `LIVE_API_TOKEN` in `.env` and keep the profile's `EXAMPLE_SELECTION`, and every route then requires that token. With `EXAMPLE_SELECTION=all`, no Live route is served. To serve the routes without a token, for example on a trusted network, set `LIVE_ENABLED=true` instead. Anyone who can reach the server by an IP address, `localhost`, or a host name in `allowed_hosts` can then use them. For details, refer to [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
+    >
+    > **Note:** The `frontend-backend-live` profiles connect the backend LLM directly by default. To use another backend adapter, set `core.backend.adapter` in the `config` block of the `frontend-backend-live` entry in `examples_registry.yaml`, for example to `llm-agent` for the backend LLM agent, together with `core.delegation.result_format: speak_display`, and restart the app service. For the adapters, refer to [Choose a Backend Adapter](../src/examples/frontend_backend_live/README.md#choose-a-backend-adapter), and for connecting an agent such as Hermes, refer to [Connect an Agent Harness](how-to/connect-an-agent-harness.md).
     >
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 
@@ -174,6 +184,7 @@ For development and debugging, you can run the server directly:
     | `omni-assistant` | Lock to Nemotron Omni Assistant |
     | `omni-assistant-subagents` | Lock to Nemotron Omni Assistant Subagents |
     | `frontend-backend-agent` | Lock to Frontend Backend Agent |
+    | `frontend-backend-live` | Lock to Frontend Backend Live |
 
     > **Note:** Docker Compose deployments pin `EXAMPLE_SELECTION=<example>` to a single example. You can set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
 

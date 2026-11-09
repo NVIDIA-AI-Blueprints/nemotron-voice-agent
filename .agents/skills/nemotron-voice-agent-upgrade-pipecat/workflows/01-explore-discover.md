@@ -146,7 +146,8 @@ change matrix.
 
 ### 4b: Pipeline build trace (one agent per example)
 
-For `generic`, `multilingual`, `omni_assistant`, `omni_assistant_subagents`, `frontend_backend_agent`, trace:
+For `generic`, `multilingual`, `omni_assistant`, `omni_assistant_subagents`, `frontend_backend_agent`,
+`frontend_backend_live`, trace:
 
 ```text
 pipeline.py → service construction (Nvidia{LLM,STT,TTS}Service+Settings) → VAD/smart-turn/turn-strategy

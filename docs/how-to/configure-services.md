@@ -202,3 +202,5 @@ server:
 ASR entries can set `speaker_diarization_supported: true` to show the **Diarization** control in the UI, and `speaker_diarization_max_speakers` to cap the speaker count. For details, refer to [Enable Speaker Labels](enable-speaker-labels.md).
 
 `streaming_url` is an optional self-hosted LLM field that points at a StreamingInput WebSocket. The Services tab shows a **Streaming Input** toggle for it when the example lists `streaming_input` under `capabilities`. For details, refer to [Configure LLM](configure-llm.md).
+
+`api` is an optional LLM field that names the API that the Frontend/Backend Live delegation core uses to call the model: `chat-completions`, the default, or `openai-responses`. A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant, unless the `nvcf` block sets `api: chat-completions`. An `api` in the `nvcf` block applies to the NVIDIA Cloud variant only. For the servers that support `openai-responses`, refer to [Configuration](../../src/examples/frontend_backend_live/README.md#configuration) in the Frontend/Backend Live README.

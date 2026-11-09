@@ -7,12 +7,20 @@ Open this file only to change the configuration of a deployed agent. Edit the sm
 | File | Owns |
 | --- | --- |
 | `.env` | Feature flags, tracing, chat history, audio debugging, buffering, supported vLLM memory overrides |
-| `examples_registry.yaml` | `selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `transports`, and per example: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt` |
+| `examples_registry.yaml` | `selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `transports`, and per example: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, and, on `frontend-backend-live` only, `live` and `config` (below) |
 | `services.yaml` | Built-in LLM, ASR, and TTS entries under `server` (NIM) and `single-gpu` (vLLM and NeMo-Speech.cpp). An entry with `nvcf` is also served by NVIDIA Cloud |
 | `settings.yaml` | Editable LLM setting profiles referenced by `settings: <profile>` in `services.yaml` |
 | `src/examples/<package>/prompts.yaml` | Built-in prompts for that example |
 
-Example ids map to packages under `src/examples/`: `generic-assistant` → `generic`, `multilingual-assistant` → `multilingual`, `omni-assistant` → `omni_assistant`, `omni-assistant-subagents` → `omni_assistant_subagents`, `frontend-backend-agent` → `frontend_backend_agent`.
+The `frontend-backend-live` entry also has the following blocks:
+
+- `live`: the Live API hooks `factory`, `describe`, and `core`, and the gateway's limits and lists under `live.settings`, such as `max_sessions` and `allowed_hosts`.
+- `config`: the Live example's own settings. Their defaults live in the example's settings models.
+  - `frontend`: the talker and the voice. `frontend.cascade.talker_style` names the talker's style for each `llm` services key: `json` by default, or `tools`.
+  - `core`: the delegation core. `core.backend.adapter` is `llm`, `llm-agent`, or `harness`. With `llm-agent` or `harness`, also set `core.delegation.result_format: speak_display`. The core's texts are the `agent_prompts.Core` entries of the example's `prompts.yaml`.
+  - `ui_bot`: the UI bot's channel and its core, with `ui_bot.core` merged over `core`.
+
+Example ids map to packages under `src/examples/`: `generic-assistant` → `generic`, `multilingual-assistant` → `multilingual`, `omni-assistant` → `omni_assistant`, `omni-assistant-subagents` → `omni_assistant_subagents`, `frontend-backend-agent` → `frontend_backend_agent`, `frontend-backend-live` → `frontend_backend_live`.
 
 ## Validate
 
@@ -31,7 +39,7 @@ Example ids map to packages under `src/examples/`: `generic-assistant` → `gene
 ## Examples
 
 - **Switch the default LLM:** move the key to the front of the example's `services.llm`, for example `llm: [nemotron-super, nemotron-lightning]`. Restart the app service. The key must also have a running sidecar, or the Services tab hides it and the next visible entry stays the default.
-- **Run Nemotron 3.5 Super VL (Generic and Multilingual Assistants):** add its sidecar profile next to the recipe. Server: `docker compose --profile <example>/server --profile nemotron-35-super-vl up -d`, which serves the NIM on GPUs `1` and `2`. Single-GPU: `docker compose --profile <example>/single-gpu --profile nemotron-35-super-vl-single-gpu up -d --scale nvidia-llm-vllm-lightning=0`, which needs a Blackwell workstation, DGX Spark, or Jetson Thor with at least 78 GiB usable memory. It requires `HF_TOKEN` for model download. Then select `nemotron-super` in the Services tab before connecting. Use the same `--profile` flags on `down`, without `--scale`. Refer to `docs/how-to/configure-llm.md#run-nemotron-35-super-vl`.
+- **Run Nemotron 3.5 Super VL (Generic and Multilingual Assistants):** available on NVIDIA Cloud (`nemotron-super` when `NVIDIA_API_KEY` is set) or as a self-hosted sidecar. Server: `docker compose --profile <example>/server --profile nemotron-35-super-vl up -d`, which serves the NIM on GPUs `1` and `2`. Single-GPU: `docker compose --profile <example>/single-gpu --profile nemotron-35-super-vl-single-gpu up -d --scale nvidia-llm-vllm-lightning=0`, which needs a Blackwell workstation, DGX Spark, or Jetson Thor with at least 78 GiB usable memory. It requires `HF_TOKEN` for model download. Then select `nemotron-super` in the Services tab before connecting. Use the same `--profile` flags on `down`, without `--scale`. Refer to `docs/how-to/configure-llm.md#run-nemotron-35-super-vl`.
 - **Run Nemotron 3.5 Bolt 74B (Generic and Multilingual Assistants):** single-GPU only, because no NIM exists for Bolt 74B. Run `docker compose --profile <example>/single-gpu --profile nemotron-35-bolt-single-gpu up -d --scale nvidia-llm-vllm-lightning=0`, which needs a Blackwell workstation GPU (SM120) or DGX Spark (SM121) with at least 32 GiB usable memory. It requires `HF_TOKEN` for model download. Then select `nemotron-bolt-74b` in the Services tab before connecting. Use the same `--profile` flags on `down`, without `--scale`. Refer to `docs/how-to/configure-llm.md#run-nemotron-35-bolt-74b`.
 - **Run Nemotron 3.5 Bolt E4B (Generic and Multilingual Assistants):** available on NVIDIA Cloud (`nemotron-bolt-4b` when `NVIDIA_API_KEY` is set) or as a self-hosted sidecar. Server: `docker compose --profile <example>/server --profile nemotron-35-bolt-e4b up -d --scale nvidia-llm=0`, which serves the NIM in place of the Lightning NIM. Single-GPU: `docker compose --profile <example>/single-gpu --profile nemotron-35-bolt-e4b-single-gpu up -d --scale nvidia-llm-vllm-lightning=0`, which needs at least 24 GiB usable memory and `HF_TOKEN`. Then select `nemotron-bolt-4b` in the Services tab before connecting. Use the same `--profile` flags on `down`, without `--scale`. Refer to `docs/how-to/configure-llm.md#run-nemotron-35-bolt-e4b`.
 - **Turn reasoning on for one service:** add `settings: {llm: {nemotron-lightning: {enable_thinking: true}}}` to the example. Restart the app service.

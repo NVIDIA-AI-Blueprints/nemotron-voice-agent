@@ -9,7 +9,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from realtime.voice import resolve_realtime_tts_voice, tts_routing_changed
+from gateways.realtime.voice import resolve_realtime_tts_voice, tts_routing_changed
 
 
 class SoftVoiceResolveTests(unittest.TestCase):
@@ -19,9 +19,12 @@ class SoftVoiceResolveTests(unittest.TestCase):
             "tts_server": "tts.example:443",
         }
         with (
-            patch("realtime.voice.load_service_entry", return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"}),
             patch(
-                "realtime.voice.get_tts_config",
+                "gateways.realtime.voice.load_service_entry",
+                return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"},
+            ),
+            patch(
+                "gateways.realtime.voice.get_tts_config",
                 return_value={
                     "voices": [{"id": "Magpie-Multilingual.EN-US.Aria"}, {"id": "Magpie-Multilingual.EN-US.Claire"}],
                     "defaultVoiceId": "Magpie-Multilingual.EN-US.Aria",
@@ -38,9 +41,12 @@ class SoftVoiceResolveTests(unittest.TestCase):
             "tts_server": "tts.example:443",
         }
         with (
-            patch("realtime.voice.load_service_entry", return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"}),
             patch(
-                "realtime.voice.get_tts_config",
+                "gateways.realtime.voice.load_service_entry",
+                return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"},
+            ),
+            patch(
+                "gateways.realtime.voice.get_tts_config",
                 return_value={
                     "voices": [{"id": "Magpie-Multilingual.EN-US.Aria"}, {"id": "Magpie-Multilingual.EN-US.Claire"}],
                     "defaultVoiceId": "Magpie-Multilingual.EN-US.Aria",
@@ -57,8 +63,11 @@ class SoftVoiceResolveTests(unittest.TestCase):
             "tts_server": "tts.example:443",
         }
         with (
-            patch("realtime.voice.load_service_entry", return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"}),
-            patch("realtime.voice.get_tts_config", return_value={"voices": [], "defaultVoiceId": ""}),
+            patch(
+                "gateways.realtime.voice.load_service_entry",
+                return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"},
+            ),
+            patch("gateways.realtime.voice.get_tts_config", return_value={"voices": [], "defaultVoiceId": ""}),
         ):
             resolved = resolve_realtime_tts_voice(config, voice_was_set=True)
         self.assertEqual(resolved, "Magpie-Multilingual.EN-US.Aria")
@@ -69,9 +78,12 @@ class SoftVoiceResolveTests(unittest.TestCase):
             "tts_server": "new-tts:443",
         }
         with (
-            patch("realtime.voice.load_service_entry", return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"}),
             patch(
-                "realtime.voice.get_tts_config",
+                "gateways.realtime.voice.load_service_entry",
+                return_value={"voice_id": "Magpie-Multilingual.EN-US.Aria"},
+            ),
+            patch(
+                "gateways.realtime.voice.get_tts_config",
                 return_value={
                     "voices": [{"id": "Magpie-Multilingual.EN-US.Aria"}],
                     "defaultVoiceId": "Magpie-Multilingual.EN-US.Aria",

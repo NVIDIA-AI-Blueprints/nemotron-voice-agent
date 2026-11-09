@@ -3,17 +3,21 @@
 
 """Shared utility functions."""
 
+import asyncio
+import http.client
 import ipaddress
 import json
 import math
 import os
 import socket
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 from urllib.parse import urlparse, urlunparse
 
 import yaml
@@ -37,6 +41,7 @@ class _ExampleBinding(NamedTuple):
 
 _NO_BINDING = _ExampleBinding(None, {}, {}, frozenset())
 _service_context: ContextVar[_ExampleBinding | None] = ContextVar("service_context", default=None)
+_listed_services: ContextVar[dict | None] = ContextVar("listed_services", default=None)
 _active_binding: _ExampleBinding = _NO_BINDING
 
 
@@ -270,7 +275,7 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
         for service, ports in services.items()
     },
 }
-_LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 
 
 def _is_compose_service_host(host: str) -> bool:
@@ -391,6 +396,106 @@ NVCF_GRPC_SERVER = "grpc.nvcf.nvidia.com:443"
 NVCF_LLM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 CLOUD_SOURCE = "cloud-nim"
 SELF_HOSTED_SOURCE = "self-hosted"
+
+ServiceStatus = Literal["ready", "starting", "error", "offline"]
+_NIM_READY_PATH = "/v1/health/ready"
+_CONNECT_HEALTH_TIMEOUT_SECS = 5
+
+
+def _service_host_port(server: str) -> tuple[str, int]:
+    """Parse a service address into host/port, raising on invalid input."""
+    parsed = parse_endpoint(server)
+    if parsed is None:
+        raise RuntimeError(f"Invalid service address: {server or '(empty)'}")
+    return parsed
+
+
+def _http_host(host: str) -> str:
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
+def _local_speech_ready_url(label: str, server: str) -> str:
+    """Return the NIM HTTP readiness URL for built-in local ASR/TTS endpoints."""
+    host, port = _service_host_port(server)
+    normalized_host = host.strip("[]").lower()
+    for service, ports in LOCAL_SPEECH_PORTS.get(label.lower(), {}).items():
+        if normalized_host == service and port == ports.grpc:
+            return f"http://{normalized_host}:{ports.health}{_NIM_READY_PATH}"
+        if normalized_host in _LOCAL_SERVICE_HOSTS and port == ports.host_grpc:
+            return f"http://{_http_host(host)}:{ports.host_health}{_NIM_READY_PATH}"
+    return ""
+
+
+def _llm_health_url(base_url: str) -> str:
+    """Return the readiness URL of the self-hosted LLM at ``base_url`` or its ``streaming_url``, or ``""``.
+
+    Every slot is searched, ``thinker-llm`` included: only an LLM's entry has a ``base_url``.
+    """
+    entry = next(
+        (
+            entry
+            for source, catalog in service_catalog_sources()
+            if source == SELF_HOSTED_SOURCE
+            for section in catalog.values()
+            for entry in section.values()
+            if base_url in (entry.get("base_url"), entry.get("streaming_url")) and entry.get("health_path")
+        ),
+        None,
+    )
+    if entry is None:
+        return ""
+    parsed = urlparse(str(entry["base_url"]))
+    return f"{parsed.scheme}://{parsed.netloc}{entry['health_path']}"
+
+
+def _unreachable_status(host: str, exc: BaseException) -> ServiceStatus:
+    """An unresolvable host, or a refused local port, means the container is not running.
+
+    A running container's published port accepts connections through docker-proxy even while
+    the model loads, so only a stopped one refuses on ``localhost``.
+    """
+    if isinstance(exc, socket.gaierror):
+        return "offline"
+    if isinstance(exc, ConnectionRefusedError) and host.strip("[]").lower() in _LOCAL_SERVICE_HOSTS:
+        return "offline"
+    return "starting"
+
+
+def _probe_tcp(server: str, timeout: float) -> ServiceStatus:
+    """Probe a gRPC port for services without an HTTP readiness endpoint."""
+    host, port = _service_host_port(server)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return "ready"
+    except OSError as exc:
+        return _unreachable_status(host, exc)
+
+
+def _probe_http(health_url: str, expects_ready_json: bool, timeout: float) -> ServiceStatus:
+    """Probe a health URL; see ``_unreachable_status`` for when a failure means offline."""
+    try:
+        with urllib.request.urlopen(health_url, timeout=timeout) as response:
+            body = response.read()
+    except urllib.error.URLError as exc:
+        return _unreachable_status(urlparse(health_url).hostname or "", exc.reason)
+    except (OSError, http.client.HTTPException):
+        return "starting"
+    if not expects_ready_json:
+        return "ready"
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "starting"
+    if isinstance(payload, dict) and (payload.get("status") == "ready" or payload.get("ready") is True):
+        return "ready"
+    return "starting"
+
+
+async def _run_blocking(func, *args, timeout: float | None = None):
+    task = asyncio.to_thread(func, *args)
+    if timeout is None:
+        return await task
+    return await asyncio.wait_for(task, timeout=timeout)
 
 
 def _entry_endpoint(entry: dict) -> str:
@@ -962,6 +1067,21 @@ def build_services_api_response() -> dict:
             entries[0]["selected"] = True
         result[category] = entries
     return result
+
+
+def set_listed_services(services: dict | None) -> None:
+    """Bind the services as ``GET /api/services`` lists them to the current context; ``None`` unbinds them."""
+    _listed_services.set(services)
+
+
+def listed_services() -> dict:
+    """Return the services bound to the current context, else :func:`build_services_api_response`.
+
+    ``GET /api/services`` leaves out an offline self-hosted entry unless its slot has nothing else, so the first entry
+    of each slot it lists is the one the UI selects.
+    """
+    services = _listed_services.get()
+    return build_services_api_response() if services is None else services
 
 
 def parse_json_dict(raw: object, label: str = "JSON") -> dict:
