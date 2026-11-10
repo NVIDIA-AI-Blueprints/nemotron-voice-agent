@@ -36,4 +36,8 @@ TURN_USERNAME=<user>
 TURN_PASSWORD=<pass>
 ```
 
+## Live Sessions
+
+The Frontend/Backend Live example uses the same TURN settings for the server's WebRTC peer in each Live session (`POST /v1/live/sessions`). When `TURN_USERNAME` and `TURN_PASSWORD` are set, the server adds the TURN server to that peer's ICE servers. To add more ICE servers, list them in `ice_urls` of the `live.settings` block in `examples_registry.yaml`. Configure your Live client's peer connection with the same TURN server.
+
 See the [Getting Started Guide](../01-getting-started.md) for the full deployment flow.

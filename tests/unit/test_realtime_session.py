@@ -11,16 +11,16 @@ from unittest.mock import patch
 
 from realtime_helpers import FakeWebSocket
 
-from realtime.events import SERVER_ERROR, SERVER_SESSION_CREATED, SERVER_SESSION_UPDATED
-from realtime.gateway import _select_realtime_subprotocol, handle_realtime_websocket
-from realtime.session import (
+from gateways.realtime.events import SERVER_ERROR, SERVER_SESSION_CREATED, SERVER_SESSION_UPDATED
+from gateways.realtime.gateway import _select_realtime_subprotocol, handle_realtime_websocket
+from gateways.realtime.session import (
     DEFAULT_PIPELINE_MODE,
     DEFAULT_PROMPT_KEY,
     RealtimeSession,
     map_session_update_to_flat_config,
     unsupported_live_session_fields,
 )
-from realtime.transport import _prefers_beta_event_names, create_realtime_transport
+from gateways.realtime.transport import _prefers_beta_event_names, create_realtime_transport
 
 
 class MapSessionUpdateTests(unittest.TestCase):
@@ -329,7 +329,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             out["prompt_key"] = out.get("prompt_key") or DEFAULT_PROMPT_KEY
             return out
 
-        with patch("realtime.gateway.resolve_realtime_tts_voice", return_value=None):
+        with patch("gateways.realtime.gateway.resolve_realtime_tts_voice", return_value=None):
             await handle_realtime_websocket(ws, sanitize_session_config=sanitize)
 
         self.assertTrue(ws.accepted)

@@ -14,7 +14,7 @@ cost: `generic-assistant` (fast) → `omni-assistant`, `omni-assistant-subagents
 
 ```bash
 test -f .env || cp .env.example .env   # NVIDIA_API_KEY
-uv sync --dev
+uv sync --dev --group harness
 uv run <entrypoint>                     # discover via EXAMPLE_SELECTION; confirm pipeline builds + binds
 cd client && npm ci && npm run build    # client must compile against the bumped @pipecat-ai/* + RTVI APIs
 ```
@@ -39,7 +39,8 @@ Per example (browser `client/` or benchmarking harness):
 - **Connect**: start a WebRTC session and confirm the transport handshake (most version-sensitive: SmallWebRTC /
   serializer / runner).
 - **Exercise**: VAD/turn fires → ASR transcript → LLM response → TTS playback → RTVI messages render. Also
-  `omni_assistant_subagents` (subagent bus routing) and `frontend_backend_agent` (planner, tools, TTS filter).
+  `omni_assistant_subagents` (subagent bus routing), `frontend_backend_agent` (planner, tools, TTS filter), and
+  `frontend_backend_live` (talker replies, delegations, task cards).
 - **Observe**: server/Compose logs + browser console for frame exceptions, RTVI mismatches, transport drops,
   observer errors.
 - **Fix & re-run** (max 3/example): diagnose (query `pipecat-docs` MCP if unclear) → fix code/`.env` →

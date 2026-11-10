@@ -97,6 +97,20 @@ nemotron-bolt-4b-nvcf:
 nemotron-super:
   <<: *llm
 
+nemotron-super-nvcf:
+  <<: *nim
+  reasoning_budget:
+    <<: *reasoning-budget
+    path: extra_body.reasoning_budget
+    default: 1024
+  reasoning_effort:
+    label: "Reasoning Effort"
+    type: enum
+    options: [low, medium, high]
+    default: medium
+    requires: enable_thinking
+    path: extra_body.reasoning_effort
+
 magpie-tts:
   synthesis_mode:
     label: "Synthesis Mode"

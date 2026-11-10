@@ -35,9 +35,9 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.utils.text.base_text_aggregator import TextType
 
-from realtime.conversation import ConversationState
-from realtime.observer import RealtimeLifecycleObserver
-from realtime.serializer import RealtimeFrameSerializer
+from gateways.realtime.conversation import ConversationState
+from gateways.realtime.observer import RealtimeLifecycleObserver
+from gateways.realtime.serializer import RealtimeFrameSerializer
 
 
 class ConversationStateTests(unittest.TestCase):
@@ -1112,7 +1112,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(run, LLMRunFrame)
 
     async def test_finish_does_not_reset_newer_response(self) -> None:
-        from realtime.lifecycle import finish_response
+        from gateways.realtime.lifecycle import finish_response
 
         emitted: list[dict[str, Any]] = []
 
@@ -1136,7 +1136,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
 
         from pipecat.frames.frames import InputAudioRawFrame
 
-        from realtime.audio import PIPELINE_PCM_RATE
+        from gateways.realtime.audio import PIPELINE_PCM_RATE
 
         emitted: list[dict[str, Any]] = []
 
@@ -1325,7 +1325,7 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_register_handlers_opens_gate_when_welcome_disabled(self) -> None:
         from examples.shared.pipeline_utils import register_session_start_handlers
-        from realtime.serializer import RealtimeFrameSerializer
+        from gateways.realtime.serializer import RealtimeFrameSerializer
 
         class _Transport:
             def __init__(self) -> None:
@@ -1356,7 +1356,7 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_register_handlers_keeps_gate_when_welcome_enabled(self) -> None:
         from examples.shared.pipeline_utils import register_session_start_handlers
-        from realtime.serializer import RealtimeFrameSerializer
+        from gateways.realtime.serializer import RealtimeFrameSerializer
 
         class _Transport:
             def __init__(self) -> None:
@@ -1379,6 +1379,45 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
             welcome_enabled=True,
         )
         self.assertFalse(transport._realtime_serializer.conversation.assistant_has_responded)
+
+    async def test_register_handlers_greets_with_the_intro_action_only_when_welcome_enabled(self) -> None:
+        from examples.shared.pipeline_utils import register_session_start_handlers
+
+        class _Emitter:
+            def __init__(self) -> None:
+                self.handlers: dict[str, Any] = {}
+                self.queue_frames = AsyncMock()
+
+            def event_handler(self, name: str):
+                def decorator(fn):
+                    self.handlers[name] = fn
+                    return fn
+
+                return decorator
+
+        for welcome_enabled in (True, False):
+            with self.subTest(welcome_enabled=welcome_enabled):
+                transport, task, greeted = _Emitter(), _Emitter(), []
+                context = LLMContext(messages=[{"role": "system", "content": "Be brief."}])
+                runner_args = MagicMock()
+                runner_args.body = {"protocol": "realtime"}
+
+                async def intro(greeted: list = greeted) -> None:
+                    greeted.append(True)
+
+                register_session_start_handlers(
+                    transport=transport,
+                    task=task,
+                    context=context,
+                    runner_args=runner_args,
+                    welcome_enabled=welcome_enabled,
+                    intro=intro,
+                )
+                await transport.handlers["on_client_connected"](None, None)
+                await task.handlers["on_pipeline_started"](task, MagicMock())
+                self.assertEqual(greeted, [True] if welcome_enabled else [])
+                task.queue_frames.assert_not_awaited()  # the intro action greets in place of the LLM's run
+                self.assertEqual(context.messages, [{"role": "system", "content": "Be brief."}])
 
 
 if __name__ == "__main__":

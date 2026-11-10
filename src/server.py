@@ -39,20 +39,15 @@ load_dotenv(override=True)
 import argparse
 import asyncio
 import contextlib
-import http.client
-import json
+import inspect
 import os
-import socket
 import sys
-import urllib.error
-import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Literal
-from urllib.parse import urlparse
+from typing import Annotated
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket
@@ -75,9 +70,16 @@ from examples.shared.prewarm import build_session_languages, peek_cached_tts_con
 from examples.shared.speaker import speaker_diarization_requested
 from examples.shared.subagents import load_subagent_registry
 from utils import (
-    LOCAL_SPEECH_PORTS,
+    _CONNECT_HEALTH_TIMEOUT_SECS,
+    NVCF_LLM_BASE_URL,
     PROJECT_ROOT,
     SELF_HOSTED_SOURCE,
+    ServiceStatus,
+    _llm_health_url,
+    _local_speech_ready_url,
+    _probe_http,
+    _probe_tcp,
+    _run_blocking,
     build_services_api_response,
     default_prompt_key,
     filter_session_config,
@@ -86,9 +88,8 @@ from utils import (
     load_service_entry,
     load_service_entry_by_id,
     load_tools_catalog,
-    parse_endpoint,
-    service_catalog_sources,
     set_active_services,
+    set_listed_services,
     set_service_context,
 )
 from webcam_frame_store import store_webcam_frame, webcam_client_config
@@ -97,14 +98,12 @@ CLIENT_DIST = PROJECT_ROOT / "client" / "dist"
 _session_configs: dict[str, dict] = {}
 _active_session_configs: dict[str, dict] = {}
 _CONNECT_PREWARM_TIMEOUT_SECS = parse_env_int("CONNECT_PREWARM_TIMEOUT_SECS", 45)
-_CONNECT_HEALTH_TIMEOUT_SECS = 5
 _STATUS_PROBE_TIMEOUT_SECS = 2
-ServiceStatus = Literal["ready", "starting", "error", "offline"]
 _seen_service_targets: set[str] = set()
 _failed_service_targets: set[str] = set()
-_NIM_READY_PATH = "/v1/health/ready"
-_LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 _TURN_LISTEN_PORT = 3478
+# Each LLM slot: the session field that holds its base URL, and its name in readiness messages.
+_LLM_SLOTS = {"llm": ("base_url", "LLM"), "thinker-llm": ("thinker_base_url", "Thinker LLM")}
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
@@ -324,8 +323,9 @@ def _get_default_asr_catalog() -> tuple[str, str, str]:
     )
 
 
-def _get_default_llm_base_url() -> str:
-    return load_service_entry("llm", "").get("base_url", "https://integrate.api.nvidia.com/v1")
+def _get_default_llm_base_url(slot: str = "llm") -> str:
+    """Return the base URL of the default catalog entry of an LLM slot (``llm``, ``thinker-llm``)."""
+    return load_service_entry(slot, "").get("base_url", NVCF_LLM_BASE_URL)
 
 
 def _store_session_config(config: dict) -> str:
@@ -345,13 +345,6 @@ def _session_capability_error(session_id: str, capability: str) -> JSONResponse 
     if capability not in set(example.get("capabilities") or []):
         return JSONResponse(status_code=403, content={"detail": f"session does not support {capability}"})
     return None
-
-
-async def _run_blocking(func, *args, timeout: float | None = None):
-    task = asyncio.to_thread(func, *args)
-    if timeout is None:
-        return await task
-    return await asyncio.wait_for(task, timeout=timeout)
 
 
 async def _read_upload_file_with_limit(file: UploadFile, *, max_bytes: int = _MAX_UPLOAD_BYTES) -> bytes:
@@ -407,97 +400,12 @@ def _should_skip_tts_prewarm(example: dict) -> bool:
     return "tts" not in example["services"]
 
 
-def _service_host_port(server: str) -> tuple[str, int]:
-    """Parse a service address into host/port, raising on invalid input."""
-    parsed = parse_endpoint(server)
-    if parsed is None:
-        raise RuntimeError(f"Invalid service address: {server or '(empty)'}")
-    return parsed
-
-
 def _check_service_port(label: str, server: str) -> None:
     _raise_unless_ready(label, server, _remembered_status(server, _probe_tcp(server, _CONNECT_HEALTH_TIMEOUT_SECS)))
 
 
-def _http_host(host: str) -> str:
-    return f"[{host}]" if ":" in host and not host.startswith("[") else host
-
-
 def _service_starting_message(label: str) -> str:
     return f"Selected {label} service is still starting. Wait for it to become ready, then try again."
-
-
-def _local_speech_ready_url(label: str, server: str) -> str:
-    """Return the NIM HTTP readiness URL for built-in local ASR/TTS endpoints."""
-    host, port = _service_host_port(server)
-    normalized_host = host.strip("[]").lower()
-    for service, ports in LOCAL_SPEECH_PORTS.get(label.lower(), {}).items():
-        if normalized_host == service and port == ports.grpc:
-            return f"http://{normalized_host}:{ports.health}{_NIM_READY_PATH}"
-        if normalized_host in _LOCAL_SERVICE_HOSTS and port == ports.host_grpc:
-            return f"http://{_http_host(host)}:{ports.host_health}{_NIM_READY_PATH}"
-    return ""
-
-
-def _llm_health_url(base_url: str) -> str:
-    """Return the readiness URL of the self-hosted LLM at ``base_url`` or its ``streaming_url``, or ``""``."""
-    entry = next(
-        (
-            entry
-            for source, catalog in service_catalog_sources()
-            if source == SELF_HOSTED_SOURCE
-            for entry in catalog.get("llm", {}).values()
-            if base_url in (entry.get("base_url"), entry.get("streaming_url")) and entry.get("health_path")
-        ),
-        None,
-    )
-    if entry is None:
-        return ""
-    parsed = urlparse(str(entry["base_url"]))
-    return f"{parsed.scheme}://{parsed.netloc}{entry['health_path']}"
-
-
-def _unreachable_status(host: str, exc: BaseException) -> ServiceStatus:
-    """An unresolvable host, or a refused local port, means the container is not running.
-
-    A running container's published port accepts connections through docker-proxy even while
-    the model loads, so only a stopped one refuses on ``localhost``.
-    """
-    if isinstance(exc, socket.gaierror):
-        return "offline"
-    if isinstance(exc, ConnectionRefusedError) and host.strip("[]").lower() in _LOCAL_SERVICE_HOSTS:
-        return "offline"
-    return "starting"
-
-
-def _probe_http(health_url: str, expects_ready_json: bool, timeout: float) -> ServiceStatus:
-    """Probe a health URL; see ``_unreachable_status`` for when a failure means offline."""
-    try:
-        with urllib.request.urlopen(health_url, timeout=timeout) as response:
-            body = response.read()
-    except urllib.error.URLError as exc:
-        return _unreachable_status(urlparse(health_url).hostname or "", exc.reason)
-    except (OSError, http.client.HTTPException):
-        return "starting"
-    if not expects_ready_json:
-        return "ready"
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return "starting"
-    if isinstance(payload, dict) and (payload.get("status") == "ready" or payload.get("ready") is True):
-        return "ready"
-    return "starting"
-
-
-def _probe_tcp(server: str, timeout: float) -> ServiceStatus:
-    """Probe a gRPC port for services without an HTTP readiness endpoint."""
-    host, port = _service_host_port(server)
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return "ready"
-    except OSError as exc:
-        return _unreachable_status(host, exc)
 
 
 def _remembered_status(target: str, status: ServiceStatus) -> ServiceStatus:
@@ -544,10 +452,10 @@ def _status_probe(slot: str, entry: dict) -> tuple[str, bool] | None:
     return None
 
 
-def _probe_status(target: str, expects_ready_json: bool) -> ServiceStatus:
+def _probe_status(address: str, expects_ready_json: bool) -> ServiceStatus:
     timeout = _STATUS_PROBE_TIMEOUT_SECS
-    status = _probe_http(target, expects_ready_json, timeout) if "://" in target else _probe_tcp(target, timeout)
-    return _remembered_status(target, status)
+    status = _probe_http(address, expects_ready_json, timeout) if "://" in address else _probe_tcp(address, timeout)
+    return _remembered_status(address, status)
 
 
 async def _with_service_status(catalog: dict[str, list[dict]]) -> dict[str, list[dict]]:
@@ -594,16 +502,14 @@ async def _run_http_readiness_check(
 
 
 async def _ensure_llm_ready_for_connection(config: dict, example: dict) -> None:
-    """Run a local LLM readiness check before starting the session."""
-    if "llm" not in example["services"]:
-        return
-
-    base_url = config.get("base_url", "") or _get_default_llm_base_url()
-    health_url = _llm_health_url(base_url)
-    if not health_url:
-        return
-
-    await _run_http_readiness_check("LLM", base_url, health_url)
+    """Run a local readiness check of every LLM slot the example uses, at the base URL the session will use."""
+    for slot, (base_url_field, label) in _LLM_SLOTS.items():
+        if slot not in example["services"]:
+            continue
+        base_url = config.get(base_url_field, "") or _get_default_llm_base_url(slot)
+        health_url = _llm_health_url(base_url)
+        if health_url:
+            await _run_http_readiness_check(label, base_url, health_url)
 
 
 async def _ensure_asr_ready_for_connection(config: dict, example: dict) -> None:
@@ -689,6 +595,78 @@ async def _ensure_services_ready_for_connection(config: dict, example: dict) -> 
     await _ensure_tts_ready_for_connection(config, example)
 
 
+def _live_served() -> bool:
+    """Return whether to serve the Live API (``/v1/live``).
+
+    ``LIVE_ENABLED`` decides when set (``1``, ``true``, ``yes`` or ``on`` serve it). Otherwise it is served only with a
+    ``LIVE_API_TOKEN``, since without one its routes are open to anyone who can reach the server.
+    """
+    explicit = os.getenv("LIVE_ENABLED", "").strip().lower()
+    if explicit:
+        return explicit in {"1", "true", "yes", "on"}
+    return bool(os.getenv("LIVE_API_TOKEN", "").strip())
+
+
+def _live_listing():
+    """Return a reader of the services as ``GET /api/services`` lists them, which probes them at its first call only.
+
+    The Live hooks share one; their root reads its catalog once per process, so later calls need no probe.
+    """
+    listed: dict | None = None
+
+    async def listing() -> dict:
+        nonlocal listed
+        if listed is None:
+            listed = await _with_service_status(build_services_api_response())
+        return listed
+
+    return listing
+
+
+def _live_hook(example: dict, spec: str, what: str, listing):
+    """Return the Live hook ``spec`` names, imported on its first call and called with ``example``'s services bound.
+
+    The hook reads the catalog as ``GET /api/services`` lists it, so each slot's default is the one the UI selects.
+    """
+
+    async def hook(*args):
+        set_service_context(example)
+        set_listed_services(await listing())
+        result = examples_registry.resolve_hook(spec, what)(*args)
+        return await result if inspect.isawaitable(result) else result
+
+    return hook
+
+
+def _mount_live(app: FastAPI) -> None:
+    """Mount the Live API's routes when the selected example's ``live:`` block names its hooks and they are served.
+
+    Raises:
+        ValueError: ``UVICORN_WORKERS`` is not a whole number of at least 1.
+    """
+    from gateways.live.gateway import LiveSettings
+    from gateways.live.mount import mount_live
+
+    example = examples_registry.live_example()
+    if example is None or not _live_served():
+        if example is not None:
+            logger.info(
+                "The Live routes under /v1/live are not served. Set LIVE_API_TOKEN to serve them, or LIVE_ENABLED=true "
+                "to serve them without a token on a trusted network; when LIVE_ENABLED is set, it decides."
+            )
+        mount_live(app)
+        return
+    hooks, listing = example["live"], _live_listing()
+    mount_live(
+        app,
+        factory=_live_hook(example, hooks["factory"], "live.factory", listing),
+        core=_live_hook(example, hooks["core"], "live.core", listing),
+        describe=_live_hook(example, hooks["describe"], "live.describe", listing),
+        settings=LiveSettings.from_env(hooks["settings"]),
+        ice_servers=_build_ice_servers,
+    )
+
+
 def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     """Build and return the FastAPI application with all routes."""
     if prompt_file:
@@ -720,6 +698,9 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ---- Live session protocol (/v1/live) ----
+    _mount_live(app)
 
     def _resolve_example(config: dict) -> dict:
         """Return the active registry entry. ``examples_registry.find()`` honors any selection lock."""
@@ -963,7 +944,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         After ``session.update`` + the same readiness checks as ``/api/ws``,
         hands the socket to the selected example bot (``protocol=realtime``).
         """
-        from realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
+        from gateways.realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
 
         async def _ensure_ready(config: dict) -> None:
             await _ensure_services_ready_for_connection(config, _resolve_example(config))

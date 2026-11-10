@@ -70,6 +70,8 @@ audio_dumps/
 
 The `<stream_id>` is a unique 8-character hex ID per session, so files from concurrent sessions do not collide.
 
+The recorder's `INFO` log line at a session's start names that session's `<stream_id>`. The Frontend/Backend Live example records its live sessions, over WebRTC and WebSocket, each from its start.
+
 > **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker-compose.yml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
 >
 > ```bash
@@ -85,6 +87,8 @@ The `<stream_id>` is a unique 8-character hex ID per session, so files from conc
 >     volumes:
 >       - ./audio_dumps:/app/audio_dumps
 > ```
+>
+> A session fails to start when the server cannot write to the folder, and the server log names the folder.
 >
 > If Docker creates the folder with different permissions, fix ownership:
 >

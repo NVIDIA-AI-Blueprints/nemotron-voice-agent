@@ -156,7 +156,7 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes through the catalog fi
 | `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Requires Pipecat `>=1.5.0`, plus Magpie TTS Multilingual `>=1.7.0` or Magpie TTS Zeroshot `>=1.2.0`. |
 | `per_sentence` | Open a fresh synthesis call per sentence. Safe for models without cross-sentence stitching. |
 
-Magpie Multilingual and Magpie Zeroshot reference the `magpie-tts` profile in [`settings.yaml`](../../settings.yaml), so their card in the Services tab has a **Synthesis Mode** dropdown that defaults to `stitched`. The backend hydrates the choice as `tts_synthesis_mode`. Chatterbox sets `synthesis_mode: per_sentence` directly and shows no dropdown. Give every entry a mode, through the profile or the field, so a TTS switch cannot inherit another model's mode through the registry-default fallback in the pipeline.
+Magpie Multilingual and Magpie Zeroshot reference the `magpie-tts` profile in [`settings.yaml`](../../settings.yaml), so their card in the Services tab has a **Synthesis Mode** dropdown that defaults to `stitched`, or to `per_sentence` in the Frontend/Backend Live example, whose `settings` in [`examples_registry.yaml`](../../examples_registry.yaml) set it. The backend hydrates the choice as `tts_synthesis_mode`. Chatterbox sets `synthesis_mode: per_sentence` directly and shows no dropdown. Give every entry a mode, through the profile or the field, so a TTS switch cannot inherit another model's mode through the registry-default fallback in the pipeline.
 
 ### Word-Level Input Streaming and Timestamps
 
@@ -246,6 +246,8 @@ tts = NvidiaTTSService(
     text_transforms=[("*", nemotron_speech_markdown_text_transform)],
 )
 ```
+
+The Frontend/Backend Live example uses this transform, because its voice can say a backend's text as written.
 
 ### Voice Cloning / Zero-Shot
 

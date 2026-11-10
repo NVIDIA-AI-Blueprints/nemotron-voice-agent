@@ -5,6 +5,7 @@ services:
   nemotron-35-super-vl:
     profiles:
       - nemotron-35-super-vl
+      - frontend-backend-live/server
     image: nvcr.io/nim/nvidia/nemotron-3.5-super-vl-120b-a12b:2.0.13-variant-build.1
     user: "0:0"
     environment:
