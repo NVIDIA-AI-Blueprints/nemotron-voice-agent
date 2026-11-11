@@ -231,6 +231,8 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
         if capability not in capabilities:
             for key in keys:
                 config.pop(key, None)
+    if "session_languages" in capabilities and not config.get("asr_language_code"):
+        config["asr_language_code"] = examples_registry.default_session_language(example["key"])
     config = filter_session_config(config)
     prompt = load_prompt_catalog(examples_registry.example_module_file(example)).get(config.get("prompt_key", ""), {})
     multi_speaker_prompt = isinstance(prompt, dict) and prompt.get("multi_speaker_support") is True
@@ -1097,13 +1099,20 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         voice_id: str = Query(default=""),
         function_id: str = Query(default=""),
         model: str = Query(default=""),
+        asr_id: str = Query(default=""),
         asr_server: str = Query(default=""),
         asr_model: str = Query(default=""),
         asr_function_id: str = Query(default=""),
     ):
         _bind_example_context_by_key(pipeline_mode or fallback_example_key)
-        if asr_server or asr_model or asr_function_id:
-            default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
+        if asr_id or asr_server or asr_model or asr_function_id:
+            asr_entry = load_service_entry_by_id("asr", asr_id) if asr_id else load_service_entry("asr", "")
+            if asr_id and asr_entry:
+                default_asr_server = asr_entry.get("server", "grpc.nvcf.nvidia.com:443")
+                default_asr_model = asr_entry.get("model", "")
+                default_asr_function_id = asr_entry.get("function_id", "")
+            else:
+                default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
             if llm_id.startswith("custom-"):
                 llm_entry = {}
             elif llm_id:
@@ -1125,6 +1134,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                     tts_function_id,
                     tts_model,
                     llm_supported_languages,
+                    asr_entry.get("supported_languages", []) if asr_entry.get("asr_type") == "transcribe" else None,
                     timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
                 )
             except TimeoutError:

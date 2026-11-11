@@ -332,6 +332,7 @@ export function useVoiceCatalog(
   model?: string,
   pipelineMode?: string,
   llmId?: string,
+  asrId?: string,
 ) {
   return useQuery<TTSConfig>({
     queryKey: [
@@ -345,6 +346,7 @@ export function useVoiceCatalog(
       asrFunctionId || "",
       pipelineMode || "",
       llmId || "",
+      asrId || "",
     ],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -357,6 +359,7 @@ export function useVoiceCatalog(
       if (asrFunctionId) params.set("asr_function_id", asrFunctionId);
       if (pipelineMode) params.set("pipeline_mode", pipelineMode);
       if (llmId) params.set("llm_id", llmId);
+      if (asrId) params.set("asr_id", asrId);
       const url = params.size > 0 ? `/api/tts-config?${params.toString()}` : "/api/tts-config";
       return fetchJson<TTSConfig>(url);
     },

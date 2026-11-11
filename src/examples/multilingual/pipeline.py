@@ -47,6 +47,7 @@ from examples.multilingual.multilingual_processor import (
 )
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
+from examples.shared.nvidia_transcribe_stt import NvidiaTranscribeSTTService
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -95,9 +96,11 @@ def _is_eval_transport(runner_args: RunnerArguments) -> bool:
     )
 
 
-def _build_multilingual_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
+def _build_multilingual_user_aggregator_params(
+    welcome_enabled: bool, *, vad_only: bool = False
+) -> LLMUserAggregatorParams:
     """Use VAD-only turn starts so interim ASR text does not start a user turn."""
-    if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
+    if not vad_only and not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             user_mute_strategies=build_user_mute_strategies(welcome_enabled),
@@ -129,6 +132,7 @@ async def _prepare_session_language_codes(
     asr_model: str,
     asr_function_id: str,
     llm_supported_languages=None,
+    asr_supported_languages=None,
 ) -> str:
     """Prewarm speech services and return UI language codes when startup should probe them."""
     if _is_eval_transport(runner_args):
@@ -136,9 +140,10 @@ async def _prepare_session_language_codes(
         return ""
 
     prewarm_tasks = [
-        asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id),
         asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model),
     ]
+    if asr_supported_languages is None:
+        prewarm_tasks.insert(0, asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id))
     await asyncio.gather(*prewarm_tasks)
     language_catalog_kwargs = {
         "asr_server": asr_server,
@@ -151,6 +156,8 @@ async def _prepare_session_language_codes(
     }
     if llm_supported_languages is not None:
         language_catalog_kwargs["llm_supported_languages"] = llm_supported_languages
+    if asr_supported_languages is not None:
+        language_catalog_kwargs["asr_supported_languages"] = asr_supported_languages
     return get_lang_codes(**language_catalog_kwargs)
 
 
@@ -183,9 +190,12 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
+    asr_entry = (load_service_entry_by_id("asr", body["asr_id"]) if body.get("asr_id") else {}) or default_asr
+    transcribe_asr = asr_entry.get("asr_type") == "transcribe"
+    asr_supported_languages = asr_entry.get("supported_languages", []) if transcribe_asr else None
     llm_supported_languages = _resolve_llm_supported_languages(body, default_llm)
 
-    asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
+    asr_server = body.get("asr_server", "") or asr_entry.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
         "api_key": nvidia_api_key(),
@@ -193,11 +203,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         "use_ssl": asr_ssl,
     }
     raw_asr_function_id = body.get("asr_function_id")
-    asr_function_id = (
-        str(raw_asr_function_id) if raw_asr_function_id is not None else default_asr.get("function_id", "")
-    )
-    asr_model = body.get("asr_model", "") or default_asr.get("model", "")
-    asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
+    asr_function_id = str(raw_asr_function_id) if raw_asr_function_id is not None else asr_entry.get("function_id", "")
+    asr_model = body.get("asr_model", "") or asr_entry.get("model", "")
+    # A fixed session uses the caller or registry locale, not the ASR catalog default.
+    asr_language_code = body.get("asr_language_code", "")
     asr_automatic_punctuation = str(body.get("asr_automatic_punctuation", "true")).lower() != "false"
     if not asr_language_code or asr_language_code.strip().lower() == "auto":
         registry_language = examples_registry.default_session_language(body.get("pipeline_mode", ""))
@@ -212,7 +221,13 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if fixed_session_language:
         asr_kwargs["settings"].language = fixed_session_language
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
+    if transcribe_asr:
+        stt = NvidiaTranscribeSTTService(
+            base_url=asr_server,
+            settings=NvidiaTranscribeSTTService.Settings(model=asr_model, language=fixed_session_language),
+        )
+    else:
+        stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={fixed_session_language}, punctuation={asr_automatic_punctuation}"
@@ -236,6 +251,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         asr_model=asr_model,
         asr_function_id=asr_function_id,
         llm_supported_languages=llm_supported_languages,
+        asr_supported_languages=asr_supported_languages,
     )
 
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
@@ -343,7 +359,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=_build_multilingual_user_aggregator_params(welcome_enabled),
+        user_params=_build_multilingual_user_aggregator_params(welcome_enabled, vad_only=transcribe_asr),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "

@@ -34,7 +34,7 @@ Smart Turn.
 | `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance in pure-VAD mode, including Transcribe. |
 | `SMART_TURN_STOP_SECS` | `1.0` | Smart Turn silence fallback (seconds) before the turn completes without a `COMPLETE` classification. Applies **only** in Smart Turn mode (`USE_SILERO_VAD_TURN_DETECTION=false`). |
 
-The Generic Assistant always uses pure Silero VAD with Nemotron 3.5 Transcribe, regardless of `USE_SILERO_VAD_TURN_DETECTION`.
+The Generic and Multilingual Assistants always use pure Silero VAD with Nemotron 3.5 Transcribe, regardless of `USE_SILERO_VAD_TURN_DETECTION`.
 
 > On the Smart Turn path, a fixed `0.2 s` Silero VAD pause (`stop_secs=0.2`) first detects the silence. The Smart Turn model then gets up to the configured fallback period (default `1.0 s`, `SMART_TURN_STOP_SECS`) to finalize the turn. Only `SILERO_VAD_STOP_SECS` is ignored in Smart Turn mode. The `generic-assistant/server-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
 

@@ -85,6 +85,7 @@ server:
     nemotron-transcribe:
       name: Nemotron 3.5 Transcribe
       asr_type: transcribe
+      supported_languages: [cs, nl, en, fr, de, hi, it, ko, pl, pt, ru, sk, es, bg, hr, da, et, fi, hu, ja, lv, lt, ro, sl, sv, th, tr, uk, ar, bn, zh, el, he, id, mt, fil, hy, ta, nn, vi]
       # Official prompts: https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B#prompt-guide
       server: http://nemotron-transcribe:9000/v1
       health_path: "/v1/health/ready"

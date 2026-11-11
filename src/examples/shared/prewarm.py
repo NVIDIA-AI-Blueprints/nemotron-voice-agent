@@ -307,6 +307,7 @@ def build_session_languages(
     tts_function_id: str = "",
     tts_model: str = "",
     llm_supported_languages: Iterable[str] | str | None = None,
+    asr_supported_languages: Iterable[str] | str | None = None,
 ) -> dict:
     """Return the compatible session-language catalog and TTS voices."""
     tts_config = prewarm_tts(
@@ -315,8 +316,23 @@ def build_session_languages(
         tts_function_id,
         tts_model,
     )
-    asr_config = prewarm_asr(asr_server, asr_model, asr_function_id)
-    languages = intersect_session_languages(asr_config, tts_config, llm_supported_languages)
+    if asr_supported_languages is None:
+        asr_config = prewarm_asr(asr_server, asr_model, asr_function_id)
+    else:
+        # Static capabilities use base codes, just like LLM capabilities. Keep
+        # the TTS locales so the UI can select the matching voice.
+        asr_config = {
+            "languages": [
+                code
+                for code in _tts_language_set(tts_config)
+                if llm_supports_session_language(code, asr_supported_languages)
+            ]
+        }
+    languages = (
+        intersect_session_languages(asr_config, tts_config, llm_supported_languages)
+        if asr_supported_languages is None or asr_config["languages"]
+        else []
+    )
     return {
         "languages": languages,
         "voices": tts_config.get("voices", []),

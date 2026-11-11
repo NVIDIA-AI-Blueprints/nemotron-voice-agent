@@ -51,7 +51,7 @@ examples:
     label: Multilingual Assistant
     services:
       llm: [nemotron-lightning, nemotron-super, nemotron-bolt-74b, nemotron-bolt-4b]
-      asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt]
+      asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt, nemotron-transcribe]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     capabilities: [session_languages]
     agent_prompt_keys:
