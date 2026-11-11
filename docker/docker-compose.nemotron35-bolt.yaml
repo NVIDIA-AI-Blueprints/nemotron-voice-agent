@@ -1,5 +1,5 @@
 # Nemotron 3.5 Bolt 74B A9B 24GB. `nemotron-35-bolt-vllm` serves the IQ2 HF
-# checkpoint for */single-gpu recipes and also serves /v1/streaming-session for
+# checkpoint for */single-gpu recipes and also serves /v1/realtime text sessions for
 # the Streaming Input toggle. The b12x kernels only target SM120 and SM121, and
 # no NIM exists for this model, so there is no */server service.
 services:

@@ -9,6 +9,7 @@ Before you begin, ensure you have the following:
 - Docker Compose v2.20 or newer. Check the version with `docker compose version`.
 - **Cloud (`<example>`), Server (`*/server`), and Performance Server (`generic-assistant/server-perf`):** an NVIDIA API key (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server and Performance Server also need NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
 - **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `generic-assistant/single-gpu` also builds its diarization VAD model locally, which needs `uv`, or Python 3 with `gguf==0.19.0` and `numpy==2.2.6`. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
+- **Dynamo (`*/dynamo`, experimental):** both `NVIDIA_API_KEY` with NGC access for the ASR and TTS NIMs, and `HF_TOKEN` for the Nemotron 3.5 Lightning weights. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
 
 For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
@@ -20,8 +21,8 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
 | Example | Description | Supported profiles |
 |---------|-------------|--------------------|
-| [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
-| [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `generic-assistant/dynamo` (workstation, experimental) |
+| [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `multilingual-assistant/dynamo` (workstation, experimental) |
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
 | [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
@@ -48,8 +49,9 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     | Server (`<example>/server`) | `NVIDIA_API_KEY` | Yes, before `up` |
     | Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` | Yes, before `up` |
     | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` | No |
+    | Dynamo (`<example>/dynamo`) | `NVIDIA_API_KEY` and `HF_TOKEN` | Yes, before `up` |
 
-    `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. `HF_TOKEN` is required for Single-GPU. Do not mix these.
+    `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. `HF_TOKEN` is required for Single-GPU. Do not mix these, except for Dynamo, which needs both.
 
     ```bash
     test -f .env || cp .env.example .env
@@ -57,7 +59,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
     Docker Compose passes `.env` values into the app and model sidecars, so exporting a key in your shell is not enough for runtime.
 
-3. For **`*/server` and `generic-assistant/server-perf` only**, log in to the NVIDIA NGC Docker Registry:
+3. For **`*/server`, `*/dynamo`, and `generic-assistant/server-perf` only**, log in to the NVIDIA NGC Docker Registry:
 
     ```bash
     set -a; . ./.env; set +a

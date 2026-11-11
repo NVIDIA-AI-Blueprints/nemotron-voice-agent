@@ -89,8 +89,8 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 
 | Example | Description | When to use | Supported Deployment Profiles |
 |---------|-------------|-------------|--------------------|
-| [Generic Assistant](src/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron streaming ASR by default, optional whole-turn Transcribe ASR, Nemotron LLM, and Magpie TTS. Optional speaker labels isolate the first speaker or label a multi-speaker conversation. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
-| [Multilingual Assistant](src/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. | Use for non-English and multi-language voice agents. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Generic Assistant](src/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron streaming ASR by default, optional whole-turn Transcribe ASR, Nemotron LLM, and Magpie TTS. Optional speaker labels isolate the first speaker or label a multi-speaker conversation. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
+| [Multilingual Assistant](src/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. | Use for non-English and multi-language voice agents. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
 | [Nemotron Omni Assistant](src/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 | [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
 | [Frontend/Backend Agent](src/examples/frontend_backend_agent/README.md) | A fast frontend LLM handles the conversation while a specialized backend agent does the work. This is the pattern for giving an **existing text / agentic backend** a real-time conversational experience (the flight-booking agent as the reference backend). | Add voice to an existing text agent / agentic backend with minimal changes. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
@@ -115,10 +115,11 @@ These are the minimum requirements, and support varies by example and deployment
 
 ### Software Requirements
 
-Credentials depend on the deployment profile. Do not mix them.
+Credentials depend on the deployment profile. Do not mix them, except for Dynamo, which needs both.
 
 - **Cloud, Server, and Performance Server**: an **NVIDIA API Key** (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server (`*/server`) and Performance Server (`generic-assistant/server-perf`) also need valid **NVIDIA NGC** credentials to pull NIM container images (refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
 - **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads and NVIDIA driver 580.x or newer for NeMo-Speech.cpp. It does not require `NVIDIA_API_KEY` or authentication with `docker login nvcr.io`.
+- **Dynamo (experimental)**: the `*/dynamo` recipes need both the Server credentials (`NVIDIA_API_KEY` and `docker login nvcr.io`) for the speech NIMs and `HF_TOKEN` for the LLM weights.
 - **Docker**: Docker Compose v2.20 or newer. Cloud needs Docker only. Server, Performance Server, and Single GPU also need Docker with NVIDIA GPU support ([NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)).
 
 ---

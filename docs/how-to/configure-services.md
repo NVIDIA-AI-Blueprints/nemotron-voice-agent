@@ -48,7 +48,7 @@ server:
 
 ## How the active recipe selects entries
 
-Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). Host-native runs (`uv run python src/server.py`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
+Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The experimental `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run python src/server.py`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |
@@ -202,6 +202,6 @@ server:
 
 ASR entries can set `speaker_diarization_supported: true` to show the **Diarization** control in the UI, and `speaker_diarization_max_speakers` to cap the speaker count. For details, refer to [Enable Speaker Labels](enable-speaker-labels.md).
 
-`streaming_url` is an optional self-hosted LLM field that points at a StreamingInput WebSocket. The Services tab shows a **Streaming Input** toggle for it when the example lists `streaming_input` under `capabilities`. For details, refer to [Configure LLM](configure-llm.md).
+`streaming_url` is an optional self-hosted LLM field that points at an OpenAI Realtime text session WebSocket. The Services tab shows a **Streaming Input** toggle for it when the example lists `streaming_input` under `capabilities`. For details, refer to [Configure LLM](configure-llm.md).
 
 `api` is an optional LLM field that names the API that the Frontend/Backend Live delegation core uses to call the model: `chat-completions`, the default, or `openai-responses`. A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant, unless the `nvcf` block sets `api: chat-completions`. An `api` in the `nvcf` block applies to the NVIDIA Cloud variant only. For the servers that support `openai-responses`, refer to [Configuration](../../src/examples/frontend_backend_live/README.md#configuration) in the Frontend/Backend Live README.

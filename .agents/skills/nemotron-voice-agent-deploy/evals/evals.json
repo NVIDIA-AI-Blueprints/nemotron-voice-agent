@@ -155,6 +155,29 @@
       ]
     },
     {
+      "id": "nemotron-voice-agent-deploy-dynamo-workstation",
+      "prompt": "Deploy the generic assistant on my 80 GB workstation GPU with the LLM served by NVIDIA Dynamo.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Selects `generic-assistant/dynamo`, sets both NVIDIA_API_KEY and HF_TOKEN, runs the nvcr.io docker login before `up`, brings it up with `docker compose --profile generic-assistant/dynamo up -d`, and checks the Dynamo frontend's ready endpoint.",
+      "assertions": [
+        "Selected the `generic-assistant/dynamo` recipe.",
+        "Required both NVIDIA_API_KEY and HF_TOKEN in .env.",
+        "Ran the NGC login: docker login nvcr.io with NVIDIA_API_KEY before bringing the stack up.",
+        "Verified the model with `curl -s localhost:18005/v1/models/nvidia/nemotron-3.5-lightning-30b-a3b/ready` after `dynamo-frontend` turned healthy."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-dynamo-dgx-spark",
+      "prompt": "Run the multilingual assistant with NVIDIA Dynamo on my DGX Spark.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Explains that the `*/dynamo` recipes are workstation-only and offers `multilingual-assistant/single-gpu` or cloud instead, without running `multilingual-assistant/dynamo`.",
+      "assertions": [
+        "Did not run `docker compose --profile multilingual-assistant/dynamo up -d`.",
+        "Stated that the Dynamo recipes are not supported on DGX Spark.",
+        "Offered `multilingual-assistant/single-gpu` or the cloud `multilingual-assistant` recipe instead."
+      ]
+    },
+    {
       "id": "nemotron-voice-agent-deploy-negative-upgrade",
       "prompt": "Upgrade pipecat-ai from 1.7.0 to 1.9.0 across this repository.",
       "expected_skill": null,

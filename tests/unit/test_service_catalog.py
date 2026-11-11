@@ -76,7 +76,7 @@ _CATALOG = dedent(
           name: Nemotron vLLM
           model_id: catalog-model
           base_url: http://nvidia-llm-vllm:8000/v1
-          streaming_url: ws://nvidia-llm-vllm:8000/v1/streaming-session
+          streaming_url: ws://nvidia-llm-vllm:8000/v1/realtime
           health_path: /health
       asr:
         parakeet:
@@ -500,7 +500,7 @@ class StreamingInputTests(_CatalogTestCase):
     def test_streaming_uses_the_streaming_url_when_the_example_supports_it(self) -> None:
         base_url = self._base_url(["streaming_input"], llm_streaming="true")
 
-        self.assertEqual(base_url, "ws://nvidia-llm-vllm:8000/v1/streaming-session")
+        self.assertEqual(base_url, "ws://nvidia-llm-vllm:8000/v1/realtime")
 
     def test_streaming_is_ignored_without_the_capability(self) -> None:
         self.assertEqual(self._base_url([], llm_streaming="true"), "http://nvidia-llm-vllm:8000/v1")
@@ -520,7 +520,7 @@ class StreamingInputTests(_CatalogTestCase):
         with patch.dict(os.environ, {"APP_RUNTIME": ""}):
             base_url = self._base_url(["streaming_input"], llm_streaming="true")
 
-        self.assertEqual(base_url, "ws://localhost:18000/v1/streaming-session")
+        self.assertEqual(base_url, "ws://localhost:18000/v1/realtime")
 
     def test_stored_session_keeps_streaming_and_settings_until_the_bot_starts(self) -> None:
         import server
@@ -531,7 +531,7 @@ class StreamingInputTests(_CatalogTestCase):
         )
         resolved = server._resolve_config(server._store_session_config(config))
 
-        self.assertEqual(resolved["base_url"], "ws://nvidia-llm-vllm:8000/v1/streaming-session")
+        self.assertEqual(resolved["base_url"], "ws://nvidia-llm-vllm:8000/v1/realtime")
         self.assertEqual(resolved, config)
 
 
@@ -829,7 +829,7 @@ class RepositoryCatalogTests(unittest.TestCase):
             with self.subTest(example=key):
                 llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]
                 self.assertEqual(
-                    llm_keys, ["nemotron-lightning", "nemotron-super", "nemotron-bolt-74b", "nemotron-bolt-4b"]
+                    llm_keys[:4], ["nemotron-lightning", "nemotron-super", "nemotron-bolt-74b", "nemotron-bolt-4b"]
                 )
 
     def test_bolt_e4b_is_an_optional_llm_across_server_and_single_gpu(self) -> None:
@@ -920,7 +920,7 @@ class HostRuntimeRewriteTests(unittest.TestCase):
         cases = {
             ("base_url", "http://nvidia-llm-omni:8000/v1"): "http://localhost:18002/v1",
             ("base_url", "http://nvidia-llm-vllm-omni:8002/v1"): "http://localhost:8002/v1",
-            ("base_url", "ws://nvidia-llm-vllm:8000/v1/streaming-session"): "ws://localhost:18000/v1/streaming-session",
+            ("base_url", "ws://nvidia-llm-vllm:8000/v1/realtime"): "ws://localhost:18000/v1/realtime",
             ("base_url", "http://nemotron-35-super-vl:8000/v1"): "http://localhost:18001/v1",
             ("base_url", "http://nemotron-35-super-vl-vllm:8000/v1"): "http://localhost:18001/v1",
             ("base_url", "http://nemotron-35-bolt-vllm:8000/v1"): "http://localhost:18003/v1",
@@ -961,20 +961,35 @@ class ComposeRecipeTests(unittest.TestCase):
         )
 
     def test_streaming_urls_point_at_services_running_the_streaming_server(self) -> None:
-        services_by_host: dict[str, dict] = {}
+        """The host serves realtime itself, or is a Dynamo frontend whose workers in the same file do."""
+        commands_by_host: dict[str, str] = {}
         for path in (utils.PROJECT_ROOT / "docker").glob("docker-compose.*.yaml"):
-            for name, service in (utils.load_yaml_file(path).get("services") or {}).items():
+            services = utils.load_yaml_file(path).get("services") or {}
+            worker_commands = "".join(
+                "".join(service.get("command") or [])
+                for service in services.values()
+                if "dynamo.vllm" in "".join(service.get("command") or [])
+            )
+            for name, service in services.items():
+                command = "".join(service.get("command") or [])
+                if "dynamo.frontend" in "".join(service.get("entrypoint") or []):
+                    command = worker_commands
                 aliases = ((service.get("networks") or {}).get("default") or {}).get("aliases") or []
                 for host in (name, *aliases):
-                    services_by_host[host] = service
+                    commands_by_host[host] = command
         catalog = utils.load_yaml_file(Path("services.yaml"))
         for recipe, categories in catalog.items():
             for key, entry in categories.get("llm", {}).items():
                 if "streaming_url" not in entry:
                     continue
                 with self.subTest(recipe=recipe, key=key):
-                    service = services_by_host[urlparse(entry["streaming_url"]).hostname]
-                    self.assertIn("examples.shared.vllm_streaming_input.server", "".join(service["command"]))
+                    url = urlparse(entry["streaming_url"])
+                    command = commands_by_host[url.hostname]
+                    self.assertEqual(url.path, "/v1/realtime")
+                    self.assertTrue(
+                        "examples.shared.vllm_streaming_input.server" in command
+                        or "--endpoint-types chat,realtime" in command
+                    )
 
 
 if __name__ == "__main__":

@@ -88,3 +88,7 @@ signals that determine when the semantic user turn is complete.
   labels still work. A larger model, such as Nemotron 3.5 Super VL, can follow
   the prompt more closely. To use it, refer to
   [Run Nemotron 3.5 Super VL](configure-llm.md#run-nemotron-35-super-vl).
+- On the experimental `generic-assistant/dynamo` recipe, multi-speaker replies
+  work only with **Streaming Input** off. NVIDIA Dynamo does not accept
+  `response_format` in realtime sessions yet. Refer to
+  [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
