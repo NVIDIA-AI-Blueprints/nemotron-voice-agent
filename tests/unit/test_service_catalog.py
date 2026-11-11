@@ -740,14 +740,66 @@ class RepositoryCatalogTests(unittest.TestCase):
                     catalog[recipe]["llm"]["nemotron-lightning"]["supported_languages"], lightning_languages
                 )
 
-    def test_transcribe_is_an_optional_generic_asr_without_speaker_labels(self) -> None:
+    def test_transcribe_is_an_optional_asr_without_speaker_labels(self) -> None:
         catalog = utils.load_yaml_file(Path("services.yaml"))
         entry = catalog["server"]["asr"]["nemotron-transcribe"]
         self.assertEqual(entry["asr_type"], "transcribe")
         self.assertEqual(entry["model"], "nvidia-nemotron-3p5-transcribe")
         self.assertFalse(entry["speaker_diarization_supported"])
         self.assertIn("nemotron-transcribe", examples_registry.EXAMPLES["generic-assistant"]["services"]["asr"])
-        self.assertNotIn("nemotron-transcribe", examples_registry.EXAMPLES["multilingual-assistant"]["services"]["asr"])
+        self.assertIn("nemotron-transcribe", examples_registry.EXAMPLES["multilingual-assistant"]["services"]["asr"])
+        self.assertEqual(
+            examples_registry.EXAMPLES["multilingual-assistant"]["services"]["asr"][0],
+            "nemotron-asr-streaming-multilingual",
+        )
+
+    def test_transcribe_languages_match_nim_support_matrix(self) -> None:
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        self.assertCountEqual(
+            catalog["server"]["asr"]["nemotron-transcribe"]["supported_languages"],
+            [
+                "ar",
+                "hy",
+                "bn",
+                "bg",
+                "zh",
+                "hr",
+                "cs",
+                "da",
+                "nl",
+                "en",
+                "et",
+                "fil",
+                "fi",
+                "fr",
+                "de",
+                "el",
+                "he",
+                "hi",
+                "hu",
+                "id",
+                "it",
+                "ja",
+                "ko",
+                "lv",
+                "lt",
+                "mt",
+                "nn",
+                "pl",
+                "pt",
+                "ro",
+                "ru",
+                "sk",
+                "sl",
+                "es",
+                "sv",
+                "ta",
+                "th",
+                "tr",
+                "uk",
+                "vi",
+            ],
+        )
 
     def test_super_is_an_optional_llm_on_every_self_hosted_recipe(self) -> None:
         catalog = utils.load_yaml_file(Path("services.yaml"))

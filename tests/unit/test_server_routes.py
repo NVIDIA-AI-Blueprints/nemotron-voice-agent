@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,3 +45,54 @@ class ServerRouteTests(unittest.TestCase):
 
                     self.assertEqual(response.status_code, 400)
                     self.assertEqual(response.json(), {"detail": f"{field} must be a string"})
+
+    def test_transcribe_language_endpoint_uses_static_catalog_without_grpc(self) -> None:
+        transcribe = {"asr_type": "transcribe", "supported_languages": ["de", "hi", "es"]}
+        with (
+            patch.object(server, "load_service_entry_by_id", return_value=transcribe),
+            patch.object(server, "load_service_entry", return_value={"supported_languages": ["de", "es"]}),
+            patch("examples.shared.prewarm.prewarm_tts", return_value={"languages": ["de-DE", "hi-IN", "fr-FR"]}),
+            patch("examples.shared.prewarm.prewarm_asr") as probe,
+            TestClient(server.create_app()) as client,
+        ):
+            response = client.get(
+                "/api/tts-config",
+                params={
+                    "pipeline_mode": "multilingual-assistant",
+                    "asr_id": "self-hosted:nemotron-transcribe",
+                    "asr_server": "http://nim/v1",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["languages"], ["de-DE"])
+        probe.assert_not_called()
+
+    def test_transcribe_api_defaults_to_session_locale_and_preserves_explicit_locale(self) -> None:
+        with patch.dict(os.environ, {"SERVICE_RECIPE": "server"}):
+            for mode, requested, expected in (
+                ("multilingual-assistant", None, "de-DE"),
+                ("multilingual-assistant", "", "de-DE"),
+                ("multilingual-assistant", "es-ES", "es-ES"),
+                ("generic-assistant", None, "en-US"),
+            ):
+                with self.subTest(mode=mode, language=requested):
+                    body = {"pipeline_mode": mode, "asr_id": "self-hosted:nemotron-transcribe"}
+                    if requested is not None:
+                        body["asr_language_code"] = requested
+                    config = server._sanitize_session_config(body)
+                    self.assertEqual(config["asr_language_code"], expected)
+
+    def test_language_endpoint_probes_selected_asr_when_only_id_is_supplied(self) -> None:
+        selected = {"server": "selected:50052", "model": "selected-model", "function_id": "selected-function"}
+        with (
+            patch.object(server, "load_service_entry_by_id", return_value=selected),
+            patch("examples.shared.prewarm.prewarm_tts", return_value={"languages": ["de-DE"]}),
+            patch("examples.shared.prewarm.prewarm_asr", return_value={"languages": ["de-DE"]}) as probe,
+            TestClient(server.create_app()) as client,
+        ):
+            response = client.get(
+                "/api/tts-config",
+                params={"pipeline_mode": "multilingual-assistant", "asr_id": "self-hosted:parakeet-rnnt"},
+            )
+        self.assertEqual(response.status_code, 200)
+        probe.assert_called_once_with("selected:50052", "selected-model", "selected-function")

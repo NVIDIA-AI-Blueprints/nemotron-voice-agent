@@ -45,6 +45,7 @@ if "riva.client.proto.riva_asr_pb2" not in sys.modules:
 
 from examples.shared.prewarm import (
     _parse_asr_config,
+    build_session_languages,
     intersect_session_languages,
     prewarm_asr,
     prewarm_tts,
@@ -121,6 +122,32 @@ class SessionLanguageCatalogTests(unittest.TestCase):
 
         self.assertLess(time.monotonic() - started, 0.1)
         self.assertIn("timed out", config["error"])
+
+    def test_static_asr_capabilities_intersect_tts_and_llm_without_grpc(self) -> None:
+        tts = {"languages": ["de-DE", "de-AT", "es-US", "hi-IN", "fr-FR", "xx-XX"], "voices": []}
+        for supported, llm, expected in (
+            (["de", "es", "hi"], ["de", "es"], ["de-AT", "de-DE", "es-US"]),
+            ("de,es,hi", None, ["de-AT", "de-DE", "es-US", "hi-IN"]),
+            ([], None, []),
+            (["ja"], None, []),
+            (["de"], [], []),
+        ):
+            with (
+                self.subTest(supported=supported, llm=llm),
+                patch("examples.shared.prewarm.prewarm_asr") as probe,
+                patch("examples.shared.prewarm.prewarm_tts", return_value=tts),
+            ):
+                catalog = build_session_languages(
+                    "http://asr/v1",
+                    "transcribe",
+                    "",
+                    "tts:50051",
+                    "Voice",
+                    llm_supported_languages=llm,
+                    asr_supported_languages=supported,
+                )
+            probe.assert_not_called()
+            self.assertEqual(catalog["languages"], expected)
 
     def test_empty_asr_catalog_falls_back_to_spanish_only(self) -> None:
         tts_config = {"languages": ["en-US", "es-US", "vi-VN", "zh-CN"], "voices": []}

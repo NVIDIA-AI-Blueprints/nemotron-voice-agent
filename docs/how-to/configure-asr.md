@@ -12,7 +12,7 @@ ASR services are declared in the root [`services.yaml`](../../services.yaml), an
 | **Nemotron ASR Streaming (Multilingual)**: cache-aware streaming multilingual ASR covering 40 language locales | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
 | **Parakeet CTC 1.1B**: English-only ASR, self-hosted only | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
 | **Parakeet 1.1B RNNT Multilingual**: multilingual ASR (25+ languages)  | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) |
-| **Nemotron 3.5 Transcribe**: whole-turn ASR in Generic Assistant, self-hosted only | [`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml) | [model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) |
+| **Nemotron 3.5 Transcribe**: whole-turn ASR in Generic and Multilingual Assistants, self-hosted only | [`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml) | [model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) |
 
 Each model is exposed as a **catalog key** in `services.yaml`:
 
@@ -33,12 +33,13 @@ For multilingual deployments, select the ASR model based on your language requir
 | Model | When to use |
 | --- | --- |
 | Nemotron ASR Streaming Multilingual | Best choice when latency is the priority. Recognition quality varies by language, and auto language detection is less reliable. Specify the session language explicitly for best results. In noisy environments, it can occasionally emit an empty transcript for turns, so the user may need to repeat themselves. |
+| Nemotron 3.5 Transcribe | Whole-turn ASR in Generic and Multilingual Assistants. Refer to the [model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) for supported languages. |
 | Parakeet 1.1B RNNT Multilingual | Better recognition quality for many languages, with better auto language detection. Trade-off is higher latency. Note: may occasionally miss the first word of an utterance or produce spurious transcripts during silence. |
 
 **Guidance:**
 - For English, use the English-only model.
-- Do not rely on auto language detection. Explicitly set the target language when possible.
-- Both models behave differently across languages. Test both with your target language and choose based on observed recognition quality.
+- For streaming ASR, do not rely on auto language detection. Explicitly set the target language when possible.
+- Models behave differently across languages. Test your target language and choose based on observed recognition quality.
 - For Nemotron ASR Streaming Multilingual, use only languages listed as transcription-ready in the [supported languages table](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#asr-nemotron-asr-streaming-supported-languages). Other locales may produce degraded results.
 - For Parakeet 1.1B RNNT Multilingual, see the [supported languages table](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#asr-parakeet-11b-rnnt-multilingual-supported-languages).
 
@@ -58,11 +59,15 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. The simplest starting point.
 - **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
-- **Opt-in local ASR (Transcribe)**: enable the `transcribe-asr` Compose profile with Generic Assistant's server recipe ([`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml), GPU `1`, HTTP port `9002`), then select **Nemotron 3.5 Transcribe** in **Services > ASR**.
+- **Opt-in local ASR (Transcribe)**: enable the `transcribe-asr` Compose profile with the server recipe of the Generic or Multilingual Assistant ([`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml), GPU `1`, HTTP port `9002`). Then select **Nemotron 3.5 Transcribe** in **Services > ASR**.
 
-  External NIMs must not require an API key because the pipeline does not pass one. Set `server.asr.nemotron-transcribe.server` to the NIM's HTTP API URL including `/v1`, and keep `asr_type: transcribe`. Transcribe produces final transcripts without speaker labels. Leave `transcription_prompt` unset for audio-only requests, or use an official NIM transcription template.
+    Transcribe writes the transcript in the spoken language. The session language does not change it.
 
-  In rare cases, Transcribe may follow an instruction spoken in the audio (for example, "answer in one word") instead of transcribing it.
+    In the Multilingual Assistant, the language list shows only languages that Transcribe, the TTS, and the LLM all support.
+
+    External NIMs must not require an API key because the pipeline does not pass one. Set `server.asr.nemotron-transcribe.server` to the HTTP API URL of the NIM, including `/v1`. Keep `asr_type: transcribe`. Transcribe produces final transcripts without speaker labels. In Generic Assistant, leave `transcription_prompt` unset for audio-only requests, or use an official NIM transcription template.
+
+    In rare cases, Transcribe can follow an instruction spoken in the audio (for example, "answer in one word") instead of transcribing it.
 - **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, one sidecar serves **ASR + TTS together** from local GGUF weights (`nemo-speech` for English, `nemo-speech-multilingual` for the multilingual example, both in `docker-compose.nemo-speech-cpp.yaml` and both reachable as `nemo-speech`). See [Jetson Thor](../03-jetson-thor.md).
 
 > Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs require compute capability **≥ 8.0** and **≥ 16 GB** VRAM.
@@ -104,9 +109,9 @@ For ASR latency and throughput across GPUs and WER for different models, see the
 
   The [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md#configuration) sets `stop_history` in `build_stt` in [`media/services.py`](../../src/examples/frontend_backend_live/media/services.py).
 
-- **Transcribe**: use `transcription_prompt` for expected words, and rely on [Silero VAD](tune-pipeline-performance.md#smart-turn-detection) for turn ends.
+- **Transcribe**: in Generic Assistant, use `transcription_prompt` for expected words. Multilingual Assistant sends no prompt. Both assistants rely on [Silero VAD](tune-pipeline-performance.md#smart-turn-detection) for turn ends.
 
-- **Language**: the multilingual example locks each session to a single locale, selectable per connection in the UI (any locale the ASR and TTS both support, default `de-DE`) and fixed for that session. Different sessions can use different languages. The ASR also accepts `language_code: auto` for per-turn detection, but this blueprint does not use it, since a pinned locale is more reliable. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
+- **Language**: the multilingual example locks each session to a single locale, selectable per connection in the UI (any locale the ASR, TTS, and selected LLM support, default `de-DE`) and fixed for that session. Different sessions can use different languages. The streaming ASR also accepts `language_code: auto` for per-turn detection, but this blueprint does not use it, since a pinned locale is more reliable. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
 - **Punctuation**: the single-GPU NeMo-Speech.cpp entries reference the `nemo-speech-asr` profile in [`settings.yaml`](../../settings.yaml), so their card in the Services tab has a **Punctuation** toggle that defaults to on. NeMo-Speech.cpp ignores `profanity_filter` and does not apply inverse text normalization, so the profile exposes only punctuation.
 - **Catalog config**: a `server` entry points at the Compose sidecar `host:port`, and its `nvcf` key adds the NVIDIA Cloud `function_id` (and `model` when it differs). Host-run deployments rewrite sidecar endpoints to `localhost` automatically. See [Configure Services → Adding a self-hosted service](configure-services.md#adding-a-self-hosted-service).
 

@@ -68,9 +68,13 @@ To run host-native without Docker, set `selection: multilingual-assistant` in [`
 
 After deploying, validate the session language with the steps in [Testing](#testing).
 
+## Transcribe ASR
+
+Optional. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting, then choose the session language in **Voice Settings**. Transcribe writes the transcript in the spoken language. The session language does not change it. Refer to [Configure ASR](../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and language compatibility.
+
 ## Customization
 
-TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service. The UI language selector contains only locales supported by the selected ASR, TTS, and built-in LLM. Changing the LLM refreshes that compatible set. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
+TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service. The UI language selector contains only locales supported by the selected ASR, TTS, and built-in LLM. Changing the LLM refreshes that compatible set. The selected session language is injected into the prompt and passed to the ASR and the TTS voice for the whole connection. If you omit the session language in an API request, the registry default (`de-DE`) applies. An explicit session language overrides it. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
 
 | Path | Role |
 | --- | --- |
@@ -80,7 +84,7 @@ TTS voices and supported language codes are discovered at runtime by prewarming 
 ### How it works
 
 1. The user selects a locale compatible with the active ASR, TTS, and LLM in the UI (default `de-DE`) before connecting.
-2. The ASR and the TTS voice are pinned to that language when the connection starts. They do not change mid-session.
+2. The session language is passed to the ASR and pins the TTS voice when the connection starts. It does not change mid-session.
 3. The fixed-session prompt addon instructs the LLM to reply only in that language, and the LLM returns plain spoken text (no JSON, labels, or metadata) that flows straight to TTS, the client transcript, and chat history.
 4. `PerTurnReminderProcessor` re-states the "reply only in <language>" reminder on each user turn at request time only, so the reminder never pollutes stored history.
 
