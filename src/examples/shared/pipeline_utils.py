@@ -242,9 +242,9 @@ def register_session_start_handlers(
             await _maybe_start_session("rtvi-client-ready+pipeline-started")
 
 
-def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
+def build_user_aggregator_params(welcome_enabled: bool, *, vad_only: bool = False) -> LLMUserAggregatorParams:
     """Return user-turn configuration, defaulting to Pipecat smart turn."""
-    if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
+    if not vad_only and not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             user_mute_strategies=build_user_mute_strategies(welcome_enabled),

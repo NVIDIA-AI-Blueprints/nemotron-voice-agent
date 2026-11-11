@@ -151,14 +151,15 @@ services:
 
 The matching entry under `server` points at that Compose service name and **container** port (`50052`). For host-native runs, the backend rewrites it to the published host port automatically. Here `nemotron-asr-streaming-english:50052` becomes `localhost:50152`.
 
-Every speech sidecar publishes its own host ports, so alternatives can run side by side and the Services tab switches between them. A new sidecar needs unused host ports in its Compose file and a matching row in `LOCAL_SPEECH_PORTS` in [`src/utils.py`](../../src/utils.py), which drives both the host rewrite and the readiness check.
+Every speech sidecar publishes its own host ports, so alternatives can run side by side and the Services tab switches between them. A gRPC speech sidecar needs unused host ports in its Compose file and a matching row in `LOCAL_SPEECH_PORTS` in [`src/utils.py`](../../src/utils.py), which drives both the host rewrite and the readiness check. HTTP-only speech sidecars use `_HOST_RUNTIME_PORT_OVERRIDES` for the host port and `health_path` on their catalog entry for readiness, as LLMs do.
 
-| Sidecar | gRPC host port | Health host port |
+| Sidecar | gRPC host port | HTTP host port |
 | --- | --- | --- |
 | `nemotron-asr-streaming-english` | `50152` | `9001` |
 | `nemotron-asr-streaming-multilingual` | `50252` | `9101` |
 | `parakeet-ctc-asr` | `50352` | `9201` |
 | `parakeet-rnnt-asr` | `50452` | `9301` |
+| `nemotron-transcribe` | — | `9002` |
 | `magpie-multilingual-tts-service` | `50151` | `9000` |
 | `chatterbox-tts-service` | `50251` | `9100` |
 | `magpie-zeroshot-tts-service` | `50351` | `9200` |

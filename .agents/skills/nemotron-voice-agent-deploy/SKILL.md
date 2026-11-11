@@ -24,6 +24,7 @@ Do not use this skill to change `pipeline.py` or migrate Pipecat versions (use `
 
 - Run commands from the repository root that contains `docker-compose.yml`. Use Docker Compose.
 - Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any recipe. The optional LLM sidecar profiles `nemotron-35-super-vl`, `nemotron-35-super-vl-single-gpu`, `nemotron-35-bolt-single-gpu`, `nemotron-35-bolt-e4b`, and `nemotron-35-bolt-e4b-single-gpu` are added next to a matching recipe (see `references/configure.md`). None of these are recipes.
+- The optional `transcribe-asr` sidecar runs with `generic-assistant/server`. It is not a recipe. Refer to `references/configure.md` for setup and `references/server.md` for GPU placement.
 - Preserve existing `.env`. Create it only if missing: `test -f .env || cp .env.example .env`.
 - Use `references/configure.md` for `.env`, catalog, setting, or prompt changes. Do not write host-specific vLLM flags into `.env`.
 - Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU Blackwell workstation load benchmark with a pinned NVFP4 TP2 LLM profile, not a UI deploy. Older hardware requires a compatible TP2 profile. See `benchmarking_tools/scaling-perf/README.md`.

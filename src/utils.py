@@ -261,6 +261,7 @@ LOCAL_SPEECH_PORTS: dict[str, dict[str, SpeechPorts]] = {
 }
 
 _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
+    ("nemotron-transcribe", 9000): 9002,
     ("nvidia-llm", 8000): 18000,
     ("nemotron-35-super-vl", 8000): 18001,
     ("nemotron-35-super-vl-vllm", 8000): 18001,
@@ -416,6 +417,12 @@ def _http_host(host: str) -> str:
 
 def _local_speech_ready_url(label: str, server: str) -> str:
     """Return the NIM HTTP readiness URL for built-in local ASR/TTS endpoints."""
+    for source, catalog in service_catalog_sources():
+        for entry in catalog.get(label.lower(), {}).values():
+            if source == SELF_HOSTED_SOURCE and entry.get("server") == server and entry.get("health_path"):
+                parsed = urlparse(server)
+                if parsed.scheme and parsed.netloc:
+                    return f"{parsed.scheme}://{parsed.netloc}{entry['health_path']}"
     host, port = _service_host_port(server)
     normalized_host = host.strip("[]").lower()
     for service, ports in LOCAL_SPEECH_PORTS.get(label.lower(), {}).items():
