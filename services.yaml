@@ -57,6 +57,15 @@ server:
       extra_params: '{"extra_body":{"top_k":1,"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
       settings: nemotron-omni-nim
       nvcf: {}
+    nemotron-lightning-dynamo:
+      name: "Nemotron 3.5 Lightning 30B A3B (Dynamo)"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://dynamo-frontend:8000/v1"
+      health_path: "/v1/models/nvidia/nemotron-3.5-lightning-30b-a3b"
+      streaming_url: "ws://dynamo-frontend:8000/v1/realtime"
+      supported_languages: [en, de, es, fr, it, ja]
+      extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
+      settings: nemotron-vllm
   tts:
     magpie-multilingual-tts:
       name: "Magpie TTS Multilingual"
@@ -124,7 +133,7 @@ single-gpu:
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
       base_url: "http://nvidia-llm-vllm:8000/v1"
       health_path: "/health"
-      streaming_url: "ws://nvidia-llm-vllm:8000/v1/streaming-session"
+      streaming_url: "ws://nvidia-llm-vllm:8000/v1/realtime"
       supported_languages: [en, de, es, fr, it, ja]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-vllm
@@ -133,7 +142,7 @@ single-gpu:
       model_id: "nvidia/nemotron-3.5-super-vl-120b-a12b"
       base_url: "http://nemotron-35-super-vl-vllm:8000/v1"
       health_path: "/health"
-      streaming_url: "ws://nemotron-35-super-vl-vllm:8000/v1/streaming-session"
+      streaming_url: "ws://nemotron-35-super-vl-vllm:8000/v1/realtime"
       supported_languages: [en, de, es, fr, it, ja, zh]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-super
@@ -142,7 +151,7 @@ single-gpu:
       model_id: "nvidia/nemotron-3.5-bolt-74b-a9b-24gb"
       base_url: "http://nemotron-35-bolt-vllm:8000/v1"
       health_path: "/health"
-      streaming_url: "ws://nemotron-35-bolt-vllm:8000/v1/streaming-session"
+      streaming_url: "ws://nemotron-35-bolt-vllm:8000/v1/realtime"
       supported_languages: [en, de, es, fr, it, ja]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-super
@@ -151,7 +160,7 @@ single-gpu:
       model_id: "nvidia/nemotron-3.5-bolt-e4b"
       base_url: "http://nemotron-35-bolt-e4b-vllm:8000/v1"
       health_path: "/health"
-      streaming_url: "ws://nemotron-35-bolt-e4b-vllm:8000/v1/streaming-session"
+      streaming_url: "ws://nemotron-35-bolt-e4b-vllm:8000/v1/realtime"
       supported_languages: [en, de, es, fr, it, ja]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-bolt-4b

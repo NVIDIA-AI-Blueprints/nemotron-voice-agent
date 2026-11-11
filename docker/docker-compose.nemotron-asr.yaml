@@ -38,6 +38,7 @@ services:
     <<: *nemotron-asr
     profiles:
       - generic-assistant/server
+      - generic-assistant/dynamo
       - frontend-backend-agent/server
       - frontend-backend-live/server
     environment:
@@ -65,6 +66,7 @@ services:
     profiles:
       - nemotron-asr-streaming-multilingual/server
       - multilingual-assistant/server
+      - multilingual-assistant/dynamo
     ports:
       - "50252:50052"
       - "9101:9001"

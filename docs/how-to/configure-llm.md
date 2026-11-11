@@ -14,7 +14,7 @@ Five models back the examples. Each is served by the self-hosted Compose service
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
-| **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
+| **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM), [`docker-compose.dynamo-lightning.yaml`](../../docker/docker-compose.dynamo-lightning.yaml) (NVIDIA Dynamo, experimental) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
 | **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
 | **Nemotron 3.5 Bolt 74B A9B**: higher-capability alternative, available self-hosted on single-GPU hosts only | [`docker-compose.nemotron35-bolt.yaml`](../../docker/docker-compose.nemotron35-bolt.yaml) (`nemotron-35-bolt-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB) |
 | **Nemotron 3.5 Bolt E4B**: compact conversational and tool-calling small language model (SLM) with a low time to first token (TTFT), 8B total and 4B effective | [`docker-compose.nemotron35-bolt-e4b.yaml`](../../docker/docker-compose.nemotron35-bolt-e4b.yaml) (`nemotron-35-bolt-e4b` NIM, `nemotron-35-bolt-e4b-vllm` vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b) |
@@ -24,7 +24,7 @@ Each model is exposed as one or more **catalog keys** in `services.yaml`:
 
 | Model | Catalog keys |
 |-------|--------------|
-| Nemotron 3.5 Lightning | `nemotron-lightning` |
+| Nemotron 3.5 Lightning | `nemotron-lightning`, `nemotron-lightning-dynamo` (NVIDIA Dynamo, experimental) |
 | Nemotron 3.5 Super VL | `nemotron-super` |
 | Nemotron 3.5 Bolt 74B | `nemotron-bolt-74b` (self-hosted single-GPU only) |
 | Nemotron 3.5 Bolt E4B | `nemotron-bolt-4b` |
@@ -38,7 +38,7 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 
 | Built-in LLM | Supported language bases |
 | --- | --- |
-| Nemotron 3.5 Lightning (`nemotron-lightning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
+| Nemotron 3.5 Lightning (`nemotron-lightning`, `nemotron-lightning-dynamo`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 | Nemotron 3.5 Super VL (`nemotron-super`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
 | Nemotron 3.5 Bolt 74B (`nemotron-bolt-74b`, self-hosted single-GPU) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 | Nemotron 3.5 Bolt E4B (`nemotron-bolt-4b`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
@@ -51,12 +51,13 @@ The source of truth for the built-in capability metadata is the NVIDIA [Nemotron
 
 ## Hardware Requirements and Deployment Configs
 
-You can self-host the LLM two ways, and the repo wires the right one per profile:
+You can self-host the LLM three ways, and the repo wires the right one per profile:
 
 - **NIM** (`nvidia-llm`, `nvidia-llm-omni`, `nemotron-35-super-vl`, `nemotron-35-bolt-e4b`): a prebuilt, optimized inference microservice with automatic, hardware-aware model-profile selection. It is used by `*/server` recipes.
 - **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`, `nemotron-35-super-vl-vllm`, `nemotron-35-bolt-vllm`, `nemotron-35-bolt-e4b-vllm`): serves weights directly. The `*/single-gpu` recipes select the serving precision automatically from the host and GPU.
+- **NVIDIA Dynamo** (`dynamo-frontend`, `dynamo-lightning-worker`, experimental): routes requests from a frontend to vLLM workers. It is used by the `*/dynamo` recipes. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
 
-Both expose the same OpenAI-compatible API, so the pipeline and the request tuning below behave identically against either.
+All three expose the same OpenAI-compatible API, so the pipeline and the request tuning below behave identically against each of them.
 
 > Check the [NIM for LLMs support matrix](https://docs.nvidia.com/nim/large-language-models/latest/reference/support-matrix.html) for cascaded models and the [NIM for VLMs support matrix](https://docs.nvidia.com/nim/vision-language-models/2.0.4-variant/support-matrix.html) for Omni before choosing a profile.
 
@@ -157,6 +158,49 @@ The single-GPU vLLM service and the server NIM read the **Reasoning Budget** fro
 
 **Conversational Mode** is a setting of the `nemotron-bolt-4b` settings profile, not of the service. It is on by default for every Bolt E4B endpoint, including NVIDIA Cloud, the server NIM, and the single-GPU service. Turn it off for a session in the Services tab. The model's own chat template defaults it to off, so a client that calls the endpoint directly gets it off unless the request sets `chat_template_kwargs.conversational_mode`.
 
+### Run Nemotron 3.5 Lightning on NVIDIA Dynamo (Experimental)
+
+The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` recipes serve Lightning with [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) and pair it with the ASR and TTS NIMs from the matching `/server` recipe. The `dynamo-frontend` service routes requests to the vLLM workers, and the recipe starts one worker, `dynamo-lightning-worker`, on GPU `0`. The workers register through file-based discovery on the shared `dynamo_kv` volume, so the recipe needs no etcd or NATS.
+
+```bash
+docker compose --profile generic-assistant/dynamo up -d
+docker compose --profile multilingual-assistant/dynamo up -d
+```
+
+Each worker runs with `--endpoint-types chat,realtime`, so one engine serves chat completions at `http://dynamo-frontend:8000/v1` and OpenAI Realtime text sessions at `ws://dynamo-frontend:8000/v1/realtime`. The `nemotron-lightning-dynamo` entry declares them as its `base_url` and `streaming_url`. With **Streaming Input** off, the pipeline sends chat completions. With it on, `NvidiaStreamingLLMService` streams ASR updates into the session as prefill, as it does for the [vLLM services](#deployment-tuning-parameters). The Multilingual Assistant has no **Streaming Input**, so it always sends chat completions.
+
+- **Image.** `docker/dynamo/Dockerfile` installs a pinned `ai-dynamo` nightly on top of `vllm/vllm-openai`. Realtime text sessions with function tools are not in a Dynamo release yet. Change `DYNAMO_VERSION` and the image tag in `docker/docker-compose.dynamo-lightning.yaml` together.
+- **Supported GPUs.** The worker runs on Ada (compute capability 8.9), Hopper, and Blackwell GPUs. On other GPUs, it exits with `Unsupported GPU compute capability for the Dynamo recipe`.
+- **GPU memory.** The ASR and TTS NIMs share GPU `0`, so the worker takes a `0.45` share of GPU memory. The LLM needs about 28 GB, so the default share needs a GPU with at least 64 GB. Change `GPU_MEMORY_UTILIZATION` in the worker's `environment` to change the share.
+- **Routing.** The frontend spreads requests across the workers in turn (`--router-mode round-robin`). Each realtime session stays on the worker that it starts on. Dynamo supports only `round-robin` and `random` for realtime sessions so far ([ai-dynamo/dynamo#10320](https://github.com/ai-dynamo/dynamo/issues/10320)). When a worker stops, `--migration-limit 2` moves its in-flight chat completions to another worker.
+- **Multi-speaker mode.** Dynamo does not accept `response_format` in `chat_completion_options` yet, so multi-speaker mode works only with **Streaming Input** off.
+- **Startup.** Loading the Lightning model takes several minutes on the first start. The frontend turns healthy, and the Services tab lists the entry, once a worker serves the model.
+
+#### Add Dynamo Workers
+
+Each worker is one container on its own GPUs. To add one, create `docker-compose.override.yaml` in the repository root. Docker Compose merges it into every `docker compose` command. Each entry extends the stock worker and sets its GPU and memory share. The `!override` tag replaces the stock GPU list and needs Docker Compose 2.24.4 or later.
+
+```yaml
+services:
+  dynamo-lightning-worker-1:
+    extends:
+      file: docker/docker-compose.dynamo-lightning.yaml
+      service: dynamo-lightning-worker
+    environment:
+      GPU_MEMORY_UTILIZATION: "0.9"
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+```
+
+Repeat the entry with a new name and GPU for each worker, then run `docker compose --profile generic-assistant/dynamo up -d`. The worker registers with the frontend when its model is loaded. Confirm the count with `curl -s localhost:18005/v1/models/nvidia/nemotron-3.5-lightning-30b-a3b/ready`. The response counts each worker once per endpoint type, chat and realtime, so two workers report `"workers":4`.
+
+Workers on other hosts need a discovery service that spans hosts. Run etcd, and set `DYN_DISCOVERY_BACKEND=etcd` and `ETCD_ENDPOINTS` on the frontend and every worker, and `DYN_TCP_RPC_HOST` to each worker's routable address. Refer to the [Dynamo runtime configuration](https://github.com/ai-dynamo/dynamo/blob/main/docs/fern/pages/reference/components/runtime-configuration.mdx).
+
 ### Deployment Tuning Parameters
 
 Single-GPU Compose services select precision and VRAM utilization automatically. Use `.env` only for the optional headroom or utilization override. Standard NIM Server deployments also use hardware-aware automatic profile selection. Only specialized recipes such as `server-perf` pin a profile. For Server deployments, the stock Compose files expose only the NIM settings shown as environment variables below. Use a Compose override for controls that the stock files fix or omit.
@@ -174,9 +218,11 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 
 **Lightning vLLM sizing (`nvidia-llm-vllm-lightning`).** The Single-GPU service loads `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` on every supported GPU. Blackwell workstations, DGX Spark, and Jetson Thor serve native NVFP4. Hopper and Ada serve the same checkpoint as W4A16 through Marlin (`--quantization modelopt_fp4`).
 
-**Streaming input.** The Lightning vLLM service also serves a text StreamingInput WebSocket at `ws://nvidia-llm-vllm:8000/v1/streaming-session`, next to chat completions. The single-GPU Super VL service (`nemotron-35-super-vl-vllm`), the Bolt 74B service (`nemotron-35-bolt-vllm`), and the Bolt E4B service (`nemotron-35-bolt-e4b-vllm`) serve the same endpoint on their own ports. The single-GPU `nemotron-lightning`, `nemotron-super`, `nemotron-bolt-74b`, and `nemotron-bolt-4b` entries declare it as `streaming_url`. When an example lists `streaming_input` under `capabilities` in `examples_registry.yaml`, each of those cards shows a **Streaming Input** toggle, and turning it on sends the session to that URL. The Generic Assistant then prefills every ASR update while the user speaks, so the answer starts from a warm KV cache. The toggle appears only for self-hosted vLLM entries with a `streaming_url`.
+**Streaming input.** The Lightning vLLM service also serves OpenAI Realtime text sessions at `ws://nvidia-llm-vllm:8000/v1/realtime`, next to chat completions. The single-GPU Super VL service (`nemotron-35-super-vl-vllm`), the Bolt 74B service (`nemotron-35-bolt-vllm`), and the Bolt E4B service (`nemotron-35-bolt-e4b-vllm`) serve the same endpoint on their own ports. The single-GPU `nemotron-lightning`, `nemotron-super`, `nemotron-bolt-74b`, and `nemotron-bolt-4b` entries declare it as `streaming_url`. When an example lists `streaming_input` under `capabilities` in `examples_registry.yaml`, each of those cards shows a **Streaming Input** toggle, and turning it on sends the session to that URL. The Generic Assistant then prefills every ASR update while the user speaks, so the answer starts from a warm KV cache. The toggle appears only for self-hosted vLLM entries with a `streaming_url`.
 
 The streaming server holds the latest word until another word arrives or the turn commits. If an ASR correction changes previously queued prompt tokens, the engine request restarts with the updated prompt. Voice activity detection (VAD) stopping does not guarantee that prefill is complete: final ASR updates or pending chunks can still require processing.
+
+The sessions follow the text protocol of [NVIDIA Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo-experimental), so `NvidiaStreamingLLMService` connects to either server. **Max Tokens** maps to `max_output_tokens`. The OpenAI Realtime protocol caps a finite limit at 4096, so a larger or empty **Max Tokens** is sent as `inf`. The other LLM settings, such as **Temperature**, **Reasoning**, and **Reasoning Budget**, and the multi-speaker `response_format` travel in the `session.chat_completion_options.update` extension. Reasoning text is not streamed, only the answer and tool calls.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4, FP8, or BF16 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 
@@ -217,7 +263,7 @@ docker run --rm --gpus '"device=0"' \
 
 Nemotron LLMs support a chain-of-thought "thinking" mode. Catalog entries reference a [`settings.yaml`](../../settings.yaml) profile that exposes **Reasoning**, **Reasoning Budget**, **Temperature**, **Top P**, **Max Tokens**, and **Seed** under the active LLM in the Services tab. Omni uses `nemotron-omni-nim` / `nemotron-omni-vllm`, whose temperature range goes up to 2.0; its `OMNI_TEMPERATURE`, `OMNI_TOP_P`, and `OMNI_MAX_TOKENS` env values still apply until a user sets the parameter.
 
-For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. Each serving engine names the budget field differently: `nemotron-nim` sends `reasoning_budget` and `nemotron-vllm` sends `thinking_token_budget`. Lightning uses `nemotron-nim` on the server NIM and NVIDIA Cloud, and `nemotron-vllm` on the single-GPU vLLM service. Self-hosted Super VL and Bolt 74B use `nemotron-super`, which has no **Reasoning Budget**. On NVIDIA Cloud, `nvcf: {settings: nemotron-super-nvcf}` gives Super VL `nemotron-nim` with a 1,024-token **Reasoning Budget**, plus **Reasoning Effort** (`low`, `medium`, or `high`, `medium` by default), which the backend sends as `reasoning_effort` only while **Reasoning** is on. Bolt E4B adds **Conversational Mode** and picks its budget field per endpoint (refer to [Run Nemotron 3.5 Bolt E4B](#run-nemotron-35-bolt-e4b)). When **Max Tokens** is set, every **Reasoning Budget** stays 64 tokens under it, and under 192 **Max Tokens** the backend turns **Reasoning** off for the session, so reasoning cannot use up the tokens for the spoken answer. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. The Frontend/Backend Live backend defaults to `nemotron-super`: Super VL on NVIDIA Cloud for the Cloud recipe, and the Super VL NIM for the Server recipe. Its `settings` in `examples_registry.yaml` turn reasoning **ON** at temperature 0 and 4,096 max tokens. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
+For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. Each serving engine names the budget field differently: `nemotron-nim` sends `reasoning_budget` and `nemotron-vllm` sends `thinking_token_budget`. Lightning uses `nemotron-nim` on the server NIM and NVIDIA Cloud, and `nemotron-vllm` on the single-GPU vLLM service and on NVIDIA Dynamo. Self-hosted Super VL and Bolt 74B use `nemotron-super`, which has no **Reasoning Budget**. On NVIDIA Cloud, `nvcf: {settings: nemotron-super-nvcf}` gives Super VL `nemotron-nim` with a 1,024-token **Reasoning Budget**, plus **Reasoning Effort** (`low`, `medium`, or `high`, `medium` by default), which the backend sends as `reasoning_effort` only while **Reasoning** is on. Bolt E4B adds **Conversational Mode** and picks its budget field per endpoint (refer to [Run Nemotron 3.5 Bolt E4B](#run-nemotron-35-bolt-e4b)). When **Max Tokens** is set, every **Reasoning Budget** stays 64 tokens under it, and under 192 **Max Tokens** the backend turns **Reasoning** off for the session, so reasoning cannot use up the tokens for the spoken answer. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. The Frontend/Backend Live backend defaults to `nemotron-super`: Super VL on NVIDIA Cloud for the Cloud recipe, and the Super VL NIM for the Server recipe. Its `settings` in `examples_registry.yaml` turn reasoning **ON** at temperature 0 and 4,096 max tokens. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
 
 > **Known limitation (Reasoning OFF with tool calling).** With reasoning **OFF** (`enable_thinking: false`), smaller models such as **Nemotron 3.5 Lightning 30B A3B** can occasionally emit tool-selection planning text (function names, argument math, or prompt rules) as normal assistant `content` before or instead of the structured tool call, which TTS then speaks aloud. Once this planning text enters the conversation history, subsequent turns in the same session can continue repeating that pattern. Start a new session to clear the conversation context, or enable **Reasoning** / switch to **Nemotron 3.5 Super VL** for tool-heavy sessions.
 

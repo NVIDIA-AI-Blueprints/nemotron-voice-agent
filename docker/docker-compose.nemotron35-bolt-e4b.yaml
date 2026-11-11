@@ -1,7 +1,7 @@
 # Nemotron 3.5 Bolt E4B (8B total, 4B effective). `nemotron-35-bolt-e4b` is the
 # NIM for */server recipes; `nemotron-35-bolt-e4b-vllm` serves the BF16 HF
 # checkpoint for */single-gpu recipes (with the NVFP4 DFlash drafter on
-# Blackwell GPUs) and also serves /v1/streaming-session for the Streaming Input
+# Blackwell GPUs) and also serves /v1/realtime text sessions for the Streaming Input
 # toggle.
 services:
   nemotron-35-bolt-e4b:

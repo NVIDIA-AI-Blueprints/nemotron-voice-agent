@@ -20,6 +20,8 @@ name: nemotron-voice-agent
 #                             on workstation / server GPUs.
 #   single-gpu                One GPU (workstation, DGX Spark, or Jetson Thor)
 #                             running the NeMo-Speech.cpp speech stack alongside vLLM
+#   dynamo                    NIM ASR + TTS with the LLM served by NVIDIA Dynamo.
+#                             Generic and Multilingual Assistants, experimental
 #
 # Cloud-only recipes:
 #   docker compose --profile generic-assistant up
@@ -33,8 +35,10 @@ name: nemotron-voice-agent
 #   docker compose --profile generic-assistant/server up
 #   docker compose --profile generic-assistant/server-perf up
 #   docker compose --profile generic-assistant/single-gpu up
+#   docker compose --profile generic-assistant/dynamo up
 #   docker compose --profile multilingual-assistant/server up
 #   docker compose --profile multilingual-assistant/single-gpu up
+#   docker compose --profile multilingual-assistant/dynamo up
 #   docker compose --profile omni-assistant/server up
 #   docker compose --profile omni-assistant/single-gpu up
 #   docker compose --profile omni-assistant-subagents/server up
@@ -51,6 +55,7 @@ name: nemotron-voice-agent
 include:
   - path: docker/docker-compose.nemotron35-lightning-nim.yaml
   - path: docker/docker-compose.nemotron35-lightning.yaml
+  - path: docker/docker-compose.dynamo-lightning.yaml
   - path: docker/docker-compose.nemotron35-super-vl.yaml
   - path: docker/docker-compose.nemotron35-bolt.yaml
   - path: docker/docker-compose.nemotron35-bolt-e4b.yaml
@@ -122,6 +127,16 @@ services:
       SERVICE_RECIPE: server
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
+  # No SERVICE_RECIPE: the Dynamo LLM lives in the server catalog next to the
+  # Lightning NIM, which this recipe does not run, so reachability selects it.
+  generic-assistant-dynamo:
+    <<: *app-base
+    profiles:
+      - generic-assistant/dynamo
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
+
   generic-assistant-single-gpu:
     <<: *app-base
     profiles:
@@ -172,6 +187,14 @@ services:
     environment:
       <<: *app-env
       SERVICE_RECIPE: single-gpu
+      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
+
+  multilingual-assistant-dynamo:
+    <<: *app-base
+    profiles:
+      - multilingual-assistant/dynamo
+    environment:
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
   omni-assistant:

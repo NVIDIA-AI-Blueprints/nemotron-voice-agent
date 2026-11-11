@@ -14,12 +14,13 @@ The `services` lists in [`examples_registry.yaml`](../../../examples_registry.ya
 | Server | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
 | Server Performance | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM with a pinned NVFP4 TP2 profile | Magpie TTS Multilingual NIM with `batch_size=64` |
 | Single GPU | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM, with chat completions or streaming input | Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Dynamo (experimental) | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B through NVIDIA Dynamo, with chat completions or streaming input | Magpie TTS Multilingual NIM |
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Performance** (NIM), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The performance profile uses the dedicated four-GPU Blackwell layout and pinned NVFP4 TP2 LLM profile documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup). Older hardware requires a compatible TP2 profile. It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
+This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Performance** (NIM), universal **Single GPU**, and experimental **Dynamo** profiles. Server and Dynamo are workstation-only (not DGX Spark or Jetson Thor). The performance profile uses the dedicated four-GPU Blackwell layout and pinned NVFP4 TP2 LLM profile documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup). Older hardware requires a compatible TP2 profile. It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
 
-1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud, Server, or Server Performance profile:
+1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud, Server, Server Performance, or Dynamo profile:
 
    ```bash
    test -f .env || cp .env.example .env
@@ -27,7 +28,9 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
 
    > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server and Performance Server profiles use NIMs from NGC (`NVIDIA_API_KEY`) and do not use `HF_TOKEN`.
 
-2. Log in to the NVIDIA NGC container registry (Server and Server Performance only. Skip for Cloud and Single GPU):
+   > **Dynamo profile:** set both `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`. The ASR and TTS NIMs come from NGC, and the Dynamo worker downloads the Lightning weights from Hugging Face. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
+
+2. Log in to the NVIDIA NGC container registry (Server, Server Performance, and Dynamo only. Skip for Cloud and Single GPU):
 
    ```bash
    set -a; . ./.env; set +a
@@ -44,6 +47,9 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
    docker compose --profile generic-assistant/single-gpu up -d
+
+   # Experimental: Lightning on NVIDIA Dynamo, with the Server ASR and TTS NIMs
+   docker compose --profile generic-assistant/dynamo up -d
    ```
 
    | Recipe profile | App service | Sidecars |
@@ -52,7 +58,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    | `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
    | `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
    | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
-
+   | `generic-assistant/dynamo` | `generic-assistant-dynamo` | `dynamo-frontend`, `dynamo-lightning-worker`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
    > The standard Lightning `server` deployment uses NIM's automatic compatible-profile selection. The `single-gpu` deployment uses its hardware-aware vLLM configuration. The four-GPU `server-perf` benchmark pins NVFP4 TP2 for Blackwell. On older hardware, change it to a compatible TP2 profile as described in [Configure LLM](../../../docs/how-to/configure-llm.md).
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).
@@ -64,6 +70,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    docker compose --profile generic-assistant/server down      # Server
    docker compose --profile generic-assistant/server-perf down # Four-GPU benchmark only
    docker compose --profile generic-assistant/single-gpu down  # One GPU (incl. DGX Spark and Jetson Thor)
+   docker compose --profile generic-assistant/dynamo down      # NVIDIA Dynamo (experimental)
    ```
 
 To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.

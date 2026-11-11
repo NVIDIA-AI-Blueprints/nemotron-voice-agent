@@ -1,6 +1,6 @@
 # Nemotron 3.5 Super VL. `nemotron-35-super-vl` is the NIM for */server recipes;
 # `nemotron-35-super-vl-vllm` serves the HF checkpoint for */single-gpu recipes
-# and also serves /v1/streaming-session for the Streaming Input toggle.
+# and also serves /v1/realtime text sessions for the Streaming Input toggle.
 services:
   nemotron-35-super-vl:
     profiles:

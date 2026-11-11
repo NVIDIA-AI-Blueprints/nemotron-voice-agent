@@ -15,14 +15,15 @@ The `services` lists in [`examples_registry.yaml`](../../../examples_registry.ya
 | Cloud | Parakeet 1.1B RNNT Multilingual ASR | Nemotron 3.5 Lightning 30B A3B | Magpie TTS Multilingual |
 | Server | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
 | Single GPU | Nemotron 3.5 ASR Streaming Multilingual 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Dynamo (experimental) | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B through NVIDIA Dynamo, with chat completions | Magpie TTS Multilingual NIM |
 
 The registry lists `nemotron-asr-streaming-multilingual` first for ASR, so it is the default on Server and Single GPU. It has no NVIDIA Cloud endpoint, so the Cloud recipe uses the next key, `parakeet-rnnt`.
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../docs/03-jetson-thor.md) when applicable. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+This example runs with **Cloud**, **Server** (NIM, recommended for scaling), universal **Single GPU**, and experimental **Dynamo** profiles. Server and Dynamo are workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../docs/03-jetson-thor.md) when applicable. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
-1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile:
+1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud, Server, or Dynamo profile:
 
    ```bash
    test -f .env || cp .env.example .env
@@ -30,7 +31,9 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
 
    > **Single GPU:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This recipe serves the LLM with vLLM, which downloads model weights from Hugging Face.
 
-2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
+   > **Dynamo:** set both `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`. The ASR and TTS NIMs come from NGC, and the Dynamo worker downloads the Lightning weights from Hugging Face. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
+
+2. Log in to the NVIDIA NGC container registry (Server and Dynamo only. Skip for Cloud and Single GPU):
 
    ```bash
    set -a; . ./.env; set +a
@@ -46,6 +49,9 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
    docker compose --profile multilingual-assistant/single-gpu up -d
+
+   # Experimental: Lightning on NVIDIA Dynamo, with the Server ASR and TTS NIMs
+   docker compose --profile multilingual-assistant/dynamo up -d
    ```
 
    | Recipe profile | App service | Sidecars |
@@ -53,7 +59,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    | `multilingual-assistant` | `multilingual-assistant` | none (cloud NVCF) |
    | `multilingual-assistant/server` | `multilingual-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
    | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-multilingual` |
-
+   | `multilingual-assistant/dynamo` | `multilingual-assistant-dynamo` | `dynamo-frontend`, `dynamo-lightning-worker`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
 5. Clean up when you are done by tearing down with the same profile you started with:
@@ -62,6 +68,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    docker compose --profile multilingual-assistant down              # Cloud (no local GPU)
    docker compose --profile multilingual-assistant/server down       # Server
    docker compose --profile multilingual-assistant/single-gpu down   # One GPU (incl. DGX Spark and Jetson Thor)
+   docker compose --profile multilingual-assistant/dynamo down       # NVIDIA Dynamo (experimental)
    ```
 
 To run host-native without Docker, set `selection: multilingual-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.
