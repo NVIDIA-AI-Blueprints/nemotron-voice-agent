@@ -699,7 +699,7 @@ class RepositoryCatalogTests(unittest.TestCase):
         self.assertEqual(load_service_entry("thinker-llm", ""), {})
 
     def test_slots_follow_services_order(self) -> None:
-        example = examples_registry._lookup_by_key("frontend-backend-agent")
+        example = examples_registry._lookup_by_key("frontend-backend-live")
 
         with patch.dict(os.environ, {"SERVICE_RECIPE": "single-gpu"}):
             self.assertEqual(examples_registry.metadata(example)["slots"], ["llm", "thinker-llm", "asr", "tts"])
@@ -874,13 +874,13 @@ class RepositoryCatalogTests(unittest.TestCase):
                 self.assertIs(extra["extra_body"]["chat_template_kwargs"]["conversational_mode"], True)
 
     def test_lightning_budget_key_follows_the_serving_engine(self) -> None:
-        example = examples_registry.EXAMPLES["frontend-backend-agent"]
+        example = examples_registry.EXAMPLES["frontend-backend-live"]
         set_service_context(example)
         for recipe, budget_key in (("server", "reasoning_budget"), ("single-gpu", "thinking_token_budget")):
             with self.subTest(recipe=recipe), patch.dict(os.environ, {"SERVICE_RECIPE": recipe, "NVIDIA_API_KEY": ""}):
-                thinker = json.loads(load_service_entry("thinker-llm", "")["extra_params"])
+                thinker = json.loads(load_service_entry("thinker-llm", "nemotron-lightning")["extra_params"])
                 self.assertEqual(thinker["extra_body"]["chat_template_kwargs"], {"enable_thinking": True})
-                self.assertEqual(thinker["extra_body"][budget_key], 1024)
+                self.assertEqual(thinker["extra_body"][budget_key], 256)
                 talker = json.loads(load_service_entry("llm", "")["extra_params"])
                 self.assertEqual(talker["extra_body"]["chat_template_kwargs"], {"enable_thinking": False})
 
@@ -950,16 +950,6 @@ class HostRuntimeRewriteTests(unittest.TestCase):
 
 
 class ComposeRecipeTests(unittest.TestCase):
-    def test_frontend_backend_single_gpu_speaks_validated_thinker_response_directly(self) -> None:
-        compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker-compose.yml")
-        environment = compose["services"]["frontend-backend-agent-single-gpu"]["environment"]
-
-        self.assertEqual(environment["THINKER_TOOL_TIMEOUT_SECONDS"], "${THINKER_TOOL_TIMEOUT_SECONDS:-90}")
-        self.assertEqual(
-            environment["FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE"],
-            "${FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE:-true}",
-        )
-
     def test_streaming_urls_point_at_services_running_the_streaming_server(self) -> None:
         """The host serves realtime itself, or is a Dynamo frontend whose workers in the same file do."""
         commands_by_host: dict[str, str] = {}

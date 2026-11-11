@@ -161,7 +161,6 @@ services:
   nvidia-llm-vllm-lightning-frontend-backend:
     <<: *vllm-lightning-service
     profiles:
-      - frontend-backend-agent/single-gpu
       - frontend-backend-live/single-gpu
     environment:
       FLASHINFER_DISABLE_VERSION_CHECK: "1"

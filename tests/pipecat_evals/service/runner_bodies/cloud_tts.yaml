@@ -52,19 +52,6 @@ bodies:
     asr_language_code: es-ES
     session_id: eval-multilingual-cloud-tts-fixed-spanish
 
-  frontend_backend_default:
-    pipeline_mode: frontend-backend-agent
-    prompt_key: talker
-    thinker_llm_id: custom-inference-api
-    thinker_model_id: nvidia/nvidia/nemotron-3.5-lightning
-    thinker_base_url: https://inference-api.nvidia.com/v1
-    # The Thinker only emits a compact JSON tool plan. Keep its hosted-eval
-    # request bounded so a flight search can complete before the eval's
-    # response deadline instead of spending the tool budget on reasoning.
-    thinker_max_tokens: 1024
-    thinker_extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
-    session_id: eval-frontend-backend-cloud-tts-default
-
   omni_default:
     pipeline_mode: omni-assistant
     prompt_key: generic_omni_assistant

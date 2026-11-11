@@ -12,7 +12,6 @@ name: nemotron-voice-agent
 #   multilingual-assistant       Cascaded Multilingual ASR + LLM + TTS Pipeline (Multilingual Assistant)
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
-#   frontend-backend-agent               Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
 #   frontend-backend-live                Cascaded Frontend/Backend Live Pipeline (Bluebird Cafe)
 #
 # Hardware targets:
@@ -28,7 +27,6 @@ name: nemotron-voice-agent
 #   docker compose --profile multilingual-assistant up
 #   docker compose --profile omni-assistant up
 #   docker compose --profile omni-assistant-subagents up
-#   docker compose --profile frontend-backend-agent up
 #   docker compose --profile frontend-backend-live up
 #
 # On-prem recipes:
@@ -43,8 +41,6 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant/single-gpu up
 #   docker compose --profile omni-assistant-subagents/server up
 #   docker compose --profile omni-assistant-subagents/single-gpu up
-#   docker compose --profile frontend-backend-agent/server up
-#   docker compose --profile frontend-backend-agent/single-gpu up
 #   docker compose --profile frontend-backend-live/server up
 #   docker compose --profile frontend-backend-live/single-gpu up
 #
@@ -70,7 +66,6 @@ include:
   - path: docker/docker-compose.nemo-speech-cpp.yaml
   - path: docker/docker-compose.coturn.yaml
   - path: docker/docker-compose.phoenix.yaml
-  - path: src/examples/frontend_backend_agent/airline/database/docker-compose.yml
 
 x-app: &app-base
   build:
@@ -250,35 +245,6 @@ services:
       <<: *app-env
       SERVICE_RECIPE: single-gpu
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
-
-  frontend-backend-agent:
-    <<: *app-base
-    profiles:
-      - frontend-backend-agent
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
-      SERVICE_RECIPE: cloud
-
-  frontend-backend-agent-server:
-    <<: *app-base
-    profiles:
-      - frontend-backend-agent/server
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
-
-  frontend-backend-agent-single-gpu:
-    <<: *app-base
-    profiles:
-      - frontend-backend-agent/single-gpu
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: single-gpu
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
-      THINKER_TOOL_TIMEOUT_SECONDS: ${THINKER_TOOL_TIMEOUT_SECONDS:-90}
-      FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE: ${FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE:-true}
 
   frontend-backend-live:
     <<: *app-base

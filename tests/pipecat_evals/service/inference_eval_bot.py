@@ -27,11 +27,6 @@ def _install_ci_services(pipeline_mode: str) -> None:
 
         pipeline.NvidiaLLMService = InferenceNvidiaLLMService
         pipeline.NvidiaTTSService = InferenceMagpieTTSService
-    elif pipeline_mode == "frontend-backend-agent":
-        import examples.frontend_backend_agent.pipeline as pipeline
-
-        pipeline.NvidiaLLMService = InferenceNvidiaLLMService
-        pipeline.NvidiaTTSService = InferenceMagpieTTSService
     elif pipeline_mode == "omni-assistant":
         import examples.omni_assistant.pipeline as pipeline
 

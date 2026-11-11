@@ -55,14 +55,13 @@ Every turn appends to the LLM's context. Left unbounded, that context keeps grow
 We use context summarization logic for our examples to always **pin the initial prompt / system messages** loaded at session start. Nemotron's chat template carries the assistant instructions and tool definitions in the *user* section, so those must stay verbatim. Evicting them (as a token-based window might) would degrade tool-calling and persona. Only the older **conversational** turns are trimmed, and the handling differs by example:
 
 - **Generic** and **Multilingual** assistants **summarize** older history: once the conversation grows past the recent window, the older turns are condensed into a single pinned summary message (an additional LLM call after the turn), and the most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-- **Frontend/Backend Agent** uses a plain **sliding window**: older non-prompt messages are dropped, keeping only the most recent `CHAT_HISTORY_RECENT_TURNS` messages.
 - **Frontend/Backend Live** does not read `CHAT_HISTORY_RECENT_TURNS`. Its talker keeps a token budget, `frontend.cascade.memory.context_tokens` in the example's settings, and drops the oldest turns, never the prompt, after the history passes the `compact_at` share of that budget. The backend's history budget is the core's `delegation.context_tokens`. For details, refer to [Use the Live Gateway → Errors and Limits](use-live-gateway.md#errors-and-limits).
 
 ### Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHAT_HISTORY_RECENT_TURNS` | `10` (Generic / Multilingual), `20` (Frontend/Backend Agent) | Most recent non-prompt turns kept before older history is summarized (Generic/Multilingual) or dropped (Frontend/Backend Agent) |
+| `CHAT_HISTORY_RECENT_TURNS` | `10` (Generic / Multilingual) | Most recent non-prompt turns kept before older history is summarized |
 
 ```bash
 # Override the per-example default (applies to whichever example is running, except Frontend/Backend Live)
@@ -75,7 +74,7 @@ When the message count exceeds `CHAT_HISTORY_RECENT_TURNS`:
 
 1. Initial prompt messages loaded at session start are always preserved.
 2. The most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-3. Older non-prompt turns are **summarized into one pinned summary message** (Generic / Multilingual) or **removed** (Frontend/Backend Agent).
+3. Older non-prompt turns are **summarized into one pinned summary message** (Generic / Multilingual).
 
 ### Recommendations
 
