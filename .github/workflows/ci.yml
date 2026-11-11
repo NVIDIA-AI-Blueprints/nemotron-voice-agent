@@ -1,93 +1,147 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
+# Deploys the Nemotron Voice Agent Generic Assistant on the server recipe
+# (local NIM ASR + LLM + TTS) with Docker Compose, waits for it to become
+# healthy, then runs the nemotron_voice_agent suite from the shared QA image.
 #
-# Lightweight CI: Python lint/format (ruff), Python unit tests (pytest), and
-# client lint + build (eslint, tsc, vite). No deployment and no GPU are required.
+# Required repository secrets:
+#   NVIDIA_API_KEY         NVIDIA API key for the app's .env and the nvcr.io
+#                          login that pulls the NIM images.
+#   TEST_DOCKER_PULL_KEY   NVIDIA API key with pull access to
+#                          nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image.
+#
+# Optional SMTP secrets (mail step skipped if any are missing):
+#   SMTP_USERNAME, SMTP_PASSWORD, SMTP_MAIL_TO, SMTP_MAIL_FROM
 
-name: Nemotron Voice Agent CI
+name: Blueprint QA
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      test_image:
+        description: QA test image
+        required: false
+        default: nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image:latest
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  python-lint:
-    name: Python lint (ruff)
-    runs-on: ubuntu-latest
+  nemotron-voice-agent-qa:
+    name: Nemotron Voice Agent QA
+    runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
+    timeout-minutes: 480
+    env:
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      QA_TEST_IMAGE: ${{ inputs.test_image || 'nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image:latest' }}
+      COMPOSE_PROFILE: generic-assistant/server
+      UI_URL: http://localhost:7860
+      WS_URL: ws://localhost:7860/api/ws
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - name: Deploy stack
+        run: |
+          set -euo pipefail
+          : "${NVIDIA_API_KEY:?NVIDIA_API_KEY secret missing}"
+          cp .env.example .env
+          sed -i "s|^NVIDIA_API_KEY=.*|NVIDIA_API_KEY=${NVIDIA_API_KEY}|" .env
+          {
+            echo "PIPELINE_TLS=false"
+            echo "TRANSPORT_SELECTION=all"
+          } >> .env
+          echo "${NVIDIA_API_KEY}" | docker login nvcr.io -u '$oauthtoken' --password-stdin
 
-      - name: Ruff lint
-        run: uvx ruff@0.15.6 check .
+          echo "Starting ${COMPOSE_PROFILE} and waiting for every service to be healthy (up to 90 min)..."
+          if ! docker compose --profile "${COMPOSE_PROFILE}" up -d --build --wait --wait-timeout 5400; then
+            echo "::error::The ${COMPOSE_PROFILE} services did not become healthy within 90 minutes."
+            docker compose --profile "${COMPOSE_PROFILE}" ps --all
+            exit 1
+          fi
 
-      - name: Ruff format check
-        run: uvx ruff@0.15.6 format --check .
+          if ! timeout 600 bash -c 'until curl -fsS "${UI_URL}/health" > /dev/null 2>&1; do sleep 10; done'; then
+            echo "::error::${UI_URL}/health did not answer within 10 minutes."
+            docker compose --profile "${COMPOSE_PROFILE}" ps --all
+            exit 1
+          fi
+          echo "Stack is ready."
 
-  unit-tests:
-    name: Unit tests (pytest)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Run QA tests
+        env:
+          TEST_DOCKER_PULL_KEY: ${{ secrets.TEST_DOCKER_PULL_KEY }}
+        run: |
+          set -euo pipefail
+          : "${TEST_DOCKER_PULL_KEY:?TEST_DOCKER_PULL_KEY secret missing}"
+          echo "${TEST_DOCKER_PULL_KEY}" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+          docker pull "${QA_TEST_IMAGE}"
+          docker run --rm --net=host -v "$(pwd):/workspace" "${QA_TEST_IMAGE}" \
+            pytest -m nemotron_voice_agent \
+              --nemotron-voice-agent-url="${UI_URL}" \
+              --nemotron-voice-agent-ws-url="${WS_URL}" \
+              --reruns=2 --reruns-delay=15 \
+              --disable-warnings -v --timeout=240 \
+              --html=/workspace/nemotron-voice-agent-test.html --self-contained-html
+          if [ ! -s nemotron-voice-agent-test.html ]; then
+            echo "::error::pytest wrote no report."
+            exit 1
+          fi
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - name: Capture failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p ci-diagnostics
+          docker compose --profile "${COMPOSE_PROFILE}" ps --all \
+            > ci-diagnostics/docker-compose-ps.txt 2>&1 || true
+          docker compose --profile "${COMPOSE_PROFILE}" logs \
+            --no-color --timestamps --tail 300 \
+            > ci-diagnostics/service-logs.txt 2>&1 || true
 
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Run unit tests
-        run: uv run pytest tests/unit -v
-
-  pipecat-evals:
-    name: Pipecat eval smoke
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Install dependencies
-        run: uv sync --group eval
-
-      - name: Validate eval transport wiring
-        run: PYTHONPATH=src uv run --group eval python tests/pipecat_evals/ci/smoke.py
-
-      - name: Run service-free eval suite
-        run: PYTHONPATH=src uv run --group eval python -m pipecat.evals suite tests/pipecat_evals/ci/manifest.yaml --timeout 5 --name ci
-
-  client-lint-build:
-    name: Client lint and build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: client/package-lock.json
+          name: nemotron-voice-agent-test
+          path: |
+            nemotron-voice-agent-test.html
+            ci-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 30
 
-      - name: Install client dependencies
-        run: npm --prefix client ci
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose --profile "${COMPOSE_PROFILE}" down -v --rmi all 2>/dev/null || true
+          docker rmi "${QA_TEST_IMAGE}" 2>/dev/null || true
+          docker image prune -f
+          rm -f .env
 
-      - name: Lint client
-        run: npm --prefix client run lint
+      - name: Detect SMTP
+        id: smtp
+        if: always()
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_MAIL_TO: ${{ secrets.SMTP_MAIL_TO }}
+          SMTP_MAIL_FROM: ${{ secrets.SMTP_MAIL_FROM }}
+        run: |
+          [ -n "${SMTP_USERNAME:-}" ] && [ -n "${SMTP_PASSWORD:-}" ] \
+            && [ -n "${SMTP_MAIL_TO:-}" ] && [ -n "${SMTP_MAIL_FROM:-}" ] \
+            && echo "enabled=true" >> "$GITHUB_OUTPUT" \
+            || echo "enabled=false" >> "$GITHUB_OUTPUT"
 
-      - name: Build client
-        run: npm --prefix client run build
+      - name: Send mail
+        if: always() && steps.smtp.outputs.enabled == 'true'
+        uses: dawidd6/action-send-mail@6e71c855c9a091d80a519621b9fd3e8d252ca40c
+        continue-on-error: true
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "QA Test Workflow Result for ${{ github.repository }}"
+          to: ${{ secrets.SMTP_MAIL_TO }}
+          from: ${{ secrets.SMTP_MAIL_FROM }}
+          html_body: |
+            <p>Workflow for <strong>${{ github.repository }}</strong> finished: <strong>${{ job.status }}</strong></p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>
