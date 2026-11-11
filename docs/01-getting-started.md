@@ -25,7 +25,6 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `multilingual-assistant/dynamo` (workstation, experimental) |
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
-| [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`frontend-backend-live`](../src/examples/frontend_backend_live/README.md) | Routing talker with the `/v1/live` session API and three backend adapters: the backend LLM, an LLM agent, or an agent runtime harness (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
@@ -77,7 +76,6 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile multilingual-assistant up -d       # Multilingual Cascaded
     docker compose --profile omni-assistant up -d               # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents up -d     # Nemotron Omni Assistant Subagents
-    docker compose --profile frontend-backend-agent up -d       # Frontend/Backend Agent Airline Assistant
     docker compose --profile frontend-backend-live up -d        # Frontend/Backend Live Cafe Assistant
     ```
 
@@ -88,7 +86,6 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile multilingual-assistant/server up -d    # Multilingual Cascaded
     docker compose --profile omni-assistant/server up -d            # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/server up -d  # Nemotron Omni Assistant Subagents
-    docker compose --profile frontend-backend-agent/server up -d    # Frontend/Backend Agent Airline Assistant
     docker compose --profile frontend-backend-live/server up -d     # Frontend/Backend Live Cafe Assistant
     ```
 
@@ -109,7 +106,6 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile multilingual-assistant/single-gpu up -d     # Multilingual Cascaded
     docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
-    docker compose --profile frontend-backend-agent/single-gpu up -d     # Frontend/Backend Agent
     docker compose --profile frontend-backend-live/single-gpu up -d      # Frontend/Backend Live
     ```
 
@@ -185,7 +181,6 @@ For development and debugging, you can run the server directly:
     | `multilingual-assistant` | Lock to Multilingual Assistant |
     | `omni-assistant` | Lock to Nemotron Omni Assistant |
     | `omni-assistant-subagents` | Lock to Nemotron Omni Assistant Subagents |
-    | `frontend-backend-agent` | Lock to Frontend Backend Agent |
     | `frontend-backend-live` | Lock to Frontend Backend Live |
 
     > **Note:** Docker Compose deployments pin `EXAMPLE_SELECTION=<example>` to a single example. You can set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.

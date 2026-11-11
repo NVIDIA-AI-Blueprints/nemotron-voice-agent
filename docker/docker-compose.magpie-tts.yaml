@@ -44,7 +44,6 @@ services:
       - multilingual-assistant/dynamo
       - omni-assistant/server
       - omni-assistant-subagents/server
-      - frontend-backend-agent/server
       - frontend-backend-live/server
     environment:
       <<: *magpie-multilingual-tts-service-env

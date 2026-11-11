@@ -22,7 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pipecat 1.15.** The server moves from Pipecat 1.12 to `pipecat-ai` 1.15.0, including Silero VAD state retention and the current service APIs. The browser packages were updated for compatibility with that server.
 - **Omni vLLM 0.33.0.** The Omni vLLM service moves from 0.20.0 to 0.33.0.
 - **Scaling metric names.** `llm_ttft` is reported as `llm_ttfb`. `vad_smart_turn` is reported as `turn_taking_latency`, measured from the VAD stop to the LLM request for any configured turn strategy. Result files that still contain `llm_ttft` remain readable.
-- **Readiness checks for every self-hosted LLM.** Before a repository UI or Realtime gateway session starts, the server checks every self-hosted LLM that the example uses, including the Frontend/Backend Agent's Thinker LLM.
+- **Readiness checks for every self-hosted LLM.** Before a repository UI or Realtime gateway session starts, the server checks every self-hosted LLM that the example uses, including the Frontend/Backend Live backend LLM in the `thinker-llm` slot.
+
+### Removed
+
+- **Frontend/Backend Agent example.** The airline assistant, its `booking-server` sidecar, and the `frontend-backend-agent` Compose profiles are removed. The Frontend/Backend Live example replaces it.
 
 ## [2.3.1] - 2026-10-29
 

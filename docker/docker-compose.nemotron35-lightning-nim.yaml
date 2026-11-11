@@ -35,7 +35,6 @@ services:
     profiles:
       - generic-assistant/server
       - multilingual-assistant/server
-      - frontend-backend-agent/server
       - frontend-backend-live/server
     environment:
       <<: *nim-llm-env

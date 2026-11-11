@@ -80,24 +80,6 @@ examples:
       prompt: [omni_subagents_assistant]
     bot: examples.omni_assistant_subagents.pipeline:bot
 
-  frontend-backend-agent:
-    label: Frontend Backend Agent
-    services:
-      llm: [nemotron-lightning]
-      thinker-llm: [nemotron-lightning]
-      asr: [nemotron-asr-streaming-english, parakeet-ctc]
-      tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
-    categories:
-      thinker-llm: llm
-    settings:
-      thinker-llm:
-        nemotron-lightning:
-          enable_thinking: true
-          reasoning_budget: 1024
-    defaults:
-      prompt: [talker]
-    bot: examples.frontend_backend_agent.pipeline:bot
-
   frontend-backend-live:
     label: Frontend Backend Live
     services:

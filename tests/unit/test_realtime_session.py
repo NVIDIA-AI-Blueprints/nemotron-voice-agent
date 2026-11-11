@@ -188,13 +188,13 @@ class RealtimeSessionApplyTests(unittest.TestCase):
         public = session.apply_update(
             {
                 "nvidia": {
-                    "pipeline_mode": "frontend-backend-agent",
+                    "pipeline_mode": "frontend-backend-live",
                     "thinker_llm_id": "cloud-nim:x",
                 }
             },
-            sanitized_flat={"pipeline_mode": "frontend-backend-agent"},
+            sanitized_flat={"pipeline_mode": "frontend-backend-live"},
         )
-        self.assertEqual(public["nvidia"]["pipeline_mode"], "frontend-backend-agent")
+        self.assertEqual(public["nvidia"]["pipeline_mode"], "frontend-backend-live")
         self.assertNotIn("thinker_llm_id", public["nvidia"])
 
     def test_public_nvidia_omits_service_endpoints(self) -> None:

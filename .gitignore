@@ -52,22 +52,10 @@ client/node_modules/
 client/dist/
 client/.env
 
-# Booking-server SQLite runtime state
-data/
-*.db
-*.db-shm
-*.db-wal
-
-# Local Thinker/Talker eval prototypes
-skills/voice-agent-eval/
-
 # Cursor agent skills install target (created by `npx skills add . -a cursor`)
 .agents/*
 !.agents/skills/
 .claude/
 .codex/
 skills-lock.json
-docs/how-to/evaluate-thinker-talker-airline.md
-eval/
-tests/test_voice_agent_eval.py
 .ipynb_checkpoints/

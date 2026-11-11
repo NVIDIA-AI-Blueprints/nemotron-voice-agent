@@ -39,7 +39,6 @@ services:
     profiles:
       - generic-assistant/server
       - generic-assistant/dynamo
-      - frontend-backend-agent/server
       - frontend-backend-live/server
     environment:
       <<: *nemotron-asr-env

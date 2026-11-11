@@ -22,9 +22,7 @@ class SingleGpuDiarizationComposeTest(unittest.TestCase):
         for name in ("nemo-speech-frontend-backend", "nemo-speech-multilingual", "nemo-speech-tts"):
             self.assertNotIn("environment", self.services[name])
         frontend_backend = self.services["nemo-speech-frontend-backend"]
-        self.assertEqual(
-            frontend_backend["profiles"], ["frontend-backend-agent/single-gpu", "frontend-backend-live/single-gpu"]
-        )
+        self.assertEqual(frontend_backend["profiles"], ["frontend-backend-live/single-gpu"])
 
     def test_reuses_existing_generic_speech_service_and_port(self) -> None:
         speech = self.services["nemo-speech"]

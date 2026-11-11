@@ -18,7 +18,6 @@ from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
-    LLMContextFrame,
     LLMMessagesAppendFrame,
     LLMRunFrame,
     TranscriptionFrame,
@@ -1265,63 +1264,6 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(frame, LLMMessagesAppendFrame)
         self.assertEqual(emitted[0]["type"], "conversation.item.created")
-
-    async def test_register_handlers_uses_isolated_no_tool_welcome_context(self) -> None:
-        from examples.frontend_backend_agent.airline.tools import TOOLS_SCHEMA
-        from examples.shared.pipeline_utils import register_session_start_handlers
-
-        class _Transport:
-            def __init__(self) -> None:
-                self.handlers: dict[str, Any] = {}
-
-            def event_handler(self, name: str):
-                def decorator(fn):
-                    self.handlers[name] = fn
-                    return fn
-
-                return decorator
-
-        class _Task:
-            def __init__(self) -> None:
-                self.handlers: dict[str, Any] = {}
-                self.queue_frames = AsyncMock()
-
-            def event_handler(self, name: str):
-                def decorator(fn):
-                    self.handlers[name] = fn
-                    return fn
-
-                return decorator
-
-        transport = _Transport()
-        task = _Task()
-        context = LLMContext(
-            messages=[{"role": "system", "content": "Use tools for flight requests."}],
-            tools=TOOLS_SCHEMA,
-            tool_choice="auto",
-        )
-        runner_args = MagicMock()
-        runner_args.body = {"protocol": "realtime"}
-
-        register_session_start_handlers(
-            transport=transport,
-            task=task,
-            context=context,
-            runner_args=runner_args,
-            intro_prompt="Greet without tools.",
-            intro_tool_choice="none",
-        )
-        await transport.handlers["on_client_connected"](None, None)
-        task.queue_frames.assert_not_awaited()
-        await task.handlers["on_pipeline_started"](task, MagicMock())
-
-        queued_frames = task.queue_frames.await_args.args[0]
-        self.assertEqual(len(queued_frames), 1)
-        self.assertIsInstance(queued_frames[0], LLMContextFrame)
-        self.assertEqual(queued_frames[0].context.tool_choice, "none")
-        self.assertIs(queued_frames[0].context.tools, TOOLS_SCHEMA)
-        self.assertEqual(context.tool_choice, "auto")
-        self.assertEqual(context.messages[-1], {"role": "user", "content": "Greet without tools."})
 
     def test_register_handlers_opens_gate_when_welcome_disabled(self) -> None:
         from examples.shared.pipeline_utils import register_session_start_handlers

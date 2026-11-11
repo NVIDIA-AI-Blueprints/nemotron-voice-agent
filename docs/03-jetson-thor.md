@@ -76,9 +76,6 @@ the supported configuration on Thor.
     # Nemotron Omni: local Omni vLLM + NeMo-Speech.cpp TTS only (Omni does its own ASR)
     docker compose --profile omni-assistant/single-gpu up -d
 
-    # Frontend/Backend Agent: NeMo-Speech.cpp + Lightning vLLM + booking-server
-    docker compose --profile frontend-backend-agent/single-gpu up -d
-
     # Frontend/Backend Live: NeMo-Speech.cpp + Lightning vLLM
     docker compose --profile frontend-backend-live/single-gpu up -d
     ```
@@ -93,7 +90,7 @@ the supported configuration on Thor.
 
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
 
-7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, `omni-assistant`, `frontend-backend-agent`, or `frontend-backend-live`).
+7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, `omni-assistant`, or `frontend-backend-live`).
 
     ```bash
     # View logs for the whole profile

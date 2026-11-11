@@ -129,7 +129,7 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 **Design Agents for Voice use case:**
 - When the real work is slow (reasoning models, multi-step tool use, or an agentic backend), split the assistant into a fast front-channel LLM that owns the live conversation and a deliberative backend agent that does the work.
 - The frontend LLM keeps the voice loop responsive by acknowledging the request, asking clarifying questions, and speaking filler while the backend runs, so perceived latency stays low even when end-to-end task latency is high.
-- See the [Frontend/Backend Agent example](../src/examples/frontend_backend_agent/README.md) for the reference pattern, including `call_backend` / `cancel_backend` delegation and filler speech during longer backend work.
+- Refer to the [Frontend/Backend Live example](../src/examples/frontend_backend_live/README.md) for the reference pattern. On every caller turn, its talker speaks a reply, delegates the turn, or waits. During longer delegated work, the voice speaks a progress line after 8 seconds of silent work (`frontend.cascade.delegation.progress_after_seconds`), and it says each result when the caller is idle.
 
 ---
 

@@ -116,20 +116,26 @@ A setting's default comes from, in order: the example's `settings` for that slot
 
 NIM and vLLM name the budget differently (`reasoning_budget` and `thinking_token_budget`), so each serving engine has its own profile. When NVIDIA Cloud needs a different profile than the self-hosted endpoint, set `settings` inside the entry's `nvcf` block. For example, the Bolt E4B entry uses `nemotron-bolt-4b` for its NIM and vLLM endpoints, which read `thinking_token_budget`, and `nvcf: {settings: nemotron-bolt-4b-nvcf}` for NVIDIA Cloud, which reads `reasoning_budget`. Keys that start with `x-` are shared YAML anchors, not profiles. Supported types are `bool`, `int`, `float`, and `enum`.
 
-The Frontend/Backend thinker reads the same `llm` entries as the talker through `categories`, and the registry sets its defaults:
+The Frontend/Backend Live backend LLM uses the `thinker-llm` slot. It reads the same `llm` entries as the talker through `categories`, and the registry sets its defaults:
 
 ```yaml
-frontend-backend-agent:
+frontend-backend-live:
   services:
     llm: [nemotron-lightning]
-    thinker-llm: [nemotron-lightning]
+    thinker-llm: [nemotron-super, nemotron-lightning]
   categories:
     thinker-llm: llm
   settings:
     thinker-llm:
-      nemotron-lightning:
+      nemotron-super:
+        temperature: 0.0
+        max_tokens: 4096
         enable_thinking: true
-        reasoning_budget: 1024
+      nemotron-lightning:
+        temperature: 0.7
+        max_tokens: 4096
+        enable_thinking: true
+        reasoning_budget: 256
 ```
 
 ## Adding a self-hosted service
@@ -142,7 +148,7 @@ services:
     image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.4.0
     profiles:
       - generic-assistant/server
-      - frontend-backend-agent/server
+      - frontend-backend-live/server
     ports:
       - "50152:50052"   # host:container (gRPC)
     environment:
