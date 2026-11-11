@@ -61,6 +61,8 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 - **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
 - **Opt-in local ASR (Transcribe)**: enable the `transcribe-asr` Compose profile with the server recipe of the Generic or Multilingual Assistant ([`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml), GPU `1`, HTTP port `9002`). Then select **Nemotron 3.5 Transcribe** in **Services > ASR**.
 
+    Transcribe is available only with the server recipe. The cloud and single-GPU recipes, including DGX Spark and Jetson Thor, do not include it.
+
     Transcribe writes the transcript in the spoken language. The session language does not change it.
 
     In the Multilingual Assistant, the language list shows only languages that Transcribe, the TTS, and the LLM all support.
@@ -77,6 +79,8 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 The streaming ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. Standard `*/server` deployments let NIM select the LLM profile automatically, so its memory footprint depends on the detected GPU and selected precision. Confirm the selected profile before assuming ASR (~15 GB), TTS (~14 GB), and the LLM fit on one ~80 GB GPU. If they don't fit, move the speech sidecars separately: update the ASR `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) and the selected TTS service's `device_ids` in its Compose file. See the [Server NIM device-placement guidance](../../.agents/skills/nemotron-voice-agent-deploy/references/server.md#precision) and [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the complete multi-GPU layout.
 
 Transcribe runs on its own GPU (GPU 1 by default). Refer to the [Transcribe NIM support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#nemotron-transcribe) for supported GPUs and memory.
+
+The Transcribe NIM support matrix does not list Jetson Thor. It lists DGX Spark only as a planned tier without measured settings, so this blueprint does not support Transcribe on DGX Spark.
 
 ### Performance
 

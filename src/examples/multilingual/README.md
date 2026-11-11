@@ -77,7 +77,7 @@ After deploying, validate the session language with the steps in [Testing](#test
 
 ## Transcribe ASR
 
-Optional. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting, then choose the session language in **Voice Settings**. Transcribe writes the transcript in the spoken language. The session language does not change it. Refer to [Configure ASR](../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and language compatibility.
+Optional. Transcribe runs self-hosted with the server recipe only. Start it with the `transcribe-asr` profile. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting, then choose the session language in **Voice Settings**. Transcribe writes the transcript in the spoken language. The session language does not change it. Refer to [Configure ASR](../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and language compatibility.
 
 ## Customization
 
