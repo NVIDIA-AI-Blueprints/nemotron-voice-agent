@@ -27,6 +27,11 @@ class Handler(SimpleHTTPRequestHandler):
         """Serve static files from the ui directory."""
         super().__init__(*args, directory=str(PUBLIC), **kwargs)
 
+    def end_headers(self):
+        """Disable caching, so a browser that used another app on this origin never serves its stale scripts."""
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self):
         """Route /token to the token endpoint and everything else to static files."""
         if urlsplit(self.path).path != "/token":
@@ -42,7 +47,6 @@ class Handler(SimpleHTTPRequestHandler):
         body = json.dumps({"token": token, "room": room}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
