@@ -44,25 +44,27 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-5. Deploy exactly one profile that matches your hardware. Run only one of the following command sets, and use the same profile in the teardown step. Use Cloud when you have no local GPU, Server on a workstation or server GPU (not DGX Spark or Jetson Thor), and Single GPU on a workstation, DGX Spark, or Jetson Thor:
+5. Deploy exactly one profile that matches your hardware. **Run only one of the three options that follow**, and use the same profile in the teardown step.
 
    The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file.
 
-   ```bash
-   # ============================================================================
-   # RUN ONLY ONE OF THE THREE OPTIONS BELOW. Do not run more than one.
-   # ============================================================================
+   **Option A: Cloud.** Use this option when you have no local GPU.
 
-   # ---- Option A: Cloud (no local GPU) ----------------------------------------
+   ```bash
    docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
      --profile generic-assistant-livekit up -d
+   ```
 
-   # ---- Option B: Server with NIM (workstation or server GPU, not DGX Spark) --
+   **Option B: Server with NIM.** Use this option on a workstation or server GPU. Do not use it on DGX Spark or Jetson Thor.
+
+   ```bash
    docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
      --profile generic-assistant-livekit/server up -d
+   ```
 
-   # ---- Option C: Single GPU (workstation, DGX Spark, or Jetson Thor) ---------
-   # Download the speech weights once, as your user, then start the profile.
+   **Option C: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. Download the speech weights once, as your user, and then start the profile:
+
+   ```bash
    bash scripts/download-nemo-speech-models.sh
    docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
      --profile generic-assistant-livekit/single-gpu up -d
