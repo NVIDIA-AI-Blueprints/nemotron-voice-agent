@@ -20,7 +20,9 @@ def test_cloud_recipe_uses_nvcf_endpoints():
     assert cfg.tts_server == config.NVCF_SERVER
     assert cfg.asr_function_id == CATALOG["server"]["asr"]["nemotron-asr-streaming-english"]["nvcf"]["function_id"]
     assert cfg.tts_function_id == CATALOG["server"]["tts"]["magpie-multilingual-tts"]["nvcf"]["function_id"]
-    assert cfg.asr_model == "nemotron-asr-streaming"
+    # The Riva client needs the catalog entry model, not the nvcf override that Pipecat uses.
+    assert cfg.asr_model == CATALOG["server"]["asr"]["nemotron-asr-streaming-english"]["model"]
+    assert cfg.asr_model != "nemotron-asr-streaming"
 
 
 def test_server_recipe_uses_compose_hostnames():

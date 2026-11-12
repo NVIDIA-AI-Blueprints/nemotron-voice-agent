@@ -94,7 +94,7 @@ def resolve_entry(catalog: Mapping[str, Any], recipe: str, slot: str, key: str) 
             )
         # Hosted endpoints replace the Compose hostnames: only the nvcf fields may set server or base_url.
         base = {k: v for k, v in entry.items() if k not in ("nvcf", "server", "base_url", "streaming_url")}
-        return {**base, **(entry["nvcf"] or {})}
+        return {**base, **(entry["nvcf"] or {}), "riva_model": entry.get("model", "")}
     section = "server" if recipe == "server" else "single-gpu"
     entry = (catalog.get(section) or {}).get(slot, {}).get(key)
     if entry is None:
@@ -137,8 +137,10 @@ def load_config(
         llm_extra_body=_extra_body(llm),
         asr_name=asr["name"],
         asr_server=asr.get("server", NVCF_SERVER) if hosted else asr["server"],
-        # Self-hosted Riva servers pick their loaded model, so only the hosted endpoint gets a model name.
-        asr_model=asr["model"] if hosted else "",
+        # Self-hosted Riva servers pick their loaded model, so only the hosted endpoint gets a model name. It is the
+        # catalog entry's own model: the nvcf "model" override (nemotron-asr-streaming) is the name Pipecat's client
+        # uses, and the Riva client in the LiveKit plugin gets "Model not available" for it.
+        asr_model=asr["riva_model"] if hosted else "",
         asr_function_id=asr.get("function_id", ""),
         asr_language=asr.get("language_code", "en-US"),
         tts_name=tts["name"],
