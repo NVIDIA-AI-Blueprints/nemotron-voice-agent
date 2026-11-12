@@ -253,7 +253,6 @@ class FakeTaskContext:
         self.refused, self.calls_seen, self.requests, self.traces = set(), [], [], []
         self.started, self.outcomes, self.order, self.settled = [], {}, [], []
         self._owed, self._outputs, self._steering = {}, [], deque()
-        self.tools_closed = False  # rule E9: the IM never closed this task's tools
 
     def give_outputs(self, outputs):
         self._outputs += list(outputs)

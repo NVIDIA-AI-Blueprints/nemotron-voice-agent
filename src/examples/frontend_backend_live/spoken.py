@@ -83,17 +83,24 @@ def unheard_rest(line: Line, *, language: str | None = None) -> str:
     """The sentences of ``line.text`` the caller did not hear, as written and in order, joined by a space; or "".
 
     A sentence is heard when its letters and digits (``alnum_only``) appear in ``line.heard`` after those of the heard
-    sentences before it. The sentence that was playing at a cut is not in ``heard``, so it counts as unheard; a sentence
-    missing from the middle (one that got no audio) is found too.
+    sentences before it, starting where a heard sentence starts, so a short sentence is never found inside a longer
+    one. The sentence that was playing at a cut is not in ``heard``, so it counts as unheard; a sentence missing from
+    the middle (one that got no audio) is found too.
     """
     if line.heard == line.text:
         return ""
     heard, found, rest = alnum_only(line.heard), 0, []
+    starts, offset = {0}, 0
+    for part in sentences(line.heard, language=language):
+        offset += len(alnum_only(part))
+        starts.add(offset)
     for sentence in sentences(line.text, language=language):
         letters = alnum_only(sentence)
         if not letters:
             continue
         at = heard.find(letters, found)
+        while at >= 0 and at != found and at not in starts:
+            at = heard.find(letters, at + 1)
         if at < 0:
             rest.append(sentence)
         else:

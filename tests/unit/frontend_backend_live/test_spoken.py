@@ -225,6 +225,9 @@ class UnheardRestTests(unittest.TestCase):
         heard = "The gym opens at six. Do you want a towel?"
         self.assertEqual(unheard_rest(line(self.THREE, heard)), "The pool opens at seven.")
 
+    def test_a_short_sentence_is_never_found_inside_a_later_one(self):
+        self.assertEqual(unheard_rest(line("Ready? Your order is ready.", "Your order is ready.")), "Ready?")
+
     def test_markup_and_case_never_tell_sentences_apart(self):
         self.assertEqual(unheard_rest(line("**Bike** 4 is free.", "bike 4 is free")), "")
 

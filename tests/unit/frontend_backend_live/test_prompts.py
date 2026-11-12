@@ -112,15 +112,6 @@ class PromptFileTests(unittest.TestCase):
             self.load("custom:\n  content: not the talker prompt\n")
 
 
-class CoreTextTests(unittest.TestCase):
-    def test_unheard_write_output_is_plain_text_with_no_field(self):
-        for key in ("texts.unheard_write_output", "texts.unheard_undeclared_output"):
-            with self.subTest(key=key):
-                self.assertNotIn("{", LOADED.core[key])
-        question = LOADED.core["texts.unheard_question_output"]
-        self.assertEqual(question.format(question="Which list?").count("Which list?"), 1)
-
-
 # The caller note's situation bullet, byte for byte as it shipped before this iteration: it must not change.
 SITUATION_BULLET = """- Some causes of a problem depend on the caller's situation, which no tool shows. Ask about it in
   one short question right after you have identified the caller and before any checks, unless they

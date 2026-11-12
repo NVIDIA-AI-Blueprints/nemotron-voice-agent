@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One IM session: admission, placement through the conductor, the scheduler, close.
-
-The write gate, when it is on, holds an app call that may change data while the caller had not heard the backend's
-answers in full when they last spoke (the fact each delegation states), a question was asked after their request, or
-an earlier question was never heard.
-"""
+"""One IM session: admission, placement through the conductor, the scheduler, close."""
 
 from __future__ import annotations
 
@@ -16,7 +11,7 @@ from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -34,12 +29,7 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     Steer,
 )
 from examples.frontend_backend_live.delegation_core.config import DelegationSettings, Texts
-from examples.frontend_backend_live.delegation_core.im.conversation import (
-    Asked,
-    AskedQuestions,
-    Conversation,
-    TaskHistory,
-)
+from examples.frontend_backend_live.delegation_core.im.conversation import AskedQuestions, Conversation, TaskHistory
 from examples.frontend_backend_live.delegation_core.im.input import (
     BackendTask,
     compose,
@@ -53,7 +43,6 @@ from examples.frontend_backend_live.delegation_core.im.results import ResultForm
 from examples.frontend_backend_live.delegation_core.im.run import Parked, TaskRun, WorkRun, brief_message
 from examples.frontend_backend_live.delegation_core.im.stop import AtClose, ForNewerRequest
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseBook, ResponseStream
-from examples.frontend_backend_live.delegation_core.im.tools import KindSource, ToolKind, declared_tool_kind
 from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.delegation_core.ledger.records import WorkLedger
 from examples.shared.delegation_contract import ReplyUnheard
@@ -94,11 +83,9 @@ class Admission:
 
 @dataclass(frozen=True)
 class HeardFact:
-    """What a delegation said the caller had heard, and where the question record stood when it was admitted."""
+    """What a delegation said the caller had heard of the backend's answers when they spoke."""
 
     level: ReplyUnheard
-    answers: int  # IMSession.questions.answers at its admission: the mark for asked_since
-    questions: int  # IMSession.questions.written at its admission
 
 
 @dataclass(frozen=True)
@@ -114,28 +101,6 @@ class Incoming:
     def reply_unheard(self) -> ReplyUnheard | None:
         """Return the level the delegation stated; ``None`` when it stated none."""
         return self.heard.level if self.heard is not None else None
-
-
-# Why the write gate holds a call: the request's fact, a question written after it, an earlier question never heard,
-# or a second attempt of a held declared write.
-HeldReason = Literal["reply_unheard", "newer_answer", "open_question", "held_again"]
-
-
-@dataclass(frozen=True)
-class WriteCheck:
-    """The write gate's reading of one app call that can change data."""
-
-    # Why not run; None: it runs.
-    held: HeldReason | None
-    fact: HeardFact
-    # Where the tool's kind came from; None: undeclared (held, with undeclared: hold).
-    source: KindSource | None
-    # For open_question: the entry the not-run output names.
-    question: Asked | None = None
-
-
-# How much of a question the not-run output names.
-QUESTION_CHARS = 200
 
 
 def _noop(kind: str, **fields: Any) -> None:
@@ -192,9 +157,8 @@ class IMSession:
         self.book = ResponseBook(self.ledger)
         self.notes = ProgressNotes(self.book, settings.progress_note_seconds)
         self.conversation = Conversation(settings.context_tokens, settings.tool_output_chars, texts.cut_output)
-        # The one record of the backend's answers and questions, and the undeclared app functions logged once.
+        # The one record of the questions the backend's answers asked.
         self.questions = AskedQuestions()
-        self._undeclared: set[str] = set()
         self.incoming: dict[str, Incoming] = {}
         self.arrivals: list[str] = []
         self.works: dict[str, WorkRun] = {}
@@ -262,7 +226,7 @@ class IMSession:
         """Accept a delegation in one step, or refuse it with ``DelegationError`` before anything changes.
 
         ``reply_unheard``: what the frontend states the caller had not heard of the backend's answers
-        (``metadata.live_reply_unheard``), kept with the question record's mark; ``None``: it states none.
+        (``metadata.live_reply_unheard``), which the questions block counts; ``None``: it states none.
         """
         return self._accept(input_items, delegation_id, settings, None, reply_unheard)
 
@@ -287,9 +251,7 @@ class IMSession:
         )
         stream = ResponseStream()
         self.book.open(delegation.id, stream, *self.response_settings(settings))
-        heard = None
-        if reply_unheard is not None:
-            heard = HeardFact(reply_unheard, self.questions.answers, self.questions.written)
+        heard = HeardFact(reply_unheard) if reply_unheard is not None else None
         self.incoming[delegation.id] = Incoming(brings, heard)
         if brings is None:  # a frontend delegation: the caller spoke after the questions asked so far
             awaiting = self.questions.replied(reply_unheard)
@@ -667,57 +629,6 @@ class IMSession:
         """Return the fact a request stated when it was admitted; ``None`` if it stated none or the IM forgot it."""
         incoming = self.incoming.get(delegation_id)
         return incoming.heard if incoming is not None else None
-
-    def write_check(self, tool: dict, delegation_id: str, *, tool_held_before: bool) -> WriteCheck | None:
-        """Check the write gate on an app call of ``tool`` in a Work whose newest request is ``delegation_id``.
-
-        ``None`` when the gate does not apply: it is off (or ``texts.unheard_write_output`` is missing), the tool is
-        declared read-only, an undeclared tool with ``undeclared: run`` (or with no
-        ``texts.unheard_undeclared_output``), a reversible write with ``reversible: run``, or the request stated no
-        fact. ``tool_held_before``: this task already held a call of this tool for the same request; the result is then
-        ``held_again`` for a declared write and ``None`` for an undeclared tool (it runs: the tool had its one hold).
-        The reasons, in order: ``reply_unheard`` (the request's level), ``newer_answer`` (a question written after it
-        was admitted), ``open_question`` (an earlier question never heard, held once per entry, which is then marked
-        ``challenged``).
-        """
-        gate = self.settings.write_gate
-        if not gate.enabled or self.texts.unheard_write_output is None:
-            return None
-        declared = declared_tool_kind(tool, self.settings.tool_kinds)
-        if declared is not None and declared.kind is ToolKind.READ:
-            return None
-        if declared is None:
-            name = str(tool.get("name", ""))
-            if name not in self._undeclared:
-                self._undeclared.add(name)
-                logger.info(f"App function {name!r} declares nothing: the write gate holds it on its path")
-            if gate.undeclared == "run" or self.texts.unheard_undeclared_output is None:
-                return None
-        elif declared.reversible and gate.reversible == "run":
-            return None
-        fact = self.heard(delegation_id)
-        if fact is None:
-            return None
-        source = declared.source if declared is not None else None
-        if tool_held_before:
-            return WriteCheck("held_again", fact, source) if declared is not None else None
-        if fact.level.at_least(ReplyUnheard(gate.unheard)):
-            return WriteCheck("reply_unheard", fact, source)
-        if self.questions.asked_since(fact.answers, besides=delegation_id):
-            return WriteCheck("newer_answer", fact, source)
-        entry = self.questions.open_question() if self.texts.unheard_question_output is not None else None
-        if entry is not None:
-            entry.challenged = True
-            return WriteCheck("open_question", fact, source, entry)
-        return WriteCheck(None, fact, source)
-
-    def not_run_output(self, check: WriteCheck) -> str:
-        """Return the not-run output of a call the write gate held, which says why and what to do."""
-        if check.held == "open_question" and check.question is not None:
-            return self.texts.unheard_question_output.format(question=check.question.text[:QUESTION_CHARS])
-        if check.source is None and check.held != "held_again":
-            return self.texts.unheard_undeclared_output
-        return self.texts.unheard_write_output
 
     def park(self, parked: Parked) -> None:
         """Owe the outputs of a response's app calls, under the client-tool deadline from its end."""

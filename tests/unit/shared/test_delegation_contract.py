@@ -29,6 +29,8 @@ class TextRuleTests(unittest.TestCase):
             ("It is 2.5 units. Is that fine?", ["It is 2.5 units.", "Is that fine?"]),
             ("準備はいいですか？はい。", ["準備はいいですか？", "はい。"]),
             ("¿Está listo? Sí.", ["¿Está listo?", "Sí."]),
+            ("**Which date?** I can check it.", ["**Which date?**", "I can check it."]),
+            ("_Ready?_ Yes.", ["_Ready?_", "Yes."]),
         ):
             with self.subTest(text=text):
                 self.assertEqual(sentences(text), expected)

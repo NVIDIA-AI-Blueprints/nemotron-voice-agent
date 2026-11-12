@@ -8,13 +8,12 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from types import MappingProxyType
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from loguru import logger
 from pydantic import (
     ConfigDict,
     Field,
-    StrictBool,
     StrictStr,
     ValidationInfo,
     field_validator,
@@ -60,16 +59,12 @@ TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "repeated_call_output": ("output",),
         "cut_output": ("chars",),
         "conductor_prompt": ("max_running",),
-        "unheard_question_output": ("question",),
         "questions_block": ("questions",),
     }
 )
 # The core's texts added after a prompt file was written: a file may lack them, and the feature that needs each is off.
 OPTIONAL_TEXTS: Mapping[str, str] = MappingProxyType(
     {
-        "unheard_write_output": "the write gate",
-        "unheard_undeclared_output": "the write gate's hold of undeclared tools",
-        "unheard_question_output": "the write gate's open-question hold",
         "questions_block": "the questions block",
     }
 )
@@ -94,45 +89,6 @@ def template(text: str, names: Iterable[str], key: str) -> str:
     except FORMAT_ERRORS as exc:
         raise ValueError(f"{key} names a field it is not given: {exc}") from None
     return text
-
-
-class WriteGateSettings(Settings):
-    """The write gate (``delegation.write_gate``).
-
-    An app call that can change data waits until the caller has heard the backend's answers in full and spoken after
-    them, and no earlier question of the call went unheard.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True, title="delegation.write_gate")
-
-    enabled: StrictBool = False
-    # Experimental, decided by the A/B: what part of the newest answer, left unheard, holds a change back: any part
-    # (answer), or a sentence that asks (question).
-    unheard: Literal["answer", "question"] = "answer"
-    # A tool neither the app nor the operator declares: hold it on the gate's path, as MCP's default for a missing
-    # readOnlyHint is "may change data" (hold), or let it run (run).
-    undeclared: Literal["run", "hold"] = "hold"
-    # A write the app declares easily undone (destructiveHint false).
-    reversible: Literal["run", "hold"] = "run"
-
-
-class ToolKindSettings(Settings):
-    """What the operator declares about the app's tools (``delegation.tool_kinds``), for tools that declare nothing."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, title="delegation.tool_kinds")
-
-    # Names or fnmatch patterns of tools that change nothing.
-    read_tools: tuple[Text, ...] = ()
-    # Names or fnmatch patterns of tools that may change data.
-    write_tools: tuple[Text, ...] = ()
-
-    @model_validator(mode="after")
-    def no_entry_in_both(self) -> ToolKindSettings:
-        """Check that an entry is in one list only."""
-        both = sorted(set(self.read_tools) & set(self.write_tools))
-        if both:
-            raise ValueError(f"delegation.tool_kinds lists {', '.join(both)} in both read_tools and write_tools")
-        return self
 
 
 class QuestionsSettings(Settings):
@@ -172,8 +128,6 @@ class DelegationSettings(Settings):
     context_tokens: WholeNumber = 24_000
     # A longer tool output enters the backend history cut to its head and tail.
     tool_output_chars: WholeNumber = 8_000
-    write_gate: WriteGateSettings = Field(default_factory=WriteGateSettings)
-    tool_kinds: ToolKindSettings = Field(default_factory=ToolKindSettings)
     questions: QuestionsSettings = Field(default_factory=QuestionsSettings)
 
 
@@ -207,15 +161,6 @@ class Texts(Settings):
     closing_line: Text
     task_line: Text
     round_cap_note: Text
-    # The output of an app call that can change data, refused by the write gate while the caller has not heard the
-    # newest answer (also for a second attempt of a held declared write); without it, the write gate stays off.
-    unheard_write_output: Text | None = None
-    # The same for a tool nobody declared: call it again if it only looks something up, else describe the change again;
-    # without it, undeclared tools run.
-    unheard_undeclared_output: Text | None = None
-    # The same while a question asked earlier in the call was never heard: holds {question}; without it, that reason
-    # is off.
-    unheard_question_output: Text | None = None
     # The backend's newest questions, after the records block: holds {questions}, one JSON line per question; without
     # it, no block is shown.
     questions_block: Text | None = None
@@ -236,7 +181,10 @@ class Texts(Settings):
 
     @model_validator(mode="after")
     def warns_of_missing_texts(self) -> Texts:
-        """Warn once (``prompts.missing_text``) for each optional text the core's texts lack."""
+        """Warn (``prompts.missing_text``) for each optional text the core's texts lack, on each parse.
+
+        No warning is deduplicated; the shipped prompts hold every text, so nothing is logged by default.
+        """
         for key, feature in OPTIONAL_TEXTS.items():
             if getattr(self, key) is None:
                 logger.warning(f"prompts.missing_text key=texts.{key} feature={feature}: it is off")

@@ -9,7 +9,7 @@ The session also keeps a record of the backend's answers and the questions they 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Final
@@ -138,28 +138,20 @@ class Asked:
     asked: int = 1  # answers that asked it
     heard_in_full: int | None = None  # times the caller had heard it to the end when they next spoke; None: unknown
     awaiting: bool = True  # asked since the caller last spoke
-    unheard: bool = False  # the caller's turn after its newest ask stated a question unheard
-    challenged: bool = False  # the gate already held a change once for it (open_question); cleared when asked again
 
 
 @dataclass
 class AskedQuestions:
-    """The backend's answers to the caller in this session, as they were written, and one entry per question."""
+    """The questions the backend's answers asked the caller in this session, one entry per question."""
 
-    answers: int = 0  # task answers written so far; conductor status answers and stop lines are not counted
-    written: int = 0  # of them, answers with a sentence that ends_with_question
-    # For each answer that asks: its index, and the requests of its Work when it was written.
-    asking: list[tuple[int, frozenset[str]]] = field(default_factory=list)
     entries: dict[str, Asked] = field(default_factory=dict)  # by key, oldest ask first
 
-    def answer_written(self, text: str, requests: Iterable[str]) -> list[Asked]:
+    def answer_written(self, text: str) -> list[Asked]:
         """A task answer was written into the response (never one that was held, or a stopped task's).
 
-        Counts it, and records each of its question sentences once per answer: ``asked`` + 1, ``awaiting`` set,
-        ``unheard`` and ``challenged`` cleared, the entry moved to the end. Returns the entries it touched, newest last.
+        Records each of its question sentences once per answer: ``asked`` + 1, ``awaiting`` set, the entry moved to the
+        end. Returns the entries it touched, newest last.
         """
-        index = self.answers
-        self.answers += 1
         touched: list[Asked] = []
         for sentence in sentences(text):
             key = question_key(sentence)
@@ -170,48 +162,25 @@ class AskedQuestions:
                 entry = Asked(sentence, key)
             else:
                 entry.text, entry.asked, entry.awaiting = sentence, entry.asked + 1, True
-                entry.unheard = entry.challenged = False
             self.entries[key] = entry
             touched.append(entry)
-        if touched:
-            self.written += 1
-            self.asking.append((index, frozenset(requests)))
         while len(self.entries) > MAX_QUESTIONS:
             del self.entries[next(iter(self.entries))]
         return touched
 
-    def asked_since(self, mark: int, *, besides: str) -> bool:
-        """Whether an answer that asks was written after ``mark`` answers by a Work not answering ``besides``.
-
-        That Work's requests did not include ``besides`` when it wrote the answer.
-        """
-        return any(index >= mark and besides not in requests for index, requests in self.asking)
-
     def replied(self, level: ReplyUnheard | None) -> int:
         """The caller spoke (a frontend delegation was admitted) and stated ``level``; returns how many were awaiting.
 
-        ``NONE`` or ``ANSWER``: each awaiting entry was heard in full (``heard_in_full`` + 1, ``unheard`` cleared).
-        ``QUESTION``: each awaiting entry is ``unheard``. ``None`` (no fact): counts stay unknown. Each clears
+        ``NONE`` or ``ANSWER``: each awaiting entry was heard in full (``heard_in_full`` + 1). ``QUESTION``: the caller
+        did not hear it to the end, so nothing is added. ``None`` (no fact): counts stay unknown. Each clears
         ``awaiting``.
         """
         awaiting = [entry for entry in self.entries.values() if entry.awaiting]
         for entry in awaiting:
             entry.awaiting = False
-            if level is None:
-                continue
-            if level is ReplyUnheard.QUESTION:
-                entry.unheard = True
-            else:
+            if level is not None and level is not ReplyUnheard.QUESTION:
                 entry.heard_in_full = (entry.heard_in_full or 0) + 1
-                entry.unheard = False
         return len(awaiting)
-
-    def open_question(self) -> Asked | None:
-        """The oldest entry that is ``unheard`` and not yet ``challenged``.
-
-        That is a question the caller never heard and the backend has not asked again since.
-        """
-        return next((entry for entry in self.entries.values() if entry.unheard and not entry.challenged), None)
 
     def newest(self, count: int) -> list[Asked]:
         """The ``count`` most recently asked questions, oldest of them first."""

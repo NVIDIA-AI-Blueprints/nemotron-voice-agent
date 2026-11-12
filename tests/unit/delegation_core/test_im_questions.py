@@ -6,9 +6,11 @@
 
 import asyncio
 import json
+import unittest
 
 from examples.frontend_backend_live.delegation_core.backend.port import Start, Steer
 from examples.frontend_backend_live.delegation_core.config import QuestionsSettings
+from examples.frontend_backend_live.delegation_core.im.conversation import AskedQuestions
 from examples.shared.delegation_contract import ReplyUnheard
 from tests.unit.delegation_core.helpers import (
     MENU,
@@ -80,3 +82,21 @@ class QuestionsBlockTests(IMCase):
         gate.set()
         await read_all(d2.stream)
         self.assertEqual(block_lines(items), [{"question": "Anything else?", "asked": 1}])
+
+
+class RepliedTests(unittest.TestCase):
+    def test_a_question_level_adds_nothing_to_heard_in_full(self):
+        questions = AskedQuestions()
+        questions.answer_written("Is the address on file still correct?")
+        self.assertEqual(questions.replied(ReplyUnheard.NONE), 1)
+        questions.answer_written("Is the address on file still correct?")
+        self.assertEqual(questions.replied(ReplyUnheard.QUESTION), 1)
+        (entry,) = questions.entries.values()
+        self.assertEqual((entry.asked, entry.heard_in_full, entry.awaiting), (2, 1, False))
+
+    def test_no_fact_leaves_heard_in_full_unknown(self):
+        questions = AskedQuestions()
+        questions.answer_written("Anything else?")
+        questions.replied(None)
+        (entry,) = questions.entries.values()
+        self.assertEqual((entry.heard_in_full, entry.awaiting), (None, False))

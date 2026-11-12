@@ -332,6 +332,8 @@ class Saying:
     """A line said with no model call: a lead-in, a fixed line, a line said once more."""
 
     line: Line
+    # A held rest made stale by a newer result of its delegation before it reached speech: it is not said.
+    stale: bool = False
 
     streams: ClassVar[bool] = False
 
@@ -348,8 +350,8 @@ class Saying:
         return False
 
     def finished(self, voice: Voice, call: TalkerCall, decision: TalkerDecision | None) -> str:
-        """Hand the line to speech."""
-        return voice.hand(self.line)
+        """Hand the line to speech, unless it is a stale rest."""
+        return "" if self.stale else voice.hand(self.line)
 
     def dropped(self, voice: Voice) -> None:
         """Do nothing: it is never cut."""
@@ -1274,9 +1276,10 @@ class Voice:
         """Note the caller speaking: drop the lead-ins not said yet, and say nothing meanwhile.
 
         The results still pending now are kept (``turn_pending``): the delegation this turn makes states them unheard
-        even if they play before it is handed over.
+        even if they play before it is handed over. An earlier start's snapshot is kept only while a turn with words is
+        still undecided; one from a start that brought no words (a cough) is taken again.
         """
-        if self.turn_pending is None:
+        if self.turn_pending is None or not self._undecided():
             self.turn_pending = self._pending()
         self.floor.caller(True)
         self.acknowledgements.drop_all()
@@ -1402,7 +1405,8 @@ class Voice:
 
     def _result_settled(self, line: Line, how: UnheardHow | None) -> None:
         """A result line settled: what of it the caller did not hear sets the heard log's answer state."""
-        settled = self.heard_log.result_settled(line.number, self.unheard_sentences(line), how)
+        replaces = line.rest_of.number if line.rest_of is not None else None
+        settled = self.heard_log.result_settled(line.number, self.unheard_sentences(line), how, replaces=replaces)
         if settled.reply is not ReplyUnheard.NONE:
             how = settled.how.value if settled.how is not None else ""
             self.observe("answer.unheard_part", line=line.number, reply_unheard=settled.reply.value, unheard_how=how)
@@ -1506,15 +1510,19 @@ class Voice:
     def answer_due(self) -> bool:
         """Whether an answer is about to be heard.
 
-        A result, or commentary that answers a client delegation, owed; a result line waiting or in flight; or a held
-        rest.
+        A result, or commentary that answers a client delegation, owed or being worded; a result line waiting, being
+        said or in flight; or a held rest.
         """
+        plan = self.call.plan if self.call is not None else None
+        batch = plan.batch if isinstance(plan, Relay) else ()
         owed = any(
             isinstance(entry, Owed)
             and (entry.answers or (entry.kind is LineKind.COMMENTARY and entry.said.delegation_id))
-            for entry in self.owed
+            for entry in (*self.owed, *batch)
         )
         lines = [*self.waiting_lines, *self.spoken.lines.values()]
+        if isinstance(plan, Saying):
+            lines.append(plan.line)
         return owed or any(line.kind is LineKind.RESULT for line in lines) or self._rest is not None
 
     def _skip_lead_in(self, text: str) -> str:
@@ -1574,8 +1582,29 @@ class Voice:
         message = {"role": "developer", "content": self.prompts.result_label + result.speak}
         self._register(message, RESULT)
         self.unsaid.add(id(message))
+        self._drop_rest_of(result.delegation_id)
         self._owe(Owed(result, LineKind.RESULT, message, answers=True))
         self.request_run()
+
+    def _drop_rest_of(self, delegation_id: str) -> None:
+        """A newer result of ``delegation_id`` came: a rest of its older answer is not said.
+
+        That is a rest held for a decision, queued, or taken off the queue but not yet handed to speech.
+        """
+        plan = self.call.plan if self.call is not None else None
+        if isinstance(plan, Saying) and plan.line.rest_of is not None and delegation_id in plan.line.delegation_ids:
+            plan.stale = True
+            self.observe("answer.rest_dropped", line=plan.line.rest_of.number, reason="newer_result")
+        held = [self._rest] if self._rest is not None else []
+        rests = [line for line in [*held, *self.waiting_lines] if line.rest_of is not None]
+        for rest in rests:
+            if delegation_id not in rest.delegation_ids:
+                continue
+            if rest is self._rest:
+                self._rest = None
+            else:
+                self.waiting_lines.remove(rest)
+            self.observe("answer.rest_dropped", line=rest.rest_of.number, reason="newer_result")
 
     def notice(self, delegation_id: str | None, text: str) -> None:
         """Owe a fixed line, said word for word in its turn; an empty line says nothing."""

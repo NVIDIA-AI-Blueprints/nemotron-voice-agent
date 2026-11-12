@@ -7,10 +7,6 @@ The IM imports no other backend module. The IM owns admission, placement, the re
 timing, stops and every response the client reads; the adapter owns model rounds, providers, tools, conductors and
 worker sessions. :class:`AdapterSource` is one per core, :class:`BackendAdapter` one per IM session, and
 :class:`BackendRun` one per task.
-
-**E9 Closed tools.** A task whose tools the IM closed (:attr:`TaskContext.tools_closed`, after a second attempt of a
-change the write gate held) gets no more tool rounds: its next round offers no tool and must answer. An adapter whose
-runtime owns the rounds gets every further declared change refused at once instead.
 """
 
 from __future__ import annotations
@@ -120,10 +116,6 @@ class TaskContext(Protocol):
     work_id: str
     task_id: str
     texts: Texts
-
-    @property
-    def tools_closed(self) -> bool:
-        """Whether the IM closed this task's tools (rule E9): its next round offers none and must answer."""
 
     def request(self) -> dict:
         """Return the settings of the task's next model call: model, composed instructions and the app's functions.

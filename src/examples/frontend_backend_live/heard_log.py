@@ -128,8 +128,9 @@ class HeardLog:
         self._sent = 0
         # What the newest result line that settled left unheard.
         self.newest: Unheard = HEARD
-        # The outcome of each result line settled since the mark, in order, and how many settled before the first.
-        self._settled: list[Unheard] = []
+        # The outcome of each result line settled since the mark, by line number, in order, and how many settled before
+        # the first.
+        self._settled: list[tuple[int, Unheard]] = []
         self._settled_before = 0
         # The ports that do not take metadata, observed once each.
         self._unsupported: set[int] = set()
@@ -216,7 +217,7 @@ class HeardLog:
         So an older cut question is not hidden by a newer line heard in full.
         """
         worst = HEARD
-        for outcome in self._settled:
+        for _, outcome in self._settled:
             worst = worst.worse(outcome)
         return worst
 
@@ -225,29 +226,40 @@ class HeardLog:
         """Whether the newest result line that settled left a question unheard."""
         return self.newest.reply is ReplyUnheard.QUESTION
 
-    def result_settled(self, line: int, rest: Sequence[str], how: UnheardHow | None) -> Unheard:
+    def result_settled(
+        self, line: int, rest: Sequence[str], how: UnheardHow | None, *, replaces: int | None = None
+    ) -> Unheard:
         """A line that said backend results settled; ``rest`` is its sentences the caller did not hear.
 
         ``rest`` is empty when the words that played cover every sentence. The level is ``ReplyUnheard.of(rest)``;
         ``how`` names why the line ended short and is kept for the trace only (it is None once the level is NONE). The
         outcome becomes :attr:`newest`, :attr:`since_sent` takes the worse of itself and the outcome, and the line's
         entry keeps the level as ``lost`` when the log still holds that entry. Returns the outcome.
+
+        ``replaces`` is the number of the cut line whose rest this line said: while no delegation has carried that
+        line's outcome, this outcome takes its place, so a question heard after all no longer counts as unheard.
         """
         level = ReplyUnheard.of(rest)
         outcome = HEARD if level is ReplyUnheard.NONE else Unheard(level, how)
         for entry in self.entries:
             if entry.line == line:
                 entry.lost = level
-        return self._settle(outcome)
+        return self._settle(outcome, line, replaces)
 
     def result_unsaid(self, said: str) -> Unheard:
         """The voice gave up saying a result whose text is ``said``: nothing of it was heard (``DROPPED``)."""
         level = ReplyUnheard.of(sentences(said))
-        return self._settle(HEARD if level is ReplyUnheard.NONE else Unheard(level, UnheardHow.DROPPED))
+        return self._settle(HEARD if level is ReplyUnheard.NONE else Unheard(level, UnheardHow.DROPPED), 0)
 
-    def _settle(self, outcome: Unheard) -> Unheard:
+    def _settle(self, outcome: Unheard, line: int, replaces: int | None = None) -> Unheard:
         self.newest = outcome
-        self._settled.append(outcome)
+        at = next(
+            (i for i, (number, _) in enumerate(self._settled) if replaces is not None and number == replaces), None
+        )
+        if at is None:
+            self._settled.append((line, outcome))
+        else:
+            self._settled[at] = (line, outcome)
         return outcome
 
     def unsay(self, line: int) -> None:

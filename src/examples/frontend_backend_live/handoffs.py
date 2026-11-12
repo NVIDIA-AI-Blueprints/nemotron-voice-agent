@@ -4,7 +4,7 @@
 """Handing a decided turn to the session's delegation part, and saying the lead-in the talker wrote for it.
 
 Each hand-off states what the caller had not heard of the backend's answers (``metadata.live_reply_unheard``), which
-the core's write gate reads.
+the core's questions block counts.
 """
 
 from __future__ import annotations

@@ -3,8 +3,8 @@
 
 """The delegation core's Responses API endpoints as Python functions.
 
-A delegation may state what the caller had heard (``metadata.live_reply_unheard``), which the IM keeps for its write
-gate.
+A delegation may state what the caller had heard (``metadata.live_reply_unheard``), which the IM's questions block
+counts.
 """
 
 from __future__ import annotations

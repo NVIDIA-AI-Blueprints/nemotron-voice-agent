@@ -15,12 +15,7 @@ from unittest import mock
 
 import httpx
 
-from examples.frontend_backend_live.delegation_core.backend.harness.bridge import (
-    ConductorDoor,
-    McpBridge,
-    WorkerDoor,
-    mcp_tool,
-)
+from examples.frontend_backend_live.delegation_core.backend.harness.bridge import ConductorDoor, McpBridge, WorkerDoor
 from examples.frontend_backend_live.delegation_core.backend.harness.protocol import AppCall, CallRunning, CallSettled
 from examples.frontend_backend_live.delegation_core.backend.harness.settings import Bridge
 from tests.unit.delegation_core.harness.doubles import vocabulary
@@ -78,14 +73,6 @@ class McpClient:
         return [tool["name"] for tool in (await self.post(client, "tools/list", {}))["result"]["tools"]]
 
 
-class McpToolTests(unittest.TestCase):
-    def test_a_malformed_hint_is_left_out(self):
-        tool = {**MENU, "annotations": {"readOnlyHint": "yes", "destructiveHint": False, "vendor": 1}}
-        self.assertEqual(mcp_tool(tool, annotations=True)["annotations"], {"destructiveHint": False})
-        self.assertNotIn("annotations", mcp_tool({**MENU, "annotations": {"readOnlyHint": 1}}, annotations=True))
-        self.assertNotIn("annotations", mcp_tool(tool))  # off: listed exactly as before
-
-
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.bridge = McpBridge(Bridge(bind="127.0.0.1:0"))
@@ -102,22 +89,11 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await client.connect(self.http)
         return client
 
-    async def worker(self, task=None, *, annotations=False):
+    async def worker(self, task=None):
         self.task = task or FakeTaskContext()
         self.mailbox = asyncio.Queue()
-        door = WorkerDoor("w1", self.task, (Tools(),), self.mailbox, tool_timeout_seconds=0.3, annotations=annotations)
+        door = WorkerDoor("w1", self.task, (Tools(),), self.mailbox, tool_timeout_seconds=0.3)
         return door, await self.open(door)
-
-    async def test_a_tool_lists_with_its_mcp_annotations_only_when_tool_annotations_is_on(self):
-        annotated = {**MENU, "annotations": {"readOnlyHint": True, "title": "The menu"}}
-        for on, expected in ((False, None), (True, {"readOnlyHint": True, "title": "The menu"})):
-            with self.subTest(tool_annotations=on):
-                door, client = await self.worker(FakeTaskContext(declared=[annotated]), annotations=on)
-                listed = (await client.post(self.http, "tools/list", {}))["result"]["tools"]
-                menu = next(tool for tool in listed if tool["name"] == "get_menu")
-                given = menu.get("annotations")
-                self.assertEqual({k: v for k, v in given.items() if v is not None} if given else None, expected)
-                self.bridge.close(door, "")
 
     async def test_only_post_with_a_live_doors_token_is_served(self):
         # Stateless HTTP opens no server-sent stream. A runtime may probe the URL before it connects (Hermes sends

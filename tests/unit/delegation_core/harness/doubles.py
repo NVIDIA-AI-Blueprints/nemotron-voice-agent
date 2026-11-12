@@ -29,7 +29,7 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
     ThoughtChunk,
 )
 from examples.frontend_backend_live.delegation_core.backend.harness.render import Renderer
-from examples.frontend_backend_live.delegation_core.backend.harness.settings import Bridge, HarnessSettings
+from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessSettings
 from tests.unit.delegation_core.helpers import CORE_SETTINGS, TEXTS
 
 # The shipped prompts and agent blocks: the prompts have no default, and neither has Hermes's command guard.
@@ -199,7 +199,6 @@ class FakeBridge:
     """The bridge's door book with no HTTP: opening a door counts as the runtime listing its tools (ready)."""
 
     def __init__(self, *, lists: bool = True):
-        self.settings = Bridge()
         self.doors: dict[str, Door] = {}
         self.closed: list[tuple[Door, str]] = []
         self.lists = lists

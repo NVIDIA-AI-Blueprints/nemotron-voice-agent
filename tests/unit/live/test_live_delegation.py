@@ -299,8 +299,11 @@ class StatedMetadataTests(Case):
         delegation_id, metadata = await self.stated(own)
         self.assertEqual(metadata["live_session_id"], self.session.id)
         self.assertEqual(metadata["live_delegation_id"], delegation_id)
-        self.assertEqual(metadata["live_typed_run"], "true")  # a frontend key the gateway does not set stays data
+        self.assertNotIn("live_typed_run", metadata)  # the gateway's key: a frontend's value never makes a typed run
         self.assertEqual(self.core.requests[-1]["input"], HI)
+        observed = []
+        passthrough.stated(own, lambda kind, **fields: observed.append((kind, fields["reason"])))
+        self.assertEqual(observed, [("delegation.metadata_dropped", "reserved")] * 3)
 
     async def test_metadata_outside_the_limits_is_dropped_and_the_delegation_still_goes(self):
         await self.start()

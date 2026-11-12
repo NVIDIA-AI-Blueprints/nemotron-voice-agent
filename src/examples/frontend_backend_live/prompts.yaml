@@ -761,23 +761,6 @@ agent_prompts:
     texts.not_run_output:
       description: "The output of a call refused while newer input waits to land."
       content: "Not run: the caller said something new."
-    texts.unheard_write_output:
-      description: "The output of an app call that can change data, refused while the caller has not heard the newest answer."
-      content: >-
-        Not run: when the caller last spoke, they had not yet heard all of your latest reply, so what they said is not
-        an answer to it. Describe the exact change again with every detail it uses, end with the question, and wait
-        for their reply.
-    texts.unheard_undeclared_output:
-      description: "The output of an app call whose tool declares nothing, held once while the caller has not heard your latest reply."
-      content: >-
-        Not run: when the caller last spoke, they had not yet heard all of your latest reply. If this call only looks
-        something up and changes nothing, call it again now. If it changes anything, first describe the exact change
-        again with every detail it uses, end with the question, and wait for their reply.
-    texts.unheard_question_output:
-      description: "The output of an app call that can change data, refused while a question asked earlier in the call was never heard ({question})."
-      content: >-
-        Not run: earlier in this call you asked "{question}", and the caller did not hear it. Ask it again, on its
-        own, and wait for their reply before this step.
     texts.stopped_output:
       description: "The output of a call refused once its work is stopping (a stop, or its own cancel_work)."
       content: "Not run: this work was stopped."

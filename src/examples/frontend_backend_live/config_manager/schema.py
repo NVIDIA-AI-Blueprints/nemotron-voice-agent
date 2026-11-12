@@ -66,8 +66,8 @@ class AnswersConfig(StrictModel):
     lead_in_skip: Switch = True
     # The next delegation reads the questions of a cut answer that did not play.
     unheard_questions: Switch = True
-    # A cut also settles a line still waiting for its words after a sentence with no audio (fix 2 PR 2). Off until
-    # arm A passes.
+    # A cut also settles a line still waiting for its words after a sentence with no audio. Off in the code; the
+    # example's registry entry turns it on.
     clear_ended_on_cut: Switch = False
 
 

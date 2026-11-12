@@ -114,13 +114,14 @@ def ends_with_question(sentence: str) -> bool:
 def _sentence_end(rest: str) -> int:
     """The index just past the first sentence end in ``rest``, or 0 when it has none.
 
-    This is the default rule of :func:`sentence_spans`.
+    This is the default rule of :func:`sentence_spans`. Closing punctuation, Markdown emphasis (``*``, ``_``) and more
+    end marks may follow the mark.
     """
     for index, char in enumerate(rest):
         if not _is_sentence_mark(char):
             continue
         end = index + 1
-        while end < len(rest) and (_is_closing(rest[end]) or _is_sentence_mark(rest[end])):
+        while end < len(rest) and (_is_closing(rest[end]) or rest[end] in "*_" or _is_sentence_mark(rest[end])):
             end += 1
         if end == len(rest) or rest[end].isspace() or _is_wide(char):
             return end
@@ -132,8 +133,8 @@ def sentence_spans(text: str, *, ends: Callable[[str], int] | None = None) -> li
 
     ``ends(rest)`` gives the index just past the first sentence end in ``rest``, or 0 when it has none. The default
     rule: a mark whose Unicode name holds ``FULL STOP``, ``QUESTION MARK`` or ``EXCLAMATION MARK`` (not an opening
-    one), with any closing punctuation after it, then a space or the end; a full-width or wide mark (East Asian Width F
-    or W, such as ``。`` or ``？``) ends a sentence with no space after it.
+    one), with any closing punctuation or Markdown emphasis after it, then a space or the end; a full-width or wide
+    mark (East Asian Width F or W, such as ``。`` or ``？``) ends a sentence with no space after it.
     """
     ends = ends or _sentence_end
     spans, start = [], 0

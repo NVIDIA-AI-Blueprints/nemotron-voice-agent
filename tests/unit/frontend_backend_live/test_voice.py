@@ -25,7 +25,7 @@ from examples.frontend_backend_live.heard_log import HEARD, Unheard, UnheardHow
 from examples.frontend_backend_live.models.decision import TalkerDecision
 from examples.frontend_backend_live.spoken import Line, LineKind, Outcome
 from examples.frontend_backend_live.talker import TalkerCall
-from examples.frontend_backend_live.voice import RESULT, Owed, Relay, Routing, Saying, message_tokens
+from examples.frontend_backend_live.voice import CALLER, RESULT, Owed, Relay, Routing, Saying, message_tokens
 from examples.shared.delegation_contract import REPLY_UNHEARD, ReplyUnheard
 from tests.unit.core_helpers import _timeout, chunk, tool_fragment
 from tests.unit.frontend_helpers import (
@@ -983,7 +983,7 @@ def result_line(text: str, number: int = 7) -> Line:
 
 
 class HeardFactTests(unittest.IsolatedAsyncioTestCase):
-    """What each delegation states the caller had not heard of the backend's answers, which the write gate reads."""
+    """What each delegation states the caller had not heard of the backend's answers; the questions block reads it."""
 
     def voice(self):
         return CallHarness().voice  # built, not run: the tests set the voice's state themselves
@@ -1115,6 +1115,26 @@ class HeardFactTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(voice.turn_pending)
         self.assertEqual(voice.sent_unheard(), HEARD)
 
+    async def test_a_start_with_no_words_does_not_keep_its_snapshot_for_the_next_turn(self):
+        voice = StillVoice().voice
+        voice.owed.append(owed_result(READ_BACK))
+        voice.caller_started()  # a cough while the answer waits: no words, so no routing decision clears it
+        voice.caller_stopped()
+        voice.owed.clear()  # the answer then plays whole
+        voice.caller_started()  # the caller's real turn
+        self.assertEqual(voice.sent_unheard(), HEARD)
+
+    async def test_a_turn_with_words_still_undecided_keeps_its_snapshot(self):
+        voice = StillVoice().voice
+        voice.owed.append(owed_result(READ_BACK))
+        voice.caller_started()
+        words = {"role": "user", "content": "Yes."}  # its words, not yet decided
+        voice.context.add_message(words)
+        voice._register(words, CALLER)
+        voice.owed.clear()
+        voice.caller_started()  # the caller speaks again before the decision
+        self.assertEqual(voice.sent_unheard().reply, ReplyUnheard.QUESTION)
+
 
 def answers_config(**answers) -> LiveConfig:
     """The test config with ``answers`` set in its ``delegation.answers`` block."""
@@ -1222,6 +1242,17 @@ class RequeueTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(still.voice._resaying)
         self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["newer"])
 
+    async def test_a_requeued_line_whose_delegation_was_handed_over_is_worded_fresh(self):
+        still = StillVoice()
+        first, taker = still.delegation("Book the bike."), still.delegation("Make it the red one.")
+        still.voice.worknote.hand_over(first, taker)  # before the answer was said: its state cannot be read
+        still.answer(first, "Bike 4. Shall I go ahead?")
+        line = still.say("Bike 4. Shall I go ahead?")
+        still.unheard(line)
+        still.delegation("Is there a helmet?")  # a newer request the work note cannot relate to the old id
+        still.voice._take()
+        self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["newer"])
+
     async def test_a_request_opened_and_answered_before_the_resay_still_refuses_it(self):
         still = StillVoice()
         still.answer(still.delegation("Book the bike."), "Bike 4. Shall I go ahead?")
@@ -1229,6 +1260,16 @@ class RequeueTests(unittest.IsolatedAsyncioTestCase):
         still.unheard(line)
         newer = still.delegation("Is there a helmet?")
         still.voice.worknote.answered(newer)  # answered by the next take: its open requests read the same
+        still.voice._take()
+        self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["newer"])
+
+    async def test_a_request_that_opened_and_closed_before_the_resay_still_refuses_it(self):
+        still = StillVoice()
+        still.answer(still.delegation("Book the bike."), "Bike 4. Shall I go ahead?")
+        line = still.say("Bike 4. Shall I go ahead?")
+        still.unheard(line)
+        newer = still.delegation("Is there a helmet?")
+        still.voice.worknote.entries.pop(newer)  # answered, heard and closed: it left the note
         still.voice._take()
         self.assertEqual([fields["reason"] for fields in still.kinds("answer.resay_reworded")], ["newer"])
 
@@ -1399,6 +1440,41 @@ class RestTests(unittest.IsolatedAsyncioTestCase):
 
     def dropped(self, still: StillVoice) -> list[str]:
         return [fields["reason"] for fields in still.kinds("answer.rest_dropped")]
+
+    async def test_a_rest_heard_in_full_leaves_nothing_unheard(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "wait")  # the caller's "okay": the rest, with its question, is queued
+        rest = still.voice.waiting_lines.pop()
+        rest.number, rest.heard = 5, REST
+        still.voice.heard(rest, cut=False)  # and plays in full
+        self.assertEqual(still.voice.sent_unheard(), HEARD)
+
+    async def test_a_newer_result_of_the_delegation_drops_a_deferred_rest(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "speak")  # the rest is held once more
+        still.voice.ready(ReadyResult("del_1", "item_newer", "Bike 4 is now taken."))
+        still.voice.owed.clear()  # the newer result played
+        self.decide(still, "wait")
+        self.assertEqual((self.rest_lines(still), self.dropped(still)), ([], ["newer_result"]))
+
+    async def test_a_newer_result_of_the_delegation_drops_a_rest_about_to_be_said(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "wait")
+        voice = still.voice
+        voice.call = voice.saying(voice._next_line())  # taken off the queue, not yet handed to speech
+        voice.ready(ReadyResult("del_1", "item_newer", "Bike 4 is now taken."))
+        self.assertEqual(voice.finished(voice.call, None, ""), "")
+        self.assertEqual(self.dropped(still), ["newer_result"])
+
+    async def test_a_newer_result_of_the_delegation_drops_a_queued_rest(self):
+        still = StillVoice()
+        self.cut(still)
+        self.decide(still, "wait")
+        still.voice.ready(ReadyResult("del_1", "item_newer", "Bike 4 is now taken."))
+        self.assertEqual((self.rest_lines(still), self.dropped(still)), ([], ["newer_result"]))
 
     async def test_a_cut_result_then_a_wait_says_the_unheard_rest_once(self):
         still = StillVoice()
@@ -1571,6 +1647,17 @@ class LeadInSkipTests(unittest.IsolatedAsyncioTestCase):
         still = StillVoice()
         still.voice.owed.append(owed_result("The gym opens at six."))
         self.assertEqual((self.lead_in(still), self.lead_ins(still)), (["answer_due"], []))
+
+    async def test_no_lead_in_while_a_relay_words_an_answer(self):
+        still = StillVoice()
+        item = owed_result("The gym opens at six.")
+        still.voice.call = TalkerCall(plan=Relay((item,), "The gym opens at six.", []))
+        self.assertEqual((self.lead_in(still), self.lead_ins(still)), (["answer_due"], []))
+
+    async def test_no_lead_in_while_a_result_line_is_being_said(self):
+        still = StillVoice()
+        still.voice.call = TalkerCall(plan=Saying(result_line("The gym opens at six.")))
+        self.assertEqual(self.lead_in(still), ["answer_due"])
 
     async def test_no_lead_in_while_a_result_line_plays(self):
         still = StillVoice()

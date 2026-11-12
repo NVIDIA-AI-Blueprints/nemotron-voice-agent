@@ -337,7 +337,6 @@ class WorkerRun:
                 self.host.tools,
                 mailbox,
                 tool_timeout_seconds=self.settings.tool_timeout_seconds,
-                annotations=self.host.bridge.settings.tool_annotations,
             )
             server, session = self.host.bridge.open(door), None
             try:

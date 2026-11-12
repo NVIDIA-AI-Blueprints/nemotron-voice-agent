@@ -114,7 +114,8 @@ class DelegationPort(Protocol):
         """Delegate a request and return its ``delegation_id``; no event of it reaches the listener before this returns.
 
         ``metadata`` is what the frontend states about the request, as string pairs: the server delegation adds them to
-        the request's metadata under its own keys, which win; the client delegation drops them. A part whose
+        the request's metadata beside its own keys, dropping any value the frontend gives for one of those; the client
+        delegation drops them. A part whose
         ``delegate`` does not take the keyword is called with ``input`` alone.
 
         The server delegation returns once the core accepts the request and raises on a refusal, so a refused delegation

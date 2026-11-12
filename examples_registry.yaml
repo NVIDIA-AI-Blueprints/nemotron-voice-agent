@@ -148,21 +148,6 @@ examples:
             command: [hermes, acp]
             pass_env: [PATH, LANG, LC_ALL, TZ, HERMES_HOME]
             runtime_label: hermes
-        # The write gate, off by default: an app call that may change data is not run while the caller had not heard
-        # the backend's answers in full when they last spoke, the backend asked a newer question since, or a question
-        # from earlier in the call was never heard. Tools may declare what they do with MCP annotations (readOnlyHint,
-        # destructiveHint); a tool not declared read-only is held on that path, once per tool per caller request.
-        # Declare your read-only tools (annotations, or read_tools here) to spare them that one extra round. The
-        # not-run outputs are texts.unheard_write_output and texts.unheard_question_output in prompts.yaml.
-        # delegation:
-        #   write_gate:
-        #     enabled: true
-        #     unheard: answer              # experimental. answer: any part unheard | question: only a question
-        #     undeclared: hold             # hold | run: a tool nobody declared read-only
-        #     reversible: run              # run | hold: a write declared easily undone
-        #   tool_kinds:
-        #     read_tools: []               # names or patterns; an annotated tool's own declaration wins
-        #     write_tools: []
       # The repository UI bot: the channel context after its talker and backend prompts (agent_prompts.Channel), and
       # its own delegation core, which is the core above with these keys merged over it.
       ui_bot:

@@ -344,22 +344,17 @@ class LlmRun:
     def _payload(self, request: dict, history: list[dict]) -> dict:
         """Return the round's request: the current settings, the whole history, and every tool the round offers.
 
-        The capped round after ``max_tool_rounds`` offers no tool, so its model has none to call or to write out. A
-        round of a task whose tools the IM closed (rule E9) offers no tool either, with no note: the held call's output
-        already says what to do.
+        The capped round after ``max_tool_rounds`` offers no tool, so its model has none to call or to write out.
         """
         capped = self.round > self.settings.max_tool_rounds
-        closed = self.task.tools_closed
-        tools, self.owners = ([], {}) if capped or closed else self._round_tools(request)
+        tools, self.owners = ([], {}) if capped else self._round_tools(request)
         self.offered = [tool["name"] for tool in tools if tool.get("name")]
         payload = {**request, "tools": tools, "input": deepcopy(history)}
-        if capped or closed:
-            payload["tool_choice"] = "none"
-            logger.debug(f"Round {self.round} offers no tool: {'past the round cap' if capped else 'tools closed'}")
         if capped:
             note = self.task.texts.round_cap_note
+            payload["tool_choice"] = "none"
             payload["instructions"] = f"{request['instructions']}\n\n{note}" if request.get("instructions") else note
-        elif not closed and allowed_tools(request.get("tool_choice")) is not None:
+        elif allowed_tools(request.get("tool_choice")) is not None:
             payload["tool_choice"] = request["tool_choice"].get("mode") or "auto"
         return payload
 

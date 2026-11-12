@@ -10,16 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import (
-    AfterValidator,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    PrivateAttr,
-    StrictBool,
-    StrictStr,
-    model_validator,
-)
+from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field, PrivateAttr, StrictStr, model_validator
 
 from examples.frontend_backend_live.delegation_core.config import FORMAT_ERRORS, Seconds, Settings, Text, WholeNumber
 from examples.frontend_backend_live.delegation_core.tables import pick
@@ -58,9 +49,6 @@ class Bridge(Settings):
 
     bind: Annotated[StrictStr, AfterValidator(_host_and_port)] = "127.0.0.1:8791"
     advertise: Annotated[StrictStr, AfterValidator(_http_url)] | None = None
-    # Whether the app's functions are listed to the runtime with their MCP annotations (readOnlyHint ...). Off: a
-    # runtime may act on them (for example, by asking for permission), which would change what the harness does.
-    tool_annotations: StrictBool = False
 
     @property
     def host(self) -> str:

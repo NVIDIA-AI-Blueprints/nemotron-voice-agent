@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
 Observe = Callable[..., None]
 LIVE_SESSION_ID = "live_session_id"
+# The metadata keys only the gateway writes: a frontend's value for one is dropped.
+GATEWAY_KEYS = frozenset({LIVE_SESSION_ID, DELEGATION_ID, TYPED_RUN})
 SETTINGS = "session.delegation.responses"
 MAX_OPEN_ROUTES = 512
 MAX_PENDING_RESULTS = 512
@@ -45,7 +47,9 @@ MAX_METADATA_VALUE = 512
 
 
 def stated(metadata: Mapping[str, str] | None, observe: Callable[..., None] = log_observation) -> dict[str, str]:
-    """Return the pairs of ``metadata`` within the limits; any other pair is dropped with a warning and an observation.
+    """Return the pairs of ``metadata`` within the limits and not the gateway's own keys (``GATEWAY_KEYS``).
+
+    Any other pair is dropped with a warning and an observation.
 
     It never raises: a refused hand-off would be spoken as a refusal, and a metadata fault must never refuse a
     caller's request.
@@ -55,6 +59,8 @@ def stated(metadata: Mapping[str, str] | None, observe: Callable[..., None] = lo
         reason = ""
         if not isinstance(key, str) or not isinstance(value, str):
             reason = "not_text"
+        elif key in GATEWAY_KEYS:
+            reason = "reserved"
         elif not key or len(key) > MAX_METADATA_KEY or len(value) > MAX_METADATA_VALUE:
             reason = "too_long"
         elif len(kept) >= MAX_STATED_METADATA:
@@ -467,7 +473,7 @@ class ServerDelegation:
             if not request.outcome.done():
                 request.outcome.set_exception(RuntimeError("Session is closing"))
             return False
-        metadata = dict(request.metadata)  # the frontend's pairs first: the gateway's own keys, written last, win
+        metadata = dict(request.metadata)  # the frontend's pairs, never the gateway's own keys (``stated``)
         if self.view is not None:
             metadata[LIVE_SESSION_ID] = self.view.id
         metadata[DELEGATION_ID] = request.delegation_id
