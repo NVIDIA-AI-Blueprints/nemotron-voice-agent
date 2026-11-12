@@ -16,11 +16,27 @@ The agent reads the first entry of each slot that the `generic-assistant` exampl
 | Server | Nemotron ASR Streaming English (NIM) | Nemotron 3.5 Lightning 30B A3B (NIM) | Magpie TTS Multilingual (NIM) |
 | Single GPU | Nemotron Speech Streaming (NeMo-Speech.cpp) | Nemotron 3.5 Lightning 30B A3B (vLLM) | Magpie TTS (NeMo-Speech.cpp) |
 
+## Recommended Hardware
+
+Pick the profile for your hardware. The hardware support matches the `generic-assistant` example in the [Getting Started guide](../../../docs/01-getting-started.md).
+
+| Hardware | Profile | Notes |
+| --- | --- | --- |
+| No local GPU (laptop or any Docker host) | Cloud: `generic-assistant-livekit` | The speech and language models run on NVIDIA Cloud. You need `NVIDIA_API_KEY` and internet access. |
+| Workstation or server GPU | Server: `generic-assistant-livekit/server` | NVIDIA NIM containers for ASR, the LLM, and TTS. Do not use this profile on DGX Spark or Jetson Thor. |
+| One GPU: workstation, DGX Spark, or Jetson Thor | Single GPU: `generic-assistant-livekit/single-gpu` | vLLM for the LLM and NeMo-Speech.cpp for ASR and TTS. This is the profile for DGX Spark and Jetson Thor. |
+
+For the Server and Single GPU profiles, use a machine that is not already running other model servers:
+
+- **Memory:** the models start together and share the GPU. On DGX Spark and Jetson Thor, the GPU shares memory with the system, so other model containers reduce what is available.
+- **Ports:** the sidecars publish host ports that must be free. The Server profile uses 9000, 9001, 50151, 50152, and 18000. The Single GPU profile uses 50051 and 18000. LiveKit uses 7880 to 7882, and the UI uses 3000. Compose reports `port is already allocated` for a conflict. Stop the other container or choose another machine.
+- **Other recipes:** do not run a Pipecat recipe on the same machine at the same time.
+
 ## Running the Example
 
 This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. The Single GPU profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run all commands from the repository root (`nemotron-voice-agent/`).
 
-> **Run everything on one machine.** Run every step in a shell on the machine that hosts the deployment: the DGX Spark, Jetson Thor, or workstation for the Server and Single GPU profiles. Docker builds the image and starts the containers on the machine where you run the commands, and the model weights download there. Open the UI in a browser on that same machine. To use a browser on another machine, refer to [Remote Browser Access](#remote-browser-access), which includes an SSH tunnel for a laptop.
+> **Run everything on one machine.** Run every step in a shell on the machine that hosts the deployment: the workstation, DGX Spark, or Jetson Thor that matches your profile (refer to [Recommended Hardware](#recommended-hardware)). Docker builds the image and starts the containers on the machine where you run the commands, and the model weights download there. Open the UI in a browser on that same machine. To use a browser on another machine, refer to [Remote Browser Access](#remote-browser-access), which includes an SSH tunnel for a laptop.
 
 1. Clone the repository and change to its root. Skip this step if you already have a clone:
 
