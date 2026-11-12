@@ -15,7 +15,7 @@ name: Nemotron Voice Agent QA
 
 on:
   push:
-    branches: [main, swqa/enable-qa]
+    branches: [main]
   workflow_dispatch:
     inputs:
       test_image:
