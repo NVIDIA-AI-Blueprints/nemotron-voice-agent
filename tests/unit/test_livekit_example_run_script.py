@@ -194,16 +194,24 @@ def test_down_without_profile_stops_all_three(tmp_path):
     ]
 
 
-def test_clean_removes_volumes_and_the_image_by_default(tmp_path):
+def test_clean_removes_volumes_but_keeps_the_image_by_default(tmp_path):
     result = run(["clean", "server", "-y"], tmp_path)
+    assert result.returncode == 0
+    (command,) = commands(result)
+    assert command.endswith("--profile generic-assistant-livekit/server down -v")
+    assert "docker image rm" not in result.stderr
+
+
+def test_clean_image_flag_also_removes_the_image(tmp_path):
+    result = run(["clean", "server", "-y", "--image"], tmp_path)
     assert result.returncode == 0
     lines = commands(result)
     assert lines[0].endswith("--profile generic-assistant-livekit/server down -v")
     assert lines[1] == "+ docker image rm generic-assistant-livekit:latest"
 
 
-def test_clean_keep_image_skips_the_image(tmp_path):
-    result = run(["clean", "-y", "--keep-image"], tmp_path)
+def test_clean_without_a_profile_covers_all_three(tmp_path):
+    result = run(["clean", "-y"], tmp_path)
     assert len(commands(result)) == 3
     assert all(c.endswith("down -v") for c in commands(result))
 
@@ -212,7 +220,7 @@ def test_clean_names_the_unknown_option(tmp_path):
     result = run(["clean", "--bogus"], tmp_path)
     assert result.returncode != 0
     assert "unknown option '--bogus'" in result.stderr
-    assert "--image was removed" in run(["clean", "--image"], tmp_path).stderr
+    assert "--keep-image is not needed" in run(["clean", "--keep-image"], tmp_path).stderr
 
 
 @pytest.mark.parametrize(

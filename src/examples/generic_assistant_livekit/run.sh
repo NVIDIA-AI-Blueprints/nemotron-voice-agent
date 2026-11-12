@@ -8,7 +8,7 @@
 #   run.sh up <cloud|server|single-gpu> [--no-wait]  Start one profile (stops another running profile first), show
 #                                            its status, then wait until every healthcheck passes (--no-wait skips)
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
-#   run.sh clean [profile] [--keep-image] [-y]  Stop and delete volumes (credentials, NIM caches) and the example image
+#   run.sh clean [profile] [--image] [-y]    Stop and delete volumes (credentials, NIM caches); --image also removes the image
 #   run.sh ps [profile]                      Show container status
 #   run.sh logs <profile> [service]          Follow logs. Services: agent, livekit, ui, init, llm, asr, tts, speech
 #   run.sh wait <profile> [seconds]          Wait until every container with a healthcheck is healthy (default 3600),
@@ -227,21 +227,21 @@ cmd_down() {
 }
 
 cmd_clean() {
-  local name="" image=1 yes=0 arg
+  local name="" image=0 yes=0 arg
   for arg in "$@"; do
     case "$arg" in
-      --keep-image) image=0 ;;
+      --image) image=1 ;;
       -y | --yes) yes=1 ;;
-      --image) die "--image was removed: clean now removes the image by default. Use --keep-image to keep it" ;;
-      -*) die "unknown option '$arg' for clean. Options: --keep-image, -y" ;;
+      --keep-image) die "--keep-image is not needed: clean keeps the image unless you pass --image" ;;
+      -*) die "unknown option '$arg' for clean. Options: --image, -y" ;;
       *) name="$arg" ;;
     esac
   done
   require_docker
   if [ "$yes" != 1 ] && [ "$DRY_RUN" != 1 ]; then
-    info "This deletes this example's volumes (the generated LiveKit credentials and the NIM model caches)"
-    info "and its image, which the next start rebuilds. Downloaded Hugging Face and NeMo-Speech weights and"
-    info "pulled sidecar images are not touched."
+    info "This deletes this example's volumes: the generated LiveKit credentials and the NIM model caches."
+    if [ "$image" = 1 ]; then info "It also removes the example image, which the next start rebuilds."; fi
+    info "Downloaded Hugging Face and NeMo-Speech weights and pulled sidecar images are not touched."
     read -r -p "Continue? [y/N] " reply
     case "$reply" in y | Y | yes) ;; *) die "cancelled" ;; esac
   fi

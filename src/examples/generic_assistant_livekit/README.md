@@ -123,8 +123,8 @@ Use `run.sh` to stop the deployment or to delete its data:
 ```bash
 src/examples/generic_assistant_livekit/run.sh ps                      # show containers
 src/examples/generic_assistant_livekit/run.sh down single-gpu         # stop one profile (omit the profile to stop all)
-src/examples/generic_assistant_livekit/run.sh clean single-gpu        # stop, delete volumes and the image, after a confirmation
-src/examples/generic_assistant_livekit/run.sh clean --keep-image -y   # all profiles, keep the image, no prompt
+src/examples/generic_assistant_livekit/run.sh clean single-gpu        # stop and delete volumes, after a confirmation
+src/examples/generic_assistant_livekit/run.sh clean --image -y        # all profiles, also remove the image, no prompt
 ```
 
 The `livekit-server`, `livekit-ui`, and `livekit-init` services belong to all three profiles, so a `down` for one profile also removes them. `run.sh up` stops a different running profile for you. With plain Compose, run `down` for the old profile before you start another one. Otherwise its containers keep their ports and the Compose network, and the new profile fails with `port is already allocated`.
@@ -134,10 +134,10 @@ The following table lists what each cleanup step removes and what it keeps:
 | Script command | Plain command | Removes | Keeps |
 | --- | --- | --- | --- |
 | `run.sh down <profile>` | `docker compose ... --profile <profile> down` | Containers and the network | Volumes (generated LiveKit credentials and NIM model caches), the image, downloaded weights |
-| `run.sh clean <profile>` | `docker compose ... --profile <profile> down -v`, then `docker image rm generic-assistant-livekit:latest` | The above, this example's named volumes (`livekit_state`, `llm_cache`, `asr_cache`, and `tts_cache`), and the example image | Downloaded weights and the pulled sidecar images |
-| `run.sh clean --keep-image` | `docker compose ... --profile <profile> down -v` | The above, and the volumes | The example image, downloaded weights, and the pulled sidecar images |
+| `run.sh clean <profile>` | `docker compose ... --profile <profile> down -v` | The above, and this example's named volumes: `livekit_state`, `llm_cache`, `asr_cache`, and `tts_cache` | The example image, downloaded weights, and the pulled sidecar images |
+| `run.sh clean --image` | `docker compose ... down -v`, then `docker image rm generic-assistant-livekit:latest` | The above, and the example image | Downloaded weights and the pulled sidecar images |
 
-After a `clean`, the next start rebuilds the image, generates a new LiveKit key and secret, and the Server profile downloads the NIM models again. All three profiles share one image, so a `clean` for one profile removes it for all.
+After a `clean`, the next start generates a new LiveKit key and secret, and the Server profile downloads the NIM models again. With `--image`, the next start also rebuilds the image. All three profiles share one image, so removing it for one profile removes it for all.
 
 The model weights are not part of this cleanup. The pulled sidecar images (vLLM, NeMo-Speech.cpp, the NIM images, and LiveKit) are also kept. Hugging Face downloads for the Single GPU profile are in `~/.cache/huggingface`, and the NeMo-Speech.cpp weights are in `models/nemo-speech`. Other applications can share both locations, so remove them only if you know that nothing else needs them.
 
