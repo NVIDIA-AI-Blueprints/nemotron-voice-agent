@@ -88,16 +88,16 @@ def test_down_without_profile_stops_all_three(tmp_path):
     ]
 
 
-def test_clean_removes_volumes_and_optionally_the_image(tmp_path):
-    result = run(["clean", "server", "-y", "--image"], tmp_path)
+def test_clean_removes_volumes_and_the_image_by_default(tmp_path):
+    result = run(["clean", "server", "-y"], tmp_path)
     assert result.returncode == 0
     lines = commands(result)
     assert lines[0].endswith("--profile generic-assistant-livekit/server down -v")
     assert lines[1] == "+ docker image rm generic-assistant-livekit:latest"
 
 
-def test_clean_without_image_flag_keeps_the_image(tmp_path):
-    result = run(["clean", "-y"], tmp_path)
+def test_clean_keep_image_skips_the_image(tmp_path):
+    result = run(["clean", "-y", "--keep-image"], tmp_path)
     assert len(commands(result)) == 3
     assert all(c.endswith("down -v") for c in commands(result))
 

@@ -7,7 +7,7 @@
 #
 #   run.sh up <cloud|server|single-gpu>      Start one profile (stops another running profile first)
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
-#   run.sh clean [profile] [--image] [-y]    Stop and delete volumes (credentials, NIM caches); --image also removes the image
+#   run.sh clean [profile] [--keep-image] [-y]  Stop and delete volumes (credentials, NIM caches) and the example image
 #   run.sh ps [profile]                      Show container status
 #   run.sh logs <profile> [service]          Follow logs. Services: agent, livekit, ui, init, llm, asr, tts, speech
 #   run.sh wait <profile> [seconds]          Wait until every container with a healthcheck is healthy (default 3600)
@@ -209,10 +209,10 @@ cmd_down() {
 }
 
 cmd_clean() {
-  local name="" image=0 yes=0 arg
+  local name="" image=1 yes=0 arg
   for arg in "$@"; do
     case "$arg" in
-      --image) image=1 ;;
+      --keep-image) image=0 ;;
       -y | --yes) yes=1 ;;
       -*) usage ;;
       *) name="$arg" ;;
@@ -220,8 +220,9 @@ cmd_clean() {
   done
   require_docker
   if [ "$yes" != 1 ] && [ "$DRY_RUN" != 1 ]; then
-    info "This deletes this example's volumes: the generated LiveKit credentials and the NIM model caches."
-    info "Downloaded Hugging Face and NeMo-Speech weights are not touched."
+    info "This deletes this example's volumes (the generated LiveKit credentials and the NIM model caches)"
+    info "and its image, which the next start rebuilds. Downloaded Hugging Face and NeMo-Speech weights and"
+    info "pulled sidecar images are not touched."
     read -r -p "Continue? [y/N] " reply
     case "$reply" in y | Y | yes) ;; *) die "cancelled" ;; esac
   fi
