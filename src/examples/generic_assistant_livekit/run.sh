@@ -214,7 +214,8 @@ cmd_clean() {
     case "$arg" in
       --keep-image) image=0 ;;
       -y | --yes) yes=1 ;;
-      -*) usage ;;
+      --image) die "--image was removed: clean now removes the image by default. Use --keep-image to keep it" ;;
+      -*) die "unknown option '$arg' for clean. Options: --keep-image, -y" ;;
       *) name="$arg" ;;
     esac
   done

@@ -102,6 +102,13 @@ def test_clean_keep_image_skips_the_image(tmp_path):
     assert all(c.endswith("down -v") for c in commands(result))
 
 
+def test_clean_names_the_unknown_option(tmp_path):
+    result = run(["clean", "--bogus"], tmp_path)
+    assert result.returncode != 0
+    assert "unknown option '--bogus'" in result.stderr
+    assert "--image was removed" in run(["clean", "--image"], tmp_path).stderr
+
+
 @pytest.mark.parametrize(
     ("args", "service"),
     [
