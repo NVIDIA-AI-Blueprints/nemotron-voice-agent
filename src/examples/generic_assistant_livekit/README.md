@@ -18,24 +18,31 @@ The agent reads the first entry of each slot that the `generic-assistant` exampl
 
 ## Running the Example
 
-This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. The Single GPU profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
+This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. The Single GPU profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run all commands from the repository root (`nemotron-voice-agent/`).
 
-1. Keep your existing `.env` file. If you do not have one, copy the template:
+1. Clone the repository and change to its root. Skip this step if you already have a clone:
+
+   ```bash
+   git clone https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+   cd nemotron-voice-agent
+   ```
+
+2. Keep your existing `.env` file. If you do not have one, copy the template:
 
    ```bash
    test -f .env || cp .env.example .env
    ```
 
-2. In `.env`, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`. Generate a secret with `openssl rand -hex 24`. Set `NVIDIA_API_KEY` for the Cloud and Server profiles. For the Single GPU profile, also set `HF_TOKEN` and leave `NVIDIA_API_KEY` empty.
+3. In `.env`, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`. Generate a secret with `openssl rand -hex 24`. Set `NVIDIA_API_KEY` for the Cloud and Server profiles. For the Single GPU profile, also set `HF_TOKEN` and leave `NVIDIA_API_KEY` empty.
 
-3. For the Server profile only, log in to the NVIDIA NGC container registry:
+4. For the Server profile only, log in to the NVIDIA NGC container registry:
 
    ```bash
    set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-4. Deploy the profile that matches your hardware. The following commands start each recipe:
+5. Deploy the profile that matches your hardware. The following commands start each recipe:
 
    ```bash
    docker compose --profile generic-assistant-livekit up -d            # Cloud, no local GPU
@@ -56,9 +63,9 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
 
    The sidecars are the same services as the `generic-assistant` profiles. Wait until they are healthy before you connect, because the first NIM or vLLM start downloads and loads models.
 
-5. Open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
+6. Open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
-6. Tear down with the same profile that you started with:
+7. Tear down with the same profile that you started with:
 
    ```bash
    docker compose --profile generic-assistant-livekit down
