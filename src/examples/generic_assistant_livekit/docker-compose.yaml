@@ -29,8 +29,11 @@ x-livekit-app: &livekit-app
       max-size: "50m"
       max-file: "5"
 
+# The agents share the LiveKit server's network namespace (network_mode below). The server advertises its node IP
+# (127.0.0.1 by default, for a browser on the same machine or behind an SSH tunnel) in ICE candidates, and inside a
+# separate container that address would point at the agent itself. Sharing the namespace makes it reach the server.
 x-livekit-env: &livekit-env
-  LIVEKIT_URL: ws://livekit-server:7880
+  LIVEKIT_URL: ws://127.0.0.1:7880
   LIVEKIT_STATE_DIR: /state
 
 services:
@@ -93,6 +96,7 @@ services:
     <<: *livekit-app
     env_file:
       - ../../../.env
+    network_mode: "service:livekit-server"
     profiles:
       - generic-assistant-livekit
     depends_on:
@@ -112,6 +116,7 @@ services:
     <<: *livekit-app
     env_file:
       - ../../../.env
+    network_mode: "service:livekit-server"
     profiles:
       - generic-assistant-livekit/server
     depends_on:
@@ -131,6 +136,7 @@ services:
     <<: *livekit-app
     env_file:
       - ../../../.env
+    network_mode: "service:livekit-server"
     profiles:
       - generic-assistant-livekit/single-gpu
     depends_on:

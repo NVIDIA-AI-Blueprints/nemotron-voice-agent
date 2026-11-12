@@ -88,6 +88,8 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
 
    The sidecars extend the shared service definitions in [`docker/`](../../../docker), so they use the same images and settings as the `generic-assistant` recipes. Each sidecar has a network alias that matches the hostname in `services.yaml`. Wait until they are healthy before you connect, because the first NIM or vLLM start downloads and loads models.
 
+   The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up -d` command again so that Compose also recreates the agent.
+
 6. On the same machine, open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
 7. Tear down with the same profile that you started with:
