@@ -33,7 +33,7 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    test -f .env || cp src/examples/generic_assistant_livekit/.env.example .env
    ```
 
-3. In `.env`, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`. Generate a secret with `openssl rand -hex 24`. Set `NVIDIA_API_KEY` for the Cloud and Server profiles. For the Single GPU profile, also set `HF_TOKEN` and leave `NVIDIA_API_KEY` empty.
+3. In `.env`, set `NVIDIA_API_KEY` for the Cloud and Server profiles. For the Single GPU profile, also set `HF_TOKEN` and leave `NVIDIA_API_KEY` empty. You do not need LiveKit credentials. The `livekit-init` service generates a random API key and secret on the first run and stores them in the `livekit_state` Docker volume. They persist across `down` and restart, and `down -v` creates a new pair. To use your own, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in `.env`.
 
 4. For the Server profile only, log in to the NVIDIA NGC container registry:
 
@@ -94,6 +94,7 @@ For a browser on another machine, set `LIVEKIT_NODE_IP` to the host address, ser
 | `prompts.yaml` | Prompt and greeting for the assistant |
 | `tools.py` | Plain async functions behind the weather and date tools. No LiveKit imports |
 | `tool_wrapper.py` | Wraps tool functions as LiveKit tools that report calls to the UI |
+| `credentials.py` | Generates the LiveKit API key and secret, writes the LiveKit server config, and shares both through the `livekit_state` volume |
 | `ui_server.py` | Serves `ui/` and mints a LiveKit join token at `/token` |
 | `ui/` | Web UI |
 | `docker-compose.yaml`, `Dockerfile` | LiveKit server, agent, UI, and model sidecar services, and the image the app services share |

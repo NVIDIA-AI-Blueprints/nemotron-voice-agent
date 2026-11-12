@@ -31,26 +31,39 @@ x-livekit-app: &livekit-app
 
 x-livekit-env: &livekit-env
   LIVEKIT_URL: ws://livekit-server:7880
-  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
-  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+  LIVEKIT_STATE_DIR: /state
 
 services:
+  # Writes the LiveKit key and secret and the server config to the livekit_state volume, then exits. It keeps
+  # credentials from an earlier run, so `docker compose down` does not rotate them (`down -v` does). Set
+  # LIVEKIT_API_KEY and LIVEKIT_API_SECRET in .env to use your own values.
+  livekit-init:
+    <<: *livekit-app
+    profiles:
+      - generic-assistant-livekit
+      - generic-assistant-livekit/server
+      - generic-assistant-livekit/single-gpu
+    command: ["python", "-m", "examples.generic_assistant_livekit.credentials"]
+    environment:
+      LIVEKIT_STATE_DIR: /state
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+    volumes:
+      - livekit_state:/state
+    restart: "no"
+
   livekit-server:
     image: livekit/livekit-server:v1.13.11
     profiles:
       - generic-assistant-livekit
       - generic-assistant-livekit/server
       - generic-assistant-livekit/single-gpu
-    command: ["--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
-    environment:
-      # Set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in .env. The server does not start without them.
-      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}"
-      LIVEKIT_CONFIG: |
-        port: 7880
-        rtc:
-          tcp_port: 7881
-          udp_port: 7882
-          use_external_ip: false
+    command: ["--config", "/state/livekit.yaml", "--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - livekit_state:/state:ro
     ports:
       - "7880:7880"
       - "7881:7881"
@@ -65,8 +78,14 @@ services:
       - generic-assistant-livekit/single-gpu
     command: ["python", "-m", "examples.generic_assistant_livekit.ui_server"]
     environment:
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      LIVEKIT_STATE_DIR: /state
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state:ro
     ports:
       - "${LIVEKIT_UI_BIND:-127.0.0.1}:${LIVEKIT_UI_PORT:-3000}:3000"
 
@@ -77,7 +96,14 @@ services:
     profiles:
       - generic-assistant-livekit
     depends_on:
-      - livekit-server
+      livekit-server:
+        condition: service_started
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state:ro
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: cloud
@@ -89,7 +115,14 @@ services:
     profiles:
       - generic-assistant-livekit/server
     depends_on:
-      - livekit-server
+      livekit-server:
+        condition: service_started
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state:ro
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: server
@@ -101,7 +134,14 @@ services:
     profiles:
       - generic-assistant-livekit/single-gpu
     depends_on:
-      - livekit-server
+      livekit-server:
+        condition: service_started
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state:ro
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: single-gpu
@@ -164,6 +204,7 @@ services:
           - nemo-speech
 
 volumes:
+  livekit_state:
   llm_cache:
   asr_cache:
   tts_cache:

@@ -18,6 +18,7 @@ from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.plugins import nvidia, openai, silero
 
 from .config import AgentConfig, load_config
+from .credentials import apply_to_environ
 from .tool_wrapper import traced_tool
 from .tools import current_datetime, current_weather
 
@@ -27,6 +28,7 @@ EVENTS_TOPIC = "agent.events"  # data-channel topic the web UI listens on
 PROMPTS_FILE = Path(__file__).with_name("prompts.yaml")
 PROMPT_KEY = "generic_assistant"
 
+apply_to_environ()  # LiveKit key and secret from the state volume, unless set in the environment
 server = AgentServer()
 
 

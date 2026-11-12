@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 from livekit import api
 
+from .credentials import apply_to_environ
+
 PUBLIC = Path(__file__).with_name("ui")
 
 
@@ -48,6 +50,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     """Run the UI server. Compose publishes the port on loopback by default."""
+    apply_to_environ()
     port = int(os.environ.get("LIVEKIT_UI_PORT", "3000"))
     print(f"UI on http://0.0.0.0:{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
