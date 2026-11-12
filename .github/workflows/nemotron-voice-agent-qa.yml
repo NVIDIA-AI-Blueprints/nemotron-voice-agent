@@ -1,0 +1,146 @@
+# Deploys the Nemotron Voice Agent Server recipe (generic-assistant/server: local
+# NIM ASR, LLM and TTS) with Docker Compose, waits for the app on :7860, then runs
+# the nemotron_voice_agent tests (UI and WebSocket) from the shared QA image.
+#
+# Required repository secrets:
+#   NVIDIA_API_KEY         build.nvidia.com key: written to .env and used for
+#                          `docker login nvcr.io` to pull the NIM images.
+#   TEST_DOCKER_PULL_KEY   NVIDIA API key with pull access to
+#                          nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image.
+#
+# Optional SMTP secrets (mail step skipped if any are missing):
+#   SMTP_USERNAME, SMTP_PASSWORD, SMTP_MAIL_TO, SMTP_MAIL_FROM
+
+name: Nemotron Voice Agent QA
+
+on:
+  push:
+    branches: [main, swqa/enable-qa]
+  workflow_dispatch:
+    inputs:
+      test_image:
+        description: "QA test image"
+        required: false
+        default: nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image:latest
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nemotron-voice-agent-e2e:
+    name: Nemotron Voice Agent E2E
+    runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
+    timeout-minutes: 480
+    env:
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      QA_TEST_IMAGE: ${{ github.event.inputs.test_image || 'nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image:latest' }}
+      COMPOSE_PROFILE: generic-assistant/server
+      APP_URL: http://127.0.0.1:7860
+      APP_WS_URL: ws://127.0.0.1:7860/api/ws
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy stack
+        run: |
+          set -euo pipefail
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "::error::NVIDIA_API_KEY secret missing"
+            exit 1
+          fi
+          cp .env.example .env
+          sed -i "s|^NVIDIA_API_KEY=.*|NVIDIA_API_KEY=${NVIDIA_API_KEY}|" .env
+          echo "PIPELINE_TLS=false" >> .env
+          printf '%s' "${NVIDIA_API_KEY}" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+          docker compose --profile "${COMPOSE_PROFILE}" up -d
+
+      - name: Wait for the app to become healthy
+        run: |
+          set -euo pipefail
+          echo "Waiting for ${APP_URL}/health (up to 60 min; first deploy may take 30-60 min)..."
+          if ! timeout 3600 bash -c 'until curl -fsS "${APP_URL}/health" > /dev/null 2>&1; do sleep 20; done'; then
+            echo "::error::Nemotron Voice Agent did not become healthy within 60 minutes."
+            docker compose --profile "${COMPOSE_PROFILE}" ps --all
+            exit 1
+          fi
+          docker compose --profile "${COMPOSE_PROFILE}" ps --all
+
+      - name: Run Nemotron Voice Agent tests
+        env:
+          TEST_DOCKER_PULL_KEY: ${{ secrets.TEST_DOCKER_PULL_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TEST_DOCKER_PULL_KEY:-}" ]; then
+            echo "::error::TEST_DOCKER_PULL_KEY secret missing"
+            exit 1
+          fi
+          echo "${TEST_DOCKER_PULL_KEY}" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+          docker pull "${QA_TEST_IMAGE}"
+          docker run --rm --net=host \
+            -v "$(pwd):/workspace" \
+            "${QA_TEST_IMAGE}" \
+            pytest testcases/nemotron_voice_agent/ -m nemotron_voice_agent \
+              --nemotron-voice-agent-url="${APP_URL}" \
+              --nemotron-voice-agent-ws-url="${APP_WS_URL}" \
+              --disable-warnings -v --timeout=600 \
+              --html=/workspace/nemotron-voice-agent-test.html --self-contained-html
+          test -f nemotron-voice-agent-test.html || { echo "::error::no test report"; exit 1; }
+
+      - name: Capture failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p ci-diagnostics
+          docker compose --profile "${COMPOSE_PROFILE}" ps --all \
+            > ci-diagnostics/docker-compose-ps.txt 2>&1 || true
+          docker compose --profile "${COMPOSE_PROFILE}" logs \
+            --no-color --timestamps --tail 300 \
+            > ci-diagnostics/service-logs.txt 2>&1 || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nemotron-voice-agent-test
+          path: |
+            nemotron-voice-agent-test.html
+            ci-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose --profile "${COMPOSE_PROFILE}" down -v 2>/dev/null || true
+          docker rmi "${QA_TEST_IMAGE}" 2>/dev/null || true
+          docker image prune -f
+          rm -f .env
+
+      - name: Detect SMTP
+        id: smtp
+        if: always()
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_MAIL_TO: ${{ secrets.SMTP_MAIL_TO }}
+          SMTP_MAIL_FROM: ${{ secrets.SMTP_MAIL_FROM }}
+        run: |
+          [ -n "${SMTP_USERNAME:-}" ] && [ -n "${SMTP_PASSWORD:-}" ] \
+            && [ -n "${SMTP_MAIL_TO:-}" ] && [ -n "${SMTP_MAIL_FROM:-}" ] \
+            && echo "enabled=true" >> "$GITHUB_OUTPUT" \
+            || echo "enabled=false" >> "$GITHUB_OUTPUT"
+
+      - name: Send mail
+        if: always() && steps.smtp.outputs.enabled == 'true'
+        uses: dawidd6/action-send-mail@6e71c855c9a091d80a519621b9fd3e8d252ca40c
+        continue-on-error: true
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Nemotron Voice Agent QA Result for ${{ github.repository }}"
+          to: ${{ secrets.SMTP_MAIL_TO }}
+          from: ${{ secrets.SMTP_MAIL_FROM }}
+          html_body: |
+            <p>Workflow for <strong>${{ github.repository }}</strong> finished: <strong>${{ job.status }}</strong></p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>
