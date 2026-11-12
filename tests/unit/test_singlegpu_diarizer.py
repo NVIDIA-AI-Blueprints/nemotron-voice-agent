@@ -17,7 +17,7 @@ class SingleGpuDiarizationComposeTest(unittest.TestCase):
     def test_only_generic_speech_service_runs_diarization(self) -> None:
         speech = self.services["nemo-speech"]
 
-        self.assertEqual(speech["profiles"], ["generic-assistant/single-gpu", "generic-assistant-livekit/single-gpu"])
+        self.assertEqual(speech["profiles"], ["generic-assistant/single-gpu"])
         self.assertIn("NEMO_SPEECH_ASR_DIAR_MODEL_PATH", speech["environment"])
         for name in ("nemo-speech-frontend-backend", "nemo-speech-multilingual", "nemo-speech-tts"):
             self.assertNotIn("environment", self.services[name])

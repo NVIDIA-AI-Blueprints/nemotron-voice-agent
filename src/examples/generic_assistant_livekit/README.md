@@ -2,7 +2,7 @@
 
 This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/) instead of Pipecat. The agent worker keeps automatic speech recognition (ASR), large language model (LLM), tools, and text-to-speech (TTS) as separate services. It uses Nemotron ASR through the LiveKit NVIDIA plugin, a Nemotron LLM through the OpenAI-compatible API, and Magpie TTS through the same plugin. A small web UI joins a LiveKit room, shows live transcripts, and shows each tool call.
 
-The example is self-contained. It has its own Python environment, image, and Compose services. It does not use the Pipecat server, the React client, or [`examples_registry.yaml`](../../../examples_registry.yaml). It reuses the model recipes in [`docker/`](../../../docker) and the catalog in [`services.yaml`](../../../services.yaml).
+The example is self-contained. It has its own Python environment, image, and Compose services. It does not use the Pipecat server, the React client, or [`examples_registry.yaml`](../../../examples_registry.yaml). It reuses the model recipes in [`docker/`](../../../docker) and the catalog in [`services.yaml`](../../../services.yaml), and nothing outside this folder refers to it. To move the example to another repository, replace the `extends` entries in `docker-compose.yaml` with copies of those service definitions.
 
 ![Architecture diagram](images/architecture.svg)
 
@@ -27,10 +27,10 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    cd nemotron-voice-agent
    ```
 
-2. Keep your existing `.env` file. If you do not have one, copy the template:
+2. Keep your existing `.env` file. If you do not have one, copy the example template. If you already have one for another example, add the entries from [`.env.example`](.env.example) to it:
 
    ```bash
-   test -f .env || cp .env.example .env
+   test -f .env || cp src/examples/generic_assistant_livekit/.env.example .env
    ```
 
 3. In `.env`, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`. Generate a secret with `openssl rand -hex 24`. Set `NVIDIA_API_KEY` for the Cloud and Server profiles. For the Single GPU profile, also set `HF_TOKEN` and leave `NVIDIA_API_KEY` empty.
@@ -44,13 +44,18 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
 
 5. Deploy the profile that matches your hardware. The following commands start each recipe:
 
+   The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file.
+
    ```bash
-   docker compose --profile generic-assistant-livekit up -d            # Cloud, no local GPU
-   docker compose --profile generic-assistant-livekit/server up -d     # Server with NIM
+   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+     --profile generic-assistant-livekit up -d            # Cloud, no local GPU
+   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+     --profile generic-assistant-livekit/server up -d     # Server with NIM
 
    # One GPU, including DGX Spark and Jetson Thor. Download the speech weights as your user:
    bash scripts/download-nemo-speech-models.sh
-   docker compose --profile generic-assistant-livekit/single-gpu up -d
+   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+     --profile generic-assistant-livekit/single-gpu up -d
    ```
 
    The following table lists the services that each recipe profile starts:
@@ -58,22 +63,21 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    | Recipe profile | App services | Sidecars |
    | --- | --- | --- |
    | `generic-assistant-livekit` | `livekit-server`, `livekit-agent`, `livekit-ui` | none (cloud NVCF) |
-   | `generic-assistant-livekit/server` | `livekit-server`, `livekit-agent-server`, `livekit-ui` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
-   | `generic-assistant-livekit/single-gpu` | `livekit-server`, `livekit-agent-single-gpu`, `livekit-ui` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
+   | `generic-assistant-livekit/server` | `livekit-server`, `livekit-agent-server`, `livekit-ui` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
+   | `generic-assistant-livekit/single-gpu` | `livekit-server`, `livekit-agent-single-gpu`, `livekit-ui` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech` |
 
-   The sidecars are the same services as the `generic-assistant` profiles. Wait until they are healthy before you connect, because the first NIM or vLLM start downloads and loads models.
+   The sidecars extend the shared service definitions in [`docker/`](../../../docker), so they use the same images and settings as the `generic-assistant` recipes. Each sidecar has a network alias that matches the hostname in `services.yaml`. Wait until they are healthy before you connect, because the first NIM or vLLM start downloads and loads models.
 
 6. Open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
 7. Tear down with the same profile that you started with:
 
    ```bash
-   docker compose --profile generic-assistant-livekit down
-   docker compose --profile generic-assistant-livekit/server down
-   docker compose --profile generic-assistant-livekit/single-gpu down
+   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+     --profile generic-assistant-livekit/server down   # or generic-assistant-livekit, or /single-gpu
    ```
 
-Do not run this example and a `generic-assistant` recipe at the same time. They share sidecar services and host ports.
+Do not run this example and a Pipecat recipe at the same time. Their sidecars publish the same host ports.
 
 ## Remote Browser Access
 
@@ -92,7 +96,8 @@ For a browser on another machine, set `LIVEKIT_NODE_IP` to the host address, ser
 | `tool_wrapper.py` | Wraps tool functions as LiveKit tools that report calls to the UI |
 | `ui_server.py` | Serves `ui/` and mints a LiveKit join token at `/token` |
 | `ui/` | Web UI |
-| `docker-compose.yaml`, `Dockerfile` | LiveKit server, agent, and UI services, and the image they share |
+| `docker-compose.yaml`, `Dockerfile` | LiveKit server, agent, UI, and model sidecar services, and the image the app services share |
+| `.env.example` | Environment template for this example |
 | `pyproject.toml`, `uv.lock` | Example-only dependencies |
 
 To add a tool, write a function with type hints and a docstring `Args:` section in `agent.py`, add it to `TOOLS`, and mention it in `prompts.yaml`. Put the underlying logic in `tools.py`. To change models, refer to [Configure Services](../../../docs/how-to/configure-services.md). The agent applies the entry's `extra_params` and turns reasoning off, as the `settings.yaml` default does. It does not read the other editable settings.

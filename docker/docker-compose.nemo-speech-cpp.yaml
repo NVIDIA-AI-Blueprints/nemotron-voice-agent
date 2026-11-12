@@ -24,7 +24,6 @@ services:
     # scripts/download-nemo-speech-models.sh.
     profiles:
       - generic-assistant/single-gpu
-      - generic-assistant-livekit/single-gpu
     environment:
       NEMO_SPEECH_ASR_DIAR_MODEL_PATH: /models/diarization/Nemotron-3-Diarization.q8_0.gguf
       NEMO_SPEECH_ASR_DIAR_PRESET: v3-streaming

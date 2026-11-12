@@ -45,7 +45,6 @@ services:
     <<: *vllm-lightning
     profiles:
       - generic-assistant/single-gpu
-      - generic-assistant-livekit/single-gpu
       - multilingual-assistant/single-gpu
     environment:
       FLASHINFER_DISABLE_VERSION_CHECK: "1"

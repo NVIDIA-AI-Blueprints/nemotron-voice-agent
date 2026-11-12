@@ -1,11 +1,17 @@
-# LiveKit generic assistant: LiveKit server, agent worker, and web UI. Model sidecars (NIMs, vLLM, NeMo-Speech.cpp)
-# come from the shared files in docker/ and join the recipe profiles below.
+# LiveKit generic assistant: LiveKit server, agent worker, web UI, and model sidecars. Self-contained: the sidecars
+# extend the shared service definitions in docker/ (read-only), so nothing outside this folder lists this example.
+#
+# Run from the repository root, passing the root .env for variable interpolation (Compose otherwise reads .env from
+# this folder):
+#   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+#     --profile <recipe> up -d
 #
 # Recipes (select exactly one):
 #   generic-assistant-livekit              NVIDIA Cloud models, no local GPU
 #   generic-assistant-livekit/server       NIM ASR + LLM + TTS on workstation / server GPUs
 #   generic-assistant-livekit/single-gpu   vLLM + NeMo-Speech.cpp on one GPU (workstation, DGX Spark, Jetson Thor)
 # TURN is not included. For remote browsers, refer to docker/docker-compose.coturn.yaml.
+# Do not run this example and a Pipecat recipe together: the sidecars publish the same host ports.
 
 x-livekit-app: &livekit-app
   build:
@@ -99,3 +105,65 @@ services:
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: single-gpu
+
+  # Model sidecars. Each extends a shared definition and gets a network alias, so the hostnames in services.yaml
+  # (nvidia-llm, nemotron-asr-streaming-english, ...) resolve to it.
+  livekit-nvidia-llm:
+    extends:
+      file: ../../../docker/docker-compose.nemotron35-lightning-nim.yaml
+      service: nvidia-llm
+    profiles: !override
+      - generic-assistant-livekit/server
+    networks:
+      default:
+        aliases:
+          - nvidia-llm
+
+  livekit-nemotron-asr:
+    extends:
+      file: ../../../docker/docker-compose.nemotron-asr.yaml
+      service: nemotron-asr-streaming-english
+    profiles: !override
+      - generic-assistant-livekit/server
+    networks:
+      default:
+        aliases:
+          - nemotron-asr-streaming-english
+
+  livekit-magpie-tts:
+    extends:
+      file: ../../../docker/docker-compose.magpie-tts.yaml
+      service: magpie-multilingual-tts-service
+    profiles: !override
+      - generic-assistant-livekit/server
+    networks:
+      default:
+        aliases:
+          - magpie-multilingual-tts-service
+
+  livekit-nvidia-llm-vllm:
+    extends:
+      file: ../../../docker/docker-compose.nemotron35-lightning.yaml
+      service: nvidia-llm-vllm-lightning
+    profiles: !override
+      - generic-assistant-livekit/single-gpu
+    networks:
+      default:
+        aliases:
+          - nvidia-llm-vllm
+
+  livekit-nemo-speech:
+    extends:
+      file: ../../../docker/docker-compose.nemo-speech-cpp.yaml
+      service: nemo-speech
+    profiles: !override
+      - generic-assistant-livekit/single-gpu
+    networks:
+      default:
+        aliases:
+          - nemo-speech
+
+volumes:
+  llm_cache:
+  asr_cache:
+  tts_cache:
