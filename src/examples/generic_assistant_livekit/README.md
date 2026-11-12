@@ -60,38 +60,38 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-5. Deploy exactly one profile that matches your hardware. **Run only one of the three options that follow**, and use the same profile in the teardown step.
-
-   The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file.
+5. Deploy exactly one profile that matches your hardware. **Run only one of the three options that follow.** The helper script [`run.sh`](run.sh) checks your `.env`, stops a different running profile first, and warns about busy ports and low memory. It prints each `docker compose` command that it runs.
 
    **Option A: Cloud.** Use this option when you have no local GPU.
 
    ```bash
-   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
-     --profile generic-assistant-livekit up -d
+   src/examples/generic_assistant_livekit/run.sh up cloud
    ```
 
    **Option B: Server with NIM.** Use this option on a workstation or server GPU. Do not use it on DGX Spark or Jetson Thor.
 
    ```bash
-   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
-     --profile generic-assistant-livekit/server up -d
+   src/examples/generic_assistant_livekit/run.sh up server
    ```
 
    **Option C: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. Download the speech weights once, as your user, and then start the profile:
 
    ```bash
    bash scripts/download-nemo-speech-models.sh
-   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
-     --profile generic-assistant-livekit/single-gpu up -d
+   src/examples/generic_assistant_livekit/run.sh up single-gpu
    ```
 
-   If you started more than one profile by mistake, stop them all before you start again:
+   The first start of the Server and Single GPU profiles downloads and loads models. Wait until the sidecars are healthy before you connect:
 
    ```bash
-   for p in generic-assistant-livekit generic-assistant-livekit/server generic-assistant-livekit/single-gpu; do
-     docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml --profile "$p" down
-   done
+   src/examples/generic_assistant_livekit/run.sh wait single-gpu     # or: server
+   ```
+
+   The script runs the following plain command, with the profile that you choose. The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file. Use this command directly if you prefer not to use the script:
+
+   ```bash
+   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+     --profile generic-assistant-livekit/single-gpu up -d     # or: generic-assistant-livekit, generic-assistant-livekit/server
    ```
 
    The following table lists the services that each recipe profile starts:
@@ -102,34 +102,41 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    | `generic-assistant-livekit/server` | `livekit-server`, `livekit-agent-server`, `livekit-ui` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
    | `generic-assistant-livekit/single-gpu` | `livekit-server`, `livekit-agent-single-gpu`, `livekit-ui` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech` |
 
-   The sidecars extend the shared service definitions in [`docker/`](../../../docker), so they use the same images and settings as the `generic-assistant` recipes. Each sidecar has a network alias that matches the hostname in `services.yaml`. Wait until they are healthy before you connect, because the first NIM or vLLM start downloads and loads models.
-
-   The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up -d` command again so that Compose also recreates the agent.
+   The sidecars extend the shared service definitions in [`docker/`](../../../docker), so they use the same images and settings as the `generic-assistant` recipes. Each sidecar has a network alias that matches the hostname in `services.yaml`.
+   The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up` command again so that Compose also recreates the agent.
 
 6. On the same machine, open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
-7. Tear down with the same profile that you started with:
+7. Tear down when you are done:
 
    ```bash
-   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
-     --profile generic-assistant-livekit/server down   # or generic-assistant-livekit, or /single-gpu
+   src/examples/generic_assistant_livekit/run.sh down single-gpu     # or: cloud, server. Omit the profile to stop all
    ```
 
 Do not run this example and a Pipecat recipe at the same time. Their sidecars publish the same host ports.
 
 ## Cleanup
 
-Stop the deployment with the same profile that you started. The `livekit-server`, `livekit-ui`, and `livekit-init` services belong to all three profiles, so a `down` for one profile also removes them. Before you switch to another profile, run `down` for the old one. Otherwise its containers keep their ports and the Compose network, and the new profile fails with `port is already allocated`.
+Use `run.sh` to stop the deployment or to delete its data:
+
+```bash
+src/examples/generic_assistant_livekit/run.sh ps                      # show containers
+src/examples/generic_assistant_livekit/run.sh down single-gpu         # stop one profile (omit the profile to stop all)
+src/examples/generic_assistant_livekit/run.sh clean single-gpu        # stop and delete volumes, after a confirmation
+src/examples/generic_assistant_livekit/run.sh clean --image -y        # all profiles, also remove the image, no prompt
+```
+
+The `livekit-server`, `livekit-ui`, and `livekit-init` services belong to all three profiles, so a `down` for one profile also removes them. `run.sh up` stops a different running profile for you. With plain Compose, run `down` for the old profile before you start another one. Otherwise its containers keep their ports and the Compose network, and the new profile fails with `port is already allocated`.
 
 The following table lists what each cleanup step removes and what it keeps:
 
-| Command | Removes | Keeps |
-| --- | --- | --- |
-| `docker compose ... --profile <profile> down` | Containers and the network | Volumes (generated LiveKit credentials and NIM model caches), the image, downloaded weights |
-| `docker compose ... --profile <profile> down -v` | The above, and this example's named volumes: `livekit_state`, `llm_cache`, `asr_cache`, and `tts_cache` | The image, downloaded weights |
-| `docker image rm generic-assistant-livekit:latest` | The example image | Everything else |
+| Script command | Plain command | Removes | Keeps |
+| --- | --- | --- | --- |
+| `run.sh down <profile>` | `docker compose ... --profile <profile> down` | Containers and the network | Volumes (generated LiveKit credentials and NIM model caches), the image, downloaded weights |
+| `run.sh clean <profile>` | `docker compose ... --profile <profile> down -v` | The above, and this example's named volumes: `livekit_state`, `llm_cache`, `asr_cache`, and `tts_cache` | The image, downloaded weights |
+| `run.sh clean --image` | `docker image rm generic-assistant-livekit:latest` | The example image, in addition to the volumes | Downloaded weights |
 
-After `down -v`, the next start generates a new LiveKit key and secret, and the Server profile downloads the NIM models again.
+After a `clean`, the next start generates a new LiveKit key and secret, and the Server profile downloads the NIM models again.
 
 The model weights are not part of this cleanup. Hugging Face downloads for the Single GPU profile are in `~/.cache/huggingface`, and the NeMo-Speech.cpp weights are in `models/nemo-speech`. Other applications can share both locations, so remove them only if you know that nothing else needs them.
 
@@ -161,6 +168,7 @@ Then open `http://localhost:3000/` in the browser on your laptop. SSH cannot for
 | `credentials.py` | Generates the LiveKit API key and secret, writes the LiveKit server config, and shares both through the `livekit_state` volume |
 | `ui_server.py` | Serves `ui/` and mints a LiveKit join token at `/token` |
 | `ui/` | Web UI |
+| `run.sh` | Helper script to start, stop, wait for, and clean up a profile. Runs plain `docker compose` commands |
 | `docker-compose.yaml`, `Dockerfile` | LiveKit server, agent, UI, and model sidecar services, and the image the app services share |
 | `.env.example` | Environment template for this example |
 | `pyproject.toml`, `uv.lock` | Example-only dependencies |
