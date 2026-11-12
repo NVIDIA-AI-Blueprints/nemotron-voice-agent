@@ -117,6 +117,22 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
 
 Do not run this example and a Pipecat recipe at the same time. Their sidecars publish the same host ports.
 
+## Cleanup
+
+Stop the deployment with the same profile that you started. The `livekit-server`, `livekit-ui`, and `livekit-init` services belong to all three profiles, so a `down` for one profile also removes them. Before you switch to another profile, run `down` for the old one. Otherwise its containers keep their ports and the Compose network, and the new profile fails with `port is already allocated`.
+
+The following table lists what each cleanup step removes and what it keeps:
+
+| Command | Removes | Keeps |
+| --- | --- | --- |
+| `docker compose ... --profile <profile> down` | Containers and the network | Volumes (generated LiveKit credentials and NIM model caches), the image, downloaded weights |
+| `docker compose ... --profile <profile> down -v` | The above, and this example's named volumes: `livekit_state`, `llm_cache`, `asr_cache`, and `tts_cache` | The image, downloaded weights |
+| `docker image rm generic-assistant-livekit:latest` | The example image | Everything else |
+
+After `down -v`, the next start generates a new LiveKit key and secret, and the Server profile downloads the NIM models again.
+
+The model weights are not part of this cleanup. Hugging Face downloads for the Single GPU profile are in `~/.cache/huggingface`, and the NeMo-Speech.cpp weights are in `models/nemo-speech`. Other applications can share both locations, so remove them only if you know that nothing else needs them.
+
 ## Remote Browser Access
 
 This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` only, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. Opening the UI from another computer, for example your laptop, does not work without additional setup. The LiveKit server publishes ports 7880, 7881 (TCP), and 7882 (UDP). Browsers also allow microphone access only on `localhost` or HTTPS.
