@@ -20,6 +20,8 @@ The agent reads the first entry of each slot that the `generic-assistant` exampl
 
 This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. The Single GPU profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run all commands from the repository root (`nemotron-voice-agent/`).
 
+> **Run everything on one machine.** Run every step in a shell on the machine that hosts the deployment: the DGX Spark, Jetson Thor, or workstation for the Server and Single GPU profiles. Docker builds the image and starts the containers on the machine where you run the commands, and the model weights download there. Open the UI in a browser on that same machine. To use a browser on another machine, refer to [Remote Browser Access](#remote-browser-access).
+
 1. Clone the repository and change to its root. Skip this step if you already have a clone:
 
    ```bash
@@ -68,7 +70,7 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
 
    The sidecars extend the shared service definitions in [`docker/`](../../../docker), so they use the same images and settings as the `generic-assistant` recipes. Each sidecar has a network alias that matches the hostname in `services.yaml`. Wait until they are healthy before you connect, because the first NIM or vLLM start downloads and loads models.
 
-6. Open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
+6. On the same machine, open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
 7. Tear down with the same profile that you started with:
 
@@ -81,7 +83,7 @@ Do not run this example and a Pipecat recipe at the same time. Their sidecars pu
 
 ## Remote Browser Access
 
-This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` only, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. The LiveKit server publishes ports 7880, 7881 (TCP), and 7882 (UDP). Browsers also allow microphone access only on `localhost` or HTTPS.
+This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` only, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. Opening the UI from another computer, for example your laptop, does not work without additional setup. The LiveKit server publishes ports 7880, 7881 (TCP), and 7882 (UDP). Browsers also allow microphone access only on `localhost` or HTTPS.
 
 For a browser on another machine, set `LIVEKIT_NODE_IP` to the host address, serve the UI over HTTPS, and add a TURN server. The repository provides one in [`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml). Refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md). The UI does not pass TURN credentials to LiveKit, so you must extend `ui/app.js` to use relay candidates.
 
