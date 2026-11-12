@@ -49,15 +49,31 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file.
 
    ```bash
-   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
-     --profile generic-assistant-livekit up -d            # Cloud, no local GPU
-   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
-     --profile generic-assistant-livekit/server up -d     # Server with NIM
+   # ============================================================================
+   # RUN ONLY ONE OF THE THREE OPTIONS BELOW. Do not run more than one.
+   # ============================================================================
 
-   # One GPU, including DGX Spark and Jetson Thor. Download the speech weights as your user:
+   # ---- Option A: Cloud (no local GPU) ----------------------------------------
+   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+     --profile generic-assistant-livekit up -d
+
+   # ---- Option B: Server with NIM (workstation or server GPU, not DGX Spark) --
+   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+     --profile generic-assistant-livekit/server up -d
+
+   # ---- Option C: Single GPU (workstation, DGX Spark, or Jetson Thor) ---------
+   # Download the speech weights once, as your user, then start the profile.
    bash scripts/download-nemo-speech-models.sh
    docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
      --profile generic-assistant-livekit/single-gpu up -d
+   ```
+
+   If you started more than one profile by mistake, stop them all before you start again:
+
+   ```bash
+   for p in generic-assistant-livekit generic-assistant-livekit/server generic-assistant-livekit/single-gpu; do
+     docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml --profile "$p" down
+   done
    ```
 
    The following table lists the services that each recipe profile starts:
