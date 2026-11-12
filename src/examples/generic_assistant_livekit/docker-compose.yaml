@@ -1,0 +1,101 @@
+# LiveKit generic assistant: LiveKit server, agent worker, and web UI. Model sidecars (NIMs, vLLM, NeMo-Speech.cpp)
+# come from the shared files in docker/ and join the recipe profiles below.
+#
+# Recipes (select exactly one):
+#   generic-assistant-livekit              NVIDIA Cloud models, no local GPU
+#   generic-assistant-livekit/server       NIM ASR + LLM + TTS on workstation / server GPUs
+#   generic-assistant-livekit/single-gpu   vLLM + NeMo-Speech.cpp on one GPU (workstation, DGX Spark, Jetson Thor)
+# TURN is not included. For remote browsers, refer to docker/docker-compose.coturn.yaml.
+
+x-livekit-app: &livekit-app
+  build:
+    context: ../../..
+    dockerfile: src/examples/generic_assistant_livekit/Dockerfile
+  image: generic-assistant-livekit:latest
+  pull_policy: build
+  volumes:
+    - ../../../services.yaml:/app/services.yaml:ro
+    - ./:/app/src/examples/generic_assistant_livekit:ro
+  restart: unless-stopped
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+x-livekit-env: &livekit-env
+  LIVEKIT_URL: ws://livekit-server:7880
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+
+services:
+  livekit-server:
+    image: livekit/livekit-server:v1.13.11
+    profiles:
+      - generic-assistant-livekit
+      - generic-assistant-livekit/server
+      - generic-assistant-livekit/single-gpu
+    command: ["--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
+    environment:
+      # Set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in .env. The server does not start without them.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    restart: unless-stopped
+
+  livekit-ui:
+    <<: *livekit-app
+    profiles:
+      - generic-assistant-livekit
+      - generic-assistant-livekit/server
+      - generic-assistant-livekit/single-gpu
+    command: ["python", "-m", "examples.generic_assistant_livekit.ui_server"]
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+    ports:
+      - "${LIVEKIT_UI_BIND:-127.0.0.1}:${LIVEKIT_UI_PORT:-3000}:3000"
+
+  livekit-agent:
+    <<: *livekit-app
+    env_file:
+      - ../../../.env
+    profiles:
+      - generic-assistant-livekit
+    depends_on:
+      - livekit-server
+    environment:
+      <<: *livekit-env
+      SERVICE_RECIPE: cloud
+
+  livekit-agent-server:
+    <<: *livekit-app
+    env_file:
+      - ../../../.env
+    profiles:
+      - generic-assistant-livekit/server
+    depends_on:
+      - livekit-server
+    environment:
+      <<: *livekit-env
+      SERVICE_RECIPE: server
+
+  livekit-agent-single-gpu:
+    <<: *livekit-app
+    env_file:
+      - ../../../.env
+    profiles:
+      - generic-assistant-livekit/single-gpu
+    depends_on:
+      - livekit-server
+    environment:
+      <<: *livekit-env
+      SERVICE_RECIPE: single-gpu

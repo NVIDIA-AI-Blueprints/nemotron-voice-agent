@@ -39,6 +39,7 @@ services:
     <<: *magpie-multilingual-tts-service-base
     profiles:
       - generic-assistant/server
+      - generic-assistant-livekit/server
       - generic-assistant/dynamo
       - multilingual-assistant/server
       - multilingual-assistant/dynamo

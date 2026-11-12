@@ -12,6 +12,7 @@ name: nemotron-voice-agent
 #   multilingual-assistant       Cascaded Multilingual ASR + LLM + TTS Pipeline (Multilingual Assistant)
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
+#   generic-assistant-livekit    Cascaded ASR + LLM + TTS on LiveKit Agents (LiveKit Generic Assistant)
 #   frontend-backend-live                Cascaded Frontend/Backend Live Pipeline (Bluebird Cafe)
 #
 # Hardware targets:
@@ -28,6 +29,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant up
 #   docker compose --profile omni-assistant-subagents up
 #   docker compose --profile frontend-backend-live up
+#   docker compose --profile generic-assistant-livekit up
 #
 # On-prem recipes:
 #   docker compose --profile generic-assistant/server up
@@ -43,6 +45,8 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-live/server up
 #   docker compose --profile frontend-backend-live/single-gpu up
+#   docker compose --profile generic-assistant-livekit/server up
+#   docker compose --profile generic-assistant-livekit/single-gpu up
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
@@ -66,6 +70,7 @@ include:
   - path: docker/docker-compose.nemo-speech-cpp.yaml
   - path: docker/docker-compose.coturn.yaml
   - path: docker/docker-compose.phoenix.yaml
+  - path: src/examples/generic_assistant_livekit/docker-compose.yaml
 
 x-app: &app-base
   build:
