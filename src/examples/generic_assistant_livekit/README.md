@@ -20,7 +20,7 @@ The agent reads the first entry of each slot that the `generic-assistant` exampl
 
 This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. The Single GPU profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run all commands from the repository root (`nemotron-voice-agent/`).
 
-> **Run everything on one machine.** Run every step in a shell on the machine that hosts the deployment: the DGX Spark, Jetson Thor, or workstation for the Server and Single GPU profiles. Docker builds the image and starts the containers on the machine where you run the commands, and the model weights download there. Open the UI in a browser on that same machine. To use a browser on another machine, refer to [Remote Browser Access](#remote-browser-access).
+> **Run everything on one machine.** Run every step in a shell on the machine that hosts the deployment: the DGX Spark, Jetson Thor, or workstation for the Server and Single GPU profiles. Docker builds the image and starts the containers on the machine where you run the commands, and the model weights download there. Open the UI in a browser on that same machine. To use a browser on another machine, refer to [Remote Browser Access](#remote-browser-access), which includes an SSH tunnel for a laptop.
 
 1. Clone the repository and change to its root. Skip this step if you already have a clone:
 
@@ -86,6 +86,16 @@ Do not run this example and a Pipecat recipe at the same time. Their sidecars pu
 This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` only, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. Opening the UI from another computer, for example your laptop, does not work without additional setup. The LiveKit server publishes ports 7880, 7881 (TCP), and 7882 (UDP). Browsers also allow microphone access only on `localhost` or HTTPS.
 
 For a browser on another machine, set `LIVEKIT_NODE_IP` to the host address, serve the UI over HTTPS, and add a TURN server. The repository provides one in [`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml). Refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md). The UI does not pass TURN credentials to LiveKit, so you must extend `ui/app.js` to use relay candidates.
+
+### SSH Tunnel from a Laptop
+
+To use a browser on your laptop with a deployment on another machine, forward the UI, signaling, and LiveKit TCP media ports. Run the following command on your laptop and keep it open. Replace the placeholder with your SSH host:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@<host>
+```
+
+Then open `http://localhost:3000/` in the browser on your laptop. SSH cannot forward UDP, so media falls back to the TCP port 7881. This path is untested. If the connection stays on connecting or you hear no audio, use the LAN or TURN setup instead.
 
 ## Customization
 
