@@ -6,13 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.4.0] - TBD
 
+This minor release adds Nemotron 3.5 Transcribe ASR and experimental NVIDIA Dynamo recipes, replaces the Frontend/Backend Agent example with the Frontend/Backend Live example and its Live gateway, upgrades Pipecat from 1.12 to 1.15, and adds Nemotron 3.5 Super VL on NVIDIA Cloud.
+
 ### Added
 
 - **Nemotron 3.5 Transcribe ASR for the Generic and Multilingual Assistants.** Use the opt-in `transcribe-asr` profile for self-hosted speech recognition. The Generic Assistant also accepts optional transcription prompts.
 - **Experimental NVIDIA Dynamo recipes for the Generic and Multilingual Assistants.** The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` profiles serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the Server ASR and TTS NIMs, including **Streaming Input** in the Generic Assistant. You can add Dynamo workers on other GPUs.
-- **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
 - **Frontend/Backend Live example.** On every caller turn, a talker replies, delegates the turn to a backend, or waits. The backend can be an LLM, an LLM agent, or an agent that you deploy, such as Hermes. Cloud, `/server`, and `/single-gpu` recipes serve the Bluebird Cafe ordering assistant.
 - **Live gateway.** Live session clients, such as Pipecat apps or your own app, can talk to the Frontend/Backend Live example at `/v1/live` over WebRTC or WebSocket, with the live session protocol of OpenAI's GPT-Live API. The server does the delegated work in Responses mode, and your app does it in client mode. `/v1/live` is off by default: set `LIVE_API_TOKEN` to serve it with a required bearer token, or `LIVE_ENABLED=true` to serve it without one.
+- **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
 - **Nemotron 3.5 Super VL on NVIDIA Cloud.** The `nemotron-super` catalog entry is also served from NVIDIA Cloud, with a **Reasoning Effort** setting. It is the Frontend/Backend Live backend's default on the cloud and `/server` recipes. On `/server`, it runs as a NIM on GPUs `1` and `2`, so that recipe needs three GPUs.
 
 ### Changed

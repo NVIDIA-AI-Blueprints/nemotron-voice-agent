@@ -26,12 +26,18 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 
 ## 📣 News
 
-- **[October 2026] v2.3.1**
-  - Nemotron 3.5 Bolt E4B on NVIDIA Cloud, server, and single-GPU hosts, with Conversational Mode.
-  - Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.
+- **[November 2026] v2.4.0**
+  - Nemotron 3.5 Transcribe ASR for the Generic and Multilingual Assistants.
+  - Experimental NVIDIA Dynamo recipes for the Generic and Multilingual Assistants.
+  - Frontend/Backend Live example, with the `/v1/live` gateway for live session clients.
+  - Pipecat 1.15.0, and Nemotron 3.5 Super VL on NVIDIA Cloud with Reasoning Effort.
 
 <details>
 <summary>Previous releases</summary>
+
+- **[October 2026] v2.3.1**
+  - Nemotron 3.5 Bolt E4B on NVIDIA Cloud, server, and single-GPU hosts, with Conversational Mode.
+  - Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.
 
 - **[October 2026] v2.3.0**
   - Nemotron 3.5 Super VL on server and single-GPU hosts.
@@ -71,6 +77,7 @@ See the [CHANGELOG](CHANGELOG.md) for the full release history.
 | **ASR** | [Nemotron ASR Streaming](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) | Any NIM ASR |
 | | [Parakeet CTC 1.1B ASR](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) | |
 | | [Parakeet 1.1B RNNT Multilingual ASR](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) | |
+| | [Nemotron 3.5 Transcribe 30B A4B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) | |
 | **TTS** | [Magpie TTS Multilingual](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) | Any NIM TTS |
 | | [Magpie TTS Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) | |
 | | [Chatterbox TTS Multilingual](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) | |
@@ -110,6 +117,7 @@ These are the minimum requirements, and support varies by example and deployment
 | Cloud | CPU only (no GPU) | Model endpoints from NVIDIA cloud APIs (NVCF). |
 | Server | NVIDIA GPU workstation. GPU count and memory depend on the selected models and scale. | Scaling-oriented NIM deployment. DGX Spark and Jetson Thor are not supported for this profile. Default all-on-one-GPU layout is about 80 GB. The `frontend-backend-live/server` recipe also runs the Nemotron 3.5 Super VL NIM on GPUs `1` and `2`, so it needs three GPUs. When that NIM is not running, the recipe's backend runs on the Lightning NIM. The optional Nemotron 3.5 Bolt E4B NIM runs in place of the Lightning NIM. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). The optional Nemotron 3.5 Transcribe NIM runs on GPU `1` by default, so it needs a second GPU. |
 | Performance Server | Four-GPU Blackwell workstation | `generic-assistant/server-perf` load benchmark only, not a browser UI session. |
+| Dynamo (experimental) | 1 Ada, Hopper, or Blackwell workstation GPU with at least 64 GB | `generic-assistant/dynamo` and `multilingual-assistant/dynamo` run the Nemotron 3.5 Lightning Dynamo worker and the ASR and TTS NIMs on GPU `0`. DGX Spark and Jetson Thor are not supported. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental). |
 | Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Nemotron 3.5 Super VL is optional and needs a Blackwell GPU, DGX Spark, or Jetson Thor with at least 78 GiB usable memory. Nemotron 3.5 Bolt 74B is optional and needs a Blackwell workstation GPU (SM120) or DGX Spark with at least 32 GiB usable memory. Nemotron 3.5 Bolt E4B is optional and needs at least 24 GiB usable memory on a supported workstation GPU, DGX Spark, or Jetson Thor. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
 
 ### Software Requirements
