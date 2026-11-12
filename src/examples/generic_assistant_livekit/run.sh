@@ -5,14 +5,16 @@
 # Launch and clean up the LiveKit generic assistant. A thin wrapper around `docker compose`: it prints every command
 # it runs, and the README lists the equivalent plain commands. Self-contained, so it keeps working if this folder moves.
 #
-#   run.sh up <cloud|server|single-gpu>      Start one profile (stops another running profile first)
+#   run.sh up <cloud|server|single-gpu> [--wait]  Start one profile (stops another running profile first), show its
+#                                            status, and with --wait block until every container is healthy
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
 #   run.sh clean [profile] [--keep-image] [-y]  Stop and delete volumes (credentials, NIM caches) and the example image
 #   run.sh ps [profile]                      Show container status
 #   run.sh logs <profile> [service]          Follow logs. Services: agent, livekit, ui, init, llm, asr, tts, speech
-#   run.sh wait <profile> [seconds]          Wait until every container with a healthcheck is healthy (default 3600)
+#   run.sh wait <profile> [seconds]          Wait until every container with a healthcheck is healthy (default 3600),
+#                                            printing progress every 15 seconds
 #
-# Environment: ENV_FILE selects the .env file (default: the repository root .env three levels above this folder,
+# Environment: WAIT_INTERVAL sets the seconds between `wait` progress lines (default 15). ENV_FILE selects the .env file (default: the repository root .env three levels above this folder,
 # else a .env in this folder). DRY_RUN=1 prints the docker commands without running them or the docker-based checks.
 
 set -euo pipefail
@@ -27,7 +29,7 @@ die() { echo "error: $*" >&2; exit 1; }
 warn() { echo "warning: $*" >&2; }
 info() { echo "$*" >&2; }
 
-usage() { sed -n '5,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+usage() { sed -n '5,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
 
 profile_name() {
   case "$1" in
@@ -174,7 +176,14 @@ check_ports() {
 
 cmd_up() {
   [ $# -ge 1 ] || usage
-  local name="$1" p other
+  local name="$1" wait=0 p other arg
+  shift
+  for arg in "$@"; do
+    case "$arg" in
+      --wait) wait=1 ;;
+      *) die "unknown option '$arg' for up. Options: --wait" ;;
+    esac
+  done
   p="$(profile_name "$name")"
   require_docker
   require_env_file
@@ -191,10 +200,15 @@ cmd_up() {
   fi
   dc --profile "$p" up -d
   info ""
+  dc --profile "$p" ps
+  info ""
   info "Started the $name profile. Open http://localhost:3000/ in a browser on this machine."
   info "From another computer, tunnel the ports: ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@<host>"
-  if [ "$name" != cloud ]; then
-    info "The first start downloads and loads models. Wait until healthy: $0 wait $name"
+  if [ "$wait" = 1 ]; then
+    cmd_wait "$name"
+  elif [ "$name" != cloud ]; then
+    info "The first start downloads and loads models, so containers can show 'health: starting' for a long time."
+    info "Follow progress and block until ready: $0 wait $name"
   fi
 }
 
@@ -263,22 +277,36 @@ cmd_logs() {
 cmd_wait() {
   [ $# -ge 1 ] || usage
   require_docker
-  local name="$1" timeout="${2:-3600}" p start now ids id status pending
+  local name="$1" timeout="${2:-3600}" p start now ids id status state pending detail cname last
   p="$(profile_name "$name")"
   start="$(date +%s)"
-  info "Waiting up to ${timeout}s for the $name profile to become healthy..."
+  info "Waiting up to ${timeout}s for the $name profile to become healthy (progress every ${WAIT_INTERVAL:-15}s)..."
   if [ "$DRY_RUN" = 1 ]; then return 0; fi
   while true; do
     ids="$(dc_quiet --profile "$p" ps -q)"
     pending=""
     for id in $ids; do
       status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id")"
-      if [ -n "$status" ] && [ "$status" != healthy ]; then pending="$pending $(docker inspect -f '{{.Name}}' "$id" | sed 's#^/##')"; fi
+      state="$(docker inspect -f '{{.State.Status}}' "$id")"
+      cname="$(docker inspect -f '{{.Name}}' "$id" | sed 's#^/##')"
+      if [ "$state" = restarting ] || { [ "$state" = exited ] && [ -n "$status" ]; }; then
+        detail="$cname is $state. Check: $0 logs $name"
+        pending="$pending
+  - $detail"
+      elif [ -n "$status" ] && [ "$status" != healthy ]; then
+        last="$(docker logs --tail 1 "$id" 2>&1 | tr -d '\r' | cut -c1-110)"
+        pending="$pending
+  - $cname: $status${last:+ | last log: $last}"
+      fi
     done
-    if [ -z "$pending" ]; then info "All healthy. Ready to connect."; return 0; fi
     now="$(date +%s)"
-    [ $((now - start)) -lt "$timeout" ] || die "timed out. Still starting:$pending"
-    sleep 15
+    if [ -z "$pending" ]; then
+      info "[$(( (now - start) / 60 ))m$(( (now - start) % 60 ))s] All healthy. Ready to connect."
+      return 0
+    fi
+    [ $((now - start)) -lt "$timeout" ] || die "timed out after ${timeout}s. Still starting:$pending"
+    info "[$(( (now - start) / 60 ))m$(( (now - start) % 60 ))s] still starting:$pending"
+    sleep "${WAIT_INTERVAL:-15}"
   done
 }
 

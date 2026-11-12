@@ -81,10 +81,11 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    src/examples/generic_assistant_livekit/run.sh up single-gpu
    ```
 
-   The first start of the Server and Single GPU profiles downloads and loads models. Wait until the sidecars are healthy before you connect:
+   The script prints the container status after it starts them. The first start of the Server and Single GPU profiles downloads and loads models, so containers show `health: starting` for a long time. Wait until the sidecars are healthy before you connect. The `wait` command prints progress every 15 seconds, with the last log line of each container that is still starting. You can also add `--wait` to the `up` command to do both in one step:
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh wait single-gpu     # or: server
+   src/examples/generic_assistant_livekit/run.sh up single-gpu --wait
    ```
 
    The script runs the following plain command, with the profile that you choose. The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file. Use this command directly if you prefer not to use the script:

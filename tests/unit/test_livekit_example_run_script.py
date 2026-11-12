@@ -38,11 +38,104 @@ def commands(result):
 def test_up_runs_compose_with_the_profile(tmp_path, name, profile):
     result = run(["up", name], tmp_path)
     assert result.returncode == 0, result.stderr
-    (command,) = commands(result)
-    assert command.endswith(f"--profile {profile} up -d")
-    assert "--env-file" in command
-    assert "-f " in command
-    assert "docker-compose.yaml" in command
+    up, status = commands(result)
+    assert up.endswith(f"--profile {profile} up -d")
+    assert "--env-file" in up
+    assert "-f " in up
+    assert "docker-compose.yaml" in up
+    assert status.endswith(f"--profile {profile} ps")
+
+
+def test_up_prints_status_and_a_wait_hint_for_model_profiles(tmp_path):
+    result = run(["up", "single-gpu"], tmp_path)
+    assert "run.sh wait single-gpu" in result.stderr
+    assert "run.sh wait" not in run(["up", "cloud"], tmp_path).stderr
+
+
+def test_up_wait_flag_waits_after_starting(tmp_path):
+    result = run(["up", "server", "--wait"], tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "Waiting up to 3600s for the server profile" in result.stderr
+    assert "run.sh wait server" not in result.stderr
+
+
+def test_up_rejects_unknown_options(tmp_path):
+    result = run(["up", "cloud", "--nope"], tmp_path)
+    assert result.returncode != 0
+    assert "unknown option '--nope' for up" in result.stderr
+
+
+def test_wait_announces_progress_reporting(tmp_path):
+    result = run(["wait", "single-gpu", "120"], tmp_path)
+    assert "up to 120s" in result.stderr
+    assert "progress every 15s" in result.stderr
+
+
+FAKE_DOCKER = """#!/usr/bin/env bash
+# Fake docker for run.sh wait: one container that reports STATUS_SEQUENCE, one health check per call.
+args="$*"
+counter="$FAKE_STATE/count"
+case "$args" in
+  "compose version") exit 0 ;;
+  *"ps -q"*) echo abc123 ;;
+  *"inspect"*"Health.Status"*)
+    n=$(cat "$counter" 2>/dev/null || echo 0)
+    echo $((n + 1)) > "$counter"
+    set -- $FAKE_HEALTH
+    shift $n 2>/dev/null || true
+    echo "${1:-${FAKE_HEALTH##* }}" ;;
+  *"inspect"*".State.Status"*) echo "${FAKE_STATE_STATUS:-running}" ;;
+  *"inspect"*".Name"*) echo /livekit-nvidia-llm-vllm ;;
+  *"logs --tail 1"*) echo "Loading weights took 12.3 seconds" ;;
+esac
+"""
+
+
+def run_wait(tmp_path, health, timeout="30", state="running"):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    docker = fake / "docker"
+    docker.write_text(FAKE_DOCKER)
+    docker.chmod(0o755)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    env_file = tmp_path / ".env"
+    env_file.write_text("HF_TOKEN=hf_test\n")
+    env = {k: v for k, v in os.environ.items() if k != "DRY_RUN"}
+    env.update(
+        {
+            "PATH": f"{fake}:{env['PATH']}",
+            "ENV_FILE": str(env_file),
+            "WAIT_INTERVAL": "0",
+            "FAKE_STATE": str(state_dir),
+            "FAKE_HEALTH": health,
+            "FAKE_STATE_STATUS": state,
+        }
+    )
+    return subprocess.run(
+        ["bash", str(SCRIPT), "wait", "single-gpu", timeout], capture_output=True, text=True, env=env, timeout=60
+    )
+
+
+def test_wait_reports_progress_until_healthy(tmp_path):
+    result = run_wait(tmp_path, "starting starting healthy")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("still starting:") == 2
+    assert "livekit-nvidia-llm-vllm: starting | last log: Loading weights took 12.3 seconds" in result.stderr
+    assert "All healthy. Ready to connect." in result.stderr
+
+
+def test_wait_times_out_and_names_the_pending_container(tmp_path):
+    result = run_wait(tmp_path, "starting", timeout="0")
+    assert result.returncode != 0
+    assert "timed out after 0s" in result.stderr
+    assert "livekit-nvidia-llm-vllm: starting" in result.stderr
+
+
+def test_wait_flags_a_restarting_container(tmp_path):
+    result = run_wait(tmp_path, "starting healthy", timeout="1", state="restarting")
+    assert result.returncode != 0
+    assert "livekit-nvidia-llm-vllm is restarting" in result.stderr
 
 
 def test_up_rejects_unknown_profile(tmp_path):
