@@ -77,7 +77,7 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 
 ## Transcribe ASR
 
-Optional. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting. Refer to [Configure ASR](../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and configuration.
+Optional. Transcribe runs self-hosted with the server recipe only. Start it with the `transcribe-asr` profile. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting. Refer to [Configure ASR](../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and configuration.
 
 ## Customization
 
