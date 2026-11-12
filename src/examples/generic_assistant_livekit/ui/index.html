@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!--
+  SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: Apache-2.0
+
+  Layout and styling adapted from aws-samples/sample-voice-agent-on-aws (MIT-0).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nemotron Voice Agent with LiveKit</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.3/dist/livekit-client.umd.min.js"></script>
+</head>
+<body>
+<div class="livekit">
+  <div class="header">
+    <div class="title">🎙️ Nemotron Voice Agent with LiveKit</div>
+    <div class="subtitle">Cascaded pipeline: speech recognition → LLM → speech synthesis, powered by NVIDIA Nemotron</div>
+    <details class="models" id="models" open>
+      <summary>Models in use</summary>
+      <div class="model-strip" id="model-strip" aria-label="Models in use">
+        <span class="hint">Shown after you connect.</span>
+      </div>
+    </details>
+    <div class="badges">
+      <span class="badge badge-model" id="mode-badge">Nemotron ASR → Nemotron LLM → Magpie TTS</span>
+      <span class="badge badge-server" id="server-badge"></span>
+    </div>
+  </div>
+  <div class="main-content">
+    <div class="layout">
+      <div class="conference-container">
+        <div class="panel-label">Audio Controls</div>
+        <div class="script" id="script">
+          <div class="script-title">🎙️ Say this</div>
+          <div class="script-line">“What is the weather in Paris?”</div>
+          <div class="script-line">“What time is it in Tokyo?”</div>
+        </div>
+        <button class="btn primary" id="connect">Connect</button>
+        <button class="btn hidden" id="mute">Mute mic</button>
+        <div class="meter hidden" id="meter"><div id="meter-fill"></div></div>
+        <div class="status" id="status">Disconnected</div>
+        <div id="audio-sink"></div>
+      </div>
+      <div class="transcription-panel">
+        <div class="panel-header"><span class="live-dot"></span>Live Transcription &amp; Events</div>
+        <div class="messages" id="messages">
+          <div class="empty-state" id="empty">🎤 Click <b>Connect</b> and start speaking. Transcripts, tool calls, and barge-ins show up here.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer">Powered by <a href="https://docs.livekit.io/agents/" target="_blank" rel="noreferrer">LiveKit Agents</a> · UI adapted from aws-samples/sample-voice-agent-on-aws</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

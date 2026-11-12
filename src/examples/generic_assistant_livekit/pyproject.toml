@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Separate environment for the LiveKit example. It does not share the root pyproject.toml or uv.lock, because the
+# LiveKit NVIDIA plugin and Pipecat resolve different nvidia-riva-client ranges (the root pins >=2.27.0,<3).
+[project]
+name = "generic-assistant-livekit"
+version = "0.1.0"
+description = "Generic voice assistant on LiveKit Agents with NVIDIA Nemotron ASR, LLM, and Magpie TTS"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "livekit-agents[silero]>=1.8.11,<2",
+    "livekit-plugins-openai>=1.8.11,<2",
+    # TEMPORARY git pin: the NVIDIA Speech STT/TTS changes of livekit/agents#6706 are merged on main (Nov 12, 2026)
+    # but not yet in a PyPI release (livekit-plugins-nvidia 1.8.11 predates them). Replace this with
+    # "livekit-plugins-nvidia>=1.8.12" and remove [tool.uv.sources] when the next release ships.
+    "livekit-plugins-nvidia",
+    "pyyaml>=6.0.3",
+]
+
+[tool.uv]
+package = false
+
+# uv applies the livekit/agents workspace sources to the git plugin's own dependencies, so livekit-agents (and its
+# silero extra) must come from the same commit. Remove all three sources together with the plugin pin.
+[tool.uv.sources]
+livekit-plugins-nvidia = { git = "https://github.com/livekit/agents", subdirectory = "livekit-plugins/livekit-plugins-nvidia", rev = "b7c9e2d0872b2df10ae3f903d091ca331de8b3b7" }
+livekit-agents = { git = "https://github.com/livekit/agents", subdirectory = "livekit-agents", rev = "b7c9e2d0872b2df10ae3f903d091ca331de8b3b7" }
+livekit-plugins-silero = { git = "https://github.com/livekit/agents", subdirectory = "livekit-plugins/livekit-plugins-silero", rev = "b7c9e2d0872b2df10ae3f903d091ca331de8b3b7" }
