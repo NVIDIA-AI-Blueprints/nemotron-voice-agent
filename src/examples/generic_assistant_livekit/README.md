@@ -44,7 +44,7 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-5. Deploy the profile that matches your hardware. The following commands start each recipe:
+5. Deploy exactly one profile that matches your hardware. Run only one of the following command sets, and use the same profile in the teardown step. Use Cloud when you have no local GPU, Server on a workstation or server GPU (not DGX Spark or Jetson Thor), and Single GPU on a workstation, DGX Spark, or Jetson Thor:
 
    The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file.
 
