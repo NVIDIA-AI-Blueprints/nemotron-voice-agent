@@ -46,23 +46,36 @@ def test_up_runs_compose_with_the_profile(tmp_path, name, profile):
     assert status.endswith(f"--profile {profile} ps")
 
 
-def test_up_prints_status_and_a_wait_hint_for_model_profiles(tmp_path):
-    result = run(["up", "single-gpu"], tmp_path)
-    assert "run.sh wait single-gpu" in result.stderr
-    assert "run.sh wait" not in run(["up", "cloud"], tmp_path).stderr
+def test_up_waits_by_default(tmp_path):
+    for name in ("cloud", "server", "single-gpu"):
+        result = run(["up", name], tmp_path)
+        assert f"Waiting up to 3600s for the {name} profile" in result.stderr
+        assert "Not waiting" not in result.stderr
 
 
-def test_up_wait_flag_waits_after_starting(tmp_path):
+def test_up_explains_how_to_stop_waiting_for_model_profiles(tmp_path):
+    assert "Ctrl+C stops only this wait" in run(["up", "single-gpu"], tmp_path).stderr
+    assert "Ctrl+C" not in run(["up", "cloud"], tmp_path).stderr
+
+
+def test_up_no_wait_skips_the_wait(tmp_path):
+    result = run(["up", "server", "--no-wait"], tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "Waiting up to" not in result.stderr
+    assert "run.sh wait server" in result.stderr
+
+
+def test_up_accepts_the_explicit_wait_flag(tmp_path):
     result = run(["up", "server", "--wait"], tmp_path)
     assert result.returncode == 0, result.stderr
-    assert "Waiting up to 3600s for the server profile" in result.stderr
-    assert "run.sh wait server" not in result.stderr
+    assert "Waiting up to 3600s" in result.stderr
 
 
 def test_up_rejects_unknown_options(tmp_path):
     result = run(["up", "cloud", "--nope"], tmp_path)
     assert result.returncode != 0
     assert "unknown option '--nope' for up" in result.stderr
+    assert "--no-wait" in result.stderr
 
 
 def test_wait_announces_progress_reporting(tmp_path):

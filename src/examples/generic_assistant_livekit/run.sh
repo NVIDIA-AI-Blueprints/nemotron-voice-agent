@@ -5,8 +5,8 @@
 # Launch and clean up the LiveKit generic assistant. A thin wrapper around `docker compose`: it prints every command
 # it runs, and the README lists the equivalent plain commands. Self-contained, so it keeps working if this folder moves.
 #
-#   run.sh up <cloud|server|single-gpu> [--wait]  Start one profile (stops another running profile first), show its
-#                                            status, and with --wait block until every container is healthy
+#   run.sh up <cloud|server|single-gpu> [--no-wait]  Start one profile (stops another running profile first), show
+#                                            its status, then wait until every healthcheck passes (--no-wait skips)
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
 #   run.sh clean [profile] [--keep-image] [-y]  Stop and delete volumes (credentials, NIM caches) and the example image
 #   run.sh ps [profile]                      Show container status
@@ -176,12 +176,13 @@ check_ports() {
 
 cmd_up() {
   [ $# -ge 1 ] || usage
-  local name="$1" wait=0 p other arg
+  local name="$1" wait=1 p other arg
   shift
   for arg in "$@"; do
     case "$arg" in
-      --wait) wait=1 ;;
-      *) die "unknown option '$arg' for up. Options: --wait" ;;
+      --no-wait) wait=0 ;;
+      --wait) ;; # the default; accepted for clarity
+      *) die "unknown option '$arg' for up. Options: --no-wait" ;;
     esac
   done
   p="$(profile_name "$name")"
@@ -205,10 +206,13 @@ cmd_up() {
   info "Started the $name profile. Open http://localhost:3000/ in a browser on this machine."
   info "From another computer, tunnel the ports: ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@<host>"
   if [ "$wait" = 1 ]; then
+    if [ "$name" != cloud ]; then
+      info "The first start downloads and loads models and can take a long time. Ctrl+C stops only this wait: the"
+      info "containers keep running, and you can resume with: $0 wait $name"
+    fi
     cmd_wait "$name"
-  elif [ "$name" != cloud ]; then
-    info "The first start downloads and loads models, so containers can show 'health: starting' for a long time."
-    info "Follow progress and block until ready: $0 wait $name"
+  else
+    info "Not waiting. Block until every healthcheck passes with: $0 wait $name"
   fi
 }
 
