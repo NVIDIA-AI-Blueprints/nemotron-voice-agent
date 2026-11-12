@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through the cloud-only, server, and single-GPU deployment options for the Nemotron Voice Agent. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
+This guide walks you through the cloud-only, server, single-GPU, and experimental Dynamo deployment options for the Nemotron Voice Agent. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
 
 ## Prerequisites
 
@@ -107,6 +107,13 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
     docker compose --profile frontend-backend-live/single-gpu up -d      # Frontend/Backend Live
+    ```
+
+    **4.4 Dynamo** (experimental workstation recipe, not DGX Spark or Jetson Thor). The Generic and Multilingual Assistants can serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the ASR and TTS NIMs of the `/server` recipe. The recipe starts one Dynamo worker on GPU `0`, which needs an Ada, Hopper, or Blackwell GPU with at least 64 GB of memory. For details and extra workers, refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
+
+    ```bash
+    docker compose --profile generic-assistant/dynamo up -d         # Generic Cascaded
+    docker compose --profile multilingual-assistant/dynamo up -d    # Multilingual Cascaded
     ```
 
     To verify all services are healthy, run `docker compose ps`.

@@ -61,7 +61,14 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 - **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
 - **Opt-in local ASR (Transcribe)**: enable the `transcribe-asr` Compose profile with the server recipe of the Generic or Multilingual Assistant ([`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml), GPU `1`, HTTP port `9002`). Then select **Nemotron 3.5 Transcribe** in **Services > ASR**.
 
-    Transcribe is available only with the server recipe. The cloud and single-GPU recipes, including DGX Spark and Jetson Thor, do not include it.
+    Start Transcribe together with the server recipe of your example:
+
+    ```bash
+    docker compose --profile generic-assistant/server --profile transcribe-asr up -d
+    docker compose --profile multilingual-assistant/server --profile transcribe-asr up -d
+    ```
+
+    Pass the same profiles to `docker compose down`. Transcribe is available only with the server recipe. The cloud and single-GPU recipes, including DGX Spark and Jetson Thor, do not include it.
 
     Transcribe writes the transcript in the spoken language. The session language does not change it.
 

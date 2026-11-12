@@ -91,5 +91,5 @@ For model selection, voices, and shared service-catalog mechanics, see [Configur
 ## Tips & best practices
 
 - **Omni model and hardware.** The Server recipe uses the `nvidia-llm-omni` NIM sidecar with automatic model-profile selection. The Single-GPU recipe uses `nvidia-llm-vllm-omni` and selects the model precision from the GPU at startup. Blackwell workstations, DGX Spark, and Jetson Thor use NVFP4. Hopper and Ada use FP8. See [Configure LLM](../../../docs/how-to/configure-llm.md#vram--hardware-support).
-- **Tune Omni behavior** with the environment variables in the table above: keep user transcript on so the UI shows the user's words, raise the minimum-audio threshold if noise triggers spurious turns, and adjust max-tokens and sampling for your latency and verbosity targets.
+- **Tune Omni behavior** with the environment variables in the table above: raise the minimum-audio threshold if noise triggers spurious turns, and adjust max-tokens and sampling for your latency and verbosity targets.
 - For deployment and general failure modes, see the [Troubleshooting guide](../../../docs/06-troubleshooting.md). VRAM sizing for the Omni vLLM sidecar is covered in [Configure LLM](../../../docs/how-to/configure-llm.md#vram--hardware-support), and edge deployment in the [Jetson Thor guide](../../../docs/03-jetson-thor.md).
