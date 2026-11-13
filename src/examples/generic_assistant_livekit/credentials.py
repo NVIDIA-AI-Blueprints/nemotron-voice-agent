@@ -42,21 +42,34 @@ def server_config(api_key: str, api_secret: str) -> str:
     )
 
 
+def _read_credentials(path: Path) -> dict[str, str] | None:
+    """Return the stored key pair, or None when the file is missing or damaged (a new pair is then generated)."""
+    try:
+        creds = json.loads(path.read_text())
+        return {"api_key": str(creds["api_key"]), "api_secret": str(creds["api_secret"])}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def load_or_create(state_dir: Path = DEFAULT_STATE_DIR, env: Mapping[str, str] | None = None) -> dict[str, str]:
     """Write the credentials and the server config to `state_dir`, and return the key pair.
 
-    Precedence: both `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in the environment, then credentials from an earlier
-    run, then a newly generated pair.
+    Precedence: both `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in the environment (setting only one is an error), then
+    credentials from an earlier run, then a newly generated pair. A damaged credentials file counts as missing.
     """
     env = os.environ if env is None else env
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / CREDENTIALS_FILE
-    if env.get("LIVEKIT_API_KEY") and env.get("LIVEKIT_API_SECRET"):
+    given = [name for name in ("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET") if env.get(name)]
+    if len(given) == 1:
+        raise ValueError(f"Set both LIVEKIT_API_KEY and LIVEKIT_API_SECRET, or neither. Only {given[0]} is set.")
+    if given:
         creds = {"api_key": env["LIVEKIT_API_KEY"], "api_secret": env["LIVEKIT_API_SECRET"]}
-    elif path.exists():
-        creds = json.loads(path.read_text())
     else:
-        creds = {"api_key": "lk" + secrets.token_hex(6), "api_secret": secrets.token_hex(24)}
+        creds = _read_credentials(path) or {
+            "api_key": "lk" + secrets.token_hex(6),
+            "api_secret": secrets.token_hex(24),
+        }
     _write_private(path, json.dumps(creds))
     _write_private(state_dir / SERVER_CONFIG_FILE, server_config(creds["api_key"], creds["api_secret"]))
     return creds

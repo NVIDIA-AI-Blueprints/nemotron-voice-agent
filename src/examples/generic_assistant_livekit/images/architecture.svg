@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" font-family="Helvetica, Arial, sans-serif" font-size="14" role="img" aria-labelledby="t d">
   <title id="t">LiveKit generic assistant architecture</title>
-  <desc id="d">A browser joins a LiveKit server over WebRTC. The agent worker joins the same room and calls Nemotron ASR, a Nemotron LLM, and Magpie TTS, and runs weather and date tools. A UI server issues join tokens.</desc>
+  <desc id="d">A browser joins a LiveKit server over WebRTC. The agent worker joins the same room and calls an ASR model, an LLM, and a TTS model, and runs weather and date tools. A UI server issues join tokens.</desc>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
   </defs>
@@ -23,10 +23,10 @@
     <text x="395" y="190" font-weight="bold">LiveKit server</text><text x="395" y="212">WebRTC room, data channel</text>
     <text x="750" y="58" font-weight="bold" font-size="16">Agent worker (LiveKit Agents)</text>
     <text x="750" y="82" font-size="12">Silero VAD, turn handling, tool calls</text>
-    <text x="750" y="130">Nemotron ASR (gRPC, NVIDIA plugin)</text>
-    <text x="750" y="200">Nemotron LLM (OpenAI-compatible API)</text>
-    <text x="750" y="270">Magpie TTS (gRPC, NVIDIA plugin)</text>
-    <text x="750" y="340">Tools: get_weather, get_current_datetime</text>
+    <text x="750" y="130">ASR model (gRPC, NVIDIA plugin)</text>
+    <text x="750" y="200">LLM (OpenAI-compatible API)</text>
+    <text x="750" y="270">TTS model (gRPC, NVIDIA plugin)</text>
+    <text x="750" y="340">Tools for the selected use case</text>
   </g>
   <g stroke="#555" stroke-width="1.5" fill="none" marker-end="url(#a)" marker-start="url(#a)">
     <path d="M220 85 H260 V195 H300"/>

@@ -62,3 +62,18 @@ def test_apply_to_environ_keeps_explicit_values(tmp_path):
 def test_apply_to_environ_fails_clearly_without_init(tmp_path):
     with pytest.raises(RuntimeError, match="livekit-init"):
         credentials.apply_to_environ(tmp_path, {})
+
+
+def test_setting_only_one_of_key_and_secret_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="Only LIVEKIT_API_KEY is set"):
+        credentials.load_or_create(tmp_path, env={"LIVEKIT_API_KEY": "mykey"})
+    with pytest.raises(ValueError, match="Only LIVEKIT_API_SECRET is set"):
+        credentials.load_or_create(tmp_path, env={"LIVEKIT_API_SECRET": "mysecret"})
+
+
+def test_a_damaged_credentials_file_is_replaced_with_a_new_pair(tmp_path):
+    for damaged in ("{not json", json.dumps({"api_key": "only-key"}), json.dumps([1, 2]), ""):
+        (tmp_path / credentials.CREDENTIALS_FILE).write_text(damaged)
+        creds = credentials.load_or_create(tmp_path, env={})
+        assert creds["api_key"].startswith("lk") and len(creds["api_secret"]) >= 32
+        assert json.loads((tmp_path / credentials.CREDENTIALS_FILE).read_text()) == creds

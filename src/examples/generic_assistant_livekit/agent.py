@@ -132,15 +132,18 @@ def publish_voices(cfg: AgentConfig, state_dir: Path, retry_s: float = 10, refre
     path = state_dir / VOICES_FILE
     try:
         path.unlink(missing_ok=True)
-        while True:
-            voices = discover_voices(cfg, quiet=True)
-            if voices:
-                write_voices_file(path, with_current(voices, cfg.tts_voice), cfg.tts_voice)
-                time.sleep(refresh_s)
-            else:
-                time.sleep(retry_s)
     except OSError as exc:
-        log.warning("cannot publish the voice list to %s: %s", state_dir, exc)
+        log.warning("cannot clear the old voice list in %s: %s", state_dir, exc)
+    while True:
+        delay = retry_s
+        voices = discover_voices(cfg, quiet=True)
+        if voices:
+            try:
+                write_voices_file(path, with_current(voices, cfg.tts_voice), cfg.tts_voice)
+                delay = refresh_s
+            except OSError as exc:  # a volume hiccup must not end the thread: try again later
+                log.warning("cannot publish the voice list to %s: %s", state_dir, exc)
+        time.sleep(delay)
 
 
 @server.rtc_session()
@@ -189,13 +192,7 @@ async def entrypoint(ctx: JobContext):
     def _false_interruption(ev):
         emit("false_interruption", resumed=ev.resumed)
 
-    agent = Agent(
-        instructions=scenario.instructions,
-        tools=[traced_tool(fn, emit) for fn in scenario.make_tools()],  # fresh demo state for each session
-    )
-    await session.start(agent=agent, room=ctx.room)
-    emit("session", recipe=cfg.recipe, models=cfg.models(), scenario=scenario.name)
-    emit("voices", voices=voices, current=tts._opts.voice)
+    started = False
 
     def on_data(packet: rtc.DataPacket) -> None:
         if packet.topic != CONTROL_TOPIC:
@@ -205,9 +202,19 @@ async def entrypoint(ctx: JobContext):
             return
         tts.set_voice(voice)
         emit("voice_changed", voice=voice, name=names[voice])
-        session.say(f"Hi, this is my {names[voice]} voice.", add_to_chat_ctx=False)
+        if started:  # a change that arrives while the session is still starting applies without a sample
+            session.say(f"Hi, this is my {names[voice]} voice.", add_to_chat_ctx=False)
 
-    ctx.room.on("data_received", on_data)
+    ctx.room.on("data_received", on_data)  # registered before the session starts, so an early change is not lost
+    agent = Agent(
+        instructions=scenario.instructions,
+        tools=[traced_tool(fn, emit) for fn in scenario.make_tools()],  # fresh demo state for each session
+    )
+    await session.start(agent=agent, room=ctx.room)
+    started = True
+    emit("session", recipe=cfg.recipe, models=cfg.models(), scenario=scenario.name)
+    emit("voices", voices=voices, current=tts._opts.voice)
+
     await session.generate_reply(instructions=scenario.greeting)
 
 

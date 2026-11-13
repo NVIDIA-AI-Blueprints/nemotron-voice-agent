@@ -16,9 +16,10 @@ from urllib.parse import parse_qs, urlsplit
 from livekit import api
 
 from .credentials import DEFAULT_STATE_DIR, apply_to_environ
-from .scenarios import get_scenario, scenario_catalog
+from .scenarios import scenario_catalog
+from .session import token_attributes
 from .state import DEPLOYMENT_FILE, read_json
-from .voices import VOICES_FILE, choose_voice, read_voices_file
+from .voices import VOICES_FILE, read_voices_file
 
 PUBLIC = Path(__file__).with_name("ui")
 
@@ -66,16 +67,13 @@ class Handler(SimpleHTTPRequestHandler):
             return send_json(self, read_json(state_path(DEPLOYMENT_FILE)) or {})
         if url.path != "/token":
             return super().do_GET()
-        listed = read_voices_file(voices_path())
-        query = parse_qs(url.query)
-        voice = choose_voice(query.get("voice", [None])[0], [v["id"] for v in listed["voices"]], "")
-        scenario = get_scenario(query.get("scenario", [None])[0]).id
+        attributes = token_attributes(parse_qs(url.query), [v["id"] for v in read_voices_file(voices_path())["voices"]])
         room = f"voice-{uuid.uuid4().hex[:8]}"  # a new room each time, so the agent dispatches per session
         grants = api.VideoGrants(room_join=True, room=room)
         token = (
             api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
             .with_identity(f"user-{uuid.uuid4().hex[:6]}")
-            .with_attributes({"scenario": scenario, **({"voice": voice} if voice else {})})  # read by the agent on join
+            .with_attributes(attributes)  # the agent reads the use case and voice when it joins
             .with_grants(grants)
             .with_ttl(timedelta(hours=1))
             .to_jwt()

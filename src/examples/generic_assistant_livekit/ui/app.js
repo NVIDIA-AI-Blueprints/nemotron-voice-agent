@@ -6,8 +6,7 @@
 const { Room, RoomEvent, Track, ConnectionState } = LivekitClient;
 
 const $ = (id) => document.getElementById(id);
-const wsUrl = `ws://${location.hostname}:7880`;  // signaling; override with ?ws=ws://host:7880
-const WS_URL = new URLSearchParams(location.search).get('ws') || wsUrl;
+const WS_URL = `ws://${location.hostname}:7880`;  // LiveKit signaling, on the same host as this page
 $('server-badge').textContent = WS_URL;
 
 // Media flows directly to LiveKit over UDP and TCP. Remote browsers need a TURN server (not included).
@@ -127,37 +126,44 @@ function showModels(models) {
 async function connect() {
   $('connect').disabled = true;
   setStatus('Requesting token…');
-  const params = new URLSearchParams({ scenario: $('scenario').value });
-  if (voicesLoaded) params.set('voice', $('voice').value);
-  const { token } = await (await fetch(`/token?${params}`)).json();
-  room = new Room({ adaptiveStream: true, dynacast: true });
-
-  room.registerTextStreamHandler('lk.transcription', onTranscription);
-  room.on(RoomEvent.TrackSubscribed, (track) => {
-    if (track.kind === Track.Kind.Audio) $('audio-sink').appendChild(track.attach());
-  });
-  room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((e) => e.remove()));
-  room.on(RoomEvent.ParticipantConnected, (p) => setStatus(`${p.identity} joined`));
-  room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-    const local = speakers.find((s) => s.isLocal);
-    $('meter-fill').style.width = `${Math.round((local?.audioLevel || 0) * 100)}%`;
-    const agent = speakers.find((s) => !s.isLocal);
-    if (agent) setStatus('Agent speaking…');
-    else if (local) setStatus('Listening…');
-  });
-  room.on(RoomEvent.DataReceived, (payload, _p, _k, topic) => {
-    if (topic !== EVENTS_TOPIC) return;
-    try { onAgentEvent(JSON.parse(new TextDecoder().decode(payload))); } catch (e) { console.warn('bad event', e); }
-  });
-  room.on(RoomEvent.Disconnected, reset);
-
   try {
+    const params = new URLSearchParams({ scenario: $('scenario').value });
+    if (voicesLoaded) params.set('voice', $('voice').value);
+    const response = await fetch(`/token?${params}`);
+    if (!response.ok) throw new Error(`token request failed (${response.status})`);
+    const { token } = await response.json();
+    room = new Room({ adaptiveStream: true, dynacast: true });
+
+    room.registerTextStreamHandler('lk.transcription', onTranscription);
+    room.on(RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === Track.Kind.Audio) $('audio-sink').appendChild(track.attach());
+    });
+    room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((e) => e.remove()));
+    room.on(RoomEvent.ParticipantConnected, (p) => setStatus(`${p.identity} joined`));
+    room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      const local = speakers.find((s) => s.isLocal);
+      $('meter-fill').style.width = `${Math.round((local?.audioLevel || 0) * 100)}%`;
+      const agent = speakers.find((s) => !s.isLocal);
+      if (agent) setStatus('Agent speaking…');
+      else if (local) setStatus('Listening…');
+    });
+    room.on(RoomEvent.DataReceived, (payload, _p, _k, topic) => {
+      if (topic !== EVENTS_TOPIC) return;
+      try { onAgentEvent(JSON.parse(new TextDecoder().decode(payload))); } catch (e) { console.warn('bad event', e); }
+    });
+    room.on(RoomEvent.Disconnected, reset);
+
     await room.connect(WS_URL, token);
     await room.startAudio();
     await room.localParticipant.setMicrophoneEnabled(true);
   } catch (e) {
+    // Any failure (token, connection, or a denied microphone) must leave the page ready for another try, and must
+    // leave the room, so the agent does not wait in it for a user who never arrived.
+    const failed = room;
+    room = null;
+    if (failed) await failed.disconnect().catch(() => {});
+    reset();
     setStatus(`Error: ${e.message}`);
-    $('connect').disabled = false;
     return;
   }
   setStatus('Connected — waiting for agent');
@@ -168,39 +174,6 @@ async function connect() {
   $('mute').classList.remove('hidden');
   $('meter').classList.remove('hidden');
 }
-
-// The voices the TTS server offers. The agent worker publishes them when it starts, so the list is available before you
-// connect. Choosing a voice before connecting sets the voice for the whole session. Choosing one during a session sends
-// a command to the agent, which uses the new voice from its next reply and says a short sample.
-let voicesLoaded = false;
-
-function showVoices(voices, current) {
-  const select = $('voice');
-  select.innerHTML = '';
-  for (const voice of voices) select.add(new Option(voice.name, voice.id, false, voice.id === current));
-  select.disabled = voices.length < 2;
-  select.title = voices.length < 2 ? 'The speech server offers one voice' : '';
-  voicesLoaded = voices.length > 0;
-}
-
-async function loadVoices() {
-  $('voice').innerHTML = '<option>Loading voices…</option>';
-  $('voice').disabled = true;
-  for (let attempt = 0; attempt < 45; attempt++) {  // the speech server can still be loading models
-    try {
-      const { voices, default: current } = await (await fetch('/voices')).json();
-      if (voices.length) { showVoices(voices, current); return; }
-    } catch (e) { /* retry */ }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-  $('voice').innerHTML = '<option>Default voice (list unavailable)</option>';
-}
-
-$('voice').onchange = async () => {
-  if (!room) return;  // before connecting, the choice is sent with the join token
-  const message = JSON.stringify({ type: 'set_voice', voice: $('voice').value });
-  await room.localParticipant.publishData(new TextEncoder().encode(message), { reliable: true, topic: CONTROL_TOPIC });
-};
 
 function reset() {
   room = null;

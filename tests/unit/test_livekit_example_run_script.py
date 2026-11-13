@@ -117,11 +117,18 @@ def test_wait_announces_progress_reporting(tmp_path):
 
 
 FAKE_DOCKER = """#!/usr/bin/env bash
-# Fake docker for run.sh wait: one container that reports STATUS_SEQUENCE, one health check per call.
+# Fake docker for run.sh. Records every call in $FAKE_LOG. The shared LiveKit services always "exist"; an agent service
+# exists only when it is listed in $FAKE_RUNNING. Health checks follow $FAKE_HEALTH, one answer per call.
 args="$*"
+[ -n "$FAKE_LOG" ] && echo "$args" >> "$FAKE_LOG"
 counter="$FAKE_STATE/count"
 case "$args" in
-  "compose version") exit 0 ;;
+  "compose version"*) echo "${FAKE_COMPOSE_VERSION:-2.30.0}" ;;
+  *"compose"*" logs "*) [ "${FAKE_REGISTERED:-1}" = 1 ] && echo '{"message": "registered worker"}' ;;
+  *"ps -q "*)
+    for svc in $FAKE_RUNNING; do
+      case "$args" in *"ps -q $svc"*) echo "id-$svc" ;; esac
+    done ;;
   *"ps -q"*) echo abc123 ;;
   *"inspect"*"Health.Status"*)
     n=$(cat "$counter" 2>/dev/null || echo 0)
@@ -133,30 +140,50 @@ case "$args" in
   *"inspect"*".Name"*) echo /livekit-nvidia-llm-vllm ;;
   *"logs --tail 1"*) echo "Loading weights took 12.3 seconds" ;;
 esac
+exit 0
 """
 
+FAKE_SS = "#!/usr/bin/env bash\nexit 0\n"  # no local port is in use
 
-def run_wait(tmp_path, health, timeout="30", state="running"):
+
+def fake_env(tmp_path, env_text="NVIDIA_API_KEY=nvapi-test\nHF_TOKEN=hf_test\n", **extra):
     fake = tmp_path / "bin"
-    fake.mkdir()
-    docker = fake / "docker"
-    docker.write_text(FAKE_DOCKER)
-    docker.chmod(0o755)
+    fake.mkdir(exist_ok=True)
+    for name, body in (("docker", FAKE_DOCKER), ("ss", FAKE_SS)):
+        path = fake / name
+        path.write_text(body)
+        path.chmod(0o755)
     state_dir = tmp_path / "state"
-    state_dir.mkdir()
+    state_dir.mkdir(exist_ok=True)
     env_file = tmp_path / ".env"
-    env_file.write_text("HF_TOKEN=hf_test\n")
-    env = {k: v for k, v in os.environ.items() if k != "DRY_RUN"}
+    env_file.write_text(env_text)
+    env = {k: v for k, v in os.environ.items() if k not in ("DRY_RUN", "NVIDIA_API_KEY", "HF_TOKEN")}
     env.update(
         {
             "PATH": f"{fake}:{env['PATH']}",
             "ENV_FILE": str(env_file),
             "WAIT_INTERVAL": "0",
             "FAKE_STATE": str(state_dir),
-            "FAKE_HEALTH": health,
-            "FAKE_STATE_STATUS": state,
+            "FAKE_LOG": str(tmp_path / "docker.log"),
+            **extra,
         }
     )
+    return env
+
+
+def run_real(tmp_path, args, running="", **extra):
+    env = fake_env(tmp_path, FAKE_RUNNING=running, **extra)
+    result = subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env=env, timeout=60)
+    log = tmp_path / "docker.log"
+    return result, (log.read_text().splitlines() if log.exists() else [])
+
+
+def downs(calls):
+    return [c for c in calls if c.rstrip().endswith(" down")]
+
+
+def run_wait(tmp_path, health, timeout="30", state="running", **extra):
+    env = fake_env(tmp_path, FAKE_HEALTH=health, FAKE_STATE_STATUS=state, **extra)
     return subprocess.run(
         ["bash", str(SCRIPT), "wait", "single-gpu", timeout], capture_output=True, text=True, env=env, timeout=60
     )
@@ -302,3 +329,50 @@ def test_unknown_command_prints_usage(tmp_path):
     result = run(["explode"], tmp_path)
     assert result.returncode == 2
     assert "run.sh up" in result.stderr
+
+
+def test_up_does_not_stop_other_profiles_because_of_the_shared_livekit_services(tmp_path):
+    # The LiveKit server and UI belong to every profile, so a profile-wide `ps` lists them whenever any profile runs.
+    result, calls = run_real(tmp_path, ["up", "server", "--no-wait"], running="livekit-agent-server")
+    assert result.returncode == 0, result.stderr
+    assert downs(calls) == []
+    assert any(c.endswith("--profile generic-assistant-livekit/server up -d") for c in calls)
+
+
+def test_up_stops_only_the_profile_whose_agent_is_running(tmp_path):
+    result, calls = run_real(tmp_path, ["up", "cloud", "--no-wait"], running="livekit-agent-server")
+    assert result.returncode == 0, result.stderr
+    assert [c.split("--profile ")[1] for c in downs(calls)] == ["generic-assistant-livekit/server down"]
+    assert "Another profile (server) is running" in result.stderr
+    assert calls.index(downs(calls)[0]) < next(
+        i for i, c in enumerate(calls) if c.endswith("cloud up -d") or c.endswith("livekit up -d")
+    )
+
+
+def test_up_with_nothing_running_stops_nothing(tmp_path):
+    result, calls = run_real(tmp_path, ["up", "cloud", "--no-wait"])
+    assert result.returncode == 0, result.stderr
+    assert downs(calls) == []
+
+
+def test_old_docker_compose_is_rejected_with_a_clear_message(tmp_path):
+    result, _ = run_real(tmp_path, ["up", "cloud", "--no-wait"], FAKE_COMPOSE_VERSION="2.20.5")
+    assert result.returncode != 0
+    assert "Docker Compose 2.20.5 is too old" in result.stderr
+    assert run_real(tmp_path, ["ps"], FAKE_COMPOSE_VERSION="v2.24.0")[0].returncode == 0
+
+
+def test_wait_also_requires_the_agent_to_register_with_livekit(tmp_path):
+    result = run_wait(tmp_path, "healthy", timeout="1", FAKE_REGISTERED="0")
+    assert result.returncode != 0
+    assert "livekit-agent-single-gpu: starting, not registered with LiveKit yet" in result.stderr
+    ok = run_wait(tmp_path, "healthy", timeout="5")
+    assert ok.returncode == 0, ok.stderr
+    assert "Ready to connect" in ok.stderr
+
+
+def test_the_ui_port_comes_from_the_env_file(tmp_path):
+    result = run(["up", "cloud", "--no-wait"], tmp_path, env_text="NVIDIA_API_KEY=x\nLIVEKIT_UI_PORT=4000\n")
+    assert "http://localhost:4000/" in result.stderr
+    tunnel = run(["tunnel", "me@host"], tmp_path, env_text="LIVEKIT_UI_PORT=4000\n")
+    assert "-L 3000:127.0.0.1:4000" in tunnel.stderr

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # LiveKit generic assistant: LiveKit server, agent worker, web UI, and model sidecars. Self-contained: the sidecars
 # extend the shared service definitions in docker/ (read-only), so nothing outside this folder lists this example.
 #
@@ -32,9 +35,16 @@ x-livekit-app: &livekit-app
 # The agents share the LiveKit server's network namespace (network_mode below). The server advertises its node IP
 # (127.0.0.1 by default, for a browser on the same machine or behind an SSH tunnel) in ICE candidates, and inside a
 # separate container that address would point at the agent itself. Sharing the namespace makes it reach the server.
+# The agents get only the variables they use, not the whole .env. NVIDIA_API_KEY goes to the cloud agent alone, and
+# HF_TOKEN goes to no app container.
 x-livekit-env: &livekit-env
   LIVEKIT_URL: ws://127.0.0.1:7880
   LIVEKIT_STATE_DIR: /state
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+  LLM_SERVICE: ${LLM_SERVICE:-}
+  ASR_SERVICE: ${ASR_SERVICE:-}
+  TTS_SERVICE: ${TTS_SERVICE:-}
 
 services:
   # Writes the LiveKit key and secret and the server config to the livekit_state volume, then exits. It keeps
@@ -67,10 +77,11 @@ services:
         condition: service_completed_successfully
     volumes:
       - livekit_state:/state:ro
+    # Published on the loopback address like the UI. Set LIVEKIT_BIND=0.0.0.0 only for a LAN deployment with TURN.
     ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
+      - "${LIVEKIT_BIND:-127.0.0.1}:7880:7880"
+      - "${LIVEKIT_BIND:-127.0.0.1}:7881:7881"
+      - "${LIVEKIT_BIND:-127.0.0.1}:7882:7882/udp"
     restart: unless-stopped
 
   livekit-ui:
@@ -94,8 +105,6 @@ services:
 
   livekit-agent:
     <<: *livekit-app
-    env_file:
-      - ../../../.env
     network_mode: "service:livekit-server"
     profiles:
       - generic-assistant-livekit
@@ -111,11 +120,10 @@ services:
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: cloud
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
 
   livekit-agent-server:
     <<: *livekit-app
-    env_file:
-      - ../../../.env
     network_mode: "service:livekit-server"
     profiles:
       - generic-assistant-livekit/server
@@ -134,8 +142,6 @@ services:
 
   livekit-agent-single-gpu:
     <<: *livekit-app
-    env_file:
-      - ../../../.env
     network_mode: "service:livekit-server"
     profiles:
       - generic-assistant-livekit/single-gpu

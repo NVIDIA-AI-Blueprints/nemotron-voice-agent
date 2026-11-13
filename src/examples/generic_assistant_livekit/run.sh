@@ -83,10 +83,12 @@ service_name() {
 
 # Host ports each profile publishes (LiveKit and the UI are shared by all profiles).
 profile_ports() {
+  local ui
+  ui="$(ui_port)"
   case "$1" in
-    cloud) echo "7880 7881 3000" ;;
-    server) echo "7880 7881 3000 9000 9001 50151 50152 18000" ;;
-    single-gpu) echo "7880 7881 3000 50051 18000" ;;
+    cloud) echo "7880 7881 $ui" ;;
+    server) echo "7880 7881 $ui 9000 9001 50151 50152 18000" ;;
+    single-gpu) echo "7880 7881 $ui 50051 18000" ;;
   esac
 }
 
@@ -126,19 +128,42 @@ dc_quiet() { # same, but without printing; empty output in a dry run
 require_docker() {
   if [ "$DRY_RUN" = 1 ]; then return 0; fi
   command -v docker >/dev/null 2>&1 || die "docker is not installed or not on PATH"
-  docker compose version >/dev/null 2>&1 || die "the 'docker compose' plugin is required"
+  local version major minor
+  version="$(docker compose version --short 2>/dev/null)" || die "the 'docker compose' plugin is required"
+  version="${version#v}"
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+  # docker-compose.yaml uses the !override tag, which needs Docker Compose 2.24 or newer
+  if [ "$major" -lt 2 ] 2>/dev/null || { [ "$major" = 2 ] && [ "$minor" -lt 24 ] 2>/dev/null; }; then
+    die "Docker Compose $version is too old. This example needs 2.24 or newer"
+  fi
 }
 
 require_env_file() {
   [ -f "$ENV_PATH" ] || die "no .env file at $ENV_PATH. Copy the template: cp $DIR/.env.example <repo root>/.env (or set ENV_FILE)"
 }
 
-running_profiles() { # profiles of this example that have containers
+agent_service() { # the agent service of a profile. It belongs to that profile only, unlike the shared LiveKit services
+  case "$1" in
+    cloud) echo livekit-agent ;;
+    server) echo livekit-agent-server ;;
+    single-gpu) echo livekit-agent-single-gpu ;;
+  esac
+}
+
+running_profiles() { # profiles whose agent has a container. The LiveKit server and UI are shared by all profiles
   local name p
   for name in $PROFILES; do
     p="$(profile_name "$name")"
-    if [ -n "$(dc_quiet --profile "$p" ps -q 2>/dev/null || true)" ]; then echo "$name"; fi
+    if [ -n "$(dc_quiet --profile "$p" ps -q "$(agent_service "$name")" 2>/dev/null || true)" ]; then echo "$name"; fi
   done
+}
+
+ui_port() { # the host UI port: the shell, then .env, then the default
+  local port
+  port="$(env_value LIVEKIT_UI_PORT)"
+  echo "${port:-3000}"
 }
 
 check_keys() {
@@ -181,7 +206,7 @@ access_hint() { # printed last, so it is the output you see when the start finis
   local host
   host="$(hostname -f 2>/dev/null || hostname)"
   info ""
-  info "Open http://localhost:${LIVEKIT_UI_PORT:-3000}/ in a browser on this machine."
+  info "Open http://localhost:$(ui_port)/ in a browser on this machine."
   info "Browser on another computer? The UI is not reachable from there until you start a tunnel ON THAT COMPUTER:"
   info "  src/examples/generic_assistant_livekit/run.sh tunnel <user>@${host}"
   info "  (or: ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@${host})"
@@ -291,7 +316,7 @@ cmd_tunnel() { # run on your laptop: forward the UI, LiveKit signaling, and Live
     done
   fi
   local cmd=(ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30
-    -L "$ui:127.0.0.1:${LIVEKIT_UI_PORT:-3000}" -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 "$host")
+    -L "$ui:127.0.0.1:$(ui_port)" -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 "$host")
   info "+ ${cmd[*]}"
   info "Tunnel to $host. Keep this window open, and open http://localhost:$ui/ in your browser. Ctrl+C stops it."
   if [ "$DRY_RUN" = 1 ]; then return 0; fi
@@ -350,6 +375,10 @@ cmd_wait() {
   - $cname: $label${last:+ | last log: $last}"
       fi
     done
+    if [ -z "$pending" ] && ! dc_quiet --profile "$p" logs --tail 300 "$(agent_service "$name")" 2>/dev/null | grep -q "registered worker"; then
+      pending="
+  - $(agent_service "$name"): starting, not registered with LiveKit yet"
+    fi
     now="$(date +%s)"
     if [ -z "$pending" ]; then
       info "[$(( (now - start) / 60 ))m$(( (now - start) % 60 ))s] All healthy. Ready to connect."
