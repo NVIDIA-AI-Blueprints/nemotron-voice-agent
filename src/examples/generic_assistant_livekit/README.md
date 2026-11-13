@@ -43,7 +43,7 @@ flowchart LR
 
 The following list describes each stage:
 
-1. **Client.** The browser publishes your microphone to a LiveKit room over WebRTC, and plays the agent's audio. It also shows live transcripts and each tool call, which arrive over the room's data channel.
+1. **Client.** The browser publishes your microphone to a LiveKit room over WebRTC, and plays the agent's audio. It also shows live transcripts and each tool call, which arrive over the room's data channel, and a voice selector that sends your choice back over the same channel.
 2. **VAD.** Voice activity detection runs the small Silero model on the incoming audio. It tells the agent when speech starts and stops. It does not recognize words.
 3. **ASR.** Nemotron streaming ASR turns speech into text while you talk, so partial transcripts appear before you finish. Hosted ASR applies low-latency endpointing in the plugin. Self-hosted speech servers do endpointing themselves.
 4. **Turn handling.** The agent combines the VAD and ASR signals to decide that your turn is complete, and then sends the final transcript to the LLM.
@@ -190,6 +190,16 @@ After a `clean`, the next start generates a new LiveKit key and secret, and the 
 
 The model weights are not part of this cleanup. The pulled sidecar images (vLLM, NeMo-Speech.cpp, the NIM images, and LiveKit) are also kept. Hugging Face downloads for the Single GPU profile are in `~/.cache/huggingface`, and the NeMo-Speech.cpp weights are in `models/nemo-speech`. Other applications can share both locations, so remove them only if you know that nothing else needs them.
 
+## Voice Selection
+
+After you connect, the **Voice** list in the UI shows the voices that the TTS server offers for the session language. Select one to switch. The agent uses the new voice from its next reply and says a short sample, so you hear the change. The sample does not enter the conversation history.
+
+- **Discovery:** the agent asks the TTS server for its voices when a session starts, with the same endpoint and credentials that it uses for synthesis. This works for NVIDIA Cloud, the Magpie NIM, and NeMo-Speech.cpp. If the server cannot be asked, the list contains only the configured default voice.
+- **Language:** the list shows voices for the language in the catalog entry, which is `en-US` for the default services.
+- **Default voice:** it comes from `voice_id` in [`services.yaml`](../../../services.yaml). Refer to [Configure TTS](../../../docs/how-to/configure-tts.md#voices--emotions).
+- **Validation:** the agent accepts only voices that the server listed. A change request for any other name is ignored.
+- **Scope:** the choice applies to the current session. A new session starts with the default voice.
+
 ## Remote Browser Access
 
 This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` only, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. Opening the UI from another computer, for example your laptop, does not work without additional setup. The LiveKit server publishes ports 7880, 7881 (TCP), and 7882 (UDP). Browsers also allow microphone access only on `localhost` or HTTPS.
@@ -214,6 +224,7 @@ Then open `http://localhost:3000/` in the browser on your laptop. SSH cannot for
 | `config.py` | Resolves endpoints from `services.yaml` for the `cloud`, `server`, and `single-gpu` recipes |
 | `prompts.yaml` | Prompt and greeting for the assistant |
 | `tools.py` | Plain async functions behind the weather and date tools. No LiveKit imports |
+| `voices.py` | Lists the voices a speech server offers, and validates voice-change requests from the UI. No LiveKit imports |
 | `tool_wrapper.py` | Wraps tool functions as LiveKit tools that report calls to the UI |
 | `credentials.py` | Generates the LiveKit API key and secret, writes the LiveKit server config, and shares both through the `livekit_state` volume |
 | `ui_server.py` | Serves `ui/` and mints a LiveKit join token at `/token` |

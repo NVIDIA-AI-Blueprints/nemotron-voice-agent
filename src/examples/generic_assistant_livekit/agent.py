@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
+from livekit import rtc
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.plugins import nvidia, openai, silero
 
@@ -21,10 +22,12 @@ from .config import AgentConfig, load_config
 from .credentials import apply_to_environ
 from .tool_wrapper import traced_tool
 from .tools import current_datetime, current_weather
+from .voices import fetch_synthesis_params, parse_set_voice, parse_voices, with_current
 
 log = logging.getLogger("generic-assistant-livekit")
 
 EVENTS_TOPIC = "agent.events"  # data-channel topic the web UI listens on
+CONTROL_TOPIC = "agent.control"  # data-channel topic the web UI sends commands on
 PROMPTS_FILE = Path(__file__).with_name("prompts.yaml")
 PROMPT_KEY = "generic_assistant"
 
@@ -77,9 +80,35 @@ def build_stt(cfg: AgentConfig) -> nvidia.STT:
     return nvidia.STT(api_key="", **common)
 
 
-def build_tts(cfg: AgentConfig) -> nvidia.TTS:
+class SwitchableTTS(nvidia.TTS):
+    """The NVIDIA TTS client with a voice that can change during a session.
+
+    The plugin copies its options each time it opens a stream, so a new voice applies from the next reply.
+    """
+
+    def set_voice(self, voice: str) -> None:
+        """Use `voice` for the next synthesis request."""
+        self._opts.voice = voice
+
+
+def discover_voices(cfg: AgentConfig) -> list[dict[str, str]]:
+    """Return the voices the TTS server offers for the session language. Empty when the server cannot be asked."""
+    try:
+        params = fetch_synthesis_params(
+            cfg.tts_server,
+            use_ssl=cfg.hosted,
+            api_key=os.environ.get("NVIDIA_API_KEY", "") if cfg.hosted else "",
+            function_id=cfg.tts_function_id,
+        )
+        return parse_voices(params, cfg.tts_language)
+    except Exception as exc:
+        log.warning("could not list TTS voices: %s", exc)
+        return []
+
+
+def build_tts(cfg: AgentConfig) -> SwitchableTTS:
     """Build the TTS client."""
-    return nvidia.TTS(
+    return SwitchableTTS(
         server=cfg.tts_server,
         use_ssl=cfg.hosted,
         voice=cfg.tts_voice,
@@ -118,7 +147,9 @@ async def entrypoint(ctx: JobContext):
             lambda t: t.cancelled() or t.exception() and log.warning("event publish failed: %s", t.exception())
         )
 
-    session = AgentSession(vad=silero.VAD.load(), stt=build_stt(cfg), llm=build_llm(cfg), tts=build_tts(cfg))
+    tts = build_tts(cfg)
+    voices_task = asyncio.ensure_future(asyncio.to_thread(discover_voices, cfg))
+    session = AgentSession(vad=silero.VAD.load(), stt=build_stt(cfg), llm=build_llm(cfg), tts=tts)
 
     @session.on("agent_state_changed")
     def _agent_state(ev):
@@ -136,7 +167,22 @@ async def entrypoint(ctx: JobContext):
 
     agent = Agent(instructions=prompt["content"], tools=[traced_tool(fn, emit) for fn in TOOLS])
     await session.start(agent=agent, room=ctx.room)
+    voices = with_current(await voices_task, cfg.tts_voice)
+    names = {voice["id"]: voice["name"] for voice in voices}
     emit("session", recipe=cfg.recipe, models=cfg.models())
+    emit("voices", voices=voices, current=tts._opts.voice)
+
+    def on_data(packet: rtc.DataPacket) -> None:
+        if packet.topic != CONTROL_TOPIC:
+            return
+        voice = parse_set_voice(packet.data, names)
+        if voice is None:
+            return
+        tts.set_voice(voice)
+        emit("voice_changed", voice=voice, name=names[voice])
+        session.say(f"Hi, this is my {names[voice]} voice.", add_to_chat_ctx=False)
+
+    ctx.room.on("data_received", on_data)
     await session.generate_reply(instructions=prompt["greeting"])
 
 

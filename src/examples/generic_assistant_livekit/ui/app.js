@@ -53,6 +53,7 @@ async function onTranscription(reader, participant) {
 
 // Agent events arrive on a data-channel topic: tool calls/results, barge-in, session info.
 const EVENTS_TOPIC = 'agent.events';
+const CONTROL_TOPIC = 'agent.control';  // commands from this page to the agent
 const short = (v) => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 400 ? `${t.slice(0, 400)}…` : t; };
 
 function addEvent(icon, text, cls = '') {
@@ -78,6 +79,8 @@ function onAgentEvent(ev) {
     case 'false_interruption':
       addEvent('↩️', `False interruption${ev.resumed ? ': agent resumed speaking' : ''}`, 'interrupt');
       break;
+    case 'voices': showVoices(ev.voices, ev.current); break;
+    case 'voice_changed': addEvent('🗣️', `Voice changed to ${ev.name}`); break;
     case 'agent_state': if (ev.state === 'thinking') setStatus('Thinking…'); break;
   }
 }
@@ -151,8 +154,30 @@ async function connect() {
   $('meter').classList.remove('hidden');
 }
 
+// The voices the agent's speech server offers, reported when the session starts. Picking one sends a command to the
+// agent, which uses the new voice from its next reply and says a short sample.
+function showVoices(voices, current) {
+  const select = $('voice');
+  select.innerHTML = '';
+  for (const voice of voices) select.add(new Option(voice.name, voice.id, false, voice.id === current));
+  select.disabled = voices.length < 2;
+  select.title = voices.length < 2 ? 'The speech server offers one voice' : '';
+}
+
+$('voice').onchange = async () => {
+  if (!room) return;
+  const message = JSON.stringify({ type: 'set_voice', voice: $('voice').value });
+  await room.localParticipant.publishData(new TextEncoder().encode(message), { reliable: true, topic: CONTROL_TOPIC });
+};
+
+function resetVoices() {
+  $('voice').innerHTML = '<option>Connect to choose a voice</option>';
+  $('voice').disabled = true;
+}
+
 function reset() {
   room = null;
+  resetVoices();
   $('connect').textContent = 'Connect';
   $('connect').classList.replace('danger', 'primary');
   $('connect').disabled = false;
