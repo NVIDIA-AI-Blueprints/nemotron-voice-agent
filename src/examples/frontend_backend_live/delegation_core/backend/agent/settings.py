@@ -20,12 +20,12 @@ class ConductorSettings(Settings):
 
     # A model of the catalog; null: the backend's default model (backend.slot's).
     model: Text | None = None
-    # How long a decision round may run; the steer rule places what it leaves unplaced.
+    # How long a decision round may run; the IM's fallback rule places what it leaves unplaced.
     timeout_seconds: Seconds = 20.0
     # The conductor's memory of earlier decision rounds, in tokens; the oldest rounds leave it whole.
     memory_tokens: WholeNumber = 8000
-    # A decision round's output cap, per new request in its input.
-    max_output_tokens_per_request: WholeNumber = 256
+    # A decision round's output cap, per new request in its input; null: the endpoint's own.
+    max_output_tokens_per_request: WholeNumber | None = None
     # The sampling temperature of a decision round; null: the endpoint's own.
     temperature: Annotated[float, Field(strict=True, ge=0)] | None = 0.0
     # "none" turns thinking off (the endpoint's enable_thinking, where its settings have one); null: the model's own.

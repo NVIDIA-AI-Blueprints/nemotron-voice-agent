@@ -45,6 +45,9 @@ class LlmAdapter:
             task, providers=self.provider, tools=self.tools, settings=self.source.settings, retryable=self.retryable
         )
 
+    def release_idle(self) -> None:
+        """Release nothing: it keeps no idle session."""
+
     async def close(self) -> None:
         """Close every provider the session made."""
         providers, self.providers = list(self.providers.values()), {}

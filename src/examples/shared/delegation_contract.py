@@ -11,9 +11,11 @@ from typing import Final
 TERMINALS: Final = frozenset({"response.completed", "response.failed", "response.incomplete"})
 # The request options besides the model, the instructions, the tools, the tool choice and the output limit.
 OPTIONS = ("parallel_tool_calls", "reasoning", "text", "service_tier")
-# Metadata keys: the delegation a request starts or continues, and the mark of a typed run, valued "true".
+# Metadata keys: the delegation a request starts or continues, the mark of a typed run, valued "true", and a
+# conversation's opt-in to keep work after its call, valued "true" (a Live session's store: true).
 DELEGATION_ID = "live_delegation_id"
 TYPED_RUN = "live_typed_run"
+STORE = "live_store"
 PROGRESS_PHASE = "commentary"
 # The API a model endpoint speaks when its services.yaml entry names none: chat completions.
 CHAT_COMPLETIONS: Final = "chat-completions"

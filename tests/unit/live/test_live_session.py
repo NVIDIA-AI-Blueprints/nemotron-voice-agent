@@ -133,6 +133,37 @@ class LifecycleTests(SessionCase):
         closes = rf"session={self.session.id} closes: reason=close_requested, lifetime=\d+\.\d s, "
         self.assertRegex(line["message"], closes + r"asked by the client \(primary connection\)")
 
+    async def test_a_stored_session_names_its_conversation_while_the_core_holds_it(self):
+        held = FakeAdapter.CONVERSATION
+        for store, keeps, named_at_close in ((False, False, None), (True, False, None), (True, True, held)):
+            with self.subTest(store=store, kept=keeps):
+                await self.start(responses_config(store=store))
+                self.frontend.keeps = keeps
+                await self.handle({"type": "session.update", "event_id": "u", "session": {}})
+                await self.session.close("remote_hangup")
+                kinds = ("session.started", "session.updated", "session.closed")
+                events = [event for event in self.primary.events if event["type"] in kinds]
+                named = [event["session"]["delegation"]["responses"].get("conversation") for event in events]
+                self.assertEqual(named, [held if store else None] * 2 + [named_at_close])
+
+    async def test_a_refused_conversation_is_the_starts_own_error_and_names_no_id(self):
+        records = []
+        self.addCleanup(logger.remove, logger.add(lambda message: records.append(message.record), level="DEBUG"))
+        named, frontend, primary = "conv_0123456789abcdef", FakeAdapter(), Collector()
+        frontend.fail["update"] = LookupError(f"Conversation {named} not found")
+        config = responses_config(conversation=named, store=True)
+        session = LiveProtocolSession(config, "websocket", frontend.parts(), core=frontend.core)
+        session.subscribe(primary.send, "primary")
+        with self.assertRaises(ProtocolError):
+            await session.start("start_1")
+        self.assertEqual(primary.kinds(), ["error", "session.closed"])
+        error = primary.events[0]
+        refused = ("invalid_value", "session.delegation.responses.conversation", "start_1")
+        self.assertEqual((error["error"]["code"], error["error"]["param"], error["client_event_id"]), refused)
+        lines = [record["message"] for record in records]
+        self.assertEqual(len([line for line in lines if f"session={session.id} start failed: " in line]), 1)
+        self.assertNotIn(named, json.dumps(primary.events) + "\n".join(lines))
+
     async def test_a_cancelled_close_finishes_and_a_second_close_waits(self):
         # Whoever asked to close may be cancelled mid-close (a client that leaves); the close still finishes in order.
         for how in ("anyio scope", "task"):
@@ -283,6 +314,19 @@ class UpdateTests(SessionCase):
             ({"delegation": {"responses": {"bogus": 1}}}, "unknown_parameter", "session.delegation.responses.bogus"),
         )
         self.assertEqual(self.frontend.delegation.acknowledgement_delay_ms, 400)
+
+    async def test_a_stored_session_may_send_back_only_its_own_conversation(self):
+        # The id its events echo changes nothing; any other would change the conversation.
+        await self.start(responses_config(store=True))
+        own = {"delegation": {"responses": {"conversation": FakeAdapter.CONVERSATION}}}
+        self.assertEqual((await self.update(own))["type"], "session.updated")
+        await self.assert_refused(
+            (
+                {"delegation": {"responses": {"conversation": "conv_other"}}},
+                "immutable_field_update",
+                "session.delegation.responses.conversation",
+            ),
+        )
 
 
 class AppendTests(SessionCase):

@@ -149,7 +149,7 @@ class WebSocketTests(unittest.TestCase):
         ws = run_socket(gateway, start)
         self.assertEqual(ws.kinds(), ["error", "session.closed"])
         error = ws.from_server[0]
-        self.assertEqual((error["error"]["code"], error["client_event_id"]), ("pipeline_error", "start_1"))
+        self.assertEqual((error["error"]["code"], error["client_event_id"]), ("server_error", "start_1"))
 
     def test_an_observer_sees_later_events_and_sends_commands(self):
         app, _, engines = make_app()
@@ -567,6 +567,15 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hook.builds, 1)
         self.assertIs(first.delegation.client, second.delegation.client)
         self.assertEqual(first.delegation.conversation, FakeAdapter.CONVERSATION)
+
+    async def test_a_stored_session_attaches_to_its_conversation_through_the_one_core(self):
+        hook = CountingCore()
+        hook.core.kept = {"conv_kept"}
+        gateway = LiveGateway(adapter_factory, LiveSettings(), core=hook)
+        session = await self.start(gateway, responses_config(conversation="conv_kept", store=True))
+        metadata = {"live_session_id": session.id, "live_store": "true"}
+        self.assertEqual((hook.core.log, hook.core.metadata), (["update"], metadata))
+        self.assertEqual(session.delegation.conversation, "conv_kept")
 
     async def test_a_core_build_failure_is_said_without_detail_and_retried(self):
         hook = CountingCore(fails=1)

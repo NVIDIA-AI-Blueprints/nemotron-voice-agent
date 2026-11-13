@@ -10,6 +10,7 @@ import json
 from unittest import mock
 
 from examples.frontend_backend_live.delegation_core.backend.port import Start
+from examples.frontend_backend_live.delegation_core.im.conversation import item_size
 from examples.frontend_backend_live.delegation_core.im.results import SpeakDisplay
 from examples.frontend_backend_live.delegation_core.im.session import DelegationError
 from tests.unit.delegation_core.helpers import (
@@ -152,7 +153,8 @@ class ResponseTests(IMCase):
         self.assertIn("Let me look.", history)
 
     async def test_the_work_tools_follow_the_result_format(self):
-        for result_format, offered in ((None, ["cancel_work"]), (SPEAK_DISPLAY, ["show", "cancel_work"])):
+        plain, envelope = ["cancel_work", "ask_caller"], ["show", "cancel_work", "ask_caller"]
+        for result_format, offered in ((None, plain), (SPEAK_DISPLAY, envelope)):
             with self.subTest(offered=offered):
                 gate = asyncio.Event()
                 adapter = ScriptedAdapter([wait(gate), answer()])
@@ -160,11 +162,11 @@ class ResponseTests(IMCase):
                 tools = adapter.runs[0].task.tools()
                 self.assertEqual([tool["name"] for tool in tools.tools()], offered)
                 gate.set()
-        schema, (tool, _) = TEXTS.work_tools["show"], tools.tools()
+        schema, (tool, *_) = TEXTS.work_tools["show"], tools.tools()
         self.assertEqual((tool["description"], tool["parameters"]), (schema["description"], dict(schema["parameters"])))
         with self.assertRaises(ValueError):
             await tools.execute("c1", "show", "{}")
-        unknown = TEXTS.unknown_tool_output.format(name="book_table", offered="show, cancel_work")
+        unknown = TEXTS.unknown_tool_output.format(name="book_table", offered="show, cancel_work, ask_caller")
         self.assertEqual(await tools.execute("c2", "book_table", "{}"), json.dumps({"error": unknown}))
 
     async def test_rounds_and_snapshots_read_the_composed_instructions(self):
@@ -233,6 +235,13 @@ class ResponseTests(IMCase):
         im = self.session(ScriptedAdapter([answer()]), context_tokens=50)
         events = await read_all(im.admit(ask("x" * 2000), delegation_id="D1").stream)
         self.assertEqual(events[-1]["type"], "response.failed")
+
+    def test_the_budget_counts_the_id_of_no_input_message(self):
+        said = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Teas."}]}
+        self.assertEqual(item_size({**said, "id": "D1.2"}), item_size(said))
+        # An output message counts its id.
+        output = {**said, "status": "completed"}
+        self.assertGreater(item_size({**output, "id": "msg_1"}), item_size(output))
 
 
 class RateLimited(Exception):

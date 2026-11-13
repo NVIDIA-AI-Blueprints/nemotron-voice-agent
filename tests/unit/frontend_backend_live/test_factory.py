@@ -176,14 +176,15 @@ class BuildCoreTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "Unknown tool source 'crm'; known: cafe"):
                 self.build(settings(tools={"crm": {}}))
 
-    def test_the_close_budget_is_the_grace_then_the_stop_wait(self):
+    def test_the_close_budget_is_the_grace_and_two_stop_waits(self):
         delegation = SHIPPED.delegation
-        self.assertEqual(self.build().close_seconds, delegation.close_grace_seconds + delegation.stop_timeout_seconds)
+        budget = delegation.close_grace_seconds + 2 * delegation.stop_timeout_seconds
+        self.assertEqual(self.build().close_seconds, budget)
         no_grace = delegation.model_copy(update={"close_grace_seconds": None})
         backend = settings().backend
         self.assertEqual(
             self.build(SHIPPED.model_copy(update={"delegation": no_grace, "backend": backend})).close_seconds,
-            delegation.work_timeout_seconds + delegation.stop_timeout_seconds,
+            delegation.work_timeout_seconds + 2 * delegation.stop_timeout_seconds,
         )
         unbounded = no_grace.model_copy(update={"work_timeout_seconds": None})
         self.assertIsNone(

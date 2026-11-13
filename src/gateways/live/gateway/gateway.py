@@ -72,6 +72,10 @@ class CoreClient:
         """Call ``POST /v1/conversations`` on the core."""
         return await (await self.client()).create_conversation(metadata)
 
+    async def update_conversation(self, conversation_id: str, metadata: dict[str, str]) -> dict:
+        """Call ``POST /v1/conversations/{id}`` on the core."""
+        return await (await self.client()).update_conversation(conversation_id, metadata)
+
     async def delete_conversation(self, conversation_id: str) -> dict:
         """Call ``DELETE /v1/conversations/{id}`` on the core."""
         return await (await self.client()).delete_conversation(conversation_id)

@@ -50,6 +50,9 @@ class AgentAdapter:
         """Start one task as an ``LlmRun`` of the session's workers; no model call happens before its ``events()``."""
         return self.workers.start(task)
 
+    def release_idle(self) -> None:
+        """Release nothing: it keeps no idle session."""
+
     async def close(self) -> None:
         """Close the workers' providers and the conductor's."""
         closing = [self.workers.close(), *([self._conductor.close()] if self._conductor is not None else [])]

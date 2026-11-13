@@ -12,7 +12,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from examples.frontend_backend_live.delegation_core.backend.port import Steering
+from examples.frontend_backend_live.delegation_core.backend.port import Steering, TaskContext
 
 if TYPE_CHECKING:
     from .sessions import KeptSession
@@ -142,6 +142,14 @@ class PromptEnded:
         reader.prompt_ended(self)
 
 
+def usage_total(usage: Mapping[str, Any] | None) -> int | None:
+    """Return the session's token total an agent reported (ACP ``totalTokens``), or ``None``."""
+    if not usage:
+        return None
+    total = usage.get("totalTokens")
+    return total if isinstance(total, int) else None
+
+
 @dataclass(eq=False)
 class HeldCall:
     """A call the bridge holds for the worker: its function call item, and the answer the runtime waits for."""
@@ -248,6 +256,10 @@ class HarnessSession(Protocol):
     def outstanding(self) -> frozenset[int]:
         """The prompts sent and not ended yet."""
 
+    @property
+    def alive(self) -> bool:
+        """Whether it can still serve: not retired, and not ended or lost as far as its protocol can tell."""
+
     def prompt(self, text: str) -> int:
         """Send ``text`` as a prompt (never as a command of the agent); return its number. Its end is a PromptEnded."""
 
@@ -263,8 +275,11 @@ class HarnessSession(Protocol):
     async def idle(self) -> None:
         """Return once no prompt is outstanding."""
 
-    def retire(self) -> None:
-        """Stop using the session; an agent with no session close keeps it until its process ends."""
+    def retire(self) -> bool:
+        """Stop using it, and close it in the agent if the agent has a session close; return whether a close went out.
+
+        An agent with no session close keeps the session until its process ends.
+        """
 
 
 class HarnessClient(Protocol):
@@ -349,7 +364,7 @@ class Runtime(Protocol):
 
 
 class Runtimes(Protocol):
-    """Where a session's runtime comes from (the adapter): a process its role shares, or the session it keeps."""
+    """Where a session's runtime comes from (the adapter): a process its role shares, or an idle session it keeps."""
 
     async def shared(self, role: Role) -> Runtime:
         """Return a process of ``role`` with a turn free, its place taken until ``Runtime.leave``."""
@@ -357,11 +372,14 @@ class Runtimes(Protocol):
     def take_place(self, runtime: Runtime) -> bool:
         """Take a place in ``runtime`` for the session kept there, while it has a turn free and its client is alive."""
 
-    def take_kept(self) -> KeptSession | None:
-        """Take the kept session out of the slot, so two tasks never share it; ``None`` when none is kept."""
+    def candidates(self, task: TaskContext) -> list[KeptSession]:
+        """Return the idle sessions of ``task``'s thread in the order it tries them (``SessionPool``)."""
 
-    def keep(self, kept: KeptSession) -> bool:
-        """Keep ``kept``, the session of a task that answered, while none is kept; ``False``: the run retires it."""
+    def take_kept(self, kept: KeptSession) -> None:
+        """Take ``kept`` out of the idle sessions, so two tasks never share it."""
+
+    def keep(self, kept: KeptSession) -> KeptSession | None:
+        """Keep ``kept``, the session of a task that answered; return the idle session over the bound, to retire."""
 
 
 class Steerable(Protocol):

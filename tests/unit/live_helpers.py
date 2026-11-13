@@ -49,15 +49,19 @@ class Stream:
 
 
 class FakeAdapter:
-    """A frontend adapter and a delegation core in one, noting what the gateway asks of them."""
+    """A frontend adapter and a delegation core in one, noting what the gateway asks of them.
+
+    As the core, it lets a later call attach to a conversation in ``kept``; while ``keeps`` is set, a delete keeps its
+    conversation there and answers ``deleted: false``, as work that outlives the call does.
+    """
 
     CONVERSATION = "conv_fake"
 
     def __init__(self, peer=None, streams=()):
         self.peer, self.streams, self.hold, self.fail = peer, list(streams), {}, {}
         self.session = self.delegation = self.reader = None
-        self.started = self.closed = self.muted = False
-        self.audio, self.appended, self.typed_texts = [], [], []
+        self.started = self.closed = self.muted = self.keeps = False
+        self.audio, self.appended, self.typed_texts, self.kept = [], [], [], set()
         self.log, self.requests, self.checked, self.heard, self.raw = [], [], [], [], []
         self.models_rejected, self.fails_on, self.deleted = {"bad-model"}, None, asyncio.Event()
 
@@ -131,10 +135,20 @@ class FakeAdapter:
         self.metadata = metadata
         return {"id": self.CONVERSATION, "object": "conversation", "created_at": 0, "metadata": dict(metadata)}
 
+    async def update_conversation(self, conversation_id, metadata):
+        await self.step("update")
+        if conversation_id not in self.kept:
+            raise LookupError("Conversation not found")
+        self.kept.discard(conversation_id)
+        self.metadata = metadata
+        return {"id": conversation_id, "object": "conversation", "created_at": 0, "metadata": dict(metadata)}
+
     async def delete_conversation(self, conversation_id):
         await self.step("delete")
         self.deleted.set()
-        return {"id": conversation_id, "object": "conversation.deleted", "deleted": True}
+        if self.keeps:
+            self.kept.add(conversation_id)
+        return {"id": conversation_id, "object": "conversation.deleted", "deleted": not self.keeps}
 
     async def retrieve_model(self, model):
         if model in self.models_rejected:
@@ -188,9 +202,11 @@ class Collector:
         return [event["type"] for event in self.events]
 
 
-def responses_config(**kwargs):
-    """Return a responses-mode session configuration."""
+def responses_config(conversation=None, **kwargs):
+    """Return a responses-mode session configuration; ``conversation`` names a kept one to continue."""
     responses = {"model": "org/org/model", "reasoning": {"effort": "low", "summary": "auto"}}
+    if conversation is not None:
+        responses["conversation"] = conversation
     return SessionConfig(model="live-1", delegation={"type": "responses", "responses": responses}, **kwargs)
 
 

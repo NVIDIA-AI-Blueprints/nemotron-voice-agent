@@ -4,6 +4,7 @@
 """The live session protocol: the strict startup schema, the voices, and the rejection error."""
 
 from gateways.live.protocol.config import (
+    CONVERSATION_PARAM,
     DELEGATION_CONFIGS,
     Audio,
     AudioFormat,
@@ -20,6 +21,7 @@ from gateways.live.protocol.errors import ProtocolError, validation_error
 from gateways.live.protocol.voices import LIVE_VOICES, TTS_VOICES
 
 __all__ = [
+    "CONVERSATION_PARAM",
     "DELEGATION_CONFIGS",
     "LIVE_VOICES",
     "TTS_VOICES",

@@ -103,6 +103,23 @@ class ProtocolTests(unittest.TestCase):
                     longest.updated({"delegation": {"acknowledgement_delay_ms": 801}})
                 self.assertEqual(error_event(updated.exception)["error"], refused)
 
+    def test_a_conversation_to_continue_needs_store_and_is_set_only_at_the_start(self):
+        param = "session.delegation.responses.conversation"
+        with self.assertRaises(ProtocolError) as unstored:
+            SessionConfig(model="live-1", delegation=responses(conversation="conv_1"))
+        self.assertEqual((unstored.exception.code, unstored.exception.param), ("invalid_value", param))
+        blank = start_error(store=True, delegation=responses(conversation=" "))
+        self.assertEqual((blank.code, blank.param), ("invalid_value", param))
+        stored = SessionConfig(model="live-1", store=True, delegation=responses(conversation="conv_1"))
+        same = stored.updated({"delegation": {"responses": {"conversation": "conv_1"}}})
+        self.assertEqual(same.delegation.responses.conversation, "conv_1")
+        fresh = SessionConfig(model="live-1", store=True, delegation=responses())
+        for config, conversation in ((stored, "conv_2"), (stored, None), (fresh, "conv_1")):
+            with self.subTest(conversation=conversation, named_at_start=config is stored):
+                with self.assertRaises(ProtocolError) as changed:
+                    config.updated({"delegation": {"responses": {"conversation": conversation}}})
+                self.assertEqual((changed.exception.code, changed.exception.param), ("immutable_field_update", param))
+
     def test_an_update_merges_reasoning_and_replaces_tool_choice(self):
         function = {"type": "function", "name": "get_menu"}
         mcp = {"type": "mcp", "server_label": "crm"}

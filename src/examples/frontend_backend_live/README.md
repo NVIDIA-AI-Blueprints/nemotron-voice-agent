@@ -124,7 +124,7 @@ The delegation core calls a backend model over chat completions unless the model
 | What places each request | A rule, with no model call | A model conductor, with one call per decision | A conductor session of the agent, with one prompt per decision |
 | What you deploy | Nothing more | Nothing more | The agent, as [Connect an Agent Harness](../../../docs/how-to/connect-an-agent-harness.md) describes |
 
-The rule joins each request to the open work, or starts the work when none is open. A conductor runs only while `max_running` is above 1. It places every request, so a new request waits up to its 20-second timeout for a decision, and it can answer a status question. For how this differs from OpenAI's GPT-Live API, refer to [How This Differs from GPT-Live](../../../docs/how-to/use-live-gateway.md#how-this-differs-from-gpt-live).
+The rule joins each request to the open work, else continues the work that ended last, else starts new work. A conductor runs only while `max_running` is above 1. It places every request, so a new request waits for the conductor's decision. That wait lasts up to 20 seconds with `llm-agent`, and with `harness` until the conductor's agent is free and has decided. The conductor can also answer a status question. For how this differs from OpenAI's GPT-Live API, refer to [How This Differs from GPT-Live](../../../docs/how-to/use-live-gateway.md#how-this-differs-from-gpt-live).
 
 To switch adapters, set `core.backend.adapter`, and for `llm-agent` or `harness` also `core.delegation.result_format: speak_display`, which asks every worker for a `show` item for the screen before the answer. Then restart the app service, for example `docker compose restart frontend-backend-live`.
 

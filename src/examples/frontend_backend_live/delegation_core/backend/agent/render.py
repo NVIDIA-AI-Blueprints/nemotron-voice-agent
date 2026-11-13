@@ -37,8 +37,8 @@ def request(given: Request) -> dict:
 
 
 def task(summary: TaskSummary) -> dict:
-    """Render one task of a Work from its record."""
-    return {
+    """Render one task of a Work from its record; its question only while it holds one, its answer only when given."""
+    rendered = {
         "task_id": summary.task_id,
         "state": summary.state,
         "brief": summary.brief,
@@ -47,17 +47,25 @@ def task(summary: TaskSummary) -> dict:
         "progress": summary.progress,
         "seconds": round(summary.seconds, SECONDS_DIGITS),
     }
+    if summary.question:
+        rendered["question"] = summary.question
+    if summary.answer:
+        rendered["answer"] = summary.answer
+    return rendered
 
 
 def work(summary: WorkSummary) -> dict:
-    """Render one Work, open or recently ended, with its requests and its tasks."""
-    return {
+    """Render one Work, open or recently ended, with its requests and its tasks; whether it outlives the call, if so."""
+    rendered = {
         "work_id": summary.work_id,
         "state": summary.state,
         "requests": [request(each) for each in summary.requests],
         "tasks": [task(each) for each in summary.tasks],
         "seconds": round(summary.seconds, SECONDS_DIGITS),
     }
+    if summary.after_call:
+        rendered["continues_after_call"] = True
+    return rendered
 
 
 def round_input(given: ConductorInput) -> dict:
