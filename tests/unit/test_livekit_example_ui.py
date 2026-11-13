@@ -23,12 +23,16 @@ const scenario = process.argv[3];
 const code = fs.readFileSync(process.argv[2], 'utf8');
 const elements = {};
 const makeEl = () => ({
-  style: {}, classList: { add() {}, remove() {}, toggle() {}, replace() {} }, textContent: '', innerHTML: '',
-  value: '', disabled: false, open: true, title: '', add() {}, append() {}, appendChild() {}, remove() {},
+  style: {}, classList: { add() {}, remove() {}, toggle() {}, replace() {} }, textContent: '',
+  value: '', disabled: false, open: true, title: '', options: [], _html: '',
+  get innerHTML() { return this._html; },
+  set innerHTML(v) { this._html = v; this.options.length = 0; },
+  add(option) { this.options.push(option); }, append() {}, appendChild() {}, remove() {},
   querySelector: () => makeEl(), scrollTop: 0, scrollHeight: 0,
 });
 const document = { getElementById: (id) => (elements[id] ||= makeEl()), createElement: () => makeEl() };
 const log = [];
+let releaseToken = null;
 class Room {
   constructor() {
     this.localParticipant = {
@@ -54,6 +58,9 @@ const context = {
   LivekitClient: { Room, RoomEvent: {}, Track: { Kind: { Audio: 'audio' } }, ConnectionState: {} },
   fetch: async (url) => {
     log.push(['fetch', url.split('?')[0]]);
+    if (scenario === 'token-pending' && url.startsWith('/token')) {
+      await new Promise((resolve) => { releaseToken = resolve; });
+    }
     if (scenario === 'token-fails' && url.startsWith('/token')) {
       return { ok: false, status: 500, json: async () => ({}) };
     }
@@ -77,10 +84,14 @@ const done = () => new Promise((resolve) => setImmediate(resolve));
   if (scenario !== 'load') {
     elements.connect.onclick();
     for (let i = 0; i < 10; i++) await done();
+    out.voiceDisabledWhilePending = elements.voice.disabled;
+    out.scenarioDisabledWhilePending = elements.scenario.disabled;
+    if (releaseToken) { releaseToken(); for (let i = 0; i < 10; i++) await done(); }
     out.connectDisabled = elements.connect.disabled;
     out.connectLabel = elements.connect.textContent;
     out.status = elements.status.textContent;
     out.scenarioDisabled = elements.scenario.disabled;
+    out.voiceDisabled = elements.voice.disabled;
     out.tokenRequest = log.filter((e) => e[0] === 'fetch' && e[1] === '/token').length;
   }
   out.log = log;
@@ -123,12 +134,22 @@ def test_connecting_locks_the_use_case_and_requests_a_token(tmp_path):
     assert out["connectDisabled"] is False
 
 
+def test_the_voice_and_use_case_are_locked_while_the_connection_is_pending(tmp_path):
+    out = run_page("token-pending", tmp_path)
+    assert out["voiceDisabledWhilePending"] is True  # a change now would be dropped: no room exists yet
+    assert out["scenarioDisabledWhilePending"] is True
+    assert out["voiceDisabled"] is False  # once connected, the voice can change during the session
+    assert out["scenarioDisabled"] is True  # the use case stays fixed for the session
+    assert out["connectLabel"] == "Disconnect"
+
+
 @pytest.mark.parametrize("scenario", ["token-fails", "connect-fails"])
 def test_a_failed_connect_leaves_the_page_ready_for_another_try(tmp_path, scenario):
     out = run_page(scenario, tmp_path)
     assert out["connectDisabled"] is False
     assert out["connectLabel"] == "Connect"
     assert out["scenarioDisabled"] is False  # unlocked again after the failure
+    assert out["voiceDisabled"] is False
     assert out["status"].startswith("Error:")
     if scenario == "connect-fails":
         assert ["disconnect"] in out["log"]  # the room is left, so the agent does not wait in it

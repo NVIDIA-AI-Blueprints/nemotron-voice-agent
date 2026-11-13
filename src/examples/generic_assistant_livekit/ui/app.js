@@ -126,6 +126,7 @@ function showModels(models) {
 async function connect() {
   $('connect').disabled = true;
   $('scenario').disabled = true;  // the use case is fixed from here on, so a late change cannot differ from the token
+  $('voice').disabled = true;  // a change before the room exists would be dropped, so it waits until the connection is up
   setStatus('Requesting token…');
   try {
     const params = new URLSearchParams({ scenario: $('scenario').value });
@@ -169,6 +170,7 @@ async function connect() {
   }
   setStatus('Connected — waiting for agent');
   $('scenario').disabled = true;  // the use case is fixed for the session
+  updateVoiceEnabled();  // a voice can change during the session now that the room exists
   $('connect').textContent = 'Disconnect';
   $('connect').classList.replace('primary', 'danger');
   $('connect').disabled = false;
@@ -188,6 +190,10 @@ function showVoices(voices, current) {
   select.disabled = voices.length < 2;
   select.title = voices.length < 2 ? 'The speech server offers one voice' : '';
   voicesLoaded = voices.length > 0;
+}
+
+function updateVoiceEnabled() {  // one voice (or the loading placeholder) leaves nothing to choose
+  $('voice').disabled = $('voice').options.length < 2;
 }
 
 async function loadVoices() {
@@ -212,6 +218,7 @@ $('voice').onchange = async () => {
 function reset() {
   room = null;
   $('scenario').disabled = false;
+  updateVoiceEnabled();
   $('connect').textContent = 'Connect';
   $('connect').classList.replace('danger', 'primary');
   $('connect').disabled = false;
