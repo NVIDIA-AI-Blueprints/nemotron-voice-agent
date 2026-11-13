@@ -264,6 +264,14 @@ Host spark
 
 SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or internet setup, set `LIVEKIT_NODE_IP` to the host address, serve the UI over HTTPS, and add a TURN server. The repository provides one in [`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml) (refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md)). The UI does not pass TURN credentials to LiveKit, so extend `ui/app.js` to use relay candidates.
 
+## Troubleshooting
+
+Check the agent log first: `src/examples/generic_assistant_livekit/run.sh logs <profile> agent`.
+
+- **Transcripts appear but the agent does not answer (Cloud):** the hosted LLM is probably rate limited. The log shows `429 Too Many Requests`, and the UI shows an error event. Wait a minute, or choose another model, for example `LLM_SERVICE=nemotron-bolt-4b` (refer to [Configure Models](#configure-models)).
+- **The Voice list is empty or shows `Default voice (list unavailable)`:** the TTS server has not answered yet. The agent keeps retrying. A hosted endpoint can take up to 30 seconds when it is cold, and a local sidecar answers after it loads its models. The log shows `could not list TTS voices` while it fails.
+- **`port is already allocated` or a stuck start:** another container holds a host port. Refer to [Recommended Hardware](#recommended-hardware) and [Cleanup](#cleanup).
+
 ## Customization
 
 | Path | Role |

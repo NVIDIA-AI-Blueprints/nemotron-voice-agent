@@ -81,6 +81,12 @@ function onAgentEvent(ev) {
       break;
     case 'voices': showVoices(ev.voices, ev.current); break;
     case 'voice_changed': addEvent('🗣️', `Voice changed to ${ev.name}`); break;
+    case 'error': {
+      const limited = /429|too many requests|rate.?limit/i.test(ev.message);
+      const hint = limited ? ' The hosted model is rate limited. Wait a minute, or choose another model.' : '';
+      addEvent('⚠️', `${ev.source} error: ${ev.message}${hint}`, 'error');
+      break;
+    }
     case 'agent_state': if (ev.state === 'thinking') setStatus('Thinking…'); break;
   }
 }

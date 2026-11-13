@@ -28,6 +28,7 @@ from .voices import (
     fetch_synthesis_params,
     parse_set_voice,
     parse_voices,
+    read_voices_file,
     with_current,
     write_voices_file,
 )
@@ -36,6 +37,8 @@ log = logging.getLogger("generic-assistant-livekit")
 
 EVENTS_TOPIC = "agent.events"  # data-channel topic the web UI listens on
 CONTROL_TOPIC = "agent.control"  # data-channel topic the web UI sends commands on
+HOSTED_VOICE_LIST_TIMEOUT_S = 30
+LOCAL_VOICE_LIST_TIMEOUT_S = 5
 
 apply_to_environ()  # LiveKit key and secret from the state volume, unless set in the environment
 server = AgentServer()
@@ -71,13 +74,17 @@ class SwitchableTTS(nvidia.TTS):
 
 
 def discover_voices(cfg: AgentConfig, quiet: bool = False) -> list[dict[str, str]]:
-    """Return the voices the TTS server offers for the session language. Empty when the server cannot be asked."""
+    """Return the voices the TTS server offers for the session language. Empty when the server cannot be asked.
+
+    A hosted endpoint can be cold, so it gets a longer timeout than a local sidecar.
+    """
     try:
         params = fetch_synthesis_params(
             cfg.tts_server,
             use_ssl=cfg.hosted,
             api_key=os.environ.get("NVIDIA_API_KEY", "") if cfg.hosted else "",
             function_id=cfg.tts_function_id,
+            timeout=HOSTED_VOICE_LIST_TIMEOUT_S if cfg.hosted else LOCAL_VOICE_LIST_TIMEOUT_S,
         )
         return parse_voices(params, cfg.tts_language)
     except Exception as exc:
@@ -109,6 +116,12 @@ def build_llm(cfg: AgentConfig) -> openai.LLM:
     )
 
 
+def error_kind(source: object) -> str:
+    """Name the pipeline stage (LLM, STT, or TTS) that an error event came from."""
+    names = {cls.__name__ for cls in type(source).__mro__}
+    return next((kind for kind in ("LLM", "STT", "TTS") if kind in names), type(source).__name__)
+
+
 def publish_voices(cfg: AgentConfig, state_dir: Path, retry_s: float = 10, refresh_s: float = 300) -> None:
     """Keep the state volume's voice list current, so the UI can offer voices before a session starts.
 
@@ -133,7 +146,7 @@ def publish_voices(cfg: AgentConfig, state_dir: Path, retry_s: float = 10, refre
 async def entrypoint(ctx: JobContext):
     """Join the room, wire the cascaded pipeline, and greet the user."""
     cfg = load_config()
-    voices_task = asyncio.ensure_future(asyncio.to_thread(discover_voices, cfg))
+    state_dir = Path(os.environ.get("LIVEKIT_STATE_DIR", "/state"))
     await ctx.connect()
     participant = await ctx.wait_for_participant()
 
@@ -148,7 +161,9 @@ async def entrypoint(ctx: JobContext):
 
     # The use case and voice chosen in the UI arrive as participant attributes. Unknown values fall back to defaults.
     scenario = get_scenario(participant.attributes.get("scenario"))
-    voices = with_current(await voices_task, cfg.tts_voice)
+    # The voice list comes from the file that the worker publishes, so a session never waits on the TTS server.
+    listed = read_voices_file(state_dir / VOICES_FILE)["voices"]
+    voices = with_current(listed, cfg.tts_voice)
     names = {voice["id"]: voice["name"] for voice in voices}
     chosen = choose_voice(participant.attributes.get("voice"), names, cfg.tts_voice)
     tts = build_tts(cfg, chosen)
@@ -163,6 +178,11 @@ async def entrypoint(ctx: JobContext):
         # The reply was cut off because the user spoke over it: a confirmed barge-in.
         if getattr(ev.item, "role", None) == "assistant" and getattr(ev.item, "interrupted", False):
             emit("barge_in")
+
+    @session.on("error")
+    def _error(ev):
+        # A failed LLM, ASR, or TTS call (for example a rate-limited hosted model) would otherwise look like silence.
+        emit("error", source=error_kind(getattr(ev, "source", None)), message=str(getattr(ev, "error", ev))[:300])
 
     @session.on("agent_false_interruption")
     def _false_interruption(ev):
