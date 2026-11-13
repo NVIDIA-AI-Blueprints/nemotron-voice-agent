@@ -29,10 +29,11 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     Steer,
 )
 from examples.frontend_backend_live.delegation_core.config import DelegationSettings, Texts
-from examples.frontend_backend_live.delegation_core.im.conversation import Conversation, TaskHistory
+from examples.frontend_backend_live.delegation_core.im.conversation import AskedQuestions, Conversation, TaskHistory
 from examples.frontend_backend_live.delegation_core.im.input import (
     BackendTask,
     compose,
+    questions_part,
     records_parts,
     settings_for,
     with_parts,
@@ -44,6 +45,7 @@ from examples.frontend_backend_live.delegation_core.im.stop import AtClose, ForN
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseBook, ResponseStream
 from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.delegation_core.ledger.records import WorkLedger
+from examples.shared.delegation_contract import ReplyUnheard
 from examples.shared.ids import uid
 
 FUNCTION_CALL_OUTPUTS_REQUIRED = "function_call_outputs_required"
@@ -80,11 +82,25 @@ class Admission:
 
 
 @dataclass(frozen=True)
+class HeardFact:
+    """What a delegation said the caller had heard of the backend's answers when they spoke."""
+
+    level: ReplyUnheard
+
+
+@dataclass(frozen=True)
 class Incoming:
     """What an accepted request brings to the Work it joins; its input is its ``Delegation`` record's."""
 
     # A typed run's or continuation's own settings; None for a delegation, which keeps the Work's.
     brings: dict | None
+    # A delegation's heard fact; None: it stated none.
+    heard: HeardFact | None = None
+
+    @property
+    def reply_unheard(self) -> ReplyUnheard | None:
+        """Return the level the delegation stated; ``None`` when it stated none."""
+        return self.heard.level if self.heard is not None else None
 
 
 def _noop(kind: str, **fields: Any) -> None:
@@ -141,6 +157,8 @@ class IMSession:
         self.book = ResponseBook(self.ledger)
         self.notes = ProgressNotes(self.book, settings.progress_note_seconds)
         self.conversation = Conversation(settings.context_tokens, settings.tool_output_chars, texts.cut_output)
+        # The one record of the questions the backend's answers asked.
+        self.questions = AskedQuestions()
         self.incoming: dict[str, Incoming] = {}
         self.arrivals: list[str] = []
         self.works: dict[str, WorkRun] = {}
@@ -198,13 +216,27 @@ class IMSession:
         task.add_done_callback(self._background.discard)
 
     def admit(
-        self, input_items: list[dict], *, delegation_id: str | None = None, settings: dict | None = None
+        self,
+        input_items: list[dict],
+        *,
+        delegation_id: str | None = None,
+        settings: dict | None = None,
+        reply_unheard: ReplyUnheard | None = None,
     ) -> Admission:
-        """Accept a delegation in one step, or refuse it with ``DelegationError`` before anything changes."""
-        return self._accept(input_items, delegation_id, settings, None)
+        """Accept a delegation in one step, or refuse it with ``DelegationError`` before anything changes.
+
+        ``reply_unheard``: what the frontend states the caller had not heard of the backend's answers
+        (``metadata.live_reply_unheard``), which the questions block counts; ``None``: it states none.
+        """
+        return self._accept(input_items, delegation_id, settings, None, reply_unheard)
 
     def _accept(
-        self, input_items: list[dict], delegation_id: str | None, settings: dict | None, brings: dict | None
+        self,
+        input_items: list[dict],
+        delegation_id: str | None,
+        settings: dict | None,
+        brings: dict | None,
+        reply_unheard: ReplyUnheard | None = None,
     ) -> Admission:
         if self.closed:
             raise DelegationError("Session is closing")
@@ -219,11 +251,17 @@ class IMSession:
         )
         stream = ResponseStream()
         self.book.open(delegation.id, stream, *self.response_settings(settings))
-        self.incoming[delegation.id] = Incoming(brings)
+        heard = HeardFact(reply_unheard) if reply_unheard is not None else None
+        self.incoming[delegation.id] = Incoming(brings, heard)
+        if brings is None:  # a frontend delegation: the caller spoke after the questions asked so far
+            awaiting = self.questions.replied(reply_unheard)
+            level = reply_unheard.value if reply_unheard is not None else "unknown"
+            self.observe("im.question.replied", delegation_id=delegation.id, awaiting=awaiting, level=level)
         self.arrivals.append(delegation.id)
         self.admitted += 1
         self._decided.clear()
-        self.observe("backend.queued", delegation_id=delegation.id, waiting=waiting + 1)
+        reply = reply_unheard.value if reply_unheard is not None else ""
+        self.observe("backend.queued", delegation_id=delegation.id, waiting=waiting + 1, reply_unheard=reply)
         if self._deciding is not None and not self._deciding.done() and not self._placed_any and self._may_restart:
             # A decide() that placed nothing starts again with every arrival.
             self._restart, self._may_restart = True, False
@@ -429,8 +467,32 @@ class IMSession:
         return with_parts(work.requested, *self.records_parts(exclude=work))
 
     def records_parts(self, exclude: WorkRun | None = None) -> tuple[str, ...]:
-        """Return the work records block and the closing line, as a request's extra parts; none with no record."""
-        return records_parts(self.texts.records_block, self.texts.closing_line, self.records(exclude))
+        """Return the work records block, the questions block and the closing line, as a request's extra parts.
+
+        None with no record. The questions block lists the backend's newest questions (:meth:`question_lines`) when
+        ``delegation.questions.shown`` is above 0.
+        """
+        records = self.records(exclude)
+        lines = self.question_lines() if records and self.settings.questions.shown > 0 else []
+        questions = questions_part(self.texts.questions_block, lines)
+        if questions:
+            repeats = sum(1 for line in lines if line["asked"] >= 2)
+            work_id = exclude.id if exclude is not None else ""
+            self.observe("im.questions_block", work_id=work_id, shown=len(lines), repeats=repeats)
+        return records_parts(self.texts.records_block, self.texts.closing_line, records, questions)
+
+    def question_lines(self) -> list[dict[str, Any]]:
+        """Return the newest ``delegation.questions.shown`` questions as ``{"question", "asked"}``.
+
+        ``"heard_in_full"`` is added when it is known.
+        """
+        lines = []
+        for entry in self.questions.newest(self.settings.questions.shown):
+            line: dict[str, Any] = {"question": entry.text, "asked": entry.asked}
+            if entry.heard_in_full is not None:
+                line["heard_in_full"] = entry.heard_in_full
+            lines.append(line)
+        return lines
 
     def history_for(self, work: WorkRun, task: TaskRun) -> TaskHistory:
         """Return a starting task's view: the conversation's window, its Work's input, its brief, what joined before."""
@@ -562,6 +624,11 @@ class IMSession:
         if not answered or not isinstance(action.output, str):
             return None
         return self.texts.repeated_call_output.format(output=action.output)
+
+    def heard(self, delegation_id: str) -> HeardFact | None:
+        """Return the fact a request stated when it was admitted; ``None`` if it stated none or the IM forgot it."""
+        incoming = self.incoming.get(delegation_id)
+        return incoming.heard if incoming is not None else None
 
     def park(self, parked: Parked) -> None:
         """Owe the outputs of a response's app calls, under the client-tool deadline from its end."""

@@ -1,16 +1,24 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The conversation: the session's shared history, and each task's own view of it."""
+"""The conversation: the session's shared history, and each task's own view of it.
+
+The session also keeps a record of the backend's answers and the questions they ask (:class:`AskedQuestions`).
+"""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass, field
+from typing import Final
 
 from examples.frontend_backend_live.delegation_core.im.input import is_user_message
+from examples.shared.delegation_contract import ReplyUnheard, ends_with_question, question_key, sentences
 from examples.shared.ids import approx_tokens
+
+MAX_QUESTIONS: Final = 50  # question entries kept; the oldest is dropped (a memory bound, not a behaviour)
 
 
 def starts_a_request(item: dict) -> bool:
@@ -119,3 +127,61 @@ class TaskHistory:
     def own(self) -> list[dict]:
         """Return what joined for the task after it started: its brief, its rounds, its outputs, its steering."""
         return deepcopy(self.items[self.base :])
+
+
+@dataclass
+class Asked:
+    """One question the backend asked the caller."""
+
+    text: str  # its newest wording
+    key: str  # its letters and digits, case-folded: two asks are one question when their keys are equal
+    asked: int = 1  # answers that asked it
+    heard_in_full: int | None = None  # times the caller had heard it to the end when they next spoke; None: unknown
+    awaiting: bool = True  # asked since the caller last spoke
+
+
+@dataclass
+class AskedQuestions:
+    """The questions the backend's answers asked the caller in this session, one entry per question."""
+
+    entries: dict[str, Asked] = field(default_factory=dict)  # by key, oldest ask first
+
+    def answer_written(self, text: str) -> list[Asked]:
+        """A task answer was written into the response (never one that was held, or a stopped task's).
+
+        Records each of its question sentences once per answer: ``asked`` + 1, ``awaiting`` set, the entry moved to the
+        end. Returns the entries it touched, newest last.
+        """
+        touched: list[Asked] = []
+        for sentence in sentences(text):
+            key = question_key(sentence)
+            if not ends_with_question(sentence) or not key or any(entry.key == key for entry in touched):
+                continue
+            entry = self.entries.pop(key, None)
+            if entry is None:
+                entry = Asked(sentence, key)
+            else:
+                entry.text, entry.asked, entry.awaiting = sentence, entry.asked + 1, True
+            self.entries[key] = entry
+            touched.append(entry)
+        while len(self.entries) > MAX_QUESTIONS:
+            del self.entries[next(iter(self.entries))]
+        return touched
+
+    def replied(self, level: ReplyUnheard | None) -> int:
+        """The caller spoke (a frontend delegation was admitted) and stated ``level``; returns how many were awaiting.
+
+        ``NONE`` or ``ANSWER``: each awaiting entry was heard in full (``heard_in_full`` + 1). ``QUESTION``: the caller
+        did not hear it to the end, so nothing is added. ``None`` (no fact): counts stay unknown. Each clears
+        ``awaiting``.
+        """
+        awaiting = [entry for entry in self.entries.values() if entry.awaiting]
+        for entry in awaiting:
+            entry.awaiting = False
+            if level is not None and level is not ReplyUnheard.QUESTION:
+                entry.heard_in_full = (entry.heard_in_full or 0) + 1
+        return len(awaiting)
+
+    def newest(self, count: int) -> list[Asked]:
+        """The ``count`` most recently asked questions, oldest of them first."""
+        return list(self.entries.values())[-count:] if count > 0 else []

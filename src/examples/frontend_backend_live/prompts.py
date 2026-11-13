@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The reader of the example's ``prompts.yaml``: the talker prompts and every other text a model reads."""
+"""The reader of the example's ``prompts.yaml``: the talker prompts and every other text a model reads.
+
+A text added after a prompt file was written is optional (:func:`optional`): a file that lacks it still loads, the
+feature that needs it is off, and one ``prompts.missing_text`` warning names the key and the feature.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +15,27 @@ from functools import reduce
 from pathlib import Path
 from typing import Any
 
-from pydantic import StrictStr, ValidationError
+from loguru import logger
+from pydantic import Field, StrictStr, ValidationError
 
 from examples.shared.strict_settings import StrictSettings, placed
 from utils import load_yaml_file, resolve_prompt_catalog_path
+
+
+def optional(feature: str) -> Any:
+    """A text a prompt file may lack: it reads ``None`` then, and ``feature``, which needs it, is off."""
+    return Field(default=None, json_schema_extra={"feature": feature})
+
+
+def _missing_texts(texts: StrictSettings, where: str) -> None:
+    """Warn once (``prompts.missing_text``) for each :func:`optional` text ``texts`` lack, nested groups included."""
+    for name, each in type(texts).model_fields.items():
+        value, key = getattr(texts, name), f"{where}.{name}"
+        if isinstance(value, StrictSettings):
+            _missing_texts(value, key)
+        elif value is None and isinstance(each.json_schema_extra, dict) and "feature" in each.json_schema_extra:
+            feature = each.json_schema_extra["feature"]
+            logger.warning(f"prompts.missing_text key={key} feature={feature}: the prompt file lacks it, so it is off")
 
 
 class FixedLines(StrictSettings):
@@ -78,6 +99,14 @@ class TranscriptText(StrictSettings):
     instruction: StrictStr
     earlier: StrictStr
     unheard: StrictStr
+    # A note for an answer the voice dropped unheard: "{answer}", the backend's text.
+    not_said: StrictStr | None = optional("the note for an answer dropped unheard")
+    # A note: the rest of a cut answer was said and heard after all, "{rest}".
+    now_heard: StrictStr | None = optional("the note for the rest of a cut answer heard after all")
+    # After a cut line's text: the questions that did not play, "{questions}".
+    cut_question: StrictStr | None = optional("the note of a cut answer's unheard questions")
+    # The label of the note that joins what a caller spelled.
+    spelled: StrictStr | None = optional("the note that joins what a caller spelled")
 
 
 class PromptSet(StrictSettings):
@@ -165,13 +194,18 @@ def _texts(agent_prompts: Mapping[str, Any], group: str, path: Path) -> dict[str
 
 
 def _group[T: StrictSettings](model: type[T], groups: Mapping[str, Any], group: str, path: Path) -> T:
-    """Validate ``agent_prompts.<group>`` as ``model``, a dotted entry name (``work_texts.item``) as a nested field."""
+    """Validate ``agent_prompts.<group>`` as ``model``, a dotted entry name (``work_texts.item``) as a nested field.
+
+    An :func:`optional` text the group lacks reads ``None``, with one ``prompts.missing_text`` warning.
+    """
     where = f"agent_prompts.{group} in {path}"
     nested = placed(_texts(groups, group, path), f"{where}: the entry")
     try:
-        return model.model_validate(nested)
+        texts = model.model_validate(nested)
     except ValidationError as error:
         raise ValueError(f"{where}: {error}") from None
+    _missing_texts(texts, group)
+    return texts
 
 
 def load_prompts() -> Prompts:

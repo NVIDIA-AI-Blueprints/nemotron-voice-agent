@@ -241,7 +241,9 @@ class FromConfigTests(unittest.TestCase):
         frontend = {"talker_style": "json", "slot": "llm", "model": "model-of-llm", "base_url": LOCAL["base_url"]}
         self.assertEqual(info["frontend"], {**frontend, "prompt": "generic"})
         speech = {"vad_start_seconds": 0.12, "vad_stop_seconds": 0.2, "turn_silence_seconds": 1.2}
-        self.assertEqual(info["speech"], {"tts_mode": "per_sentence", **speech, "interrupt_min_words": 2})
+        self.assertEqual(
+            info["speech"], {"tts_mode": "per_sentence", **speech, "interrupt_min_words": 2, "spelling_hold": True}
+        )
         self.assertEqual(set(info), {"frontend", "speech"})
         self.assertNotIn("nvapi-secret", json.dumps(info))
         stitched = CascadeAdapter.describe(TALKER_SETTINGS, FakeCatalog(synthesis_mode="stitched"))

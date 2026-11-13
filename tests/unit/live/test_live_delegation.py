@@ -279,6 +279,54 @@ class RelayTests(Case):
         self.assertEqual(tagged, {(delegation_id, None), (delegation_id, "rc7"), (run, "rc8")})
 
 
+class StatedMetadataTests(Case):
+    """What the frontend states about a delegation reaches the core beside the gateway's keys, which always win."""
+
+    async def stated(self, metadata):
+        delegation_id = await self.core.delegation.delegate(HI, metadata=metadata)
+        await self.until(lambda: ("response.completed", delegation_id) in self.ends())
+        return delegation_id, self.core.requests[-1]["metadata"]
+
+    async def test_a_delegation_carries_the_frontends_metadata_beside_the_gateways_keys(self):
+        await self.start()
+        delegation_id, metadata = await self.stated({"live_reply_unheard": "question"})
+        expected = {"live_reply_unheard": "question", "live_session_id": self.session.id}
+        self.assertEqual(metadata, {**expected, "live_delegation_id": delegation_id})
+
+    async def test_the_gateways_own_keys_win_over_the_frontends(self):
+        await self.start()
+        own = {"live_session_id": "other", "live_delegation_id": "item_x", "live_typed_run": "true"}
+        delegation_id, metadata = await self.stated(own)
+        self.assertEqual(metadata["live_session_id"], self.session.id)
+        self.assertEqual(metadata["live_delegation_id"], delegation_id)
+        self.assertNotIn("live_typed_run", metadata)  # the gateway's key: a frontend's value never makes a typed run
+        self.assertEqual(self.core.requests[-1]["input"], HI)
+        observed = []
+        passthrough.stated(own, lambda kind, **fields: observed.append((kind, fields["reason"])))
+        self.assertEqual(observed, [("delegation.metadata_dropped", "reserved")] * 3)
+
+    async def test_metadata_outside_the_limits_is_dropped_and_the_delegation_still_goes(self):
+        await self.start()
+        many = {f"k{n}": "v" for n in range(passthrough.MAX_STATED_METADATA + 1)}
+        long_key, long_value = "x" * (passthrough.MAX_METADATA_KEY + 1), "v" * (passthrough.MAX_METADATA_VALUE + 1)
+        bad = {**many, long_key: "v", "long": long_value, "n": 1}
+        _, metadata = await self.stated(bad)  # the delegation still goes, with the pairs within the limits
+        self.assertEqual(sorted(key for key in metadata if key.startswith("k")), sorted(list(many)[:-1]))
+        observed = []
+        passthrough.stated(bad, lambda kind, **fields: observed.append((kind, fields["reason"])))
+        reasons = sorted(reason for kind, reason in observed if kind == "delegation.metadata_dropped")
+        self.assertEqual(reasons, ["not_text", "too_long", "too_long", "too_many"])
+
+    async def test_continuations_and_typed_runs_carry_no_frontend_metadata(self):
+        await self.start(response("resp_1", call("c1")))
+        await self.core.delegation.delegate(HI, metadata={"live_reply_unheard": "answer"})
+        await self.until(lambda: len(self.ends()) >= 1)
+        await self.send({"type": "response.item.create", "item": output("c1")})
+        continued, typed_run = (await self.create("rc7"))[0], (await self.create("rc8"))[0]
+        for request in (continued, typed_run):
+            self.assertNotIn("live_reply_unheard", request["metadata"])
+
+
 class ContinuationTests(Case):
     async def test_responses_continue_in_call_order_the_newest_with_text(self):
         calls = (("resp_a", call("c1"), call("c2")), ("resp_b", call("c3")), ("resp_c", call("c4"), call("c5")))
@@ -578,6 +626,13 @@ class PartTests(Case):
         for closed in (part, closed_first):
             with self.assertRaises(RuntimeError):
                 await closed.delegate([])
+
+    async def test_a_client_delegation_takes_metadata_and_sends_it_nowhere(self):
+        part, view = ClientDelegation(), View()
+        await part.open(view)
+        delegation_id = await part.delegate([], metadata={"live_reply_unheard": "question"})
+        created = view.events[0][1]
+        self.assertEqual(created["delegation"], {"id": delegation_id, "type": "delegation", "target": "client"})
 
 
 if __name__ == "__main__":

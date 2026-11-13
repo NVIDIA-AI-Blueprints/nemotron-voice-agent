@@ -125,6 +125,9 @@ examples:
           slot: llm                      # the services slot whose selected entry is the talker's model
           talker_style:                  # the talker's style by that entry's services key: json, the JSON decision
             nemotron-lightning: json     # (also for a key not listed), or tools, the routing decision by tool calling
+          delegation:
+            answers:
+              clear_ended_on_cut: true   # a cut also settles a line still waiting for its words (off by default)
       # The delegation core of Live sessions.
       core:
         backend:
@@ -134,8 +137,9 @@ examples:
           prompt: generic                # the agent_prompts.Backend entry of prompts.yaml for requests with none
           # The steps the app's function outputs take before the backend reads them, none by default. To turn on the
           # ID-shape hints, add this block: after an app lookup finds nothing, the backend is told the failed id in the
-          # shape the app's ids take, once. The hint's words are backend.app_output_steps.shape_hints.hint in
-          # prompts.yaml (agent_prompts.Core).
+          # shape the app's ids take, once per form; once a suggested form also failed, no more hints for that field and
+          # one line asking to read the value back. The pattern is the app's language for "found nothing"; replace it
+          # for another. The texts are backend.app_output_steps.shape_hints.* in prompts.yaml (agent_prompts.Core).
           # app_output_steps:
           #   shape_hints:
           #     not_found_pattern: '(?i)\b(not found|does not exist|no such)\b'  # an app output that names nothing

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal
 
 from examples.shared.ids import uid
@@ -50,8 +51,8 @@ class ClientDelegation:
         self._closed = True
         self.announced.clear()
 
-    async def delegate(self, input: list[dict]) -> str:
-        """Mint a delegation id, announce it to the client and return it; ``input`` goes nowhere.
+    async def delegate(self, input: list[dict], *, metadata: Mapping[str, str] | None = None) -> str:
+        """Mint a delegation id, announce it to the client and return it; ``input`` and ``metadata`` go nowhere.
 
         The id is remembered before the announcement goes out, so an append that answers it is always accepted.
         """

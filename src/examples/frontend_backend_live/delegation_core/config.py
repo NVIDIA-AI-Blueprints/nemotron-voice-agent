@@ -10,6 +10,7 @@ from copy import deepcopy
 from types import MappingProxyType
 from typing import Annotated, Any
 
+from loguru import logger
 from pydantic import (
     ConfigDict,
     Field,
@@ -58,6 +59,13 @@ TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "repeated_call_output": ("output",),
         "cut_output": ("chars",),
         "conductor_prompt": ("max_running",),
+        "questions_block": ("questions",),
+    }
+)
+# The core's texts added after a prompt file was written: a file may lack them, and the feature that needs each is off.
+OPTIONAL_TEXTS: Mapping[str, str] = MappingProxyType(
+    {
+        "questions_block": "the questions block",
     }
 )
 WORK_TOOL_KEYS = ("show", "cancel_work")
@@ -81,6 +89,16 @@ def template(text: str, names: Iterable[str], key: str) -> str:
     except FORMAT_ERRORS as exc:
         raise ValueError(f"{key} names a field it is not given: {exc}") from None
     return text
+
+
+class QuestionsSettings(Settings):
+    """The questions block (``delegation.questions``): the backend's newest questions on later requests."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, title="delegation.questions")
+
+    # Questions listed, newest last, after the records block, each with how often it was asked and heard in full; 0: no
+    # block.
+    shown: Count = 3
 
 
 class DelegationSettings(Settings):
@@ -110,10 +128,15 @@ class DelegationSettings(Settings):
     context_tokens: WholeNumber = 24_000
     # A longer tool output enters the backend history cut to its head and tail.
     tool_output_chars: WholeNumber = 8_000
+    questions: QuestionsSettings = Field(default_factory=QuestionsSettings)
 
 
 class Texts(Settings):
-    """The lines the IM and the backend write or add to a model's input; prompts.yaml describes each one."""
+    """The lines the IM and the backend write or add to a model's input; prompts.yaml describes each one.
+
+    Every key is required but the ones added after a prompt file was written (``OPTIONAL_TEXTS``): a file that lacks one
+    loads, the feature that needs it is off, and one ``prompts.missing_text`` warning names the key and the feature.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, title="texts")
 
@@ -138,6 +161,9 @@ class Texts(Settings):
     closing_line: Text
     task_line: Text
     round_cap_note: Text
+    # The backend's newest questions, after the records block: holds {questions}, one JSON line per question; without
+    # it, no block is shown.
+    questions_block: Text | None = None
     conductor_prompt: Text
     outcomes: dict[str, Text]
     refusal_reasons: dict[str, Text]
@@ -146,9 +172,23 @@ class Texts(Settings):
 
     @field_validator(*TEMPLATE_FIELDS)
     @classmethod
-    def holds_its_fields(cls, text: str, info: ValidationInfo) -> str:
-        """Check that a template holds each field it is given (``TEMPLATE_FIELDS``) and names no other."""
-        return template(text, TEMPLATE_FIELDS[info.field_name], info.field_name)
+    def holds_its_fields(cls, text: str | None, info: ValidationInfo) -> str | None:
+        """Check that a template holds each field it is given (``TEMPLATE_FIELDS``) and names no other.
+
+        An optional template may be missing.
+        """
+        return text if text is None else template(text, TEMPLATE_FIELDS[info.field_name], info.field_name)
+
+    @model_validator(mode="after")
+    def warns_of_missing_texts(self) -> Texts:
+        """Warn (``prompts.missing_text``) for each optional text the core's texts lack, on each parse.
+
+        No warning is deduplicated; the shipped prompts hold every text, so nothing is logged by default.
+        """
+        for key, feature in OPTIONAL_TEXTS.items():
+            if getattr(self, key) is None:
+                logger.warning(f"prompts.missing_text key=texts.{key} feature={feature}: it is off")
+        return self
 
     @field_validator("outcomes")
     @classmethod

@@ -31,7 +31,13 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     message_phase,
 )
 from examples.frontend_backend_live.delegation_core.im.conversation import TaskHistory
-from examples.frontend_backend_live.delegation_core.im.input import settings_for, task_request, user_message, with_parts
+from examples.frontend_backend_live.delegation_core.im.input import (
+    QUESTION_TEXT_CHARS,
+    settings_for,
+    task_request,
+    user_message,
+    with_parts,
+)
 from examples.frontend_backend_live.delegation_core.im.results import CallReports, ControlCalls
 from examples.frontend_backend_live.delegation_core.im.stop import AtBackstop, AtDeadline, StopReason
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter
@@ -39,6 +45,7 @@ from examples.frontend_backend_live.delegation_core.im.tools import WorkTools
 from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.delegation_core.ledger.records import Runner, Task, Work
 from examples.frontend_backend_live.delegation_core.ledger.records import Steering as SteeringRecord
+from examples.shared.delegation_contract import ends_with_question, sentences
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.delegation_core.config import Texts
@@ -355,7 +362,7 @@ class TaskRun:
     def _answer(self, message: dict) -> None:
         """Mark the round answered, and have the Work write ``message``."""
         self.answered = True
-        self.trace("im.answer.written")
+        self.trace("im.answer.written", question=any(map(ends_with_question, sentences(message_text(message)))))
         self.work.answer(self, message)
 
     @property
@@ -647,6 +654,12 @@ class WorkRun:
 
             def written(writer: ResponseWriter) -> None:
                 writer.message(text, "final_answer")
+                for asked in self.session.questions.answer_written(text):
+                    question = asked.text[:QUESTION_TEXT_CHARS]
+                    repeat = asked.asked > 1
+                    self.session.observe(
+                        "im.question.asked", work_id=self.id, question=question, asked=asked.asked, repeat=repeat
+                    )
                 if result.state == "final":
                     result.move("pushed")
 

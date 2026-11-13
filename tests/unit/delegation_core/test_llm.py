@@ -707,3 +707,15 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
                 arrivals = (a_request("d_1", "Also this."), a_request("d_2", "Also this."))
                 self.assertEqual(await decide(SteerOpenWork(), ConductorInput(arrivals, works, (), 0)), [decision])
         self.assertEqual(await decide(SteerOpenWork(), ConductorInput((), (running,), (), 0)), [])
+
+
+class AppToolsTests(unittest.IsolatedAsyncioTestCase):
+    """A round sends the app's tools as a model API takes them."""
+
+    async def test_a_round_sends_the_apps_tools_without_their_annotations(self):
+        annotated = {**MENU, "annotations": {"readOnlyHint": True}}
+        provider, task = ScriptedProvider(text_round("Done.")), FakeTaskContext(declared=[annotated])
+        await drive(adapter(provider).start(task), task)
+        sent = [tool for tool in provider.payloads[0]["tools"] if tool["name"] == "get_menu"]
+        self.assertEqual(sent, [MENU])
+        self.assertIn("annotations", task.request()["tools"][0])  # the task's request keeps them

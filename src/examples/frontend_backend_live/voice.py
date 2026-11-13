@@ -1,7 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One call's voice: which run of the talker each one is, what its decision does, and what the backend sends."""
+"""One call's voice: which run of the talker each one is, what its decision does, and what the backend sends.
+
+How backend answers land (``answers``): a cut answer's unheard sentences are said once, as written, only when the first
+decision after the cut waits (``unheard_rest_once``). A line nobody heard is said again with its words while nothing
+newer changed it, at most ``max_tries`` times for a backend answer, which is then dropped and the backend told
+(``requeued_as_said``). A lead-in is skipped in front of an answer that is due, beside another lead-in, or when it
+repeats the last line (``lead_in_skip``).
+"""
 
 from __future__ import annotations
 
@@ -17,13 +24,14 @@ from loguru import logger
 from pipecat.frames.frames import InterruptionFrame, LLMMessagesAppendFrame
 from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext, standard_message_text
+from pipecat.utils.text.alnum_utils import alnum_only
 
 from examples.frontend_backend_live.delegations import DelegationReader, ReadyResult
 from examples.frontend_backend_live.display import NullDisplay
 from examples.frontend_backend_live.handoffs import Acknowledgements, HandOffs
-from examples.frontend_backend_live.heard_log import HeardLog
+from examples.frontend_backend_live.heard_log import HEARD, HeardLog, Unheard, UnheardHow
 from examples.frontend_backend_live.models.decision import ACTIONS, CallSpec, TalkerDecision, decision_from_output_text
-from examples.frontend_backend_live.spoken import Line, LineKind, SpokenLines
+from examples.frontend_backend_live.spoken import Line, LineKind, Outcome, SpokenLines, sentences, unheard_rest
 from examples.frontend_backend_live.talker import (
     CALL_FIELDS,
     Layout,
@@ -34,6 +42,7 @@ from examples.frontend_backend_live.talker import (
     relay_line,
 )
 from examples.frontend_backend_live.worknote import OpenWork, WorkNote
+from examples.shared.delegation_contract import ReplyUnheard, ends_with_question
 from examples.shared.ids import approx_tokens
 from examples.shared.observe import log_observation
 
@@ -94,6 +103,16 @@ class Owed:
     kind: LineKind
     message: dict | None = None
     answers: bool = False
+    # How often a line that carried it settled not heard.
+    tries: int = 0
+    # The text of the line that last carried it; a re-queued item is said again with these words.
+    words: str = ""
+    # The newer requests when its line was said (WorkNote.newer_state of its delegations). A re-say holds only while
+    # this is the same, so a request that opened and was already answered by the next run still counts as a change.
+    # The update's "told" part is left out on purpose: delivered() forgets it, so it is gone when a line comes back.
+    newer: tuple = ()
+    # The line that last carried it produced no audio, even when said once more.
+    silent: bool = False
 
     @property
     def worded(self) -> bool:
@@ -127,6 +146,10 @@ class Routing:
     covers: tuple[dict, ...]
     request: str
     work_open: bool
+    # A run on Pipecat's empty-turn note alone: a caller turn with no words.
+    wordless: bool = False
+    # It decides an application instruction.
+    steered: bool = False
 
     streams: ClassVar[bool] = True
 
@@ -148,9 +171,13 @@ class Routing:
         if call.said and not (decision.action == "delegate" and decision.call_id):
             decision = TalkerDecision("speak", call.said, decision.diagnostics)
         decision = floored(decision, work_open=self.work_open, holding=voice.lines.holding)
+        if decision.action != "delegate":
+            voice.turn_pending = None  # no delegation sends this turn's snapshot
         voice.decided_by(self)
         voice.observe("talker.completed", action=decision.action, **decision.diagnostics)
-        return voice.actions[decision.action](self, call, decision)
+        said = voice.actions[decision.action](self, call, decision)
+        voice._rest_after(self, decision)  # after the action: a reply is handed first
+        return said
 
     def dropped(self, voice: Voice) -> None:
         """Leave its turns for the run the result brings, which decides them with the result in view."""
@@ -160,6 +187,7 @@ class Routing:
         """Leave its turns undecided, unless its words went to speech."""
         if call.said:
             voice.decided_by(self)
+            voice._rest_unruled()
 
     def failed(self, voice: Voice, call: TalkerCall) -> bool:
         """Take its turns as decided; return whether the fallback is due: not when its words went to speech."""
@@ -169,7 +197,10 @@ class Routing:
     def recover(self, voice: Voice) -> None:
         """Say the holding line while work is open; otherwise delegate the turn with no lead-in."""
         decision = after_failure({"recovery": "talker_failed"}, work_open=self.work_open, holding=voice.lines.holding)
+        if decision.action != "delegate":
+            voice.turn_pending = None
         voice.actions[decision.action](self, None, decision)
+        voice._rest_after(self, decision)
 
 
 @dataclass
@@ -181,6 +212,8 @@ class Relay:
     history: list[dict]
     note: str = ""
     version: int = 0
+    # The backend results' own text when every worded item is a result: the question check reads it.
+    asked: str = ""
 
     streams: ClassVar[bool] = False
 
@@ -189,18 +222,30 @@ class Relay:
         return True
 
     def moved(self, voice: Voice) -> bool:
-        """Return whether what it words moved since it began: a new entry owed, its note, or the voice's version."""
-        return bool(voice.owed) or voice.version != self.version or voice._update(self.batch)[1] != self.note
+        """Return whether what it words moved since it began: a fresh entry owed, its note, or the voice's version.
+
+        A re-queued group waiting in what is owed is not a move: it is said on its own, before the batch.
+        """
+        fresh = any(not voice._requeued(entry) for entry in voice.owed)
+        return fresh or voice.version != self.version or voice._update(self.batch)[1] != self.note
 
     def holds(self, delegation_id: str) -> bool:
         """Return whether it words an item of ``delegation_id``, whose end or handover then waits for its re-word."""
         return any(item.worded and item.said.delegation_id == delegation_id for item in self.batch)
 
     def words(self, voice: Voice, decision: TalkerDecision) -> str:
-        """Return the worded line, or the worded items as written when it does not pass the checks."""
-        line = relay_line(decision, self.content, self.history)
+        """Return the worded line, or the worded items as written when it does not pass the checks.
+
+        With ``keep_questions``, a line that no longer ends with the backend results' last question does not pass.
+        """
+        checks = {"keep_questions": voice.config.delegation.keep_questions, "language": voice.sentence_language()}
+        line = relay_line(decision, self.content, self.history, asked=self.asked, **checks)
         if line is None:
-            voice.observe("commentary.answer_forced", talker_action=decision.action, results=len(self.batch))
+            usable = relay_line(decision, self.content, self.history) is not None
+            reason = "question_lost" if usable else "unusable"
+            voice.observe(
+                "commentary.answer_forced", talker_action=decision.action, results=len(self.batch), reason=reason
+            )
             line = as_written([item for item in self.batch if item.worded])
         return line
 
@@ -213,12 +258,12 @@ class Relay:
         return voice.hand(delivered) if delivered else ""
 
     def dropped(self, voice: Voice) -> None:
-        """Owe its items again, first: the run the result brings words them with it, in one line."""
-        voice.owe_again(self.batch)
+        """Owe its items again, first (behind a re-queued group): the run the result brings words them with it."""
+        voice.owe_again(self.batch, behind_requeued=True)
 
     def cancelled(self, voice: Voice, call: TalkerCall) -> None:
-        """Owe its items again."""
-        voice.owe_again(self.batch)
+        """Owe its items again (behind a re-queued group)."""
+        voice.owe_again(self.batch, behind_requeued=True)
 
     def failed(self, voice: Voice, call: TalkerCall) -> bool:
         """Return ``True``: the items are said as written."""
@@ -320,6 +365,16 @@ class Saying:
         """Do nothing."""
 
 
+@dataclass(frozen=True)
+class Pending:
+    """The backend results pending when the caller's turn started: what waited, and the result lines in flight."""
+
+    # The texts of the results owed, being worded or waiting to be said.
+    waiting: tuple[str, ...]
+    # The result lines not settled yet: judged by how they settle.
+    playing: tuple[Line, ...]
+
+
 class Floor:
     """When the caller speaks, and how long the voice has been idle."""
 
@@ -386,13 +441,19 @@ class Voice:
         delegation: DelegationPort,
         item_text: Callable[[dict], str],
         reports_sentences: bool = True,
+        sentence_language: Callable[[], str | None] = lambda: None,
         display: DisplaySink | None = None,
         observe: Callable[..., None] = log_observation,
         clock: Callable[[], float] = time.monotonic,
     ):
-        """Wire the call's records and its delegation part; the talker is bound by :meth:`bind`."""
+        """Wire the call's records and its delegation part; the talker is bound by :meth:`bind`.
+
+        ``sentence_language`` reads the text-to-speech's sentence language now (its ``text_aggregation_language``), so
+        the voice splits a line into the sentences the text-to-speech cuts.
+        """
         self.config, self.prompts, self.lines, self.delegation = config, prompts, lines, delegation
         self.empty_turn_note, self.observe, self.clock = empty_turn_note, observe, clock
+        self.sentence_language = sentence_language
         self.layout = Layout(prompts, json_rules)
         self.display = display or NullDisplay()
         self.routing_spec = CallSpec("talker", ACTIONS, prompts.call_hints.talker)
@@ -405,8 +466,20 @@ class Voice:
         }
         self.floor = Floor(clock)
         self.worknote = WorkNote(prompts, tracks=delegation.reports_events, clock=clock, observe=observe)
-        self.heard_log = HeardLog(prompts)
-        self.spoken = SpokenLines(self, reports_sentences=reports_sentences, observe=observe)
+        answers = config.delegation.answers
+        self.heard_log = HeardLog(
+            prompts,
+            spelled_notes=config.delegation.spelled_notes,
+            unheard_questions=answers.unheard_questions,
+            observe=observe,
+        )
+        self.spoken = SpokenLines(
+            self,
+            reports_sentences=reports_sentences,
+            clear_ended_on_cut=answers.clear_ended_on_cut,
+            requeued_as_said=answers.requeued_as_said,
+            observe=observe,
+        )
         self.acknowledgements = Acknowledgements(self.floor, self._lead_in, observe=observe)
         self.handoffs = HandOffs(
             delegation,
@@ -415,6 +488,7 @@ class Voice:
             self.display,
             self.acknowledgements,
             refused=lambda: self.notice(None, lines.refusal),
+            heard=self.sent_unheard,
             observe=observe,
         )
         self.reader = DelegationReader(
@@ -444,8 +518,22 @@ class Voice:
         self.owed: deque[Owed | Turnover] = deque()
         self.early: EarlyLine | None = None
         self.waiting_lines: deque[Line] = deque()
+        # The last line handed to speech, any kind.
+        self.last_handed: Line | None = None
+        # A cut answer's unheard sentences, held for the next routing decision; the decided caller turns when it was
+        # held; whether a reply was said first (then only a wait on the caller's next turn queues it).
+        self._rest: Line | None = None
+        self._rest_stamp = 0
+        self._rest_deferred = False
+        # The caller turns a routing decision decided.
+        self._decided_turns = 0
+        # The take is a re-queued group, said again with its words.
+        self._resaying = False
         self.lead_ins: dict[str, Line] = {}
         self.instruction_due = False
+        # The results pending when the caller's turn started (by identity); None once a delegation sent it or a routing
+        # decision did not delegate.
+        self.turn_pending: Pending | None = None
         self.progress_due: OpenWork | None = None
         self.call: TalkerCall | None = None
         self.failures: deque[TalkerCall] = deque()
@@ -513,6 +601,7 @@ class Voice:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.owed.clear()
         self.waiting_lines.clear()
+        self._rest = None
 
     def _register(self, message: dict, kind: Kind) -> None:
         self.kinds[id(message)] = (message, kind)
@@ -658,12 +747,15 @@ class Voice:
         elif self.waiting_lines:
             call = self.saying(self._next_line())
         elif any(isinstance(entry, Owed) for entry in self.owed):
-            try:
-                await self._worded_early()
-            except asyncio.CancelledError:
-                self._after_call()
-                raise
-            if batch := self._take():
+            batch = self._take_group()  # decided before any await: a re-said line never waits for a wording
+            if batch is None:
+                try:
+                    await self._worded_early()
+                except asyncio.CancelledError:
+                    self._after_call()
+                    raise
+                batch = self._take()  # a group re-queued during the await is ruled on first
+            if batch:
                 call = self._said_by(batch)
         elif self.progress_due is not None:
             call = self._progress()
@@ -701,6 +793,7 @@ class Voice:
         turn = " ".join(standard_message_text(message) for message in undecided)
         request = turn or (self.instructions[-1] if self.instruction_due else "")
         plan = Routing(tuple(undecided), request, bool(self.worknote.open()))
+        plan.wordless, plan.steered = bool(note) and not undecided, self.instruction_due
         self._tidy()
         routing = self.layout.routing("\n\n".join(self.instructions), self.worknote.line(), turn, note)
         return TalkerCall(
@@ -708,15 +801,91 @@ class Voice:
         )
 
     def _take(self) -> list[Owed]:
-        """Take everything owed, oldest first; apply each end or handover whose item the batch does not word."""
+        """Take a re-queued group that may be said again with its words, alone; else everything owed, oldest first.
+
+        Apply each end or handover whose item the batch does not word. Every item a relay takes is fresh: it is worded
+        anew.
+        """
+        group = self._take_group()
+        if group is not None:
+            return group
+        self._resaying = False
         batch: list[Owed] = []
         while self.owed:
             entry = self.owed.popleft()
             if isinstance(entry, Owed):
+                entry.words = ""
                 batch.append(entry)
             elif not any(item.worded and item.said.delegation_id == entry.delegation_id for item in batch):
                 self._turnover(entry)
         return batch
+
+    def _take_group(self) -> list[Owed] | None:
+        """The first re-queued group, taken alone when it may be said again with its words; else ``None``.
+
+        A group that may not (:meth:`_resaid`) is made fresh, so the relay words it with everything else owed.
+        """
+        group = self._requeued_head()
+        if not group:
+            return None
+        reason = self._resaid(group)
+        if reason:
+            self.observe("answer.resay_reworded", items=len(group), delegations=self._delegations(group), reason=reason)
+            self._make_fresh(group)
+            return None
+        for item in group:
+            self.owed.remove(item)
+        self._resaying = True
+        return list(group)
+
+    def _requeued_head(self) -> tuple[Owed, ...]:
+        """The first re-queued group in what is owed, wherever it sits: the items in a row with the same ``words``.
+
+        None with ``answers.requeued_as_said`` off: every owed item is fresh then.
+        """
+        if not self.config.delegation.answers.requeued_as_said:
+            return ()
+        group: list[Owed] = []
+        for entry in self.owed:
+            if group and not (isinstance(entry, Owed) and entry.words == group[0].words):
+                break
+            if isinstance(entry, Owed) and entry.words:
+                group.append(entry)
+        return tuple(group)
+
+    def _requeued(self, entry: Owed | Turnover) -> bool:
+        """Whether ``entry`` is an item of a re-queued group (it has its line's words), with ``requeued_as_said``."""
+        return isinstance(entry, Owed) and bool(entry.words) and self.config.delegation.answers.requeued_as_said
+
+    def _fresh_owed(self) -> tuple[Owed, ...]:
+        """The items owed that a relay words: every owed item but the re-queued ones, said as they were."""
+        return tuple(entry for entry in self.owed if isinstance(entry, Owed) and not self._requeued(entry))
+
+    @staticmethod
+    def _delegations(batch: Sequence[Owed]) -> list[str]:
+        return list(dict.fromkeys(item.said.delegation_id for item in batch if item.said.delegation_id))
+
+    def _resaid(self, batch: Sequence[Owed]) -> str:
+        """Why ``batch``, one re-queued line's items, may not be said again with its words; ``""`` when it may.
+
+        It may with ``answers.requeued_as_said``, no item tried ``answers.max_tries`` times, the same newer-request
+        state as when it was said (``Owed.newer``), and no silent line since audio last played. The checks run in this
+        order, and the first that fails is the reason: ``"tries"``, ``"newer"``, ``"silent"``.
+        """
+        cap = self.config.delegation.answers.max_tries
+        if cap is not None and any(item.tries >= cap for item in batch):
+            return "tries"
+        if self.worknote.newer_state(self._delegations(batch)) != batch[0].newer:
+            return "newer"
+        if any(item.silent for item in batch):
+            return "silent"
+        return ""
+
+    @staticmethod
+    def _make_fresh(group: Sequence[Owed]) -> None:
+        """``group`` may not be re-said: its words are cleared, so it is worded with what else is owed, as today."""
+        for item in group:
+            item.words = ""
 
     def _turnover(self, entry: Turnover) -> None:
         if entry.taker is None:
@@ -725,7 +894,16 @@ class Voice:
             self.spoken.carry_told(entry.delegation_id, entry.taker)
 
     def _said_by(self, batch: list[Owed]) -> TalkerCall | None:
-        """Return the call that says ``batch``: the relay's, or the fixed lines as written when none is worded."""
+        """Return the call that says ``batch``: a re-queued group with its words, a relay, or the lines as written."""
+        if self._resaying:
+            self._resaying = False
+            self.observe("answer.resaid", items=len(batch), tries=max(item.tries for item in batch))
+            line = self.delivered(batch, batch[0].words)
+            return self.saying(line) if line else None
+        if self._says_as_written(batch):
+            self.observe("answer.as_written", items=len(batch))
+            line = self.delivered(batch, self.joined(batch, as_written([i for i in batch if i.worded])))
+            return self.saying(line) if line else None
         if any(item.worded for item in batch):
             return self.relay(batch)
         line = self.delivered(batch, self.joined(batch, ""))
@@ -747,7 +925,7 @@ class Voice:
         """Return the relay that words ``batch``: the writer's frame and rules, ``history``, then the update."""
         content, note = self._update(batch)
         relay = self.layout.relay("\n\n".join(self.instructions), content, note)
-        plan = Relay(tuple(batch), content, history, note, self.version)
+        plan = Relay(tuple(batch), content, history, note, self.version, self._asked(batch))
         return TalkerCall(spec=self.answer_spec, request=relay, format=self.talker.response_format, plan=plan)
 
     def _update(self, batch: Sequence[Owed]) -> tuple[str, str]:
@@ -757,6 +935,28 @@ class Voice:
         told = " ".join(text for each in delegations if (text := self.spoken.told_text(each)))
         note = self.layout.note(told or None, self.worknote.newer_requests(delegations))
         return "\n\n".join(item.said.speak for item in worded), note
+
+    @staticmethod
+    def _asked(batch: Sequence[Owed]) -> str:
+        """Return the backend results' own text when every worded item of ``batch`` is a result; else "" (not checked).
+
+        A batch that holds commentary is never checked: commentary may be an instruction to the writer.
+        """
+        worded = [item for item in batch if item.worded]
+        if not worded or not all(item.answers for item in worded):
+            return ""
+        return "\n\n".join(item.said.speak for item in worded)
+
+    def _says_as_written(self, batch: Sequence[Owed]) -> bool:
+        """Return whether ``batch`` is said as the backend wrote it, with no writer call (``result_wording``).
+
+        Only when every worded item is a backend result and none came out silent: a silent batch goes through the
+        writer first.
+        """
+        if self.config.delegation.result_wording != "as_written":
+            return False
+        worded = [item for item in batch if item.worded]
+        return bool(worded) and all(item.answers for item in worded) and not any(item.silent for item in batch)
 
     def _stamp(self, batch: Sequence[Owed]) -> tuple:
         """Return what a wording of ``batch`` stands on: its items, its update's note, and the voice's version."""
@@ -775,9 +975,9 @@ class Voice:
         """
         if self.talker is None or self._closed:
             return
-        batch = tuple(entry for entry in self.owed if isinstance(entry, Owed))
+        batch = self._fresh_owed()
         early = self.early
-        if not any(item.worded for item in batch):
+        if not any(item.worded for item in batch) or self._says_as_written(batch):
             return
         stamp = self._stamp(batch)
         if early is not None:
@@ -813,7 +1013,7 @@ class Voice:
     async def _worded_early(self) -> None:
         """Wait for the wording under way of what is owed now, so the relay says its line rather than word it again."""
         while (early := self.early) is not None and early.task is not None and not early.task.done():
-            if early.stamp != self._stamp(tuple(entry for entry in self.owed if isinstance(entry, Owed))):
+            if early.stamp != self._stamp(self._fresh_owed()):
                 return
             await asyncio.wait({early.task})
 
@@ -839,7 +1039,9 @@ class Voice:
         kinds = {item.kind for item in batch}
         kind = next(each for each in LINE_KIND_ORDER if each in kinds)
         ids = tuple(dict.fromkeys(item.said.delegation_id for item in batch if item.said.delegation_id))
+        newer = self.worknote.newer_state(list(ids))
         for item in batch:
+            item.words, item.newer = text, newer
             if item.worded:
                 if item.said.delegation_id:
                     self.spoken.forget(item.said.delegation_id)
@@ -918,7 +1120,61 @@ class Voice:
         """Mark the plan's caller turns as decided, and any instruction read with them."""
         for message in plan.covers:
             self.decided[id(message)] = message
+        self._decided_turns += bool(plan.covers)
         self.instruction_due = False
+
+    def _hold_rest(self, line: Line) -> None:
+        """A cut result line left unheard sentences: hold them, as written, for the next routing decision."""
+        if not self.config.delegation.answers.unheard_rest_once or line.rest_of is not None:
+            return
+        language = self.sentence_language()
+        rest = unheard_rest(line, language=language)
+        if not alnum_only(rest):
+            return
+        if self._rest is not None:
+            self.observe("answer.rest_dropped", line=self._rest.rest_of.number, reason="replaced")
+        self._rest = Line(LineKind.RESULT, rest, line.delegation_ids, results=True, again=False, rest_of=line)
+        self._rest_stamp, self._rest_deferred = self._decided_turns, False
+        self.observe("answer.rest_held", line=line.number, sentences=len(sentences(rest, language=language)))
+
+    def _rest_after(self, plan: Routing, decision: TalkerDecision) -> None:
+        """The first routing decision after a cut rules on the held rest: queued, held again, or dropped.
+
+        A ``wait`` queues it; a ``speak`` with words holds it once more, for the decision on the caller's next turn;
+        any other decision drops it, as does a newer result of its delegation owed by then. No rule reads the reply's
+        words.
+        """
+        rest = self._rest
+        if rest is None:
+            return
+        reason = ""
+        if any(isinstance(e, Owed) and e.answers and e.said.delegation_id in rest.delegation_ids for e in self.owed):
+            reason = "newer_result"
+        elif plan.steered:
+            reason = "steered"
+        elif decision.action == "wait":
+            self._rest = None
+            self.observe("answer.rest_said", line=rest.rest_of.number, action=decision.action)
+            self.say(rest)
+            return
+        elif decision.action == "delegate":
+            reason = "delegate"
+        elif plan.wordless:
+            reason = "wordless_speak"
+        elif not self._rest_deferred:
+            self._rest_deferred = True
+            self.observe("answer.rest_deferred", line=rest.rest_of.number)
+            return
+        else:
+            reason = "speak"
+        self._rest = None
+        self.observe("answer.rest_dropped", line=rest.rest_of.number, reason=reason)
+
+    def _rest_unruled(self) -> None:
+        """A decided caller turn no decision ruled on: a rest held for two decided turns is stale, and dropped."""
+        if self._rest is not None and self._decided_turns - self._rest_stamp >= 2:
+            self.observe("answer.rest_dropped", line=self._rest.rest_of.number, reason="stale")
+            self._rest = None
 
     def hand(self, line: Line) -> str:
         """Hand ``line`` to speech as the response in progress, and return its words.
@@ -926,6 +1182,7 @@ class Voice:
         The heard log notes it at once, so a delegation made while it plays carries it; playout corrects the entry.
         """
         said_as, line.number = line.number, self.responses
+        self.last_handed = line
         if line.retried:
             self.heard_log.said_again(said_as, line.number)
         else:
@@ -1014,10 +1271,21 @@ class Voice:
                 self.not_heard(line)
 
     def caller_started(self) -> None:
-        """Note the caller speaking: drop the lead-ins not said yet, and say nothing meanwhile."""
+        """Note the caller speaking: drop the lead-ins not said yet, and say nothing meanwhile.
+
+        The results still pending now are kept (``turn_pending``): the delegation this turn makes states them unheard
+        even if they play before it is handed over. An earlier start's snapshot is kept only while a turn with words is
+        still undecided; one from a start that brought no words (a cough) is taken again.
+        """
+        if self.turn_pending is None or not self._undecided():
+            self.turn_pending = self._pending()
         self.floor.caller(True)
         self.acknowledgements.drop_all()
         self._withdraw()
+        rest = next((line for line in self.waiting_lines if line.rest_of is not None), None)
+        if rest is not None:  # not said yet: held again, for the decision on the caller's newer words
+            self.waiting_lines.remove(rest)
+            self._rest, self._rest_deferred = rest, True
         self._moved()
 
     def caller_stopped(self) -> None:
@@ -1055,30 +1323,166 @@ class Voice:
         self.version += 1
         self._moved()
 
+    def unheard_sentences(self, line: Line) -> list[str]:
+        """Return ``line``'s unheard rest, split into sentences in the speech's language.
+
+        This is the one split of a line's unheard part that the voice and the heard fact use.
+        """
+        language = self.sentence_language()
+        return sentences(unheard_rest(line, language=language), language=language)
+
     def heard(self, line: Line, cut: bool) -> None:
-        """Settle ``line`` as heard, even in part: a cut line keeps what played, and its items are said."""
+        """Settle ``line`` as heard, even in part: a cut line keeps what played, and its items are said.
+
+        A result line's unheard sentences set the heard log's answer state (``result_settled``).
+        """
         if cut:
-            self.heard_log.cut(line.number, line.heard)
+            self.heard_log.cut(line.number, line.heard, unheard=self._unheard_questions(line))
+        elif line.rest_of is not None:  # the rest was heard: the cut answer reads whole again
+            self.heard_log.whole(line.rest_of.number, line.rest_of.text, rest=line.text)
+        if line.results:
+            self._result_settled(line, UnheardHow.CUT if cut else None)
+        if cut and line.results:
+            self._hold_rest(line)
+        for entry in self.owed:  # audio played: a line that came out silent may be said again as it was
+            if isinstance(entry, Owed):
+                entry.silent = False
         self._done(line.items)
         self._moved()
 
     def not_heard(self, line: Line) -> None:
-        """Settle ``line`` as not heard: it leaves the heard log, and its items are owed again, first."""
+        """Settle ``line`` as not heard: it leaves the heard log, and its items are owed again, first.
+
+        Each item counts a try; a backend answer tried ``answers.max_tries`` times is dropped and the backend is told
+        (:meth:`_drop_unheard`). A line said once more after it produced no audio marks its items silent. When some
+        items of the line are dropped, the others are made fresh: their words still hold the dropped answer's text.
+        """
         self.heard_log.unsay(line.number)
         if line.items:
-            self.owe_again(line.items)
-            self.observe("answer.requeued", line=line.number, items=len(line.items))
-            self.request_run()
+            cap = self.config.delegation.answers.max_tries
+            again: list[Owed] = []
+            for item in line.items:
+                item.tries += 1
+                item.silent = item.silent or line.retried
+                if item.answers and cap is not None and item.tries >= cap:
+                    self._drop_unheard(item)
+                else:
+                    again.append(item)
+            if again:
+                if len(again) < len(line.items):
+                    self._make_fresh(again)
+                self.owe_again(again)
+                tries = max(item.tries for item in again)
+                self.observe("answer.requeued", line=line.number, items=len(again), tries=tries)
+                self.request_run()
         self._move()
+
+    def _drop_unheard(self, item: Owed) -> None:
+        """``item``, a backend answer, went unheard ``answers.max_tries`` times: not said again; the backend is told.
+
+        The work note counts it as said, so it no longer reads "answered"; the heard log's answer state reads it as
+        dropped, and the next delegation reads ``transcript.not_said`` with the backend's text. Its developer message
+        stays out of the context.
+        """
+        self.observe("answer.dropped_unheard", delegation_id=item.said.delegation_id, tries=item.tries)
+        self._done([item])
+        self.heard_log.result_unsaid(item.said.speak)
+        self.heard_log.not_said(item.said.speak)
+        if item.worded:
+            self.unsaid.add(id(item.message))
+            self._take_out({id(item.message)})
+
+    def _unheard_questions(self, line: Line) -> tuple[str, ...]:
+        """The questions of a result line that did not play: the sentences of its unheard rest that ask."""
+        if not line.results:
+            return ()
+        questions = tuple(sentence for sentence in self.unheard_sentences(line) if ends_with_question(sentence))
+        if questions:
+            self.observe("answer.question_unheard", line=line.number, questions=len(questions))
+        return questions
+
+    def _result_settled(self, line: Line, how: UnheardHow | None) -> None:
+        """A result line settled: what of it the caller did not hear sets the heard log's answer state."""
+        replaces = line.rest_of.number if line.rest_of is not None else None
+        settled = self.heard_log.result_settled(line.number, self.unheard_sentences(line), how, replaces=replaces)
+        if settled.reply is not ReplyUnheard.NONE:
+            how = settled.how.value if settled.how is not None else ""
+            self.observe("answer.unheard_part", line=line.number, reply_unheard=settled.reply.value, unheard_how=how)
+
+    def _level(self, text: str) -> ReplyUnheard:
+        """The level of a whole text the caller has not heard."""
+        return ReplyUnheard.of(sentences(text, language=self.sentence_language()))
+
+    def _unheard_results(self) -> list[str]:
+        """The texts of results the caller has not heard in full: owed, being worded, waiting, or not settled."""
+        texts = [entry.said.speak for entry in self.owed if isinstance(entry, Owed) and entry.answers]
+        plan = self.call.plan if self.call is not None else None
+        if isinstance(plan, Relay):
+            texts += [item.said.speak for item in plan.batch if item.answers]
+        lines = [*self.waiting_lines, *self.spoken.unsettled()]
+        if isinstance(plan, Saying):
+            lines.append(plan.line)
+        return texts + [line.text for line in lines if line.results]
+
+    def reply_unheard(self) -> Unheard:
+        """What of the backend's answers the caller has not heard now.
+
+        The worse of the results still waiting (owed, being worded, waiting to be said, or not settled) and every
+        result line that settled since the last delegation (``HeardLog.since_sent``).
+        """
+        unheard = self.heard_log.since_sent
+        for text in self._unheard_results():
+            unheard = unheard.worse(Unheard(self._level(text), UnheardHow.WAITING))
+        return unheard if unheard.reply is not ReplyUnheard.NONE else HEARD
+
+    def _pending(self) -> Pending:
+        """The results pending now, by identity."""
+        waiting = [entry.said.speak for entry in self.owed if isinstance(entry, Owed) and entry.answers]
+        plan = self.call.plan if self.call is not None else None
+        if isinstance(plan, Relay):
+            waiting += [item.said.speak for item in plan.batch if item.answers]
+        lines = [*self.waiting_lines, *([plan.line] if isinstance(plan, Saying) else [])]
+        waiting += [line.text for line in lines if line.results]
+        playing = tuple(line for line in self.spoken.unsettled() if line.results)
+        return Pending(tuple(waiting), playing)
+
+    def sent_unheard(self) -> Unheard:
+        """What a delegation handed over now states: the worse of the turn-start snapshot, judged now, and the reading.
+
+        A result that waited when the caller's turn started counts whole, even if it played since: the caller spoke
+        before hearing it. A line in flight then is judged by how it has settled since (its unheard sentences), and
+        counts whole while it is still unsettled. The snapshot is cleared: the next turn takes its own.
+        """
+        now, pending, self.turn_pending = self.reply_unheard(), self.turn_pending, None
+        if pending is None:
+            return now
+        snapshot = HEARD
+        for text in pending.waiting:
+            snapshot = snapshot.worse(Unheard(self._level(text), UnheardHow.WAITING))
+        for line in pending.playing:
+            if line.outcome in (Outcome.HEARD, Outcome.CUT, Outcome.NOT_HEARD):
+                how = UnheardHow.WAITING if line.outcome is Outcome.NOT_HEARD else UnheardHow.CUT
+                level = ReplyUnheard.of(self.unheard_sentences(line))
+            else:
+                how, level = UnheardHow.WAITING, self._level(line.text)
+            snapshot = snapshot.worse(Unheard(level, how))
+        if snapshot.reply is ReplyUnheard.NONE or now.reply.at_least(snapshot.reply):
+            return now
+        return Unheard(snapshot.reply, snapshot.how, from_turn_start=True)
 
     def say_again(self, line: Line) -> None:
         """Say ``line`` once more, behind the lines already waiting: it produced no audio."""
         self.say(line)
 
-    def owe_again(self, items: Sequence[Owed]) -> None:
-        """Owe ``items`` again, first; until a line says them, their messages stay out of the context."""
-        for item in reversed(items):
-            self.owed.appendleft(item)
+    def owe_again(self, items: Sequence[Owed], *, behind_requeued: bool = False) -> None:
+        """Owe ``items`` again, first; until a line says them, their messages stay out of the context.
+
+        ``behind_requeued``: right after the re-queued group at the head of what is owed, which is ruled on first.
+        """
+        group = self._requeued_head() if behind_requeued else ()
+        at = len(group) if group and self.owed and self.owed[0] is group[0] else 0
+        for offset, item in enumerate(items):
+            self.owed.insert(at + offset, item)
             if item.worded:
                 self.unsaid.add(id(item.message))
         self._take_out({id(item.message) for item in items if item.worded})
@@ -1101,8 +1505,48 @@ class Voice:
                 del self.lead_ins[delegation_id]
         return line
 
+    def answer_due(self) -> bool:
+        """Whether an answer is about to be heard.
+
+        A result, or commentary that answers a client delegation, owed or being worded; a result line waiting, being
+        said or in flight; or a held rest.
+        """
+        plan = self.call.plan if self.call is not None else None
+        batch = plan.batch if isinstance(plan, Relay) else ()
+        owed = any(
+            isinstance(entry, Owed)
+            and (entry.answers or (entry.kind is LineKind.COMMENTARY and entry.said.delegation_id))
+            for entry in (*self.owed, *batch)
+        )
+        lines = [*self.waiting_lines, *self.spoken.lines.values()]
+        if isinstance(plan, Saying):
+            lines.append(plan.line)
+        return owed or any(line.kind is LineKind.RESULT for line in lines) or self._rest is not None
+
+    def _skip_lead_in(self, text: str) -> str:
+        """Why a lead-in is not said, in this order; "" when it is (``answers.lead_in_skip``).
+
+        ``answer_due``: an answer is about to be heard; ``lead_in_waiting``: another lead-in waits or plays;
+        ``same_as_last``: it repeats the last line handed, by letters and digits. A lead-in after one that played is
+        said: it acknowledges another request.
+        """
+        if not self.config.delegation.answers.lead_in_skip:
+            return ""
+        if self.answer_due():
+            return "answer_due"
+        if any(line.kind is LineKind.LEAD_IN for line in [*self.waiting_lines, *self.spoken.lines.values()]):
+            return "lead_in_waiting"
+        last = self.last_handed
+        if last is not None and alnum_only(text) == alnum_only(last.text):
+            return "same_as_last"
+        return ""
+
     def _lead_in(self, delegation_id: str, text: str) -> None:
-        """Say a delegation's lead-in, which tells the caller about it."""
+        """Say a delegation's lead-in, which tells the caller about it, unless it is skipped (:meth:`_skip_lead_in`)."""
+        reason = self._skip_lead_in(text)
+        if reason:
+            self.observe("acknowledgement.skipped", delegation_id=delegation_id, reason=reason)
+            return
         line = Line(LineKind.LEAD_IN, text, (delegation_id,), tells=(delegation_id,))
         self.lead_ins[delegation_id] = line
         self.say(line)
@@ -1212,7 +1656,9 @@ class Voice:
             if message.interrupted:
                 self.cut_marked(aggregator.context, message.content)
             elif line := self.spoken.end_played(message.content):
-                self.heard_log.partly(line.number, line.heard)
+                self.heard_log.partly(line.number, line.heard, unheard=self._unheard_questions(line))
+                if line.results:
+                    self._result_settled(line, UnheardHow.NO_AUDIO)
                 self._moved()
             self.bound()
 

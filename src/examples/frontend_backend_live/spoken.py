@@ -1,15 +1,25 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the voice said: each line, what it told the caller about a delegation, and how much of it played."""
+"""What the voice said: each line, what it told the caller about a delegation, and how much of it played.
+
+A line an interruption cut is not said again whole: the voice may say its unheard sentences once, as written
+(:func:`unheard_rest`).
+"""
 
 from __future__ import annotations
 
+import unicodedata
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
+
+from pipecat.utils.string import match_endofsentence
+from pipecat.utils.text.alnum_utils import alnum_only
+
+from examples.shared import delegation_contract
 
 
 class LineKind(StrEnum):
@@ -48,6 +58,8 @@ class Line:
     outcome: Outcome = Outcome.HANDED
     heard: str = ""
     retried: bool = False
+    # The cut line whose unheard sentences this line says: it gets no rest of its own.
+    rest_of: Line | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +68,86 @@ class Cut:
 
     lines: tuple[Line, ...]
     playing: Line
+
+
+def sentences(text: str, *, language: str | None = None) -> list[str]:
+    """``text`` split into sentences the way the text-to-speech cuts them.
+
+    The shared rule runs with Pipecat's sentence-end test in ``language``. Each sentence is stripped; a last part with
+    no sentence end is a sentence too.
+    """
+    return delegation_contract.sentences(text, ends=lambda rest: match_endofsentence(rest, language=language))
+
+
+def unheard_rest(line: Line, *, language: str | None = None) -> str:
+    """The sentences of ``line.text`` the caller did not hear, as written and in order, joined by a space; or "".
+
+    A sentence is heard when its letters and digits (``alnum_only``) appear in ``line.heard`` after those of the heard
+    sentences before it, starting where a heard sentence starts, so a short sentence is never found inside a longer
+    one. The sentence that was playing at a cut is not in ``heard``, so it counts as unheard; a sentence missing from
+    the middle (one that got no audio) is found too.
+    """
+    if line.heard == line.text:
+        return ""
+    heard, found, rest = alnum_only(line.heard), 0, []
+    starts, offset = {0}, 0
+    for part in sentences(line.heard, language=language):
+        offset += len(alnum_only(part))
+        starts.add(offset)
+    for sentence in sentences(line.text, language=language):
+        letters = alnum_only(sentence)
+        if not letters:
+            continue
+        at = heard.find(letters, found)
+        while at >= 0 and at != found and at not in starts:
+            at = heard.find(letters, at + 1)
+        if at < 0:
+            rest.append(sentence)
+        else:
+            found = at + len(letters)
+    return " ".join(rest)
+
+
+def _spelled_tokens(text: str) -> list[str]:
+    """Each token of ``text``: itself when it is spelled, else "".
+
+    Tokens split on whitespace, with leading and trailing punctuation stripped and empty ones left out. A spelled token
+    is one digit (``Nd``) or one letter of a script with letter case (``Lu``, ``Ll``).
+    """
+    tokens = []
+    for raw in text.split():
+        start, end = 0, len(raw)
+        while start < end and unicodedata.category(raw[start]).startswith("P"):
+            start += 1
+        while end > start and unicodedata.category(raw[end - 1]).startswith("P"):
+            end -= 1
+        if start < end:
+            token = raw[start:end]
+            tokens.append(token if len(token) == 1 and unicodedata.category(token) in ("Nd", "Lu", "Ll") else "")
+    return tokens
+
+
+def spelled_runs(text: str) -> list[str]:
+    """Each run of two or more single-character tokens in ``text``, joined as heard.
+
+    A token is one digit, or one letter of a script with letter case, once its leading and trailing punctuation is
+    stripped. ``"last name e L L I S"`` gives ``["eLLIS"]``; a text with none gives ``[]``. Never raises.
+    """
+    runs, run = [], ""
+    for token in [*_spelled_tokens(text), ""]:
+        if token:
+            run += token
+            continue
+        if len(run) >= 2:
+            runs.append(run)
+        run = ""
+    return runs
+
+
+def ends_spelled(text: str) -> bool:
+    """Whether ``text`` ends with such a run, so the caller may still be spelling."""
+    tokens = _spelled_tokens(text)
+    return len(tokens) >= 2 and bool(tokens[-1]) and bool(tokens[-2])
 
 
 class Settled(Protocol):
@@ -74,9 +166,23 @@ class Settled(Protocol):
 class SpokenLines:
     """The lines of one call in flight, settled by their playout, and what each delegation told."""
 
-    def __init__(self, settled: Settled, *, reports_sentences: bool = True, observe: Callable[..., None]):
-        """Report each settled line to ``settled``; ``reports_sentences``: each sentence's text follows its audio."""
+    def __init__(
+        self,
+        settled: Settled,
+        *,
+        reports_sentences: bool = True,
+        clear_ended_on_cut: bool = False,
+        requeued_as_said: bool = False,
+        observe: Callable[..., None],
+    ):
+        """Report each settled line to ``settled``; ``reports_sentences``: each sentence's text follows its audio.
+
+        ``clear_ended_on_cut``: a cut also lets go of a line that ended waiting for its words (``ended_line``), so one
+        whose words never came cannot read as unsettled after its turn. ``requeued_as_said``: the lines a cut drops
+        unheard settle newest first, so their items, each put back at the front of what is owed, keep their order.
+        """
         self.settled, self.reports_sentences, self.observe = settled, reports_sentences, observe
+        self.clear_ended_on_cut, self.requeued_as_said = clear_ended_on_cut, requeued_as_said
         self.lines: dict[int, Line] = {}
         self.told: dict[str, list[Line]] = {}
         self.marks: deque[int] = deque()
@@ -92,6 +198,16 @@ class SpokenLines:
     def in_flight(self) -> bool:
         """Return whether a line is handed and not settled."""
         return bool(self.lines) or self.cutting is not None
+
+    def unsettled(self) -> tuple[Line, ...]:
+        """Return the lines not settled yet, in order.
+
+        A cut's lines waiting for what played, the lines in flight, and the line that ended waiting for the words the
+        aggregator recorded (a sentence of it got no audio).
+        """
+        cutting = self.cutting.lines if self.cutting is not None else ()
+        ended = (self.ended_line,) if self.ended_line is not None else ()
+        return (*cutting, *self.lines.values(), *ended)
 
     def told_text(self, delegation_id: str) -> str | None:
         """Return what the caller heard about a delegation, then what the lines in flight tell; ``None`` for nothing.
@@ -162,6 +278,8 @@ class SpokenLines:
 
         ``number`` heads the playout; when its audio played, the lines settle once the aggregator reports what played.
         """
+        if self.clear_ended_on_cut:
+            self.ended_line = None  # its words will not come after this cut: it stays heard whole
         mark = self.marks.popleft() if self.marks else max(self.lines, default=0)
         lines = tuple(self.lines.pop(each) for each in list(self.lines) if each <= mark)
         playing = next((line for line in lines if line.number == number and line.outcome is Outcome.PLAYING), None)
@@ -183,7 +301,14 @@ class SpokenLines:
         return heard
 
     def _settle_cut(self, lines: Sequence[Line], playing: Line | None, heard: str) -> None:
-        """Settle a cut's lines in order: ``playing`` cut after ``heard``, when any; the others not heard."""
+        """Settle a cut's lines in order: ``playing`` cut after ``heard``, when any; the others not heard.
+
+        With ``requeued_as_said`` the cut line settles first, then the others newest first: each not-heard line's items
+        go to the front of what is owed, so they come back in the order the lines were handed.
+        """
+        if self.requeued_as_said:
+            cut = [line for line in lines if line is playing and heard]
+            lines = [*cut, *reversed([line for line in lines if not (line is playing and heard)])]
         for line in lines:
             if line is playing and heard:
                 line.heard = heard

@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Handing a decided turn to the session's delegation part, and saying the lead-in the talker wrote for it."""
+"""Handing a decided turn to the session's delegation part, and saying the lead-in the talker wrote for it.
+
+Each hand-off states what the caller had not heard of the backend's answers (``metadata.live_reply_unheard``), which
+the core's questions block counts.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
 from loguru import logger
+
+from examples.frontend_backend_live.heard_log import HEARD, Unheard
+from examples.shared.delegation_contract import REPLY_UNHEARD
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.display import DisplaySink
@@ -80,11 +87,16 @@ class HandOffs:
         acknowledgements: Acknowledgements,
         *,
         refused: Callable[[], None],
+        heard: Callable[[], Unheard] = lambda: HEARD,
         observe: Callable[..., None],
     ):
-        """Wire the parts a hand-off reaches; ``refused()`` says the refusal line."""
+        """Wire the parts a hand-off reaches; ``refused()`` says the refusal line.
+
+        ``heard()`` reads what the caller had not heard of the backend's answers as a delegation is handed over (the
+        voice's ``sent_unheard``), which each delegation states.
+        """
         self.delegation, self.heard_log, self.worknote, self.display = delegation, heard_log, worknote, display
-        self.acknowledgements, self.refused, self.observe = acknowledgements, refused, observe
+        self.acknowledgements, self.refused, self.observe, self.heard = acknowledgements, refused, observe, heard
         self.tasks: set[asyncio.Task] = set()
         self.parked: dict[str, tuple[str | None, str, str, int]] = {}
 
@@ -124,8 +136,13 @@ class HandOffs:
 
     async def _hand_off(self, reservation: str | None, request: str, lead_in: str, decided_at: int) -> bool:
         """Send the heard log's input; confirm the reserved entry and return ``True``, or release it on a refusal."""
+        unheard = self.heard()
         try:
-            delegation_id = await self.heard_log.delegate(self.delegation, unheard=self.worknote.answer_ready())
+            delegation_id = await self.heard_log.delegate(
+                self.delegation,
+                unheard=self.worknote.answer_ready(),
+                metadata={REPLY_UNHEARD: unheard.reply.value},
+            )
         except asyncio.CancelledError:
             self.worknote.release(reservation)
             raise
@@ -137,7 +154,13 @@ class HandOffs:
             return False
         self.worknote.confirm(reservation, delegation_id)
         self.display.started(delegation_id, request)
-        self.observe("delegation.handed", delegation_id=delegation_id)
+        self.observe(
+            "delegation.handed",
+            delegation_id=delegation_id,
+            reply_unheard=unheard.reply.value,
+            unheard_how=unheard.how.value if unheard.how is not None else "",
+            from_turn_start=unheard.from_turn_start,
+        )
         delay_ms = self.delegation.acknowledgement_delay_ms
         await self.acknowledgements.acknowledge(delegation_id, lead_in.strip(), delay_ms, decided_at=decided_at)
         return True

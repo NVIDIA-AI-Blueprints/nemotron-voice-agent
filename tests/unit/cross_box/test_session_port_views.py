@@ -24,12 +24,16 @@ from gateways.live.gateway.websocket import PrimarySocketView
 from gateways.live.protocol import SessionConfig
 from gateways.live.server_delegation.passthrough import request_settings
 from gateways.live.session import LiveProtocolSession
+from gateways.live.session.session import DelegationPortView
 from tests.unit.frontend_helpers import FakeSocket
 from tests.unit.live_helpers import ClientSocket, Collector, FakeAdapter, responses_config
 
 ADAPTER_SENDS = ("session.input_transcript.delta", "session.output_transcript.delta")
 DELEGATION_SENDS = ("session.delegation.created", "response.event")
 NEITHER_SENDS = ("session.started", "session.output_audio.delta", "session.closed", "error", "info", "response.created")
+
+
+HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]
 
 
 class SessionCase(unittest.IsolatedAsyncioTestCase):
@@ -116,6 +120,41 @@ class ViewTests(SessionCase):
         self.assertEqual(self.session.status, "active")
         self.assertEqual((await self.primary.wait_for("session.closed"))["reason"], "connection_lost")
         self.assertEqual((port.is_active(), self.adapter.closed), (False, True))
+
+
+class OldPart:
+    """A delegation part written before ``metadata``: its ``delegate`` takes the input alone."""
+
+    def __init__(self):
+        self.inputs: list = []
+
+    async def delegate(self, input):
+        self.inputs.append(input)
+        return "item_1"
+
+
+class NewPart(OldPart):
+    """A delegation part that takes ``metadata``."""
+
+    def __init__(self):
+        super().__init__()
+        self.metadata: list = []
+
+    async def delegate(self, input, *, metadata=None):
+        self.metadata.append(metadata)
+        return await super().delegate(input)
+
+
+class PortViewMetadataTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_view_passes_metadata_to_its_part(self):
+        part = NewPart()
+        await DelegationPortView(part).delegate(HI, metadata={"live_reply_unheard": "none"})
+        self.assertEqual((part.inputs, part.metadata), ([HI], [{"live_reply_unheard": "none"}]))
+
+    async def test_the_view_drops_metadata_for_a_part_that_does_not_take_it(self):
+        part = OldPart()
+        self.assertEqual(await DelegationPortView(part).delegate(HI, metadata={"live_reply_unheard": "none"}), "item_1")
+        self.assertEqual(part.inputs, [HI])
 
 
 class ObserverTests(SessionCase):

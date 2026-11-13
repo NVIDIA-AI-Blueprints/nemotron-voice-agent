@@ -54,9 +54,25 @@ class ConfigTests(unittest.TestCase):
             ({"memory": {"compact_at": 1.5}}, "memory.compact_at\n.*less than or equal to 1"),
             ({"speech": {"interrupt_min_words": 0}}, "speech.interrupt_min_words\n.*greater than or equal to 1"),
             ({"tts_preroll_ms": 2001}, "tts_preroll_ms\n.*less than or equal to 2000"),
+            ({"delegation": {"answers": {"max_tries": 0}}}, "answers.max_tries\n.*greater than or equal to 1"),
+            ({"delegation": {"answers": {"max_tries": 1.5}}}, "answers.max_tries\n.*valid integer"),
+            ({"delegation": {"answers": {"requeued_as_said": "yes"}}}, "answers.requeued_as_said\n.*valid boolean"),
+            ({"delegation": {"answers": {"lead_in_skip": 1}}}, "answers.lead_in_skip\n.*valid boolean"),
+            ({"delegation": {"answers": {"oops": True}}}, "answers.oops\n.*Extra inputs are not permitted"),
+            ({"delegation": {"answers": {"clear_ended_on_cut": "on"}}}, "answers.clear_ended_on_cut\n.*valid boolean"),
+            ({"delegation": {"answers": {"worded_carried": True}}}, "answers.worded_carried\n.*Extra inputs are not"),
         ):
             with self.subTest(cascade=cascade), self.assertRaisesRegex(ValueError, message):
                 cascade_of(ExampleConfig.model_validate(example(**cascade)))
+
+    def test_the_answers_block_has_its_defaults_and_a_null_cap_means_no_limit(self):
+        answers = cascade_of(ExampleConfig.model_validate(example())).delegation.answers
+        self.assertEqual(answers.max_tries, 3)
+        self.assertTrue(answers.requeued_as_said and answers.unheard_rest_once and answers.lead_in_skip)
+        self.assertTrue(answers.unheard_questions)
+        self.assertFalse(answers.clear_ended_on_cut)
+        config = ExampleConfig.model_validate(example(delegation={"answers": {"max_tries": None}}))
+        self.assertIsNone(cascade_of(config).delegation.answers.max_tries)
 
     def test_values_override_the_defaults_and_null_keeps_a_parts(self):
         config = ExampleConfig.model_validate(

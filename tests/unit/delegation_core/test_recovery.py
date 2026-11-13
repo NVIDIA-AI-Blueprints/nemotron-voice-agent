@@ -26,6 +26,7 @@ def _shape_hints_block() -> dict:
 
 SHAPE_HINTS = _shape_hints_block()
 HINT = SHAPE_HINTS["hint"]
+READ_BACK = SHAPE_HINTS["read_back"]
 
 
 def tool(name: str, **descriptions: str) -> dict:
@@ -35,6 +36,19 @@ def tool(name: str, **descriptions: str) -> dict:
 
 USER = tool("get_member", user_id="The user id, such as 'lee_park_42'.")
 PHONE = tool("get_customer_by_phone", phone_number="The customer's phone number.")
+
+
+CODES = {
+    "type": "function",
+    "name": "get_x",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string", "description": "The code, such as 'ab-12-cd'."},
+            "ref": {"type": "string", "description": "The ref, such as 'xy-1'."},
+        },
+    },
+}
 
 
 def pair(name: str, call_id: str, text, **arguments) -> tuple[dict, dict]:
@@ -89,15 +103,16 @@ class ShapeHintsTests(unittest.TestCase):
 
     def test_the_hint_is_given_once_per_form(self):
         hint = HINT.format(value="maya_ross_3817")
-        for call_id, value, hinted in (
-            ("c1", "Maya_Ross_3817", True),
-            ("c2", "Maya_Ross_3817", False),
-            ("c3", "maya_ross_3817", False),
-            ("c4", "MAYA_ROSS_3817", False),
+        # The suggested form failing too (c3) ends the hints for the field, with the read-back line once.
+        for call_id, value, added in (
+            ("c1", "Maya_Ross_3817", hint),
+            ("c2", "Maya_Ross_3817", None),
+            ("c3", "maya_ross_3817", READ_BACK),
+            ("c4", "MAYA_ROSS_3817", None),
         ):
             failed = f"Error: User {value} not found"
             read = self.read(pair("get_member", call_id, failed, user_id=value))[call_id]
-            self.assertEqual(read, f"{failed}\n{hint}" if hinted else failed)
+            self.assertEqual(read, f"{failed}\n{added}" if added else failed)
 
     def test_the_shape_is_learned_from_what_worked_not_errors(self):
         for index, failure in enumerate(("Error: the service is unavailable", '{"error": "rate limited"}')):
@@ -147,3 +162,52 @@ class ShapeHintsTests(unittest.TestCase):
         failed = pair("get_member", "c1", "Error: User Maya_Ross_3817 not found", user_id="Maya_Ross_3817")
         for step in (first[0], second[0]):  # what one session tried, another has not
             self.assertIn(HINT.format(value="maya_ross_3817"), step.outputs([failed], [USER])["c1"]["output"])
+
+
+class ShapeHintStopTests(unittest.TestCase):
+    """Once a form the step suggested also found nothing, no more hints for that field, and one read-back line."""
+
+    def setUp(self):
+        self.traces: list[tuple[str, dict]] = []
+        self.step(SHAPE_HINTS)
+
+    def step(self, block):
+        self.hints = ShapeHints.from_settings(block, observe=lambda kind, **fields: self.traces.append((kind, fields)))
+
+    def read(self, name, call_id, value, **more):
+        failed = f"Error: code {value} not found"
+        output = self.hints.outputs([pair(name, call_id, failed, code=value, **more)], [CODES])[call_id]["output"]
+        return output[len(failed) :].strip()
+
+    def kinds(self, kind):
+        return [fields for each, fields in self.traces if each == kind]
+
+    def test_a_suggested_form_that_fails_too_ends_the_hints_for_that_field_and_reads_back_once(self):
+        self.assertEqual(self.read("get_x", "c1", "AB-12-CD"), HINT.format(value="ab-12-cd"))
+        self.assertEqual(self.read("get_x", "c2", "ab-12-cd"), READ_BACK)
+        self.assertEqual(self.read("get_x", "c3", "AC-12-CD"), "")
+        self.assertEqual(len(self.kinds("tools.shape_hint_futile")), 1)
+        failed = "Error: ref XY-9 not found"
+        other = self.hints.outputs([pair("get_x", "c4", failed, ref="XY-9")], [CODES])["c4"]["output"]
+        self.assertEqual(other, f"{failed}\n{HINT.format(value='xy-9')}")  # another parameter still gets its hint
+
+    def test_a_case_only_recovery_keeps_working(self):
+        self.read("get_x", "c1", "AB-12-CD")
+        self.hints.outputs([pair("get_x", "c2", '{"code": "ab-12-cd"}', code="ab-12-cd")], [CODES])
+        self.assertEqual(len(self.kinds("tools.shape_hint_worked")), 1)
+        self.assertEqual(self.read("get_x", "c3", "EF-34-GH"), HINT.format(value="ef-34-gh"))
+
+    def test_with_stop_when_futile_off_every_new_form_gets_its_hint(self):
+        self.step({**SHAPE_HINTS, "stop_when_futile": False})
+        self.read("get_x", "c1", "AB-12-CD")
+        self.assertEqual(self.read("get_x", "c2", "ab-12-cd"), "")  # today's: the tried form gets nothing
+        self.assertEqual(self.read("get_x", "c3", "AC-12-CD"), HINT.format(value="ac-12-cd"))
+
+    def test_a_bad_block_is_refused(self):
+        for bad, message in (
+            ({**SHAPE_HINTS, "stop_when_futile": "yes"}, "stop_when_futile must be true or false"),
+            ({**SHAPE_HINTS, "extra": 1}, "must set not_found_pattern and hint, and nothing else"),
+            ({**SHAPE_HINTS, "read_back": "Read {value}"}, "read_back must be non-empty text with no field"),
+        ):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, message):
+                ShapeHints.from_settings(bad, observe=lambda *a, **k: None)

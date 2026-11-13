@@ -11,11 +11,14 @@ from pathlib import Path
 
 import yaml
 
-from examples.frontend_backend_live.config_manager.schema import ExampleConfig
+from examples.frontend_backend_live.config_manager.schema import ExampleConfig, LiveConfig
 from examples.frontend_backend_live.delegation_core.backend.agent import AgentSettings
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from examples.frontend_backend_live.delegation_core.config import CoreSettings
+from examples.frontend_backend_live.delegations import ReadyResult
+from examples.frontend_backend_live.factory import adapter_block
 from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, EXAMPLE_SETTINGS, core_block
+from tests.unit.frontend_helpers import CallHarness
 
 REPO = Path(__file__).resolve().parents[3]
 WHERE = r"comes from agent_prompts\.Core in the example's prompts\.yaml"
@@ -86,3 +89,20 @@ class ComposeTests(unittest.TestCase):
             names = {str(item).split("=", 1)[0] for item in service.get("environment") or ()}
             with self.subTest(service=name):
                 self.assertEqual(names & {"LIVE_ENABLED", "LIVE_API_TOKEN"}, set())
+
+
+class AnswersSettingsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_answers_keys_reach_the_voice_through_the_composition_root(self):
+        # frontend.cascade.delegation.answers in the example's settings, read as the root reads the cascade's block.
+        cascade = {**EXAMPLE_SETTINGS["frontend"]["cascade"], "delegation": {"answers": {"max_tries": 1}}}
+        settings = {**EXAMPLE_SETTINGS, "frontend": {**EXAMPLE_SETTINGS["frontend"], "cascade": cascade}}
+        live = LiveConfig.model_validate(adapter_block(ExampleConfig.model_validate(settings)))
+        voice = CallHarness(config=live).voice
+        voice._queue = lambda frame: None
+        voice._word_early = lambda: None
+        voice.worknote.confirm(voice.worknote.reserve("Hours?"), "del_1")
+        voice.worknote.answered("del_1")
+        voice.ready(ReadyResult("del_1", "item_1", "The gym opens at six."))
+        batch = voice._take()
+        voice.not_heard(voice.delivered(batch, "We open at six."))  # the first miss drops it
+        self.assertEqual((list(voice.owed), voice.worknote.answer_ready()), ([], False))

@@ -28,7 +28,7 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     listed,
 )
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend, BrokenStreamError, back_off
-from examples.shared.delegation_contract import TERMINALS
+from examples.shared.delegation_contract import TERMINALS, model_tool
 from examples.shared.ids import uid
 
 from .settings import LlmSettings
@@ -361,10 +361,11 @@ class LlmRun:
     def _round_tools(self, request: dict) -> tuple[list[dict], dict[str, ToolSource]]:
         """Return the request's, the server sources' and the work tools, each name once (the first wins).
 
-        Under an ``allowed_tools`` tool choice, only the tools it lists, but the work tools all the same.
+        Under an ``allowed_tools`` tool choice, only the tools it lists, but the work tools all the same. The app's
+        tools go without their annotations, which no model API takes.
         """
         allowed = allowed_tools(request.get("tool_choice"))
-        tools = [tool for tool in deepcopy(list(request.get("tools") or [])) if listed(tool, allowed)]
+        tools = [model_tool(tool) for tool in request.get("tools") or [] if listed(tool, allowed)]
         names = {tool.get("name") for tool in tools}
         owners: dict[str, ToolSource] = {}
         work_tools = self.task.tools()

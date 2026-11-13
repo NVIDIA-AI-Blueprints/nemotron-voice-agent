@@ -40,7 +40,9 @@ from examples.frontend_backend_live.models.decision import (
     decision_schema,
     unusable_decision,
 )
+from examples.frontend_backend_live.spoken import sentences
 from examples.frontend_backend_live.tool_handlers import build_handlers
+from examples.shared.delegation_contract import ends_with_question
 from examples.shared.json_stream import JsonStringFieldStreamer
 from examples.shared.strict_settings import Tool
 
@@ -763,15 +765,39 @@ def after_failure(diagnostics: dict, *, work_open: bool, holding: str) -> Talker
     return TalkerDecision("delegate", "", diagnostics)
 
 
-def relay_line(decision: TalkerDecision, content: str, history: Sequence[dict]) -> str | None:
+def question_lost(asked: str, line: str, *, language: str | None = None) -> bool:
+    """Return whether ``asked`` (the backend results' own text) ends with a question and ``line`` does not.
+
+    The last sentence of each, by ``spoken.sentences``, read with the shared ``ends_with_question``.
+    """
+    ends = sentences(asked, language=language)
+    if not ends or not ends_with_question(ends[-1]):
+        return False
+    said = sentences(line, language=language)
+    return not (said and ends_with_question(said[-1]))
+
+
+def relay_line(
+    decision: TalkerDecision,
+    content: str,
+    history: Sequence[dict],
+    *,
+    asked: str = "",
+    keep_questions: bool = True,
+    language: str | None = None,
+) -> str | None:
     """Return the relay's worded line, or ``None`` when the update must be said as written.
 
     Only a ``speak`` with words that are neither the update nor a line said already is worded; lines compare by
-    ``alnum_only``, so markup, punctuation, case and accents never tell them apart.
+    ``alnum_only``, so markup, punctuation, case and accents never tell them apart. With ``keep_questions`` and
+    ``asked`` (the backend results' text, when the update holds only results), a line that no longer ends with the
+    results' last question is not worded either (:func:`question_lost`); ``language`` is the speech's sentence language.
     """
     line = decision.speech
     said = {alnum_only(standard_message_text(entry)) for entry in history if entry["role"] == "assistant"}
     if decision.action != "speak" or not line.strip() or alnum_only(line) in {alnum_only(content), *said}:
+        return None
+    if keep_questions and asked and question_lost(asked, line, language=language):
         return None
     return line
 
