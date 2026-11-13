@@ -93,24 +93,44 @@ def load_catalog(path: Path | None = None) -> dict[str, Any]:
         return yaml.safe_load(handle)
 
 
-def resolve_entry(catalog: Mapping[str, Any], recipe: str, slot: str, key: str) -> dict[str, Any]:
-    """Return a catalog entry for the recipe. The cloud recipe applies the entry's `nvcf` fields over it."""
+def _section(catalog: Mapping[str, Any], recipe: str, slot: str) -> Mapping[str, Any]:
+    """Return the catalog entries of one slot that the recipe can serve."""
     if recipe not in RECIPES:
         raise ValueError(f"SERVICE_RECIPE must be one of {', '.join(RECIPES)}; got '{recipe}'.")
+    entries = (catalog.get("single-gpu" if recipe == "single-gpu" else "server") or {}).get(slot, {})
     if recipe == "cloud":
-        entry = (catalog.get("server") or {}).get(slot, {}).get(key)
-        if entry is None or "nvcf" not in entry:
-            raise ValueError(
-                f"{slot} service '{key}' is not hosted on NVIDIA Cloud. Pick a service with an nvcf entry."
-            )
-        # Hosted endpoints replace the Compose hostnames: only the nvcf fields may set server or base_url.
-        base = {k: v for k, v in entry.items() if k not in ("nvcf", "server", "base_url", "streaming_url")}
-        return {**base, **(entry["nvcf"] or {}), "riva_model": entry.get("model", "")}
-    section = "server" if recipe == "server" else "single-gpu"
-    entry = (catalog.get(section) or {}).get(slot, {}).get(key)
-    if entry is None:
-        raise ValueError(f"{slot} service '{key}' is not available in the {recipe} recipe.")
-    return dict(entry)
+        entries = {key: entry for key, entry in entries.items() if "nvcf" in entry}
+    return entries
+
+
+def _supported(slot: str, entry: Mapping[str, Any]) -> bool:
+    """Whether this example can use the entry. The NVIDIA plugin speaks Riva gRPC, not the Transcribe HTTP API."""
+    return not (slot == "asr" and entry.get("asr_type") == "transcribe")
+
+
+def available_services(catalog: Mapping[str, Any], recipe: str) -> dict[str, list[str]]:
+    """Return the catalog keys that `LLM_SERVICE`, `ASR_SERVICE`, and `TTS_SERVICE` accept for the recipe."""
+    return {
+        slot: [key for key, entry in _section(catalog, recipe, slot).items() if _supported(slot, entry)]
+        for slot in DEFAULT_SERVICES
+    }
+
+
+def resolve_entry(catalog: Mapping[str, Any], recipe: str, slot: str, key: str) -> dict[str, Any]:
+    """Return a catalog entry for the recipe. The cloud recipe applies the entry's `nvcf` fields over it."""
+    entries = _section(catalog, recipe, slot)
+    entry = entries.get(key)
+    if entry is None or not _supported(slot, entry):
+        choices = ", ".join(available_services(catalog, recipe)[slot])
+        hint = " Cloud serves only entries with an nvcf key." if recipe == "cloud" else ""
+        raise ValueError(
+            f"{slot} service '{key}' is not available in the {recipe} recipe.{hint} Choose one of: {choices}."
+        )
+    if recipe != "cloud":
+        return dict(entry)
+    # Hosted endpoints replace the Compose hostnames: only the nvcf fields may set server or base_url.
+    base = {k: v for k, v in entry.items() if k not in ("nvcf", "server", "base_url", "streaming_url")}
+    return {**base, **(entry["nvcf"] or {}), "riva_model": entry.get("model", "")}
 
 
 def _extra_body(entry: Mapping[str, Any]) -> dict[str, Any]:
@@ -161,3 +181,27 @@ def load_config(
         tts_language=tts.get("language_code", "en-US"),
         tts_sample_rate=SINGLE_GPU_TTS_SAMPLE_RATE if recipe == "single-gpu" else DEFAULT_TTS_SAMPLE_RATE,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """List the services that each recipe offers, marking the defaults: `python -m ...config [recipe]`."""
+    import sys
+
+    args = sys.argv[1:] if argv is None else argv
+    recipes = args or list(RECIPES)
+    catalog = load_catalog()
+    for recipe in recipes:
+        try:
+            services = available_services(catalog, recipe)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(recipe)
+        for slot, keys in services.items():
+            listed = ", ".join(f"{key} (default)" if key == DEFAULT_SERVICES[slot] else key for key in keys)
+            print(f"  {slot.upper()}_SERVICE: {listed}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

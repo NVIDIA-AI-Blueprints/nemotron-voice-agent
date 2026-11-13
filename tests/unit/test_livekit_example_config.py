@@ -61,7 +61,7 @@ def test_service_keys_can_be_overridden():
 
 
 def test_cloud_rejects_services_without_nvcf():
-    with pytest.raises(ValueError, match="not hosted on NVIDIA Cloud"):
+    with pytest.raises(ValueError, match="Cloud serves only entries with an nvcf key"):
         config.load_config("cloud", env={"ASR_SERVICE": "parakeet-ctc"}, catalog=CATALOG)
 
 
@@ -70,6 +70,38 @@ def test_unknown_recipe_and_service_are_errors():
         config.load_config("bogus", env={}, catalog=CATALOG)
     with pytest.raises(ValueError, match="not available"):
         config.load_config("server", env={"TTS_SERVICE": "nope"}, catalog=CATALOG)
+
+
+def test_unknown_service_error_lists_the_choices():
+    with pytest.raises(ValueError, match="Choose one of: .*nemotron-lightning"):
+        config.load_config("single-gpu", env={"LLM_SERVICE": "typo"}, catalog=CATALOG)
+
+
+def test_available_services_follow_the_recipe():
+    cloud = config.available_services(CATALOG, "cloud")
+    assert "nemotron-bolt-4b" in cloud["llm"]  # has an nvcf key
+    assert "magpie-zeroshot-tts" not in cloud["tts"]  # self-hosted only
+    server = config.available_services(CATALOG, "server")
+    assert "magpie-zeroshot-tts" in server["tts"]
+    single = config.available_services(CATALOG, "single-gpu")
+    assert single["asr"] == ["nemotron-asr-streaming-english", "nemotron-asr-streaming-multilingual"]
+    for recipe in config.RECIPES:
+        services = config.available_services(CATALOG, recipe)
+        assert all(config.DEFAULT_SERVICES[slot] in services[slot] for slot in services)
+
+
+def test_transcribe_asr_is_rejected_because_the_plugin_speaks_riva_grpc():
+    assert "nemotron-transcribe" in CATALOG["server"]["asr"]
+    assert "nemotron-transcribe" not in config.available_services(CATALOG, "server")["asr"]
+    with pytest.raises(ValueError, match="not available"):
+        config.load_config("server", env={"ASR_SERVICE": "nemotron-transcribe"}, catalog=CATALOG)
+
+
+def test_every_listed_combination_resolves():
+    for recipe in config.RECIPES:
+        for slot, keys in config.available_services(CATALOG, recipe).items():
+            for key in keys:
+                config.load_config(recipe, env={f"{slot.upper()}_SERVICE": key}, catalog=CATALOG)
 
 
 def test_models_summary_for_the_ui():
@@ -93,3 +125,12 @@ def test_deployment_summary_has_a_label_and_the_model_ids():
     assert llm["id"] == "nvidia/nemotron-3.5-lightning-30b-a3b"
     assert config.load_config("server", env={}, catalog=CATALOG).deployment()["label"] == "Server (NIM)"
     assert config.load_config("cloud", env={}, catalog=CATALOG).deployment()["label"] == "Cloud"
+
+
+def test_list_command_prints_choices_and_marks_defaults(capsys, monkeypatch):
+    monkeypatch.setenv("SERVICES_FILE", str(Path(__file__).resolve().parents[2] / "services.yaml"))
+    assert config.main(["single-gpu"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("single-gpu\n")
+    assert "LLM_SERVICE: nemotron-lightning (default)" in out
+    assert config.main(["nope"]) == 2

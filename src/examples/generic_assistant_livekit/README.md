@@ -31,13 +31,51 @@ The following diagram shows the deployed components. The ASR, LLM, and TTS servi
 
 ## Default Models
 
-The agent uses the first entry of each slot that the `generic-assistant` example offers in `services.yaml`. To pick another catalog entry, set `LLM_SERVICE`, `ASR_SERVICE`, or `TTS_SERVICE` in `.env`.
+The agent uses the first entry of each slot that the `generic-assistant` example offers in `services.yaml`. To use other models, refer to [Configure Models](#configure-models).
 
 | Profile | ASR | LLM | TTS |
 | --- | --- | --- | --- |
 | Cloud | Nemotron ASR Streaming English | Nemotron 3.5 Lightning 30B A3B | Magpie TTS Multilingual |
 | Single GPU | Nemotron Speech Streaming (NeMo-Speech.cpp) | Nemotron 3.5 Lightning 30B A3B (vLLM) | Magpie TTS (NeMo-Speech.cpp) |
 | Server | Nemotron ASR Streaming English (NIM) | Nemotron 3.5 Lightning 30B A3B (NIM) | Magpie TTS Multilingual (NIM) |
+
+## Configure Models
+
+The agent reads the repository's [`services.yaml`](../../../services.yaml) catalog, the same file that the Pipecat examples use. Catalog entries, their `nvcf` cloud overrides, and the `SERVICE_RECIPE` selection work the same way. To use a different model, set one or more of these variables in `.env`:
+
+```bash
+LLM_SERVICE=nemotron-bolt-4b
+ASR_SERVICE=nemotron-asr-streaming-english
+TTS_SERVICE=magpie-multilingual-tts
+```
+
+Then recreate the agent so that it reads the change. Use `livekit-agent`, `livekit-agent-server`, or `livekit-agent-single-gpu`, depending on the profile:
+
+```bash
+docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+  --profile generic-assistant-livekit/single-gpu up -d --force-recreate livekit-agent-single-gpu
+```
+
+To list the keys that each profile accepts, with the defaults marked, run this command from the repository root:
+
+```bash
+PYTHONPATH=src uv run python -m examples.generic_assistant_livekit.config single-gpu   # or: cloud, server. Omit to list all
+```
+
+- **Cloud:** any listed entry works without other setup, because NVIDIA hosts it.
+- **Server and Single GPU:** the entry's sidecar must be running. `docker-compose.yaml` starts only the default sidecars. To run another model locally, add its sidecar from [`docker/`](../../../docker) with `extends`, as the existing sidecars do, and give it a network alias that matches the hostname in `services.yaml`.
+- **New models:** add an entry to `services.yaml`, and then select it with the variables above.
+- **Not supported:** ASR entries that use the Transcribe HTTP API, such as `nemotron-transcribe`, because the LiveKit NVIDIA plugin speaks Riva gRPC.
+
+The example inherits the shared catalog, but not the Pipecat UI around it:
+
+| | Pipecat examples | This example |
+| --- | --- | --- |
+| Model catalog (`services.yaml`) | Yes | Yes, the same file |
+| List of services per example (`examples_registry.yaml`) | Each example lists what it offers | Not used. Any catalog entry that the profile can serve |
+| Switching models | **Services** tab in the UI | At deploy time, through `.env` and an agent restart |
+| Editable settings (`settings.yaml`) | UI controls, such as the reasoning budget | Only the entry's `extra_params`, with reasoning off |
+| Cloud and local models together | Cloud entries appear in local profiles | One profile for all three slots |
 
 ## Deployment Profiles
 
@@ -195,7 +233,7 @@ SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or inter
 | Path | Role |
 | --- | --- |
 | `agent.py` | Agent worker: builds the ASR, LLM, and TTS clients, registers tools, and publishes UI events |
-| `config.py` | Resolves endpoints from `services.yaml` for the `cloud`, `server`, and `single-gpu` recipes |
+| `config.py` | Resolves endpoints from `services.yaml` for the `cloud`, `server`, and `single-gpu` recipes, and lists the models that a profile accepts |
 | `prompts.yaml` | Prompt and greeting |
 | `tools.py`, `tool_wrapper.py` | Weather and date tool logic, and the wrapper that reports tool calls to the UI |
 | `voices.py` | Lists the voices a speech server offers, and validates voice-change requests |
