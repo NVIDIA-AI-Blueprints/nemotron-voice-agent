@@ -70,7 +70,7 @@ function addEvent(icon, text, cls = '') {
 
 function onAgentEvent(ev) {
   switch (ev.type) {
-    case 'session': addEvent('🔊', `Session started · ${ev.recipe}`); showModels(ev.models); break;
+    case 'session': addEvent('🔊', `Session started · ${ev.scenario} · ${ev.recipe}`); showModels(ev.models); break;
     case 'tool_call': addEvent('🔧', `Tool call: ${ev.name}(${short(ev.args)})`); break;
     case 'tool_result':
       addEvent(ev.ok ? '✅' : '❌', `Tool result: ${ev.name} → ${short(ev.result)} (${ev.ms} ms)`, ev.ok ? 'ok' : 'error');
@@ -117,8 +117,9 @@ function showModels(models) {
 async function connect() {
   $('connect').disabled = true;
   setStatus('Requesting token…');
-  const voice = voicesLoaded ? `?voice=${encodeURIComponent($('voice').value)}` : '';
-  const { token } = await (await fetch(`/token${voice}`)).json();
+  const params = new URLSearchParams({ scenario: $('scenario').value });
+  if (voicesLoaded) params.set('voice', $('voice').value);
+  const { token } = await (await fetch(`/token?${params}`)).json();
   room = new Room({ adaptiveStream: true, dynacast: true });
 
   room.registerTextStreamHandler('lk.transcription', onTranscription);
@@ -150,6 +151,7 @@ async function connect() {
     return;
   }
   setStatus('Connected — waiting for agent');
+  $('scenario').disabled = true;  // the use case is fixed for the session
   $('connect').textContent = 'Disconnect';
   $('connect').classList.replace('primary', 'danger');
   $('connect').disabled = false;
@@ -192,6 +194,7 @@ $('voice').onchange = async () => {
 
 function reset() {
   room = null;
+  $('scenario').disabled = false;
   $('connect').textContent = 'Connect';
   $('connect').classList.replace('danger', 'primary');
   $('connect').disabled = false;
@@ -218,6 +221,32 @@ async function loadDeployment() {
   $('mode-badge').textContent = 'Deployment unknown';
 }
 
+// The use cases (prompt and tools) that the agent offers. The choice is sent with the join token and is fixed for the session.
+let scenarios = [];
+function showScenario() {
+  const scenario = scenarios.find((item) => item.id === $('scenario').value);
+  if (!scenario) return;
+  $('scenario-desc').textContent = scenario.description;
+  const script = $('script');
+  script.innerHTML = '<div class="script-title">🎙️ Say this</div>';
+  for (const example of scenario.examples) script.append(el('div', 'script-line', `“${example}”`));
+  const empty = $('empty-examples');
+  if (empty) {
+    empty.innerHTML = '';
+    for (const example of scenario.examples) empty.append(el('div', '', `“${example}”`));
+  }
+}
+
+async function loadScenarios() {
+  try {
+    scenarios = (await (await fetch('/scenarios')).json()).scenarios;
+    for (const scenario of scenarios) $('scenario').add(new Option(scenario.name, scenario.id));
+    showScenario();
+  } catch (e) { $('scenario-desc').textContent = 'Use cases are unavailable; the default is used.'; }
+}
+$('scenario').onchange = showScenario;
+
+loadScenarios();
 loadDeployment();
 loadVoices();
 $('connect').onclick = () => (room ? room.disconnect() : connect());

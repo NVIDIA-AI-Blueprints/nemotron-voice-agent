@@ -1,6 +1,6 @@
 # Generic Assistant on LiveKit
 
-This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/). It uses Nemotron automatic speech recognition (ASR) and Magpie text-to-speech (TTS) through the LiveKit NVIDIA plugin, and a Nemotron large language model (LLM) through the OpenAI-compatible API. A small web UI joins a LiveKit room, shows live transcripts and tool calls, and lets you pick a voice.
+This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/). It uses Nemotron automatic speech recognition (ASR) and Magpie text-to-speech (TTS) through the LiveKit NVIDIA plugin, and a Nemotron large language model (LLM) through the OpenAI-compatible API. A small web UI joins a LiveKit room, shows live transcripts and tool calls, and lets you pick a use case and a voice.
 
 The example is self-contained. It has its own Python environment, image, and Compose file, and nothing outside this folder refers to it. It reuses the model recipes in [`docker/`](../../../docker) and the catalog in [`services.yaml`](../../../services.yaml). It does not use the Pipecat server, the React client, or [`examples_registry.yaml`](../../../examples_registry.yaml). To move the example to another repository, replace the `extends` entries in `docker-compose.yaml` with copies of those service definitions.
 
@@ -207,6 +207,21 @@ src/examples/generic_assistant_livekit/run.sh clean --image -y   # all profiles,
 - **Weights are kept:** Hugging Face downloads are in `~/.cache/huggingface`, and the NeMo-Speech.cpp weights are in `models/nemo-speech`. Other applications can share them, so remove them only if nothing else needs them.
 - **Switching profiles:** `run.sh up` stops a different running profile for you. With plain Compose, run `down` for the old profile first, or its containers keep their ports.
 
+## Use Cases
+
+The **Use case** list in the UI selects the agent's prompt and tools. Choose one before you connect. It stays fixed for the session. The generic assistant is the default.
+
+| Use case | What it does | Tools | Try saying |
+| --- | --- | --- | --- |
+| Generic assistant | Date, time, and live weather | `get_weather`, `get_current_datetime` | "What is the weather in Paris?" |
+| Insurance claims | Summit Auto Insurance: look up a policy, file a claim, check a claim | `lookup_policy`, `file_claim`, `check_claim_status`, `get_current_datetime` | "I was in a fender bender yesterday, my policy is AUT-1001." |
+| Clinic booking | Riverside Family Clinic: find open slots, book and cancel appointments | `list_available_slots`, `book_appointment`, `cancel_appointment`, `get_current_datetime` | "I would like to see a dermatologist this week." |
+| Bank assistant | Harbor Bank phone banking: verify a PIN, then balances, transactions, transfers, and a lost card | `verify_identity`, `get_balance`, `recent_transactions`, `transfer_funds`, `report_lost_card` | "What is my checking balance?" (the demo PIN is 1234) |
+
+All data in the insurance, clinic, and bank use cases is fictional and held in memory for one session, so every session starts fresh. Only the weather lookup calls an outside service (Open-Meteo, no key needed). Each tool call shows in the transcript panel.
+
+To add a use case, add an entry to `prompts.yaml` (name, description, examples, greeting, and the prompt), write its tool functions in `scenarios.py`, and register it in `USE_CASES`. Tools are plain functions. LiveKit builds the tool schema from the type hints and the docstring `Args:` section.
+
 ## Voice Selection
 
 The **Voice** list shows the voices that the TTS server offers. Choose a voice before you connect, and the session starts with it. You can also change it during the session: the agent uses the new voice from its next reply and says a short sample, which does not enter the conversation history.
@@ -234,16 +249,15 @@ SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or inter
 | --- | --- |
 | `agent.py` | Agent worker: builds the ASR, LLM, and TTS clients, registers tools, and publishes UI events |
 | `config.py` | Resolves endpoints from `services.yaml` for the `cloud`, `server`, and `single-gpu` recipes, and lists the models that a profile accepts |
-| `prompts.yaml` | Prompt and greeting |
-| `tools.py`, `tool_wrapper.py` | Weather and date tool logic, and the wrapper that reports tool calls to the UI |
+| `prompts.yaml` | Prompt, greeting, and UI text for each use case |
+| `scenarios.py` | The use cases, their tools, and their fictional demo data. No LiveKit imports |
+| `tools.py`, `tool_wrapper.py` | Weather and date logic, and the wrapper that reports tool calls to the UI |
 | `voices.py` | Lists the voices a speech server offers, and validates voice-change requests |
 | `credentials.py` | Generates the LiveKit key and secret and the server config |
-| `ui_server.py`, `ui/` | Web UI, the join-token endpoint, and the voice list endpoint |
+| `ui_server.py`, `ui/` | Web UI and its endpoints for the join token, use cases, voices, and deployment |
 | `run.sh` | Helper script to start, wait for, stop, and clean up a profile |
 | `docker-compose.yaml`, `Dockerfile`, `.env.example` | Services, image, and environment template |
 | `pyproject.toml`, `uv.lock` | Example-only dependencies |
-
-To add a tool, write a function with type hints and a docstring `Args:` section in `agent.py`, add it to `TOOLS`, and mention it in `prompts.yaml`. To change models, refer to [Configure Services](../../../docs/how-to/configure-services.md). The agent applies the catalog entry's `extra_params` and turns reasoning off, as the `settings.yaml` default does. It does not read other editable settings.
 
 ## Dependencies
 

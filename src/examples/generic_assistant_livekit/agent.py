@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""LiveKit agent worker for the generic assistant: Nemotron ASR, Nemotron LLM, and Magpie TTS."""
+"""LiveKit agent worker: Nemotron ASR, Nemotron LLM, and Magpie TTS, with a use case chosen in the UI."""
 
 from __future__ import annotations
 
@@ -12,18 +12,16 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Literal
 
-import yaml
 from livekit import rtc
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.plugins import nvidia, openai, silero
 
 from .config import AgentConfig, load_config
 from .credentials import apply_to_environ
+from .scenarios import get_scenario
 from .state import DEPLOYMENT_FILE, write_json_atomic
 from .tool_wrapper import traced_tool
-from .tools import current_datetime, current_weather
 from .voices import (
     VOICES_FILE,
     choose_voice,
@@ -38,38 +36,9 @@ log = logging.getLogger("generic-assistant-livekit")
 
 EVENTS_TOPIC = "agent.events"  # data-channel topic the web UI listens on
 CONTROL_TOPIC = "agent.control"  # data-channel topic the web UI sends commands on
-PROMPTS_FILE = Path(__file__).with_name("prompts.yaml")
-PROMPT_KEY = "generic_assistant"
 
 apply_to_environ()  # LiveKit key and secret from the state volume, unless set in the environment
 server = AgentServer()
-
-
-def get_current_datetime(timezone: str = "") -> dict:
-    """Get the current date and time.
-
-    Args:
-        timezone: Optional IANA timezone name such as "America/New_York". Leave empty for local time.
-    """
-    return current_datetime(timezone)
-
-
-async def get_weather(location: str, unit: Literal["fahrenheit", "celsius"] = "fahrenheit") -> dict:
-    """Get the current weather for a city. Reports Fahrenheit by default; both units are supported.
-
-    Args:
-        location: City name, for example "Paris" or "Austin, Texas".
-        unit: "fahrenheit" (the default) or "celsius". Use "celsius" whenever the user asks for Celsius or metric.
-    """
-    return await current_weather(location, fahrenheit=(unit != "celsius"))
-
-
-TOOLS = (get_current_datetime, get_weather)
-
-
-def load_prompt() -> dict:
-    """Return the `generic_assistant` entry of prompts.yaml."""
-    return yaml.safe_load(PROMPTS_FILE.read_text())[PROMPT_KEY]
 
 
 def build_stt(cfg: AgentConfig) -> nvidia.STT:
@@ -164,7 +133,6 @@ def publish_voices(cfg: AgentConfig, state_dir: Path, retry_s: float = 10, refre
 async def entrypoint(ctx: JobContext):
     """Join the room, wire the cascaded pipeline, and greet the user."""
     cfg = load_config()
-    prompt = load_prompt()
     voices_task = asyncio.ensure_future(asyncio.to_thread(discover_voices, cfg))
     await ctx.connect()
     participant = await ctx.wait_for_participant()
@@ -178,7 +146,8 @@ async def entrypoint(ctx: JobContext):
             lambda t: t.cancelled() or t.exception() and log.warning("event publish failed: %s", t.exception())
         )
 
-    # The voice chosen in the UI before connecting arrives as a participant attribute. Only listed voices are used.
+    # The use case and voice chosen in the UI arrive as participant attributes. Unknown values fall back to defaults.
+    scenario = get_scenario(participant.attributes.get("scenario"))
     voices = with_current(await voices_task, cfg.tts_voice)
     names = {voice["id"]: voice["name"] for voice in voices}
     chosen = choose_voice(participant.attributes.get("voice"), names, cfg.tts_voice)
@@ -199,9 +168,12 @@ async def entrypoint(ctx: JobContext):
     def _false_interruption(ev):
         emit("false_interruption", resumed=ev.resumed)
 
-    agent = Agent(instructions=prompt["content"], tools=[traced_tool(fn, emit) for fn in TOOLS])
+    agent = Agent(
+        instructions=scenario.instructions,
+        tools=[traced_tool(fn, emit) for fn in scenario.make_tools()],  # fresh demo state for each session
+    )
     await session.start(agent=agent, room=ctx.room)
-    emit("session", recipe=cfg.recipe, models=cfg.models())
+    emit("session", recipe=cfg.recipe, models=cfg.models(), scenario=scenario.name)
     emit("voices", voices=voices, current=tts._opts.voice)
 
     def on_data(packet: rtc.DataPacket) -> None:
@@ -215,7 +187,7 @@ async def entrypoint(ctx: JobContext):
         session.say(f"Hi, this is my {names[voice]} voice.", add_to_chat_ctx=False)
 
     ctx.room.on("data_received", on_data)
-    await session.generate_reply(instructions=prompt["greeting"])
+    await session.generate_reply(instructions=scenario.greeting)
 
 
 if __name__ == "__main__":

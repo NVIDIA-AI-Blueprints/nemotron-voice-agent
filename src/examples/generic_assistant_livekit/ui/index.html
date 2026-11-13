@@ -33,11 +33,10 @@
     <div class="layout">
       <div class="conference-container">
         <div class="panel-label">Audio Controls</div>
-        <div class="script" id="script">
-          <div class="script-title">🎙️ Say this</div>
-          <div class="script-line">“What is the weather in Paris?”</div>
-          <div class="script-line">“What time is it in Tokyo?”</div>
-        </div>
+        <label class="field" for="scenario">Use case</label>
+        <select class="select" id="scenario"></select>
+        <div class="hint" id="scenario-desc"></div>
+        <div class="script" id="script"></div>
         <label class="field" for="voice">Voice</label>
         <select class="select" id="voice" disabled>
           <option>Loading voices…</option>
@@ -51,7 +50,7 @@
       <div class="transcription-panel">
         <div class="panel-header"><span class="live-dot"></span>Live Transcription &amp; Events</div>
         <div class="messages" id="messages">
-          <div class="empty-state" id="empty">🎤 Click <b>Connect</b> and start speaking. Transcripts, tool calls, and barge-ins show up here.</div>
+          <div class="empty-state" id="empty">🎤 Click <b>Connect</b> and start speaking. Transcripts, tool calls, and barge-ins show up here.<div class="empty-examples" id="empty-examples"></div></div>
         </div>
       </div>
     </div>
