@@ -130,7 +130,7 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    src/examples/generic_assistant_livekit/run.sh up single-gpu
    ```
 
-   The script prints the container status after it starts them, and then waits until the sidecars are healthy. The first start of the Server and Single GPU profiles downloads and loads models, so containers show `health: starting` for a long time. The wait prints progress every 15 seconds, with the last log line of each container that is still starting. Press Ctrl+C to stop waiting. The containers keep running, and you can resume with the `wait` command. Connect only after the script prints `Ready to connect`. Use `--no-wait` to return right after the start:
+   The script prints the container status after it starts them, and then waits until the sidecars are healthy. The first start of the Server and Single GPU profiles downloads and loads models, so containers show `health: starting` for a long time. The wait prints progress every 15 seconds, with the last log line of each container that is still starting. A container that shows `not ready yet` has passed its health check window, but it can still be loading: the first start of a large model can take longer than the check allows. Worry only when a container is restarting or its last log line stops changing. Press Ctrl+C to stop waiting. The containers keep running, and you can resume with the `wait` command. Connect only after the script prints `Ready to connect`. Use `--no-wait` to return right after the start:
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh wait single-gpu          # resume waiting (or: server)

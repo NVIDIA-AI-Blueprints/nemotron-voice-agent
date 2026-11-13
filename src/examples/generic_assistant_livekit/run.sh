@@ -281,7 +281,7 @@ cmd_logs() {
 cmd_wait() {
   [ $# -ge 1 ] || usage
   require_docker
-  local name="$1" timeout="${2:-3600}" p start now ids id status state pending detail cname last
+  local name="$1" timeout="${2:-3600}" p start now ids id status state pending detail cname last label unready hinted=0
   p="$(profile_name "$name")"
   start="$(date +%s)"
   info "Waiting up to ${timeout}s for the $name profile to become healthy (progress every ${WAIT_INTERVAL:-15}s)..."
@@ -289,6 +289,7 @@ cmd_wait() {
   while true; do
     ids="$(dc_quiet --profile "$p" ps -q)"
     pending=""
+    unready=0
     for id in $ids; do
       status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id")"
       state="$(docker inspect -f '{{.State.Status}}' "$id")"
@@ -298,9 +299,11 @@ cmd_wait() {
         pending="$pending
   - $detail"
       elif [ -n "$status" ] && [ "$status" != healthy ]; then
+        label="starting"
+        if [ "$status" = unhealthy ]; then label="not ready yet"; unready=1; fi
         last="$(docker logs --tail 1 "$id" 2>&1 | tr -d '\r' | cut -c1-110)"
         pending="$pending
-  - $cname: $status${last:+ | last log: $last}"
+  - $cname: $label${last:+ | last log: $last}"
       fi
     done
     now="$(date +%s)"
@@ -310,6 +313,11 @@ cmd_wait() {
     fi
     [ $((now - start)) -lt "$timeout" ] || die "timed out after ${timeout}s. Still starting:$pending"
     info "[$(( (now - start) / 60 ))m$(( (now - start) % 60 ))s] still starting:$pending"
+    if [ "$unready" = 1 ] && [ "$hinted" = 0 ]; then
+      info "  'not ready yet' is not an error: a first start can take longer than the container's health check allows."
+      info "  Worry only if a container is restarting or its last log line stops changing."
+      hinted=1
+    fi
     sleep "${WAIT_INTERVAL:-15}"
   done
 }

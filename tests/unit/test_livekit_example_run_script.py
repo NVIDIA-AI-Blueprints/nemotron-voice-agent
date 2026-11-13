@@ -138,6 +138,21 @@ def test_wait_reports_progress_until_healthy(tmp_path):
     assert "All healthy. Ready to connect." in result.stderr
 
 
+def test_wait_labels_an_unhealthy_container_as_not_ready(tmp_path):
+    result = run_wait(tmp_path, "unhealthy unhealthy healthy")
+    assert result.returncode == 0, result.stderr
+    assert "livekit-nvidia-llm-vllm: not ready yet | last log: Loading weights took 12.3 seconds" in result.stderr
+    assert "unhealthy" not in result.stderr
+    assert result.stderr.count("is not an error") == 1
+    assert "All healthy. Ready to connect." in result.stderr
+
+
+def test_wait_does_not_explain_starting_containers_as_not_ready(tmp_path):
+    result = run_wait(tmp_path, "starting healthy")
+    assert "not ready yet" not in result.stderr
+    assert "is not an error" not in result.stderr
+
+
 def test_wait_times_out_and_names_the_pending_container(tmp_path):
     result = run_wait(tmp_path, "starting", timeout="0")
     assert result.returncode != 0
