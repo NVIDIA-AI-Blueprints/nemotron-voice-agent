@@ -1,12 +1,12 @@
 # Generic Assistant on LiveKit
 
-This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/). The agent worker keeps automatic speech recognition (ASR), large language model (LLM), tools, and text-to-speech (TTS) as separate services. It uses Nemotron ASR through the LiveKit NVIDIA plugin, a Nemotron LLM through the OpenAI-compatible API, and Magpie TTS through the same plugin. A small web UI joins a LiveKit room, shows live transcripts, and shows each tool call.
+This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/). It uses Nemotron automatic speech recognition (ASR) and Magpie text-to-speech (TTS) through the LiveKit NVIDIA plugin, and a Nemotron large language model (LLM) through the OpenAI-compatible API. A small web UI joins a LiveKit room, shows live transcripts and tool calls, and lets you pick a voice.
 
-The example is self-contained. It has its own Python environment, image, and Compose services. It does not use the Pipecat server, the React client, or [`examples_registry.yaml`](../../../examples_registry.yaml). It reuses the model recipes in [`docker/`](../../../docker) and the catalog in [`services.yaml`](../../../services.yaml), and nothing outside this folder refers to it. To move the example to another repository, replace the `extends` entries in `docker-compose.yaml` with copies of those service definitions.
+The example is self-contained. It has its own Python environment, image, and Compose file, and nothing outside this folder refers to it. It reuses the model recipes in [`docker/`](../../../docker) and the catalog in [`services.yaml`](../../../services.yaml). It does not use the Pipecat server, the React client, or [`examples_registry.yaml`](../../../examples_registry.yaml). To move the example to another repository, replace the `extends` entries in `docker-compose.yaml` with copies of those service definitions.
 
 ## How It Works
 
-The assistant is a cascade: each stage hands its output to the next. The following diagram shows one conversation turn, from your microphone to the agent's voice. The solid arrows are the normal flow. The dotted arrow is the barge-in path: when you speak over the agent, the VAD tells the TTS to stop.
+The assistant is a cascade: each stage hands its output to the next. The solid arrows in the following diagram are the normal flow. The dotted arrow is barge-in: when you speak over the agent, the VAD tells the TTS to stop.
 
 ```mermaid
 flowchart LR
@@ -18,15 +18,12 @@ flowchart LR
     VAD -. "barge-in: the user speaks over the agent" .-> TTS
 ```
 
-The following list describes each stage:
-
-1. **Client.** The browser publishes your microphone to a LiveKit room over WebRTC, and plays the agent's audio. It also shows live transcripts and each tool call, which arrive over the room's data channel, and a voice selector that sends your choice back over the same channel.
-2. **VAD.** Voice activity detection runs the small Silero model on the incoming audio. It tells the agent when speech starts and stops. It does not recognize words.
-3. **ASR.** Nemotron streaming ASR turns speech into text while you talk, so partial transcripts appear before you finish. Hosted ASR applies low-latency endpointing in the plugin. Self-hosted speech servers do endpointing themselves.
-4. **Turn handling.** The agent combines the VAD and ASR signals to decide that your turn is complete, and then sends the final transcript to the LLM.
-5. **LLM and tools.** The Nemotron LLM streams a reply. When your request matches a tool, such as the weather, it calls the tool, reads the result, and continues the reply.
-6. **TTS.** Magpie TTS converts the streamed text into speech as it arrives, so the agent starts talking before the full reply exists. The audio returns through LiveKit to your speaker.
-7. **Barge-in.** While the agent speaks, the VAD keeps listening. If you start talking, the agent stops speaking and cancels the rest of the reply, and your new speech becomes the next turn. If the sound turns out not to be real speech, the agent can resume. The UI shows both cases as events.
+1. **Client.** The browser sends your microphone to a LiveKit room over WebRTC, plays the agent's audio, and shows transcripts and tool calls.
+2. **VAD.** The Silero voice activity detection (VAD) model detects when you start and stop speaking. It does not recognize words.
+3. **ASR.** Nemotron streaming ASR turns your speech into text while you talk.
+4. **LLM.** The Nemotron LLM writes the reply and calls tools, such as the weather tool, when needed.
+5. **TTS.** Magpie TTS speaks the reply as it streams in.
+6. **Barge-in.** The VAD keeps listening while the agent speaks. If you talk over the agent, it stops, and your new speech becomes the next turn.
 
 The following diagram shows the deployed components. The ASR, LLM, and TTS services run on NVIDIA Cloud or in local sidecars, depending on the profile.
 
@@ -34,7 +31,7 @@ The following diagram shows the deployed components. The ASR, LLM, and TTS servi
 
 ## Default Models
 
-The agent reads the first entry of each slot that the `generic-assistant` example offers in `services.yaml`. Select a different catalog entry with `LLM_SERVICE`, `ASR_SERVICE`, or `TTS_SERVICE` in `.env`. The following table lists the default entries for each profile:
+The agent uses the first entry of each slot that the `generic-assistant` example offers in `services.yaml`. To pick another catalog entry, set `LLM_SERVICE`, `ASR_SERVICE`, or `TTS_SERVICE` in `.env`.
 
 | Profile | ASR | LLM | TTS |
 | --- | --- | --- | --- |
@@ -44,40 +41,38 @@ The agent reads the first entry of each slot that the `generic-assistant` exampl
 
 ## Recommended Hardware
 
-Pick the profile for your hardware. The hardware support matches the `generic-assistant` example in the [Getting Started guide](../../../docs/01-getting-started.md).
+Pick the profile for your hardware. The support matches the `generic-assistant` example in the [Getting Started guide](../../../docs/01-getting-started.md).
 
 | Hardware | Profile | Notes |
 | --- | --- | --- |
-| No local GPU (laptop or any Docker host) | Cloud: `generic-assistant-livekit` | The speech and language models run on NVIDIA Cloud. You need `NVIDIA_API_KEY` and internet access. |
-| Workstation or server GPU | Server: `generic-assistant-livekit/server` | NVIDIA NIM containers for ASR, the LLM, and TTS. Do not use this profile on DGX Spark or Jetson Thor. |
-| One GPU: workstation, DGX Spark, or Jetson Thor | Single GPU: `generic-assistant-livekit/single-gpu` | vLLM for the LLM and NeMo-Speech.cpp for ASR and TTS. This is the profile for DGX Spark and Jetson Thor. |
+| No local GPU | Cloud: `generic-assistant-livekit` | Models run on NVIDIA Cloud. You need `NVIDIA_API_KEY` and internet access. |
+| Workstation or server GPU | Server: `generic-assistant-livekit/server` | NVIDIA NIM containers. Do not use on DGX Spark or Jetson Thor. |
+| Workstation, DGX Spark, or Jetson Thor | Single GPU: `generic-assistant-livekit/single-gpu` | vLLM for the LLM and NeMo-Speech.cpp for ASR and TTS. This is the profile for DGX Spark and Jetson Thor. |
 
-For the Server and Single GPU profiles, use a machine that is not already running other model servers:
+For the Server and Single GPU profiles, use a machine that is not running other model servers:
 
-- **Memory:** the models start together and share the GPU. On DGX Spark and Jetson Thor, the GPU shares memory with the system, so other model containers reduce what is available.
-- **Ports:** the sidecars publish host ports that must be free. The Server profile uses 9000, 9001, 50151, 50152, and 18000. The Single GPU profile uses 50051 and 18000. LiveKit uses 7880 to 7882, and the UI uses 3000. Compose reports `port is already allocated` for a conflict. Stop the other container or choose another machine.
-- **Other recipes:** do not run a Pipecat recipe on the same machine at the same time.
+- **Memory:** on DGX Spark and Jetson Thor, the GPU shares memory with the system. Stop other model containers first.
+- **Ports:** these host ports must be free: 7880 to 7882 (LiveKit), 3000 (UI), 9000, 9001, 50151, 50152, and 18000 (Server), or 50051 and 18000 (Single GPU). A conflict shows as `port is already allocated`.
+- **Pipecat:** do not run a Pipecat recipe on the same machine at the same time.
 
 ## Running the Example
 
-This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. The Single GPU profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run all commands from the repository root (`nemotron-voice-agent/`).
+Run all commands from the repository root, on the machine that hosts the deployment (refer to [Recommended Hardware](#recommended-hardware)). Docker builds and runs the containers there, and the model weights download there. Open the UI in a browser on the same machine, or use an SSH tunnel (refer to [Remote Browser Access](#remote-browser-access)).
 
-> **Run everything on one machine.** Run every step in a shell on the machine that hosts the deployment: the workstation, DGX Spark, or Jetson Thor that matches your profile (refer to [Recommended Hardware](#recommended-hardware)). Docker builds the image and starts the containers on the machine where you run the commands, and the model weights download there. Open the UI in a browser on that same machine. To use a browser on another machine, refer to [Remote Browser Access](#remote-browser-access), which includes an SSH tunnel for a laptop.
-
-1. Clone the repository and change to its root. Skip this step if you already have a clone:
+1. Clone the repository. Skip this step if you already have a clone:
 
    ```bash
    git clone https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
    cd nemotron-voice-agent
    ```
 
-2. Keep your existing `.env` file. If you do not have one, copy the example template. If you already have one for another example, add the entries from [`.env.example`](.env.example) to it:
+2. Keep your existing `.env`. If you do not have one, copy the template. If you have one for another example, add the entries from [`.env.example`](.env.example):
 
    ```bash
    test -f .env || cp src/examples/generic_assistant_livekit/.env.example .env
    ```
 
-3. In `.env`, set `NVIDIA_API_KEY` for the Cloud and Server profiles. For the Single GPU profile, also set `HF_TOKEN` and leave `NVIDIA_API_KEY` empty. You do not need LiveKit credentials. The `livekit-init` service generates a random API key and secret on the first run and stores them in the `livekit_state` Docker volume. They persist across `down` and restart, and `down -v` creates a new pair. To use your own, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in `.env`.
+3. In `.env`, set `NVIDIA_API_KEY` for the Cloud and Server profiles, or `HF_TOKEN` for the Single GPU profile. You do not need LiveKit credentials: the `livekit-init` service generates them on the first run and keeps them in the `livekit_state` volume. To use your own, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
 
 4. For the Server profile only, log in to the NVIDIA NGC container registry:
 
@@ -86,7 +81,7 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-5. Deploy exactly one profile that matches your hardware. **Run only one of the three options that follow.** The helper script [`run.sh`](run.sh) checks your `.env`, stops a different running profile first, and warns about busy ports and low memory. It prints each `docker compose` command that it runs.
+5. Deploy one profile. **Run only one of the following options.** The helper script [`run.sh`](run.sh) checks your `.env`, stops a different running profile, warns about busy ports and low memory, prints each `docker compose` command, and waits until the sidecars are healthy.
 
    **Option A: Cloud.** Use this option when you have no local GPU.
 
@@ -94,138 +89,121 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    src/examples/generic_assistant_livekit/run.sh up cloud
    ```
 
-   **Option B: Server with NIM.** Use this option on a workstation or server GPU. Do not use it on DGX Spark or Jetson Thor.
+   **Option B: Server with NIM.** Use this option on a workstation or server GPU, not on DGX Spark or Jetson Thor.
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh up server
    ```
 
-   **Option C: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. This option requires `HF_TOKEN` in your `.env` file, because vLLM downloads the LLM from Hugging Face. Create a token at [Hugging Face](https://huggingface.co/settings/tokens) with read access. The script refuses to start without it. Download the speech weights once, as your user, and then start the profile:
+   **Option C: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. It requires `HF_TOKEN` in `.env`, because vLLM downloads the LLM from Hugging Face. Create a [token](https://huggingface.co/settings/tokens) with read access. Download the speech weights once, and then start the profile:
 
    ```bash
    bash scripts/download-nemo-speech-models.sh
    src/examples/generic_assistant_livekit/run.sh up single-gpu
    ```
 
-   The script prints the container status after it starts them, and then waits until the sidecars are healthy. The first start of the Server and Single GPU profiles downloads and loads models, so containers show `health: starting` for a long time. The wait prints progress every 15 seconds, with the last log line of each container that is still starting. A container that shows `not ready yet` has passed its health check window, but it can still be loading: the first start of a large model can take longer than the check allows. Worry only when a container is restarting or its last log line stops changing. Press Ctrl+C to stop waiting. The containers keep running, and you can resume with the `wait` command. Connect only after the script prints `Ready to connect`. Use `--no-wait` to return right after the start:
+   The first start of the Server and Single GPU profiles downloads and loads models, which can take a long time. The script prints progress every 15 seconds. `not ready yet` is normal while a large model loads. Worry only if a container restarts or its last log line stops changing. Press Ctrl+C to stop waiting. The containers keep running. Connect after the script prints `Ready to connect`.
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh wait single-gpu          # resume waiting (or: server)
    src/examples/generic_assistant_livekit/run.sh up single-gpu --no-wait  # start and return immediately
    ```
 
-   The script runs the following plain command, with the profile that you choose. The `--env-file .env` option makes Compose read the root `.env` for variable interpolation. Without it, Compose looks for a `.env` file next to the Compose file. Use this command directly if you prefer not to use the script:
+   The script runs this plain command. The `--env-file .env` option makes Compose read the root `.env`:
 
    ```bash
    docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
      --profile generic-assistant-livekit/single-gpu up -d     # or: generic-assistant-livekit, generic-assistant-livekit/server
    ```
 
-   The following table lists the services that each recipe profile starts:
+   Each profile starts these services:
 
-   | Recipe profile | App services | Sidecars |
+   | Profile | App services | Sidecars |
    | --- | --- | --- |
-   | `generic-assistant-livekit` | `livekit-server`, `livekit-agent`, `livekit-ui` | none (cloud NVCF) |
+   | `generic-assistant-livekit` | `livekit-server`, `livekit-agent`, `livekit-ui` | none (NVIDIA Cloud) |
    | `generic-assistant-livekit/server` | `livekit-server`, `livekit-agent-server`, `livekit-ui` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
    | `generic-assistant-livekit/single-gpu` | `livekit-server`, `livekit-agent-single-gpu`, `livekit-ui` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech` |
 
-   The sidecars extend the shared service definitions in [`docker/`](../../../docker), so they use the same images and settings as the `generic-assistant` recipes. Each sidecar has a network alias that matches the hostname in `services.yaml`.
-   The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up` command again so that Compose also recreates the agent.
+   The sidecars extend the service definitions in [`docker/`](../../../docker) and have network aliases that match the hostnames in `services.yaml`. The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up` command again so that the agent is recreated too.
 
-6. On the same machine, open the UI at `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
+6. Open `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
-7. Tear down when you are done:
+7. When you are done, stop the profile. Omit the profile to stop all of them:
 
    ```bash
-   src/examples/generic_assistant_livekit/run.sh down single-gpu     # or: cloud, server. Omit the profile to stop all
+   src/examples/generic_assistant_livekit/run.sh down single-gpu     # or: cloud, server
    ```
-
-Do not run this example and a Pipecat recipe at the same time. Their sidecars publish the same host ports.
 
 ## Cleanup
 
-Use `run.sh` to stop the deployment or to delete its data:
-
 ```bash
-src/examples/generic_assistant_livekit/run.sh ps                      # show containers
-src/examples/generic_assistant_livekit/run.sh down single-gpu         # stop one profile (omit the profile to stop all)
-src/examples/generic_assistant_livekit/run.sh clean single-gpu        # stop and delete volumes, after a confirmation
-src/examples/generic_assistant_livekit/run.sh clean --image -y        # all profiles, also remove the image, no prompt
+src/examples/generic_assistant_livekit/run.sh ps                 # show containers
+src/examples/generic_assistant_livekit/run.sh down single-gpu    # stop a profile
+src/examples/generic_assistant_livekit/run.sh clean single-gpu   # stop and delete volumes, after a confirmation
+src/examples/generic_assistant_livekit/run.sh clean --image -y   # all profiles, also remove the image, no prompt
 ```
-
-The `livekit-server`, `livekit-ui`, and `livekit-init` services belong to all three profiles, so a `down` for one profile also removes them. `run.sh up` stops a different running profile for you. With plain Compose, run `down` for the old profile before you start another one. Otherwise its containers keep their ports and the Compose network, and the new profile fails with `port is already allocated`.
-
-The following table lists what each cleanup step removes and what it keeps:
 
 | Script command | Plain command | Removes | Keeps |
 | --- | --- | --- | --- |
-| `run.sh down <profile>` | `docker compose ... --profile <profile> down` | Containers and the network | Volumes (generated LiveKit credentials and NIM model caches), the image, downloaded weights |
-| `run.sh clean <profile>` | `docker compose ... --profile <profile> down -v` | The above, and this example's named volumes: `livekit_state`, `llm_cache`, `asr_cache`, and `tts_cache` | The example image, downloaded weights, and the pulled sidecar images |
-| `run.sh clean --image` | `docker compose ... down -v`, then `docker image rm generic-assistant-livekit:latest` | The above, and the example image | Downloaded weights and the pulled sidecar images |
+| `run.sh down <profile>` | `docker compose ... --profile <profile> down` | Containers and the network | Volumes, the image, downloaded weights |
+| `run.sh clean <profile>` | `docker compose ... --profile <profile> down -v` | The above, and the volumes `livekit_state`, `llm_cache`, `asr_cache`, and `tts_cache` | The image, downloaded weights, pulled sidecar images |
+| `run.sh clean --image` | `down -v`, then `docker image rm generic-assistant-livekit:latest` | The above, and the example image | Downloaded weights, pulled sidecar images |
 
-After a `clean`, the next start generates a new LiveKit key and secret, and the Server profile downloads the NIM models again. With `--image`, the next start also rebuilds the image. All three profiles share one image, so removing it for one profile removes it for all.
-
-The model weights are not part of this cleanup. The pulled sidecar images (vLLM, NeMo-Speech.cpp, the NIM images, and LiveKit) are also kept. Hugging Face downloads for the Single GPU profile are in `~/.cache/huggingface`, and the NeMo-Speech.cpp weights are in `models/nemo-speech`. Other applications can share both locations, so remove them only if you know that nothing else needs them.
+- **After a `clean`:** the next start generates new LiveKit credentials, and the Server profile downloads the NIM models again. After `--image`, the next start also rebuilds the image.
+- **Weights are kept:** Hugging Face downloads are in `~/.cache/huggingface`, and the NeMo-Speech.cpp weights are in `models/nemo-speech`. Other applications can share them, so remove them only if nothing else needs them.
+- **Switching profiles:** `run.sh up` stops a different running profile for you. With plain Compose, run `down` for the old profile first, or its containers keep their ports.
 
 ## Voice Selection
 
-After you connect, the **Voice** list in the UI shows the voices that the TTS server offers for the session language. Select one to switch. The agent uses the new voice from its next reply and says a short sample, so you hear the change. The sample does not enter the conversation history.
+After you connect, the **Voice** list shows the voices that the TTS server offers. Select one to switch. The agent uses it from the next reply and says a short sample, which does not enter the conversation history.
 
-- **Discovery:** the agent asks the TTS server for its voices when a session starts, with the same endpoint and credentials that it uses for synthesis. This works for NVIDIA Cloud, the Magpie NIM, and NeMo-Speech.cpp. If the server cannot be asked, the list contains only the configured default voice.
-- **Language:** the list shows voices for the language in the catalog entry, which is `en-US` for the default services.
-- **Default voice:** it comes from `voice_id` in [`services.yaml`](../../../services.yaml). Refer to [Configure TTS](../../../docs/how-to/configure-tts.md#voices--emotions).
-- **Validation:** the agent accepts only voices that the server listed. A change request for any other name is ignored.
-- **Scope:** the choice applies to the current session. A new session starts with the default voice.
+- **Discovery:** the agent asks the TTS server for its voices when a session starts. This works for NVIDIA Cloud, the Magpie NIM, and NeMo-Speech.cpp. If the server cannot be asked, the list has only the default voice.
+- **Language and default:** the list shows voices for the catalog entry's language, `en-US` by default. The default voice is `voice_id` in `services.yaml` (refer to [Configure TTS](../../../docs/how-to/configure-tts.md#voices--emotions)).
+- **Validation:** the agent ignores any voice that the server did not list.
+- **Scope:** the choice applies to the current session only.
 
 ## Remote Browser Access
 
-This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` only, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. Opening the UI from another computer, for example your laptop, does not work without additional setup. The LiveKit server publishes ports 7880, 7881 (TCP), and 7882 (UDP). Browsers also allow microphone access only on `localhost` or HTTPS.
+This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. Browsers also allow the microphone only on `localhost` or HTTPS.
 
-For a browser on another machine, set `LIVEKIT_NODE_IP` to the host address, serve the UI over HTTPS, and add a TURN server. The repository provides one in [`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml). Refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md). The UI does not pass TURN credentials to LiveKit, so you must extend `ui/app.js` to use relay candidates.
-
-### SSH Tunnel from a Laptop
-
-To use a browser on your laptop with a deployment on another machine, forward the UI, signaling, and LiveKit TCP media ports. Run the following command on your laptop and keep it open. Replace the placeholder with your SSH host:
+To use a browser on your laptop, forward the UI, signaling, and LiveKit TCP media ports. Run this command on your laptop and keep it open. Then open `http://localhost:3000/`:
 
 ```bash
 ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@<host>
 ```
 
-Then open `http://localhost:3000/` in the browser on your laptop. SSH cannot forward UDP, so media falls back to the TCP port 7881. This path is untested. If the connection stays on connecting or you hear no audio, use the LAN or TURN setup instead.
+SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or internet setup, set `LIVEKIT_NODE_IP` to the host address, serve the UI over HTTPS, and add a TURN server. The repository provides one in [`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml) (refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md)). The UI does not pass TURN credentials to LiveKit, so extend `ui/app.js` to use relay candidates.
 
 ## Customization
 
 | Path | Role |
 | --- | --- |
-| `agent.py` | LiveKit agent worker: builds ASR, LLM, and TTS clients, registers tools, and publishes UI events |
+| `agent.py` | Agent worker: builds the ASR, LLM, and TTS clients, registers tools, and publishes UI events |
 | `config.py` | Resolves endpoints from `services.yaml` for the `cloud`, `server`, and `single-gpu` recipes |
-| `prompts.yaml` | Prompt and greeting for the assistant |
-| `tools.py` | Plain async functions behind the weather and date tools. No LiveKit imports |
-| `voices.py` | Lists the voices a speech server offers, and validates voice-change requests from the UI. No LiveKit imports |
-| `tool_wrapper.py` | Wraps tool functions as LiveKit tools that report calls to the UI |
-| `credentials.py` | Generates the LiveKit API key and secret, writes the LiveKit server config, and shares both through the `livekit_state` volume |
-| `ui_server.py` | Serves `ui/` and mints a LiveKit join token at `/token` |
-| `ui/` | Web UI |
-| `run.sh` | Helper script to start, stop, wait for, and clean up a profile. Runs plain `docker compose` commands |
-| `docker-compose.yaml`, `Dockerfile` | LiveKit server, agent, UI, and model sidecar services, and the image the app services share |
-| `.env.example` | Environment template for this example |
+| `prompts.yaml` | Prompt and greeting |
+| `tools.py`, `tool_wrapper.py` | Weather and date tool logic, and the wrapper that reports tool calls to the UI |
+| `voices.py` | Lists the voices a speech server offers, and validates voice-change requests |
+| `credentials.py` | Generates the LiveKit key and secret and the server config |
+| `ui_server.py`, `ui/` | Web UI and the join-token endpoint |
+| `run.sh` | Helper script to start, wait for, stop, and clean up a profile |
+| `docker-compose.yaml`, `Dockerfile`, `.env.example` | Services, image, and environment template |
 | `pyproject.toml`, `uv.lock` | Example-only dependencies |
 
-To add a tool, write a function with type hints and a docstring `Args:` section in `agent.py`, add it to `TOOLS`, and mention it in `prompts.yaml`. Put the underlying logic in `tools.py`. To change models, refer to [Configure Services](../../../docs/how-to/configure-services.md). The agent applies the entry's `extra_params` and turns reasoning off, as the `settings.yaml` default does. It does not read the other editable settings.
+To add a tool, write a function with type hints and a docstring `Args:` section in `agent.py`, add it to `TOOLS`, and mention it in `prompts.yaml`. To change models, refer to [Configure Services](../../../docs/how-to/configure-services.md). The agent applies the catalog entry's `extra_params` and turns reasoning off, as the `settings.yaml` default does. It does not read other editable settings.
 
 ## Dependencies
 
-This example keeps its dependencies separate from the Pipecat environment. The root `pyproject.toml` forces `nvidia-riva-client>=2.27.0,<3`, and the example locks its own set (currently 2.28.0 in `uv.lock`). Do not merge the two environments.
+The example keeps its dependencies separate from the Pipecat environment, because the root `pyproject.toml` forces `nvidia-riva-client>=2.27.0,<3`. Do not merge the two environments.
 
-> **Temporary pin:** the NVIDIA STT and TTS changes from [livekit/agents#6706](https://github.com/livekit/agents/pull/6706) merged on November 12, but no `livekit-plugins-nvidia` release contains them yet (1.8.11 predates the merge). `pyproject.toml` pins `livekit-plugins-nvidia`, `livekit-agents`, and `livekit-plugins-silero` to the merge commit `b7c9e2d0` of `livekit/agents`. When the next release ships, replace the pin with `livekit-plugins-nvidia>=1.8.12` and remove the three `[tool.uv.sources]` entries.
+> **Temporary pin:** the NVIDIA speech changes from [livekit/agents#6706](https://github.com/livekit/agents/pull/6706) merged on November 12, but no `livekit-plugins-nvidia` release contains them yet (1.8.11 predates the merge). `pyproject.toml` pins `livekit-plugins-nvidia` to the merge commit `b7c9e2d0` of `livekit/agents`. `livekit-agents` and `livekit-plugins-silero` come from PyPI through `override-dependencies`, because the silero model is a Git LFS file that a git install does not include. When the next release ships, use `livekit-plugins-nvidia>=1.8.12`, and remove the git source and both overrides.
 
-To run the unit tests and install the example environment without Docker, run the following commands:
+To run the unit tests and install the example environment without Docker:
 
 ```bash
-uv run pytest tests/unit/test_livekit_example_tools.py tests/unit/test_livekit_example_config.py -v
+uv run pytest tests/unit/test_livekit_example_*.py -v
 uv sync --project src/examples/generic_assistant_livekit
 ```
 
 ## Credits
 
-The web UI layout and styling are adapted from [aws-samples/sample-voice-agent-on-aws](https://github.com/aws-samples/sample-voice-agent-on-aws/tree/main/samples/cascading/livekit-transcribe-polly), which is licensed under MIT-0. The license text is in [THIRD_PARTY_NOTICES.txt](../../../THIRD_PARTY_NOTICES.txt). The browser loads [livekit-client](https://github.com/livekit/client-sdk-js) 2.15.3 (Apache-2.0) from the jsDelivr CDN.
+The web UI layout and styling are adapted from [aws-samples/sample-voice-agent-on-aws](https://github.com/aws-samples/sample-voice-agent-on-aws/tree/main/samples/cascading/livekit-transcribe-polly) (MIT-0). The license text is in [THIRD_PARTY_NOTICES.txt](../../../THIRD_PARTY_NOTICES.txt). The browser loads [livekit-client](https://github.com/livekit/client-sdk-js) 2.15.3 (Apache-2.0) from the jsDelivr CDN.
