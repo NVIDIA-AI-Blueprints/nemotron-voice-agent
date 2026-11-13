@@ -1,8 +1,57 @@
 # Generic Assistant on LiveKit
 
-This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/) instead of Pipecat. The agent worker keeps automatic speech recognition (ASR), large language model (LLM), tools, and text-to-speech (TTS) as separate services. It uses Nemotron ASR through the LiveKit NVIDIA plugin, a Nemotron LLM through the OpenAI-compatible API, and Magpie TTS through the same plugin. A small web UI joins a LiveKit room, shows live transcripts, and shows each tool call.
+This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/). The agent worker keeps automatic speech recognition (ASR), large language model (LLM), tools, and text-to-speech (TTS) as separate services. It uses Nemotron ASR through the LiveKit NVIDIA plugin, a Nemotron LLM through the OpenAI-compatible API, and Magpie TTS through the same plugin. A small web UI joins a LiveKit room, shows live transcripts, and shows each tool call.
 
 The example is self-contained. It has its own Python environment, image, and Compose services. It does not use the Pipecat server, the React client, or [`examples_registry.yaml`](../../../examples_registry.yaml). It reuses the model recipes in [`docker/`](../../../docker) and the catalog in [`services.yaml`](../../../services.yaml), and nothing outside this folder refers to it. To move the example to another repository, replace the `extends` entries in `docker-compose.yaml` with copies of those service definitions.
+
+## How It Works
+
+The assistant is a cascade: each stage hands its output to the next. The following diagram shows one conversation turn, from your microphone to the agent's voice and back. Solid arrows are the normal flow. Dotted arrows are the barge-in path.
+
+```mermaid
+flowchart LR
+    subgraph Client["Client (browser)"]
+        MIC["Microphone"]
+        SPK["Speaker"]
+        UI["Transcript and tool-call panel"]
+    end
+    subgraph LK["LiveKit server"]
+        RTC["WebRTC room:<br/>audio tracks and data channel"]
+    end
+    subgraph Agent["Agent worker (LiveKit AgentSession)"]
+        VAD["VAD (Silero)<br/>detects speech start and stop"]
+        ASR["ASR (Nemotron streaming)<br/>speech to text"]
+        TURN["Turn handling<br/>decides when the user is done"]
+        LLM["LLM (Nemotron)<br/>writes the reply, calls tools"]
+        TOOLS["Tools<br/>weather, date and time"]
+        TTS["TTS (Magpie)<br/>text to speech"]
+    end
+    MIC -->|"1. user audio"| RTC
+    RTC -->|"2. audio frames"| VAD
+    RTC -->|"2. audio frames"| ASR
+    VAD -->|"speech start and stop"| TURN
+    ASR -->|"3. partial and final transcripts"| TURN
+    TURN -->|"4. user turn complete"| LLM
+    LLM <-->|"tool call and result"| TOOLS
+    LLM -->|"5. reply text, streamed"| TTS
+    TTS -->|"6. agent audio"| RTC
+    RTC -->|"7. agent audio"| SPK
+    RTC -->|"transcripts, tool calls, events"| UI
+    VAD -.->|"barge-in: user speaks over the agent"| TURN
+    TURN -.->|"interrupt: stop speech, cancel the reply"| TTS
+```
+
+The following list describes each stage:
+
+1. **Client.** The browser publishes your microphone to a LiveKit room over WebRTC, and plays the agent's audio. It also shows live transcripts and each tool call, which arrive over the room's data channel.
+2. **VAD.** Voice activity detection runs the small Silero model on the incoming audio. It tells the agent when speech starts and stops. It does not recognize words.
+3. **ASR.** Nemotron streaming ASR turns speech into text while you talk, so partial transcripts appear before you finish. Hosted ASR applies low-latency endpointing in the plugin. Self-hosted speech servers do endpointing themselves.
+4. **Turn handling.** The agent combines the VAD and ASR signals to decide that your turn is complete, and then sends the final transcript to the LLM.
+5. **LLM and tools.** The Nemotron LLM streams a reply. When your request matches a tool, such as the weather, it calls the tool, reads the result, and continues the reply.
+6. **TTS.** Magpie TTS converts the streamed text into speech as it arrives, so the agent starts talking before the full reply exists. The audio returns through LiveKit to your speaker.
+7. **Barge-in.** While the agent speaks, the VAD keeps listening. If you start talking, the agent stops speaking and cancels the rest of the reply, and your new speech becomes the next turn. If the sound turns out not to be real speech, the agent can resume. The UI shows both cases as events.
+
+The following diagram shows the deployed components. The ASR, LLM, and TTS services run on NVIDIA Cloud or in local sidecars, depending on the profile.
 
 ![Architecture diagram](images/architecture.svg)
 
