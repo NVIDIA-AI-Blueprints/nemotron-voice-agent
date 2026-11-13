@@ -128,15 +128,19 @@ dc_quiet() { # same, but without printing; empty output in a dry run
 require_docker() {
   if [ "$DRY_RUN" = 1 ]; then return 0; fi
   command -v docker >/dev/null 2>&1 || die "docker is not installed or not on PATH"
-  local version major minor
+  local version major minor patch rest
   version="$(docker compose version --short 2>/dev/null)" || die "the 'docker compose' plugin is required"
   version="${version#v}"
   major="${version%%.*}"
-  minor="${version#*.}"
-  minor="${minor%%.*}"
-  # docker-compose.yaml uses the !override tag, which needs Docker Compose 2.24 or newer
-  if [ "$major" -lt 2 ] 2>/dev/null || { [ "$major" = 2 ] && [ "$minor" -lt 24 ] 2>/dev/null; }; then
-    die "Docker Compose $version is too old. This example needs 2.24 or newer"
+  rest="${version#*.}"
+  minor="${rest%%.*}"
+  patch="${rest#*.}"
+  patch="${patch%%[!0-9]*}"
+  # docker-compose.yaml uses the !override tag, which needs Docker Compose 2.24.4 or newer
+  if [ "$major" -lt 2 ] 2>/dev/null \
+    || { [ "$major" = 2 ] && [ "$minor" -lt 24 ] 2>/dev/null; } \
+    || { [ "$major" = 2 ] && [ "$minor" = 24 ] && [ "${patch:-0}" -lt 4 ] 2>/dev/null; }; then
+    die "Docker Compose $version is too old. This example needs 2.24.4 or newer"
   fi
 }
 
@@ -347,7 +351,7 @@ cmd_logs() {
 cmd_wait() {
   [ $# -ge 1 ] || usage
   require_docker
-  local name="$1" timeout="${2:-3600}" p start now ids id status state pending detail cname last label unready hinted=0
+  local name="$1" timeout="${2:-3600}" p start now ids id svc status state pending detail cname last label unready hinted=0
   p="$(profile_name "$name")"
   start="$(date +%s)"
   info "Waiting up to ${timeout}s for the $name profile to become healthy (progress every ${WAIT_INTERVAL:-15}s)..."
@@ -356,9 +360,19 @@ cmd_wait() {
     return 0
   fi
   while true; do
-    ids="$(dc_quiet --profile "$p" ps -q)"
+    ids=""
     pending=""
     unready=0
+    # List every service of the profile with `ps -a`, so a stopped or never-created container cannot be skipped.
+    for svc in $(dc_quiet --profile "$p" config --services); do
+      id="$(dc_quiet --profile "$p" ps -a -q "$svc" | head -n 1)"
+      if [ -z "$id" ]; then
+        pending="$pending
+  - $svc: not created"
+      else
+        ids="$ids $id"
+      fi
+    done
     for id in $ids; do
       status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id")"
       state="$(docker inspect -f '{{.State.Status}}' "$id")"

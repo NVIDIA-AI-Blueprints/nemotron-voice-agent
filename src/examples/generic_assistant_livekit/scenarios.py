@@ -172,8 +172,13 @@ def _clinic_tools() -> list[Callable]:
             specialty: Which kind of doctor the patient needs.
             date_filter: Optional date as YYYY-MM-DD to show only that day.
         """
+        booked = {booking["slot_id"] for booking in bookings.values()}
         found = [
-            s for s in slots.values() if s["specialty"] == specialty and (not date_filter or s["date"] == date_filter)
+            s
+            for s in slots.values()
+            if s["specialty"] == specialty
+            and s["slot_id"] not in booked
+            and (not date_filter or s["date"] == date_filter)
         ]
         if not found:
             raise ValueError("No open slots match. Try another day or specialty.")

@@ -200,6 +200,13 @@ services:
       service: nvidia-llm-vllm-lightning
     profiles: !override
       - generic-assistant-livekit/single-gpu
+    # The shared recipe reads the repository-root .env with env_file. Drop that, so the sidecar follows the .env that
+    # run.sh selected, and pass only what vLLM uses: the Hugging Face token and the optional memory settings.
+    env_file: !reset []
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_VRAM_HEADROOM_MIB: ${VLLM_VRAM_HEADROOM_MIB:-}
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-}
     networks:
       default:
         aliases:

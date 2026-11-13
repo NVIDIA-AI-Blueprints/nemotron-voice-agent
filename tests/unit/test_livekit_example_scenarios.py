@@ -87,6 +87,19 @@ def test_clinic_flow_and_double_booking():
     t["book_appointment"](slot["slot_id"], "Other", "x")  # free again
 
 
+def test_booked_slots_are_not_offered_again_and_later_slots_show_up():
+    t = tools_by_name("clinic")
+    first_six = t["list_available_slots"]("dermatology")
+    for slot in first_six:
+        t["book_appointment"](slot["slot_id"], "Pat Kim", "rash")
+    next_six = t["list_available_slots"]("dermatology")
+    assert not {s["slot_id"] for s in first_six} & {s["slot_id"] for s in next_six}
+    assert len(next_six) == 6  # the limit applies after the booked slots are removed
+    cancelled = t["cancel_appointment"]("APT-4001")
+    assert first_six[0]["slot_id"] in {s["slot_id"] for s in t["list_available_slots"]("dermatology")}
+    assert cancelled["cancelled"] == "APT-4001"
+
+
 def test_bank_requires_pin_and_locks():
     t = tools_by_name("bank")
     with pytest.raises(ValueError, match="not verified"):

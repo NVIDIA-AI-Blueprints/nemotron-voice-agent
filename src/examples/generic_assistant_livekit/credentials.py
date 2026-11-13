@@ -46,9 +46,10 @@ def _read_credentials(path: Path) -> dict[str, str] | None:
     """Return the stored key pair, or None when the file is missing or damaged (a new pair is then generated)."""
     try:
         creds = json.loads(path.read_text())
-        return {"api_key": str(creds["api_key"]), "api_secret": str(creds["api_secret"])}
+        pair = {"api_key": str(creds["api_key"]), "api_secret": str(creds["api_secret"])}
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    return pair if all(pair.values()) else None  # an empty key or secret would lock LiveKit out, so replace it
 
 
 def load_or_create(state_dir: Path = DEFAULT_STATE_DIR, env: Mapping[str, str] | None = None) -> dict[str, str]:

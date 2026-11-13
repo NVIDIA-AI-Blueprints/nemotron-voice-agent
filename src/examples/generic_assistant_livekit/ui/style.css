@@ -280,8 +280,9 @@ body { margin: 0; background: #0f0f16; color: #e0e0e0; }
 
 /* Models in use (compact) */
 .models { max-width: 1240px; width: 100%; margin: .8rem auto .6rem; box-sizing: border-box; }
-.models > summary { display: none; list-style: none; cursor: pointer; color: #aaa; font-size: .8rem; padding: .35rem .8rem; border: 1px solid #2a2a3a; border-radius: 10px; background: #1a1a24; }
+.models > summary { display: block; list-style: none; cursor: pointer; color: #aaa; font-size: .8rem; padding: .35rem .8rem; border: 1px solid #2a2a3a; border-radius: 10px; background: #1a1a24; }
 .models > summary::-webkit-details-marker { display: none; }
+@media (min-width: 700px) { .models[open] > summary { display: none; } }  /* wide: no toggle while the list is open */
 .models > summary::after { content: ' ▾'; }
 .models[open] > summary::after { content: ' ▴'; }
 .model-strip { display: flex; align-items: stretch; justify-content: center; flex-wrap: wrap; gap: .4rem; box-sizing: border-box; }

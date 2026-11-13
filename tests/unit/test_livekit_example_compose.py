@@ -68,3 +68,10 @@ def test_agents_share_the_livekit_server_network_for_media(services):
 def test_the_ui_container_binds_all_interfaces_so_docker_can_publish_the_port(services):
     # The server itself defaults to loopback. Compose publishes the container port on 127.0.0.1 by default.
     assert environment(services["livekit-ui"])["LIVEKIT_UI_HOST"] == "0.0.0.0"  # noqa: S104
+
+
+def test_the_vllm_sidecar_does_not_inherit_the_repository_env_file(services):
+    # `extends` would otherwise keep `env_file: ../.env` from docker/, which ignores the .env that run.sh selected.
+    vllm = services["livekit-nvidia-llm-vllm"]
+    assert vllm["env_file"] == []
+    assert set(environment(vllm)) == {"HF_TOKEN", "VLLM_VRAM_HEADROOM_MIB", "VLLM_GPU_MEMORY_UTILIZATION"}

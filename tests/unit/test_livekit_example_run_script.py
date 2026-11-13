@@ -14,11 +14,22 @@ SCRIPT = Path(__file__).resolve().parents[2] / "src/examples/generic_assistant_l
 
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
 
+# Settings that an operator may export. They would change the defaults that these tests assert.
+OPERATOR_VARIABLES = {"NVIDIA_API_KEY", "HF_TOKEN", "DRY_RUN", "ENV_FILE", "LOCAL_UI_PORT", "WAIT_INTERVAL"}
+
+
+def clean_env():
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in OPERATOR_VARIABLES and not key.startswith(("LIVEKIT_", "FAKE_"))
+    }
+
 
 def run(args, tmp_path, env_text="NVIDIA_API_KEY=nvapi-test\nHF_TOKEN=hf_test\n", extra_env=None):
     env_file = tmp_path / ".env"
     env_file.write_text(env_text)
-    env = {k: v for k, v in os.environ.items() if k not in ("NVIDIA_API_KEY", "HF_TOKEN")}
+    env = clean_env()
     env.update({"DRY_RUN": "1", "ENV_FILE": str(env_file), **(extra_env or {})})
     return subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env=env, timeout=30)
 
@@ -125,6 +136,10 @@ counter="$FAKE_STATE/count"
 case "$args" in
   "compose version"*) echo "${FAKE_COMPOSE_VERSION:-2.30.0}" ;;
   *"compose"*" logs "*) [ "${FAKE_REGISTERED:-1}" = 1 ] && echo '{"message": "registered worker"}' ;;
+  *"config --services"*) echo "${FAKE_SERVICES:-livekit-nvidia-llm-vllm}" | tr ' ' '\n' ;;
+  *"ps -a -q "*)
+    svc="${args##*ps -a -q }"
+    case " $FAKE_MISSING " in *" $svc "*) ;; *) echo "id-$svc" ;; esac ;;
   *"ps -q "*)
     for svc in $FAKE_RUNNING; do
       case "$args" in *"ps -q $svc"*) echo "id-$svc" ;; esac
@@ -157,7 +172,7 @@ def fake_env(tmp_path, env_text="NVIDIA_API_KEY=nvapi-test\nHF_TOKEN=hf_test\n",
     state_dir.mkdir(exist_ok=True)
     env_file = tmp_path / ".env"
     env_file.write_text(env_text)
-    env = {k: v for k, v in os.environ.items() if k not in ("DRY_RUN", "NVIDIA_API_KEY", "HF_TOKEN")}
+    env = clean_env()
     env.update(
         {
             "PATH": f"{fake}:{env['PATH']}",
@@ -196,6 +211,21 @@ def test_wait_reports_progress_until_healthy(tmp_path):
     assert "livekit-nvidia-llm-vllm: starting | last log: Loading weights took 12.3 seconds" in result.stderr
     assert "All healthy. Ready to connect." in result.stderr
     assert result.stderr.index("Ready to connect") < result.stderr.index("run.sh tunnel <user>@")
+
+
+def test_wait_does_not_report_ready_while_a_service_has_no_container(tmp_path):
+    services = "livekit-nvidia-llm-vllm livekit-nemo-speech"
+    result = run_wait(tmp_path, "healthy", timeout="1", FAKE_SERVICES=services, FAKE_MISSING="livekit-nemo-speech")
+    assert result.returncode != 0
+    assert "livekit-nemo-speech: not created" in result.stderr
+    assert "Ready to connect" not in result.stderr
+
+
+def test_wait_lists_stopped_containers_too(tmp_path):
+    # `ps -a` includes a container that exited after startup. A plain `ps` would have skipped it.
+    _, calls = run_real(tmp_path, ["wait", "single-gpu", "1"], FAKE_HEALTH="healthy")
+    assert any("ps -a -q " in call for call in calls)
+    assert not any(call.endswith("ps -q") for call in calls)
 
 
 def test_wait_labels_an_unhealthy_container_as_not_ready(tmp_path):
@@ -252,7 +282,7 @@ def test_up_accepts_a_key_from_the_environment(tmp_path):
 
 
 def test_up_without_env_file_explains_the_fix(tmp_path):
-    env = {k: v for k, v in os.environ.items() if k not in ("NVIDIA_API_KEY", "HF_TOKEN")}
+    env = clean_env()
     env.update({"DRY_RUN": "1", "ENV_FILE": str(tmp_path / "missing.env")})
     result = subprocess.run(["bash", str(SCRIPT), "up", "cloud"], capture_output=True, text=True, env=env, timeout=30)
     assert result.returncode != 0
@@ -355,11 +385,18 @@ def test_up_with_nothing_running_stops_nothing(tmp_path):
     assert downs(calls) == []
 
 
-def test_old_docker_compose_is_rejected_with_a_clear_message(tmp_path):
-    result, _ = run_real(tmp_path, ["up", "cloud", "--no-wait"], FAKE_COMPOSE_VERSION="2.20.5")
+@pytest.mark.parametrize("version", ["2.20.5", "2.23.9", "2.24.0", "2.24.3", "1.29.2"])
+def test_docker_compose_older_than_2_24_4_is_rejected(tmp_path, version):
+    # The !override tag in docker-compose.yaml needs Docker Compose 2.24.4.
+    result, _ = run_real(tmp_path, ["up", "cloud", "--no-wait"], FAKE_COMPOSE_VERSION=version)
     assert result.returncode != 0
-    assert "Docker Compose 2.20.5 is too old" in result.stderr
-    assert run_real(tmp_path, ["ps"], FAKE_COMPOSE_VERSION="v2.24.0")[0].returncode == 0
+    assert f"Docker Compose {version} is too old. This example needs 2.24.4 or newer" in result.stderr
+
+
+@pytest.mark.parametrize("version", ["2.24.4", "v2.24.4", "2.24.10", "2.25.0", "5.5.1"])
+def test_docker_compose_2_24_4_or_newer_is_accepted(tmp_path, version):
+    result, _ = run_real(tmp_path, ["ps"], FAKE_COMPOSE_VERSION=version)
+    assert result.returncode == 0, result.stderr
 
 
 def test_wait_also_requires_the_agent_to_register_with_livekit(tmp_path):

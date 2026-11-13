@@ -72,7 +72,14 @@ def test_setting_only_one_of_key_and_secret_is_an_error(tmp_path):
 
 
 def test_a_damaged_credentials_file_is_replaced_with_a_new_pair(tmp_path):
-    for damaged in ("{not json", json.dumps({"api_key": "only-key"}), json.dumps([1, 2]), ""):
+    for damaged in (
+        "{not json",
+        json.dumps({"api_key": "only-key"}),
+        json.dumps({"api_key": "", "api_secret": ""}),
+        json.dumps({"api_key": "k", "api_secret": ""}),
+        json.dumps([1, 2]),
+        "",
+    ):
         (tmp_path / credentials.CREDENTIALS_FILE).write_text(damaged)
         creds = credentials.load_or_create(tmp_path, env={})
         assert creds["api_key"].startswith("lk") and len(creds["api_secret"]) >= 32

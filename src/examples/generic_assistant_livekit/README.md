@@ -47,7 +47,7 @@ The default models are the first entries that the `generic-assistant` example of
 
 ## Running the Example
 
-This example needs Docker Compose 2.24 or newer. Run all commands from the repository root, on the machine that hosts the deployment. Docker builds and runs the containers there, and the model weights download there.
+This example needs Docker Compose 2.24.4 or newer. Run all commands from the repository root, on the machine that hosts the deployment. Docker builds and runs the containers there, and the model weights download there.
 
 1. Clone the repository. Skip this step if you already have a clone:
 
