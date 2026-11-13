@@ -19,6 +19,7 @@ from livekit.plugins import nvidia, openai, silero
 
 from .config import AgentConfig, load_config
 from .credentials import apply_to_environ
+from .errors import describe_error
 from .scenarios import get_scenario
 from .state import DEPLOYMENT_FILE, write_json_atomic
 from .tool_wrapper import traced_tool
@@ -182,7 +183,7 @@ async def entrypoint(ctx: JobContext):
     @session.on("error")
     def _error(ev):
         # A failed LLM, ASR, or TTS call (for example a rate-limited hosted model) would otherwise look like silence.
-        emit("error", source=error_kind(getattr(ev, "source", None)), message=str(getattr(ev, "error", ev))[:300])
+        emit("error", source=error_kind(getattr(ev, "source", None)), **describe_error(getattr(ev, "error", ev)))
 
     @session.on("agent_false_interruption")
     def _false_interruption(ev):

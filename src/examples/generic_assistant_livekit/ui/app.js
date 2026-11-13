@@ -82,9 +82,13 @@ function onAgentEvent(ev) {
     case 'voices': showVoices(ev.voices, ev.current); break;
     case 'voice_changed': addEvent('🗣️', `Voice changed to ${ev.name}`); break;
     case 'error': {
-      const limited = /429|too many requests|rate.?limit/i.test(ev.message);
-      const hint = limited ? ' The hosted model is rate limited. Wait a minute, or choose another model.' : '';
-      addEvent('⚠️', `${ev.source} error: ${ev.message}${hint}`, 'error');
+      const limited = ev.status === 429 || /too many requests|rate.?limit/i.test(ev.message);
+      if (ev.recoverable) {  // the call is retried, so this is a short hiccup, not a failure
+        addEvent('🔁', `${ev.source} was busy${limited ? ' (rate limited, HTTP 429)' : ''}. Retrying.`, 'interrupt');
+      } else {
+        const hint = limited ? ' The hosted model is rate limited. Wait a minute, or choose another model.' : '';
+        addEvent('⚠️', `${ev.source} error: ${ev.message}${hint}`, 'error');
+      }
       break;
     }
     case 'agent_state': if (ev.state === 'thinking') setStatus('Thinking…'); break;
