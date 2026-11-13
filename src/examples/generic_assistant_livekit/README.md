@@ -6,39 +6,16 @@ The example is self-contained. It has its own Python environment, image, and Com
 
 ## How It Works
 
-The assistant is a cascade: each stage hands its output to the next. The following diagram shows one conversation turn, from your microphone to the agent's voice and back. Solid arrows are the normal flow. Dotted arrows are the barge-in path.
+The assistant is a cascade: each stage hands its output to the next. The following diagram shows one conversation turn, from your microphone to the agent's voice. The solid arrows are the normal flow. The dotted arrow is the barge-in path: when you speak over the agent, the VAD tells the TTS to stop.
 
 ```mermaid
 flowchart LR
-    subgraph Client["Client (browser)"]
-        MIC["Microphone"]
-        SPK["Speaker"]
-        UI["Transcript and tool-call panel"]
-    end
-    subgraph LK["LiveKit server"]
-        RTC["WebRTC room:<br/>audio tracks and data channel"]
-    end
-    subgraph Agent["Agent worker (LiveKit AgentSession)"]
-        VAD["VAD (Silero)<br/>detects speech start and stop"]
-        ASR["ASR (Nemotron streaming)<br/>speech to text"]
-        TURN["Turn handling<br/>decides when the user is done"]
-        LLM["LLM (Nemotron)<br/>writes the reply, calls tools"]
-        TOOLS["Tools<br/>weather, date and time"]
-        TTS["TTS (Magpie)<br/>text to speech"]
-    end
-    MIC -->|"1. user audio"| RTC
-    RTC -->|"2. audio frames"| VAD
-    RTC -->|"2. audio frames"| ASR
-    VAD -->|"speech start and stop"| TURN
-    ASR -->|"3. partial and final transcripts"| TURN
-    TURN -->|"4. user turn complete"| LLM
-    LLM <-->|"tool call and result"| TOOLS
-    LLM -->|"5. reply text, streamed"| TTS
-    TTS -->|"6. agent audio"| RTC
-    RTC -->|"7. agent audio"| SPK
-    RTC -->|"transcripts, tool calls, events"| UI
-    VAD -.->|"barge-in: user speaks over the agent"| TURN
-    TURN -.->|"interrupt: stop speech, cancel the reply"| TTS
+    MIC["Client<br/>(microphone)"] --> VAD["VAD<br/>detects speech"]
+    VAD --> ASR["ASR<br/>speech to text"]
+    ASR --> LLM["LLM<br/>reply and tools"]
+    LLM --> TTS["TTS<br/>text to speech"]
+    TTS --> SPK["Client<br/>(speaker)"]
+    VAD -. "barge-in: the user speaks over the agent" .-> TTS
 ```
 
 The following list describes each stage:
@@ -123,7 +100,7 @@ This example runs with the Cloud, Server (NVIDIA NIM), and Single GPU profiles. 
    src/examples/generic_assistant_livekit/run.sh up server
    ```
 
-   **Option C: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. Download the speech weights once, as your user, and then start the profile:
+   **Option C: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. This option requires `HF_TOKEN` in your `.env` file, because vLLM downloads the LLM from Hugging Face. Create a token at [Hugging Face](https://huggingface.co/settings/tokens) with read access. The script refuses to start without it. Download the speech weights once, as your user, and then start the profile:
 
    ```bash
    bash scripts/download-nemo-speech-models.sh
