@@ -5,7 +5,7 @@
 
 The IM imports no other backend module. The IM owns admission, placement, the records, the conversation, steering's
 timing, stops and every response the client reads; the adapter owns model rounds, providers, tools, conductors and
-worker sessions. :class:`AdapterSource` is one per core, :class:`BackendAdapter` one per IM session, and
+worker sessions. :class:`AdapterSource` is one per core, :class:`BackendAdapter` one per IM session at a time, and
 :class:`BackendRun` one per task.
 """
 
@@ -116,6 +116,13 @@ class TaskContext(Protocol):
     work_id: str
     task_id: str
     texts: Texts
+    # The Work or task (W1, W1.2) whose thread this task's Work continues, by the IM's placement; None for a new
+    # thread. An adapter that keeps sessions serves the task only from an idle session of that thread, else from a
+    # fresh one.
+    continues: str | None
+    # Whether the task's Work continues after the call (a task's continue_after_call was written), read when asked:
+    # the call's per-turn limit does not apply to its turns.
+    after_call: bool
 
     def request(self) -> dict:
         """Return the settings of the task's next model call: model, composed instructions and the app's functions.
@@ -129,11 +136,16 @@ class TaskContext(Protocol):
 
         The shared conversation, the Work's input, the task's brief, then its own rounds, outputs and steering. An ended
         Work's items join the shared conversation in order, so a later task's view begins with the view of that Work's
-        first task, unless the budget trimmed it or other items joined in between.
+        first task, unless the budget trimmed it or other items joined in between. Each message carries an id, and each
+        call and its output a call_id, the same in every task's view: a request's messages carry ids from its
+        delegation's id, except a one-shot session's, which are as sent.
         """
 
     def tools(self) -> ToolSource:
-        """Return the IM's work tools for this task, such as ``show`` and ``cancel_work``."""
+        """Return the IM's work tools for this task, such as ``show``, ``cancel_work`` and ``ask_caller``.
+
+        A backend asks the caller only through ``ask_caller`` or the task's answer.
+        """
 
     def route(self, call: dict) -> Route:
         """Return who runs ``call``; the IM decides once per call, before it runs."""
@@ -179,7 +191,8 @@ class BackendRun(Protocol):
     The iteration ends after an answer, after calls the app runs (then :meth:`resume`), or by raising.
     Each backend call runs once, reported by ``tool_started`` and ``tool_outcome``; each steering batch by ``settle``.
     No attempt that dispatched a call or delivered an item is retried.
-    A run ends within its adapter's limits, and :meth:`stop` returns within its stop limit.
+    A run ends within its adapter's limits, except the turn limit of a task whose Work continues after the call, and
+    :meth:`stop` returns within its stop limit.
     """
 
     def events(self) -> AsyncIterator[dict]:
@@ -223,6 +236,10 @@ class TaskSummary:
     acted: bool
     progress: str | None
     seconds: float
+    # The question it asked the caller and still waits on; None when it holds none.
+    question: str | None = None
+    # The start of its answer, only for a task whose Work continues after the call; None for any other task.
+    answer: str | None = None
 
 
 @dataclass(frozen=True)
@@ -236,6 +253,8 @@ class WorkSummary:
     requests: tuple[Request, ...]
     tasks: tuple[TaskSummary, ...]
     seconds: float
+    # A task's continue_after_call was written: the Work goes on after the call ends.
+    after_call: bool = False
 
 
 @dataclass(frozen=True)
@@ -243,7 +262,8 @@ class ConductorInput:
     """What one ``decide()`` call reads."""
 
     arrivals: tuple[Request, ...]
-    # The open Works, then the newest ended ones, so the records answer a status question about finished work.
+    # The open Works, then the newest ended ones in the order they ended, so the records answer a status question about
+    # finished work.
     works: tuple[WorkSummary, ...]
     conversation: tuple[dict, ...]
     # The index in ``conversation`` of the first item this conductor was not given before.
@@ -262,7 +282,7 @@ class DecisionTarget(Protocol):
     async def steer(self, decision: Steer) -> str:
         """Join these requests to an open Work (one task, or every open task); the IM decides when they land.
 
-        A Steer to an ended Work or task becomes a Start.
+        A Steer to an ended Work or task starts a new Work that continues it.
         """
 
     async def cancel(self, decision: Cancel) -> str:
@@ -351,9 +371,11 @@ class Conductor(Protocol):
     async def decide(self, given: ConductorInput, place: Place) -> None:
         """Place decisions through ``place``, each awaited for its outcome text, then return.
 
-        The IM calls it one at a time per session; an arrival may cancel it once before it placed anything, which must
-        leave the conductor as it was. Concurrent ``place()`` calls apply in order, and one after it ended is refused.
-        What it leaves unplaced, also on a timeout or an error, the steer rule places. It never runs work itself.
+        The IM calls it one at a time within a call; an arrival may cancel it once before it placed anything, and the
+        conductor may let its agent finish that turn before it ends. A call's end cancels it without waiting, so a later
+        call's ``decide()`` calls may start while it still runs. Concurrent ``place()`` calls apply in order, and one
+        after it ended is refused. What it leaves unplaced, also on a timeout or an error, the IM places by its fallback
+        rule. The conductor never runs work itself.
         """
 
 
@@ -363,10 +385,13 @@ class BackendAdapter(Protocol):
     max_running: int
 
     def conductor(self) -> Conductor:
-        """Return the session's conductor; the IM calls this once per IM session."""
+        """Return the session's conductor; the IM calls this once per adapter."""
 
     def start(self, task: TaskContext) -> BackendRun:
         """Return one task's run, before any model call; the run starts with ``events()``."""
+
+    def release_idle(self) -> None:
+        """Release every session that no running task holds, and keep none until a task starts: the caller left."""
 
     async def close(self) -> None:
         """Release the session's connections and its conductor."""

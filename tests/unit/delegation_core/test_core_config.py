@@ -83,6 +83,8 @@ class CoreConfigTests(unittest.TestCase):
             "a boolean count": ({"context_tokens": True}, None),
             "no room for a tool output": ({"tool_output_chars": 0}, None),
             "a negative wait": ({"stop_timeout_seconds": -1}, None),
+            "no keep time": ({"after_call_seconds": 0}, None),
+            "a fraction of a conversation": ({"max_after_call_conversations": 1.5}, None),
             "an unknown format": ({"result_format": "html"}, None),
             "a scalar adapter block": (None, {**BACKEND, "llm": "fast"}),
             "a scalar step block": (None, {**BACKEND, "app_output_steps": {"spell": "on"}}),
@@ -94,6 +96,7 @@ class CoreConfigTests(unittest.TestCase):
 
     def test_the_texts_keep_their_template_fields(self):
         outcomes, reasons = WORDS["texts"]["outcomes"], WORDS["texts"]["refusal_reasons"]
+        tools = WORDS["texts"]["work_tools"]
         cases = {
             "handover_line": ("Handled together.", "must hold {delegation}"),
             "task_line": ("Task:", "must hold {task}"),
@@ -117,6 +120,10 @@ class CoreConfigTests(unittest.TestCase):
             ),
             "outcomes.refused": ({**outcomes, "refused": "Not applied."}, "outcomes.refused must hold {reason}"),
             "round_cap_note": (" ", "round_cap_note\n.*must be non-empty"),
+            "work_tools": (
+                {name: tool for name, tool in tools.items() if name != "ask_caller"},
+                "work_tools must hold exactly show, cancel_work, ask_caller, continue_after_call",
+            ),
         }
         for key, (value, message) in cases.items():
             with self.subTest(key), self.assertRaisesRegex(ValueError, message):

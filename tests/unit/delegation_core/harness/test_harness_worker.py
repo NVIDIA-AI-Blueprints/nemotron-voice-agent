@@ -6,9 +6,13 @@
 """The harness's worker run and conductor on a session double: turns, app calls, steering, stops and sessions."""
 
 import asyncio
+import contextlib
+import itertools
 import json
 import unittest
 from unittest import mock
+
+from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
 from examples.frontend_backend_live.delegation_core.backend.harness.acp import AcpAgent, SessionUpdates
@@ -21,14 +25,14 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
     ToolCard,
     ToolCardEnd,
 )
-from examples.frontend_backend_live.delegation_core.backend.harness.worker import _CANCELS, HarnessTurnError, WorkerRun
+from examples.frontend_backend_live.delegation_core.backend.harness.runtime import _CANCELS
+from examples.frontend_backend_live.delegation_core.backend.harness.worker import HarnessTurnError, WorkerRun
 from examples.frontend_backend_live.delegation_core.backend.port import ConductorInput, Start, Steer
-from tests.unit.delegation_core.harness.doubles import FakeHost, plain, settings, until, wire
+from tests.unit.delegation_core.harness.doubles import FakeHost, FakeTaskContext, plain, settings, until, wire
 from tests.unit.delegation_core.helpers import (
     MENU,
     STEERING,
     FakeDecisionTarget,
-    FakeTaskContext,
     IMCase,
     RecordingTools,
     a_request,
@@ -40,7 +44,10 @@ from tests.unit.delegation_core.helpers import (
     check_events,
     finished_items,
     items_of,
+    placing,
+    planned,
     read_all,
+    turns,
 )
 
 ORDER_FUNCTION = {
@@ -51,8 +58,8 @@ ORDER_FUNCTION = {
 }
 USAGE = {"inputTokens": 80, "outputTokens": 20, "totalTokens": 100}
 LATER_USAGE = {"inputTokens": 150, "outputTokens": 30, "totalTokens": 180}
-NEXT = {"type": "message", "role": "user", "content": "And black tea?"}
-BETWEEN = {"type": "message", "role": "user", "content": "Hi."}
+NEXT = {"id": "d_next", "type": "message", "role": "user", "content": "And black tea?"}
+BETWEEN = {"id": "d_between", "type": "message", "role": "user", "content": "Hi."}
 DECIDED = {"totalTokens": 50}
 EARLIER = ({"type": "message", "role": "user", "content": "Earlier: book a table."},)
 PARTS = [
@@ -69,6 +76,32 @@ IMAGE = {"type": "message", "role": "user", "content": [{"type": "input_image", 
 
 def texts(events):
     return [item["content"][0]["text"] for item in items_of(events, "message")]
+
+
+def brief(part):
+    """Return a conductor's brief as the IM writes it: a user message with an id of its own."""
+    return {"id": f"msg_{part}", "type": "message", "role": "user", "content": f"Task: {part}"}
+
+
+def request(delegation_id, text):
+    """Return a request's input as the IM records it: its message carries the request's id."""
+    return [{**item, "id": delegation_id} for item in ask(text)]
+
+
+async def close_events(events):
+    """Close a run's events, as the IM does once it stops reading them."""
+    await events.aclose()
+
+
+@contextlib.contextmanager
+def logged():
+    """Collect the warning lines logged inside the block."""
+    lines = []
+    sink = logger.add(lambda message: lines.append(message.strip()), level="WARNING", format="{message}")
+    try:
+        yield lines
+    finally:
+        logger.remove(sink)
 
 
 class Harness(unittest.IsolatedAsyncioTestCase):
@@ -144,7 +177,7 @@ class TurnTests(Harness):
         self.assertEqual(answers(events), ["Done."])
         usage = {"input_tokens": 80, "output_tokens": 20, "total_tokens": 100}
         self.assertEqual(events[-1]["response"]["usage"], usage)
-        self.assertIs(self.host.kept.session, session)
+        self.assertEqual(self.host.idle(), [session])
         self.assertEqual((session.retired, self.host.bridge.closed), (False, []))
         self.assertEqual(await self.run.stop(), "stopped")
         # An idle cancel poisons Hermes's next prompt.
@@ -510,6 +543,35 @@ class StopTests(Harness):
         self.assertIn("ran past", str(error))
         self.assertEqual(session.cancels, 1)
 
+    async def test_a_marked_tasks_turn_runs_past_the_turn_limit(self):
+        # Its Work goes on after the call, bounded by the keep time and a stop: an unmarked turn fails meanwhile.
+        session, collector = await self.opened(task=FakeTaskContext(after_call=True), turn_timeout_seconds=0.2)
+        # The marked run reads first, so a limit on its turn would run out before the unmarked one's.
+        await turns()
+        unmarked = WorkerRun(FakeTaskContext(work_id="W2", task_id="W2.1"), self.host)
+        with self.assertRaisesRegex(HarnessTurnError, "ran past"):
+            await read_all(unmarked.events())
+        self.assertFalse(collector.done())
+        session.say("m1", "Do", "ne.")
+        session.end(1, usage=USAGE)
+        self.assertEqual(answers(await collector), ["Done."])
+        self.assertEqual(session.cancels, 0)
+
+    async def test_a_turn_whose_work_is_marked_while_it_waits_runs_past_the_turn_limit(self):
+        # Another task of its Work marks the Work while this one waits on a quiet session.
+        session, collector = await self.opened(turn_timeout_seconds=0.2)
+        await turns()
+        self.task.after_call = True
+        # The marked run waits first, so the limit it began its wait with runs out before the unmarked one's.
+        unmarked = WorkerRun(FakeTaskContext(work_id="W2", task_id="W2.1"), self.host)
+        with self.assertRaisesRegex(HarnessTurnError, "ran past"):
+            await read_all(unmarked.events())
+        self.assertFalse(collector.done())
+        session.say("m1", "Do", "ne.")
+        session.end(1, usage=USAGE)
+        self.assertEqual(answers(await collector), ["Done."])
+        self.assertEqual(session.cancels, 0)
+
     async def test_a_turn_whose_task_call_raises_is_cancelled(self):
         # The task fails and no stop follows: the run cancels the turn, which would run on with no reader.
         task = FakeTaskContext(declared=())
@@ -533,15 +595,16 @@ class StopTests(Harness):
 
 
 class Runs:
-    """The worker runs on ``host`` as an IM's backend, one task at a time (the steer rule places each request)."""
+    """The worker runs on ``host`` as an IM's backend, ``max_running`` tasks at a time.
 
-    max_running = 1
+    ``placer`` places each request; the steer rule does unless one is given.
+    """
 
-    def __init__(self, host):
-        self.host, self.runs = host, []
+    def __init__(self, host, placer=None, max_running=1):
+        self.host, self.runs, self.placer, self.max_running = host, [], placer, max_running
 
     def conductor(self):
-        return SteerOpenWork()
+        return self.placer or SteerOpenWork()
 
     def start(self, task):
         self.runs.append(WorkerRun(task, self.host))
@@ -549,6 +612,34 @@ class Runs:
 
     async def close(self):
         pass
+
+
+def one_thread(count):
+    """Return a conductor that starts W1 with D1, then places each later request in the Work before it, ended by then.
+
+    So each later Work continues the one before it, D2's W1 and D3's W2.
+    """
+    later = [placing(Steer(f"W{number}", (f"D{number + 1}",))) for number in range(1, count)]
+    return planned(placing(Start(("D1",))), *later)
+
+
+class Conducted(Runs):
+    """The worker runs and the harness conductor on ``host`` as an IM's backend, three tasks at a time."""
+
+    def __init__(self, host):
+        super().__init__(host, max_running=3)
+        self.harness = HarnessConductor(host)
+
+    def conductor(self):
+        return self.harness
+
+    def release_idle(self):
+        for kept in self.host.pool.close():
+            kept.retire(self.host.bridge)
+
+    async def close(self):
+        self.host.closed = True
+        await self.harness.close()
 
 
 class UnderTheImTests(IMCase):
@@ -609,12 +700,14 @@ class UnderTheImTests(IMCase):
         self.assertEqual(im.ended_works[-1].tasks[0].step_lines(), ("web_search: done",))
 
     async def test_the_next_works_task_takes_the_kept_session(self):
+        # One task at a time: the steer rule places D2 in W1, which has ended, so D2's Work continues W1's thread.
         im = self.session(self.runs)
         first = im.admit(ask("Find teas."), delegation_id="D1")
         session = await self.prompted(1)
         session.say("m1", "Green ", "tea.")
         session.end(1, usage=USAGE)
         self.assertEqual(answers(await read_all(first.stream)), ["Green tea."])
+        await until(lambda: not im.works)
         second = im.admit(ask("And black?"), delegation_id="D2")
         await self.prompted(2)
         self.assertEqual(len(self.client.sessions), 1)
@@ -627,13 +720,77 @@ class UnderTheImTests(IMCase):
         kinds = [kind for kind, _ in self.traces]
         self.assertEqual([kinds.count(kind) for kind in ("harness.session_opened", "harness.session_reused")], [1, 1])
 
+    async def test_a_caller_who_says_yes_twice_keeps_one_session(self):
+        # Under the steer rule each request continues the Work before it, and its id tells it from the other "Yes.":
+        # the session that read the thread is sent only the newest request.
+        im = self.session(self.runs)
+        newest = []
+        for number, text in enumerate(("Book a table.", "Yes.", "Yes."), 1):
+            admitted = im.admit(ask(text), delegation_id=f"D{number}")
+            session = await self.prompted(number)
+            newest.append(self.runs.runs[-1].task.history()[-1])
+            session.say(f"m{number}", "Done.")
+            session.end(session.last_prompt(), usage={"totalTokens": 100 * number})
+            await read_all(admitted.stream)
+            await until(lambda: not im.works)
+        self.assertEqual(len(self.client.sessions), 1)
+        self.assertEqual(session.texts("prompt")[1:], [self.host.renderer.transcript([item]) for item in newest[1:]])
+
+    async def test_two_requests_of_the_same_words_are_told_apart(self):
+        # W2's "Yes." and answer join the conversation before W1's: W1's session read only its own "Yes.".
+        placer = planned(placing(Start(("D1",))), placing(Start(("D2",))), placing(Steer("W1", ("D3",))))
+        self.runs = Runs(self.host, placer, max_running=3)
+        im = self.session(self.runs)
+        table = im.admit(ask("Yes."), delegation_id="D1")
+        ours = await self.prompted(1)
+        taxi = im.admit(ask("Yes."), delegation_id="D2")
+        theirs = await self.prompted(1, index=1)
+        for session, admitted, text in ((theirs, taxi, "Your taxi is booked."), (ours, table, "Your table is booked.")):
+            session.say("m1", text)
+            session.end(1, usage=USAGE)
+            await read_all(admitted.stream)
+        last = im.admit(ask("And the wifi password?"), delegation_id="D3")
+        await self.prompted(2)
+        history = self.runs.runs[-1].task.history()
+        self.assertEqual([item.get("id") for item in history if item.get("role") == "user"], ["D2", "D1", "D3"])
+        # What it has not read: W2's request and answer, then D3.
+        self.assertEqual(ours.texts("prompt")[1], self.host.renderer.transcript([*history[:2], history[-1]]))
+        self.assertEqual(len(self.client.sessions), 2)
+        ours.say("m2", "It is on the card.")
+        ours.end(2, usage=LATER_USAGE)
+        await read_all(last.stream)
+
+    async def test_a_follow_up_of_one_split_task_is_sent_the_other_tasks_brief_and_answer(self):
+        # D2 continues W1.1, whose session read the request and its own brief: each brief has an id of its own.
+        placer = planned(placing(Start(("D1",), ("teas", "hours"))), placing(Steer("W1", ("D2",), "W1.1")))
+        self.runs = Runs(self.host, placer, max_running=2)
+        im = self.session(self.runs)
+        first = im.admit(ask("Teas and hours."), delegation_id="D1")
+        await self.prompted(1, index=1)
+        teas, hours = self.runs.runs
+        sessions, hours_brief = [teas.session, hours.session], hours.task.history()[-1]
+        for session, text in zip(sessions, ("Green tea.", "Open till six."), strict=True):
+            session.say("m1", text)
+            session.end(1, usage=USAGE)
+        await read_all(first.stream)
+        await until(lambda: not im.works)
+        last = im.admit(ask("And black tea?"), delegation_id="D2")
+        await until(lambda: len(sessions[0].texts("prompt")) == 2)
+        history = self.runs.runs[-1].task.history()
+        sent = history[history.index(hours_brief) :]
+        self.assertEqual(sessions[0].texts("prompt")[1], self.host.renderer.transcript(sent))
+        self.assertEqual(len(self.client.sessions), 2)
+        sessions[0].say("m2", "Black tea too.")
+        sessions[0].end(2, usage=LATER_USAGE)
+        await read_all(last.stream)
+
     async def typed_with_the_outputs(self, harness, typed):
-        """Have D1's task ask the app for its menu, and send the app's outputs with ``typed``.
+        """Have D1's task ask the app for its menu, and send the app's outputs with ``typed``; a later D2 continues W1.
 
         Return the session, the held call's reply and D1's continuation.
         """
         self.host = FakeHost(harness)
-        self.client, self.runs = self.host.runtime.client, Runs(self.host)
+        self.client, self.runs = self.host.runtime.client, Runs(self.host, one_thread(2))
         self.im = self.session(self.runs)
         first = self.im.admit(ask("Find teas."), delegation_id="D1", settings=MENU_APP)
         session = await self.prompted(1)
@@ -657,6 +814,7 @@ class UnderTheImTests(IMCase):
         session.end(1, usage=USAGE)
         self.assertEqual(answers(await read_all(rest.stream)), ["Green tea with milk."])
         self.assertEqual(self.steering_states(), ["applied"])
+        await until(lambda: not self.im.works)
         self.im.admit(ask("And black?"), delegation_id="D2", settings=MENU_APP)
         await self.prompted(2)
         self.assertEqual((len(self.client.sessions), session.retired), (1, False))
@@ -714,11 +872,60 @@ class UnderTheImTests(IMCase):
         fresh.end(1, usage=LATER_USAGE)
         self.assertEqual(answers(await read_all(newer.stream)), ["Two teas."])
 
+    async def test_each_call_the_gate_refuses_is_traced_once(self):
+        # The run routes a call as the agent makes it, and the IM again as it reads the round.
+        self.host = FakeHost(plain(), tools=(RecordingTools(),))
+        self.client, self.runs = self.host.runtime.client, Runs(self.host)
+        im = self.session(self.runs)
+        im.admit(ask("Find teas."), delegation_id="D1", settings=MENU_APP)
+        session = await self.prompted(1)
+        newer = im.admit(ask("Only green ones."), delegation_id="D2", settings=MENU_APP)
+        await until(lambda: session.cancels == 1)
+        door = self.runs.runs[0].door
+        self.assertEqual([await door.call(name, {}) for name in ("get_menu", "lookup")], [im.texts.not_run_output] * 2)
+        session.end(1, "cancelled", USAGE)
+        await self.prompted(2)
+        session.say("m2", "Green ", "teas.", thought=False)
+        session.end(2, usage=LATER_USAGE)
+        self.assertEqual(answers(await asyncio.wait_for(read_all(newer.stream), 5)), ["Green teas."])
+        refused = [(fields["name"], fields["reason"]) for kind, fields in self.traces if kind == "tools.refused"]
+        self.assertEqual(refused, [("get_menu", "not_run"), ("lookup", "not_run")])
+
+    async def test_a_hang_up_sends_no_cancel_to_the_conductors_running_turn(self):
+        # The job runs on after the call, so the backend stays open. The agent may be compacting its memory: its turn
+        # runs on, and its session waits for a later call.
+        self.runs = Conducted(self.host)
+        im = self.session(self.runs)
+        im.continuable = True
+        conductor = self.runs.harness
+        im.admit(ask("Research every supplier."), delegation_id="D1")
+        await until(lambda: conductor.session is not None and conductor.session.outstanding)
+        session = conductor.session
+        await conductor.door.call("start_work", {"delegations": ["D1"]})
+        session.end(1, usage=USAGE)
+        await until(lambda: self.runs.runs and self.runs.runs[0].door is not None)
+        worker = self.runs.runs[0]
+        mark = {"message": "I'll keep working on it after we hang up."}
+        self.assertEqual(await worker.door.call("continue_after_call", mark), im.texts.continued_output)
+        im.admit(ask("What's on my calendar?"), delegation_id="D2")
+        await until(lambda: len(session.texts("prompt")) == 2)
+        self.assertIs(await im.leave(), True)
+        self.assertEqual((session.cancels, session.retired, conductor.session), (0, False, session))
+        self.assertIsNotNone(conductor.turn)
+        # The decide() that prompted it ended with the call: what the turn places now is refused.
+        late = await conductor.door.call("start_work", {"delegations": ["D2"]})
+        self.assertEqual(late, im.texts.refusal("ended"))
+
 
 class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
-    """The session of a task that answered takes the next task that fits; any other task opens a fresh session."""
+    """The idle sessions of tasks that answered: a later task of their thread takes the first that fits.
+
+    A task of another thread, or one that no idle session fits, opens a fresh one.
+    """
 
     def setUp(self):
+        # An agent's running token total, which grows with each model call.
+        self.totals = itertools.count(200, 100)
         self.use(settings())
 
     def use(self, harness):
@@ -729,12 +936,14 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         """Run ``task`` on the host up to its first event, its session opened or taken over and prompted."""
         run = WorkerRun(task, self.host)
         events = run.events()
+        self.addAsyncCleanup(close_events, events)
         self.assertEqual((await anext(events))["type"], "response.created")
         return run, events
 
-    async def answer(self, events, session, message_id="m1", usage=USAGE):
+    async def answer(self, events, session, message_id="m1", usage=None):
+        """Have ``session`` answer, its token total grown unless ``usage`` is given; return the rest of the events."""
         session.say(message_id, "Green ", "tea.")
-        session.end(session.last_prompt(), usage=usage)
+        session.end(session.last_prompt(), usage=usage or {"totalTokens": next(self.totals)})
         return [event async for event in events]
 
     async def answered(self, task=None):
@@ -742,18 +951,25 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         self.first = task or FakeTaskContext()
         _, events = await self.start(self.first)
         session = self.client.sessions[-1]
-        rest = await self.answer(events, session)
+        rest = await self.answer(events, session, usage=USAGE)
         return session, [*self.first.history(), *finished_items(rest)]
 
+    async def answered_together(self, *tasks):
+        """Start ``tasks`` side by side, then answer them in that order; return their sessions and their items."""
+        started = [await self.start(task) for task in tasks]
+        sessions = [run.session for run, _ in started]
+        items = [finished_items(await self.answer(events, run.session)) for run, events in started]
+        return sessions, items
+
     def next_task(self, view, **kwargs):
-        return FakeTaskContext(history=[*view, NEXT], task_id="W2.1", **kwargs)
+        """Return W2's task, which continues W1 unless ``kwargs`` say otherwise: ``view``, then the next request."""
+        return FakeTaskContext(history=[*view, NEXT], work_id="W2", task_id="W2.1", **{"continues": "W1", **kwargs})
 
     async def test_an_answered_session_takes_the_next_task(self):
         session, view = await self.answered()
-        self.assertIs(self.host.kept.session, session)
-        self.assertFalse(session.retired)
+        self.assertEqual((self.host.idle(), session.retired), ([session], False))
         _, events = await self.start(self.next_task(view))
-        self.assertEqual(len(self.client.sessions), 1)
+        self.assertEqual((len(self.client.sessions), self.host.idle()), (1, []))
         self.assertEqual(session.texts("prompt")[1], "And black tea?")
         rest = await self.answer(events, session, "m2", usage=LATER_USAGE)
         self.assertEqual(answers(rest), ["Green tea."])
@@ -774,17 +990,17 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         _, events = await self.start(FakeTaskContext())
         with self.assertRaisesRegex(HarnessTurnError, "ran past"):
             [event async for event in events]
-        self.assertIsNone(self.host.kept)
+        self.assertEqual(self.host.idle(), [])
         self.assertTrue(all(session.retired for session in self.client.sessions))
 
     async def test_a_session_whose_turn_took_the_cancel_is_kept(self):
         self.use(plain())
-        task = FakeTaskContext()
+        task, steering = FakeTaskContext(), request("D2", "Make it two.")
         run, events = await self.start(task)
         session = self.client.sessions[-1]
         collector = asyncio.ensure_future(read_all(events))
         session.say("m1", "Let me ", "look.", thought=False)
-        task.steer_with(STEERING)
+        task.steer_with(steering)
         run.steer()
         await until(lambda: session.cancels == 1)
         session.end(1, "cancelled", USAGE)
@@ -793,11 +1009,11 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         session.end(2, usage=LATER_USAGE)
         rest = await collector
         self.assertEqual((answers(rest, "commentary"), answers(rest)), (["Let me look."], ["Two it is."]))
-        self.assertIs(self.host.kept.session, session)
+        self.assertEqual(self.host.idle(), [session])
         # What it read and wrote, in order (the cancelled turn's text before the batch), is the task's view, so the next
         # task's prompt is only its new request.
         commentary, answer = finished_items(rest)
-        await self.start(self.next_task([*task.history()[: -len(STEERING)], commentary, *STEERING, answer]))
+        await self.start(self.next_task([*task.history()[: -len(steering)], commentary, *steering, answer]))
         self.assertEqual((len(self.client.sessions), session.texts("prompt")[2]), (1, "And black tea?"))
 
     async def test_a_session_answered_across_the_cancel_is_not_kept(self):
@@ -813,51 +1029,197 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         session.end(1, usage=USAGE)
         self.assertEqual(answers(await collector), ["Green tea."])
         self.assertEqual(task.settled, [("steer_1", "not_applied")])
-        self.assertIsNone(self.host.kept)
+        self.assertEqual(self.host.idle(), [])
         self.assertTrue(session.retired)
 
-    async def test_a_changed_history_or_settings_opens_a_fresh_session(self):
-        for name, cut, changes in (
-            ("an item inserted", lambda view: [view[0], BETWEEN, *view[1:]], {}),
-            ("an item trimmed", lambda view: view[1:], {}),
-            ("other instructions", lambda view: view, {"instructions": "OTHER-INSTRUCTIONS"}),
-            ("another toolset", lambda view: view, {"declared": [MENU, ORDER_FUNCTION]}),
+    async def test_an_item_inserted_or_trimmed_is_no_bar_to_reuse(self):
+        # An item inserted before the session's answer, such as another Work's, is sent after what the session read;
+        # one the budget trimmed is still in the agent's memory.
+        for name, cut, sent in (
+            ("an item inserted", lambda view: [view[0], BETWEEN, *view[1:]], [BETWEEN, NEXT]),
+            ("an item trimmed", lambda view: view[1:], [NEXT]),
         ):
             with self.subTest(name):
                 self.use(settings())
                 session, view = await self.answered()
-                run, _ = await self.start(self.next_task(cut(view), **changes))
-                fresh = self.client.sessions[-1]
-                self.assertEqual(len(self.client.sessions), 2)
-                self.assertIsNot(fresh, session)
-                self.assertTrue(session.retired)
-                self.assertTrue(fresh.texts("prompt")[0].startswith("The conversation and your task:"))
-                self.assertEqual((self.host.kept, self.host.runtime.places), (None, 1))
-                self.assertEqual([door for door, _ in self.host.bridge.closed][-1].name, "w1")
-                self.assertEqual(run.door.name, "w2")
+                task = self.next_task(cut(view))
+                run, _ = await self.start(task)
+                self.assertEqual((run.session, len(self.client.sessions)), (session, 1))
+                self.assertEqual(session.texts("prompt")[1], self.host.renderer.transcript(sent))
 
-    async def test_two_tasks_use_two_sessions_and_the_first_is_kept(self):
-        _, first = await self.start(FakeTaskContext())
-        _, second = await self.start(FakeTaskContext(task_id="W1.2"))
-        one, two = self.client.sessions
-        await self.answer(second, two)
-        await self.answer(first, one)
-        self.assertIs(self.host.kept.session, two)
-        self.assertEqual((one.retired, two.retired), (True, False))
+    async def test_a_task_the_idle_session_does_not_fit_opens_a_fresh_one_and_leaves_it_untouched(self):
+        for why, cut, changes in (
+            ("other instructions", lambda view: view, {"instructions": "OTHER-INSTRUCTIONS"}),
+            ("another toolset", lambda view: view, {"declared": [MENU, ORDER_FUNCTION]}),
+            # The idle session holds W1's work as its own turns: it stays for W1's thread, which may hold a question.
+            ("no idle session of its thread", lambda view: view, {"continues": None}),
+            # The budget kept only the newest request: where the session's reads end, the history does not show.
+            ("its last answer not in the history", lambda view: [], {}),
+        ):
+            with self.subTest(why):
+                self.use(settings())
+                session, view = await self.answered()
+                [kept] = self.host.pool.idle
+                task = self.next_task(cut(view), **changes)
+                run, _ = await self.start(task)
+                self.assertIsNot(run.session, session)
+                [opened] = task.traced("harness.session_opened")
+                self.assertEqual(opened["why"], [why])
+                # Untouched: still pooled, nothing more sent, no place taken, its door still its old task's.
+                self.assertEqual((self.host.idle(), len(session.sent), self.host.runtime.places), ([session], 1, 1))
+                self.assertEqual((kept.door.task, self.host.bridge.closed), (self.first, []))
 
-    async def test_a_failed_history_retires_the_kept_session(self):
+    async def test_a_continuing_task_takes_its_threads_session(self):
+        # W1's session went idle first: a task takes its own thread's, the idle longest or not.
+        for continues, taken in (("W1", 0), ("W2", 1), ("W2.1", 1)):
+            with self.subTest(continues=continues):
+                self.use(settings())
+                asked = [request("D1", "Book a table."), request("D2", "Wifi password?")]
+                works = [
+                    FakeTaskContext(history=asked[0]),
+                    FakeTaskContext(history=asked[1], work_id="W2", task_id="W2.1"),
+                ]
+                sessions, items = await self.answered_together(*works)
+                history = [*asked[0], *items[0], *asked[1], *items[1], NEXT]
+                task = FakeTaskContext(history=history, work_id="W3", task_id="W3.1", continues=continues)
+                run, _ = await self.start(task)
+                self.assertIs(run.session, sessions[taken])
+                self.assertEqual(self.host.idle(), [sessions[1 - taken]])
+
+    async def test_a_task_whose_threads_session_is_gone_opens_a_fresh_one_beside_a_siblings(self):
+        # The pool keeps two: W1.1's session, idle longest, is retired. Its siblings' sessions ran other parts of W1.
+        self.use(settings(max_running=2))
+        asked, briefs = request("D1", "Tea, coffee and juice."), [brief("tea"), brief("coffee"), brief("juice")]
+        split = [FakeTaskContext(history=[*asked, part], task_id=f"W1.{n}") for n, part in enumerate(briefs, 1)]
+        sessions, items = await self.answered_together(*split)
+        self.assertEqual((self.host.idle(), sessions[0].retired), (sessions[1:], True))
+        segment = [*asked, *(item for part, own in zip(briefs, items, strict=True) for item in (part, *own))]
+        task = FakeTaskContext(history=[*segment, NEXT], work_id="W2", task_id="W2.1", continues="W1.1")
+        run, _ = await self.start(task)
+        self.assertNotIn(run.session, sessions)
+        [opened] = task.traced("harness.session_opened")
+        self.assertEqual(opened["why"], ["no idle session of its thread"])
+        self.assertEqual(self.host.idle(), sessions[1:])
+
+    async def test_a_split_works_follow_up_takes_the_named_tasks_session_else_the_newest(self):
+        asked, briefs = request("D1", "Menu and hours."), [brief("menu"), brief("hours")]
+        for continues, taken in (("W1.1", 0), ("W1", 1)):
+            with self.subTest(continues=continues):
+                self.use(settings())
+                split = [FakeTaskContext(history=[*asked, part], task_id=f"W1.{n}") for n, part in enumerate(briefs, 1)]
+                sessions, items = await self.answered_together(*split)
+                segment = [*asked, briefs[0], *items[0], briefs[1], *items[1]]
+                task = FakeTaskContext(history=[*segment, NEXT], work_id="W2", task_id="W2.1", continues=continues)
+                run, _ = await self.start(task)
+                self.assertIs(run.session, sessions[taken])
+
+    async def test_the_pool_keeps_max_running_sessions_and_retires_the_idle_longest(self):
+        self.use(settings(max_running=2))
+        tasks = [FakeTaskContext(task_id=f"W1.{n}") for n in (1, 2, 3)]
+        sessions, _ = await self.answered_together(*tasks)
+        self.assertEqual(self.host.idle(), sessions[1:])
+        self.assertTrue(sessions[0].retired)
+        self.assertEqual([door.name for door, _ in self.host.bridge.closed], ["w1"])
+        [retired] = tasks[2].traced("harness.session_retired")
+        self.assertEqual((retired["why"], retired["last_task"]), ("evicted", "W1.1"))
+
+    async def test_a_history_over_the_budget_fails_and_leaves_the_pool_as_it_was(self):
+        # The history is read before the walk, and again once a place is taken for the session that fits.
+        for walked in (False, True):
+            with self.subTest(walked=walked):
+                self.use(settings())
+                session, view = await self.answered()
+                task = self.next_task(view)
+                over = RuntimeError("Backend context budget exceeded")
+                task.history = mock.Mock(side_effect=[task.history(), over] if walked else over)
+                with self.assertRaisesRegex(RuntimeError, "budget exceeded"):
+                    await self.start(task)
+                self.assertEqual((self.host.idle(), session.retired, len(session.sent)), ([session], False, 1))
+                self.assertEqual((self.host.runtime.places, self.host.bridge.closed), (0, []))
+
+    async def test_a_batch_landed_in_both_split_tasks_is_sent_to_neither_session_again(self):
+        # The segment holds the batch twice, each copy with the batch's id: each session read it with its own task, and
+        # is sent only the other task's part and the new request.
+        asked, batch = request("D1", "Two lattes."), request("D2", "Oat milk.")
+        briefs = [brief("first"), brief("second")]
+        for continues, taken in (("W1.1", 0), ("W1.2", 1)):
+            with self.subTest(continues=continues):
+                self.use(settings())
+                split = [FakeTaskContext(history=[*asked, part], task_id=f"W1.{n}") for n, part in enumerate(briefs, 1)]
+                for number, task in enumerate(split, 1):
+                    task.steer_with(batch, f"steer_{number}")
+                sessions, items = await self.answered_together(*split)
+                self.assertEqual([task.settled for task in split], [[("steer_1", "applied")], [("steer_2", "applied")]])
+                parts = [[part, *batch, *own] for part, own in zip(briefs, items, strict=True)]
+                task = FakeTaskContext(
+                    history=[*asked, *parts[0], *parts[1], NEXT], work_id="W2", task_id="W2.1", continues=continues
+                )
+                run, _ = await self.start(task)
+                self.assertIs(run.session, sessions[taken])
+                other = 1 - taken
+                sent = [briefs[other], *items[other], NEXT]
+                self.assertEqual(sessions[taken].texts("prompt")[-1], self.host.renderer.transcript(sent))
+
+    async def test_a_reused_sessions_failed_first_prompt_moves_the_task_to_a_fresh_session(self):
+        # The agent may have ended the session meanwhile: nothing of the task reached it.
         session, view = await self.answered()
-        task = FakeTaskContext(history=[*view, NEXT])
-        task.history = mock.Mock(side_effect=RuntimeError("Backend context budget exceeded"))
-        with self.assertRaisesRegex(RuntimeError, "budget exceeded"):
-            await self.start(task)
+        task = self.next_task(view)
+        _, events = await self.start(task)
+        collector = asyncio.ensure_future(read_all(events))
+        session.end(session.last_prompt(), stop=None, error="RequestError: Session not found")
+        await until(lambda: len(self.client.sessions) == 2 and self.client.sessions[1].sent)
+        fresh = self.client.sessions[1]
         self.assertTrue(session.retired)
-        self.assertEqual((self.host.kept, self.host.runtime.places), (None, 0))
+        self.assertEqual(fresh.texts("prompt"), [self.host.renderer.worker_input(task.history())])
+        fresh.say("m2", "Black ", "too.")
+        fresh.end(1, usage={"totalTokens": next(self.totals)})
+        self.assertEqual(answers(await collector), ["Black too."])
+        [retired], [opened] = task.traced("harness.session_retired"), task.traced("harness.session_opened")
+        self.assertEqual((retired["why"], opened["why"]), ("a failed first prompt", ["a failed first prompt"]))
+        self.assertEqual((self.host.idle(), self.host.runtime.places), ([fresh], 0))
+
+    async def test_a_lost_idle_session_is_retired_on_the_walk(self):
+        session, view = await self.answered()
+        session.lost = True
+        task = self.next_task(view)
+        run, _ = await self.start(task)
+        self.assertIsNot(run.session, session)
+        self.assertEqual((session.retired, self.host.idle()), (True, []))
+        [retired] = task.traced("harness.session_retired")
+        self.assertEqual(retired["why"], "session lost")
+
+    async def test_a_marked_tasks_session_is_retired_not_pooled(self):
+        # No later task's history holds the steps of a Work that went on after the call.
+        task = FakeTaskContext(after_call=True)
+        run, events = await self.start(task)
+        session = run.session
+        await self.answer(events, session)
+        self.assertEqual((session.retired, self.host.idle(), self.host.runtime.places), (True, [], 0))
+        [retired] = task.traced("harness.session_retired")
+        self.assertEqual(retired["why"], "a marked task")
+
+    async def test_a_task_start_warns_once_of_a_tool_name_offered_twice(self):
+        # The tool source's get_menu collides with the app's: the walk's checks over the idle sessions log nothing.
+        self.host = FakeHost(settings(), tools=(RecordingTools(["get_menu"]),))
+        self.client = self.host.runtime.client
+        await self.answered_together(FakeTaskContext(), FakeTaskContext(task_id="W1.2"))
+        with logged() as lines:
+            await self.start(FakeTaskContext(work_id="W2", task_id="W2.1", continues="W1"))
+        self.assertEqual(len(self.host.idle()), 2)
+        collisions = [line for line in lines if line.startswith("harness.tool_collision")]
+        self.assertEqual(len(collisions), 1)
 
 
 def given(*requests, works=(), conversation=(), new_from=0):
     conversation = (*conversation, *(item for request in requests for item in request.input))
     return ConductorInput(tuple(requests), tuple(works), conversation, new_from)
+
+
+class Unreadable:
+    """An event whose reading raises: the agent's events failed while a ``decide()`` read them."""
+
+    def apply(self, reader):
+        raise RuntimeError("an unreadable event")
 
 
 class ConductorTests(unittest.IsolatedAsyncioTestCase):
@@ -866,6 +1228,18 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
         self.conductor = HarnessConductor(self.host)
         self.target = FakeDecisionTarget()
         self.sessions = self.host.runtime.client.sessions
+        # The agent's running token total, which grows with each model call.
+        self.totals = itertools.count(100, 100)
+        self.addAsyncCleanup(self.close, self.host, self.conductor)
+
+    async def close(self, host, conductor):
+        """Close the conductor as its adapter does at the call's end: a turn it left running is cancelled."""
+        host.closed = True
+        await conductor.close()
+
+    def used(self):
+        """Return the usage of a turn that made a model call: a larger running total."""
+        return {"totalTokens": next(self.totals)}
 
     def prompted(self):
         """Return the session whose prompt is out: the newest one in use with a prompt that has not ended."""
@@ -873,9 +1247,9 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
             (session for session in reversed(self.sessions) if session.outstanding and not session.retired), None
         )
 
-    async def deciding(self, given_input):
-        """Start a ``decide()``; once its prompt went out, return its task and its session."""
-        task = asyncio.ensure_future(self.conductor.decide(given_input, self.target.place))
+    async def deciding(self, given_input, target=None):
+        """Start a ``decide()`` placing into ``target`` or the test's; once it prompted, return it and its session."""
+        task = asyncio.ensure_future(self.conductor.decide(given_input, (target or self.target).place))
         await until(self.prompted)
         return task, self.prompted()
 
@@ -883,9 +1257,21 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
         """Run one ``decide()`` whose turn starts work for its first arrival; return the session it ran in."""
         task, session = await self.deciding(given_input)
         await self.conductor.door.call("start_work", {"delegations": [given_input.arrivals[0].delegation_id]})
-        session.end(session.last_prompt(), usage=DECIDED)
+        session.end(session.last_prompt(), usage=self.used())
         await task
         return session
+
+    async def left_running(self, task):
+        """Cancel a ``decide()`` twice, as a hang-up after a restart does: it ends, and its agent's turn runs on."""
+        task.cancel()
+        await turns()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(task.cancelled())
+
+    def later(self, given_input):
+        """Start a ``decide()`` placing into the test's target, with no wait; return its task."""
+        return asyncio.ensure_future(self.conductor.decide(given_input, self.target.place))
 
     async def test_one_prompt_per_decide_placed_through_its_door(self):
         self.make()
@@ -941,61 +1327,132 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
         await self.placed(given(a_request("d_3", "Teas?")))
         self.assertEqual((len(self.sessions), fresh.retired), (3, True))
 
-    async def test_a_conductor_turn_past_its_limit_is_cancelled(self):
-        # Its session is kept only when the turn ends cancelled: one that ends end_turn after its cancel went out may
-        # have crossed it, and the agent got the cancel idle.
-        ends = {
-            "cancelled": {"stop": "cancelled"},
-            "end_turn": {},
-            "lost": {"stop": None, "error": "lost"},
-            "never": None,
-        }
-        for name, end in ends.items():
-            with self.subTest(name):
-                self.make(conductor_timeout_seconds=0.2)
-                task, session = await self.deciding(given(a_request("d_1", "Teas?")))
-                await until(lambda session=session: session.cancels == 1)
-                self.assertFalse(task.done())
-                if end is not None:
-                    session.end(1, **end)
-                await task
-                self.assertEqual((session.retired, self.target.decisions), (name != "cancelled", []))
-                if name == "cancelled":
-                    self.assertIs(await self.placed(given(a_request("d_2", "Hours?"))), session)
-
-    async def test_a_cancelled_decide_waits_for_its_turn(self):
+    async def test_a_turn_is_read_to_its_end_however_long_it_runs(self):
+        # Only the backstop at turn_timeout_seconds cuts a turn, which may be the agent compacting its memory.
         self.make()
-        task, session = await self.deciding(given(a_request("d_0", "Book.")))
-        # As the turn ends: no cancel goes to a turn that has ended.
-        task.cancel()
-        session.end(1, usage=DECIDED)
-        await asyncio.gather(task, return_exceptions=True)
-        self.assertEqual((session.cancels, session.retired), (0, False))
-        task, _ = await self.deciding(given(a_request("d_1", "Teas?")))
-        # The IM's busy rule: a decide() that placed nothing restarts.
-        task.cancel()
-        await until(lambda: session.cancels == 1)
+        task, session = await self.deciding(given(a_request("d_1", "Teas?")))
+        await self.conductor.door.call("start_work", {"delegations": ["d_1"]})
+        # The agent works on: half a minute passes on the loop's clock.
+        loop = asyncio.get_running_loop()
+        clock = loop.time
+        loop.time = lambda: clock() + 30
+        await turns()
         self.assertFalse(task.done())
-        session.end(2, "cancelled")
-        await asyncio.gather(task, return_exceptions=True)
-        self.assertIs(await self.placed(given(a_request("d_1", "Teas?"), a_request("d_2", "Green."))), session)
+        session.end(1, usage=self.used())
+        await task
+        self.assertEqual((session.cancels, session.retired, self.target.decisions), (0, False, [Start(("d_1",))]))
 
-    async def test_a_cancelled_decide_whose_turn_hangs_retires_it(self):
-        # A second cancel (the IM's close) ends the wait while the turn runs.
-        for again in (False, True):
-            with self.subTest(again=again):
+    async def test_a_restarted_decide_reads_its_turn_to_its_end(self):
+        # The IM restarts a decide() that placed nothing when a request arrives: the agent's turn runs on uncut, and
+        # what it places counts. The IM builds the next input once the agent is free, and it goes out as one prompt.
+        self.make()
+        session = await self.placed(given(a_request("d_0", "Book."), conversation=EARLIER))
+        task, _ = await self.deciding(given(a_request("d_1", "Teas?"), conversation=EARLIER, new_from=1))
+        task.cancel()
+        await turns()
+        self.assertFalse(task.done())
+        await self.conductor.door.call("start_work", {"delegations": ["d_1"]})
+        session.end(2, usage=self.used())
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual((self.target.decisions[-1], session.cancels), (Start(("d_1",)), 0))
+        self.assertIs(await self.placed(given(a_request("d_2", "Green."), conversation=EARLIER, new_from=1)), session)
+        self.assertEqual(len(session.texts("prompt")), 3)
+        self.assertNotIn("Earlier: book a table.", session.texts("prompt")[2])
+
+    async def test_the_next_decide_waits_for_a_turn_a_cancelled_one_left(self):
+        # A hang-up cancels a decide() once, and it reads its turn on; a hang-up after a restart cancels it twice, and
+        # it leaves the turn running. Either way the next decide() never splits that turn.
+        for cancels in (1, 2):
+            with self.subTest(cancels=cancels):
                 self.make()
-                session = await self.placed(given(a_request("d_0", "Book."), conversation=EARLIER))
-                newer = given(a_request("d_1", "Teas?"), conversation=EARLIER, new_from=1)
-                task, _ = await self.deciding(newer)
-                # The double's turn does not end within stop_timeout_seconds.
-                task.cancel()
-                if again:
-                    await until(lambda session=session: session.cancels == 1)
+                first = FakeDecisionTarget()
+                task, session = await self.deciding(given(a_request("d_1", "Teas?")), first)
+                for _ in range(cancels):
                     task.cancel()
-                    session.end(2, "cancelled")
-                await asyncio.gather(task, return_exceptions=True)
-                self.assertEqual((session.cancels, session.retired), (1, True))
-                fresh = await self.placed(newer)
+                    await turns()
+                self.assertEqual((task.done(), task.cancelled()), (cancels == 2, cancels == 2))
+                later = self.later(given(a_request("d_2", "Hours?"), new_from=1))
+                await turns()
+                # Never a prompt into a running turn; the turn's own calls still reach the decision that prompted it.
+                self.assertEqual(len(session.texts("prompt")), 1)
+                await self.conductor.door.call("start_work", {"delegations": ["d_1"]})
+                self.assertEqual((first.decisions, self.target.decisions), ([Start(("d_1",))], []))
+                session.end(1, usage=self.used())
+                await until(lambda session=session: len(session.texts("prompt")) == 2)
+                await self.conductor.door.call("start_work", {"delegations": ["d_2"]})
+                session.end(2, usage=self.used())
+                await later
+                decided = (self.target.decisions, session.cancels, session.retired)
+                self.assertEqual(decided, ([Start(("d_2",))], 0, False))
+
+    async def test_a_wait_that_ends_retired_prompts_a_fresh_session_with_the_whole_history(self):
+        self.make()
+        task, session = await self.deciding(given(a_request("d_1", "Teas?"), conversation=EARLIER))
+        await self.left_running(task)
+        later = self.later(given(a_request("d_2", "Hours?"), conversation=EARLIER, new_from=1))
+        await turns()
+        self.assertEqual((len(self.sessions), len(session.texts("prompt"))), (1, 1))
+        session.end(1, "refusal")
+        await until(lambda: len(self.sessions) == 2 and self.sessions[1].sent)
+        fresh = self.sessions[1]
+        self.assertIn("Earlier: book a table.", fresh.texts("prompt")[0])
+        self.assertEqual((session.retired, session.cancels), (True, 0))
+        await self.conductor.door.call("start_work", {"delegations": ["d_2"]})
+        fresh.end(1, usage=self.used())
+        await later
+        self.assertEqual(self.target.decisions, [Start(("d_2",))])
+
+    async def test_a_turn_past_turn_timeout_seconds_is_cancelled_once_and_its_session_replaced(self):
+        # The backstop holds whether a decide() reads the turn or none does.
+        for reading in (True, False):
+            with self.subTest(reading=reading):
+                self.make(turn_timeout_seconds=0.2)
+                with logged() as lines:
+                    task, session = await self.deciding(given(a_request("d_1", "Teas?"), conversation=EARLIER))
+                    if not reading:
+                        await self.left_running(task)
+                    await until(lambda session=session: session.retired and session.cancels)
+                    await asyncio.gather(task, return_exceptions=True)
+                overran = [line for line in lines if line.startswith("harness.conductor_turn_overran")]
+                self.assertEqual((len(overran), session.cancels), (1, 1))
+                fresh = await self.placed(given(a_request("d_2", "Hours?"), conversation=EARLIER, new_from=1))
                 self.assertIsNot(fresh, session)
                 self.assertIn("Earlier: book a table.", fresh.texts("prompt")[0])
+
+    async def test_a_turn_with_no_model_call_retires_a_hermes_session_only(self):
+        # Hermes ends a turn whose model call failed end_turn, with text of its own: only its usage tells.
+        for name, harness, usages, retired in (
+            ("hermes, no usage", settings(), [None], True),
+            ("hermes, an unchanged total", settings(), [{"totalTokens": 100}, {"totalTokens": 100}], True),
+            ("hermes, a first turn with no tokens", settings(), [{"totalTokens": 0}], True),
+            ("a plain agent, no usage", plain(), [None], False),
+        ):
+            with self.subTest(name):
+                self.make(harness)
+                for number, usage in enumerate(usages, 1):
+                    task, session = await self.deciding(given(a_request(f"d_{number}", "Teas?")))
+                    session.end(session.last_prompt(), usage=usage)
+                    await task
+                self.assertEqual((session.retired, session.cancels), (retired, 0))
+
+    async def test_close_cancels_a_running_turn(self):
+        self.make()
+        task, session = await self.deciding(given(a_request("d_1", "Teas?")))
+        self.host.closed = True
+        await self.conductor.close()
+        await task
+        self.assertEqual((session.cancels, session.retired, len(self.sessions)), (1, True, 1))
+
+    async def test_a_decide_that_fails_while_a_turn_runs_cancels_it_once_and_retires(self):
+        self.make()
+        task, session = await self.deciding(given(a_request("d_1", "Teas?"), conversation=EARLIER))
+        await self.left_running(task)
+        later = self.later(given(a_request("d_2", "Hours?")))
+        await turns()
+        self.assertEqual((len(self.sessions), len(session.texts("prompt"))), (1, 1))
+        session.put(Unreadable())
+        await later
+        self.assertEqual((session.cancels, session.retired, self.target.decisions), (1, True, []))
+        fresh = await self.placed(given(a_request("d_3", "Sunday?"), conversation=EARLIER, new_from=1))
+        self.assertIsNot(fresh, session)
+        self.assertIn("Earlier: book a table.", fresh.texts("prompt")[0])

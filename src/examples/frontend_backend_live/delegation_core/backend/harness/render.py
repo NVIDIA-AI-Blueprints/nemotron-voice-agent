@@ -111,6 +111,7 @@ class Renderer:
         return self.prompts.work.format(
             work=work.work_id,
             state=work.state,
+            after_call=self.prompts.after_call if work.after_call else "",
             carrier=work.carrier,
             requests=requests or self.prompts.none,
             tasks="\n".join(self._task(task) for task in work.tasks),
@@ -122,6 +123,8 @@ class Renderer:
             state=task.state,
             seconds=round(task.seconds),
             brief=self.prompts.brief.format(brief=task.brief) if task.brief else "",
+            question=self.prompts.question.format(question=task.question) if task.question else "",
             steps=", ".join(task.steps) or self.prompts.none,
             note=task.progress or self.prompts.none,
+            answer=self.prompts.answer.format(answer=task.answer) if task.answer else "",
         )

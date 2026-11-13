@@ -124,7 +124,7 @@ class DelegationPort(Protocol):
 class DelegationPart(DelegationPort, Protocol):
     """The session's delegation part, by the resolved mode; a member that does not apply refuses the call."""
 
-    # The session's conversation with its delegation core; None in client mode.
+    # The session's conversation with its delegation core; None in client mode, and once a close deleted it.
     conversation: str | None
     # How long close step 4 waits for :meth:`close` before it goes on.
     close_seconds: float
@@ -164,6 +164,8 @@ class DelegationView(Protocol):
     input_ms: int
     responses: BackendConfig | None
     acknowledgement_delay_ms: int
+    # The session's store: true, its opt-in to keep backend work that outlives the call.
+    store: bool
 
     async def emit(self, kind: str, **fields: Any) -> None:
         """Send a server event: only ``session.delegation.created`` and ``response.event``."""

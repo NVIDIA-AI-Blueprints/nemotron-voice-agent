@@ -50,8 +50,12 @@ class DelegationCore:
         self.defaults, self.result_format = defaults, result_format
         self.output_steps, self.observe = output_steps, observe
 
-    def session(self) -> IMSession:
-        """Return a new IM session for a new conversation, on a new adapter of the backend source."""
+    def session(self, **hooks: Callable[[IMSession], Any]) -> IMSession:
+        """Return a new IM session for a new conversation, on a new adapter of the backend source.
+
+        The session takes another adapter of the source for a later call once its adapter closed. ``hooks`` are its
+        ``room`` and ``on_closed`` hooks (``IMSession``).
+        """
         return IMSession(
             self.source.new(),
             self.defaults,
@@ -60,6 +64,8 @@ class DelegationCore:
             result_format=self.result_format,
             output_steps=self.output_steps(self.observe),
             observe=self.observe,
+            renew=self.source.new,
+            **hooks,
         )
 
     def one_shot_session(self) -> IMSession:
@@ -84,14 +90,15 @@ class DelegationCore:
 
     @property
     def close_seconds(self) -> float | None:
-        """How long closing one conversation may take: the close grace, else the backstop, then the stop wait.
+        """How long closing one conversation may take: the close grace, else the backstop, and two stop waits.
 
+        A stop wait comes before the grace, for queued work and work that waits for the app, and another after it.
         ``None`` when neither the grace nor the backstop bounds it.
         """
         delegation = self.settings.delegation
         grace = delegation.close_grace_seconds
         running = grace if grace is not None else delegation.work_timeout_seconds
-        return None if running is None else running + delegation.stop_timeout_seconds
+        return None if running is None else running + 2 * delegation.stop_timeout_seconds
 
     def describe(self) -> dict:
         """Return what the core runs, as plain JSON: its choices, then the backend source's own."""

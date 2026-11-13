@@ -20,10 +20,10 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
-from examples.shared.delegation_contract import DELEGATION_ID, OPTIONS, TERMINALS, TYPED_RUN
+from examples.shared.delegation_contract import DELEGATION_ID, OPTIONS, STORE, TERMINALS, TYPED_RUN
 from examples.shared.ids import uid
 from examples.shared.observe import log_observation
-from gateways.live.protocol import BackendConfig, ProtocolError, SessionConfig
+from gateways.live.protocol import CONVERSATION_PARAM, BackendConfig, ProtocolError, SessionConfig
 from gateways.live.server_delegation.sender import Request, RequestSender
 
 if TYPE_CHECKING:
@@ -342,21 +342,29 @@ class ServerDelegation:
     async def open(self, view: DelegationView | None) -> None:
         """Open the session's conversation with the core, then build the call routes and the relay.
 
-        With no ``view`` nothing is relayed and no settings are sent; a conversation not created in time raises.
+        With no ``view`` nothing is relayed and no settings are sent; a conversation not created in time raises. A
+        ``store: true`` session that names ``delegation.responses.conversation`` attaches to that conversation instead,
+        waiting up to the core's close budget, since the call before may still be closing; a conversation the core
+        refuses (unknown, ended or serving another call) raises ``ProtocolError`` ``invalid_value``, naming no id.
         """
         if self._opened or self._closed:
             return
         self._opened = True
         self.view = view
         metadata = {LIVE_SESSION_ID: view.id} if view is not None else {}
+        if view is not None and view.store:
+            metadata[STORE] = "true"
         try:
-            async with asyncio.timeout(CONVERSATION_SECONDS):
-                conversation = await self.client.create_conversation(metadata)
+            if view is None or view.responses is None or view.responses.conversation is None:
+                async with asyncio.timeout(CONVERSATION_SECONDS):
+                    conversation = await self.client.create_conversation(metadata)
+            else:
+                conversation = await self._attach(metadata)
         except TimeoutError:
             raise RuntimeError(
                 f"The delegation core did not open a conversation within {CONVERSATION_SECONDS} s"
             ) from None
-        # Closed while the core created it: nothing else would delete it.
+        # Closed while the core created or attached it: nothing else would delete it (a kept one stays kept).
         if self._closed:
             await self.client.delete_conversation(conversation["id"])
             return
@@ -366,12 +374,41 @@ class ServerDelegation:
             self.relay = BackendEventRelay(view, self.routes)
         self.sender.start()
 
+    async def _attach(self, metadata: dict[str, str]) -> dict:
+        """Attach to the core's kept conversation that the session names (``POST /v1/conversations/{id}``).
+
+        It waits up to the core's close budget, at least ``CONVERSATION_SECONDS``, since the call before may still be
+        closing. A refusal raises ``ProtocolError`` ``invalid_value``. Neither it nor a line of its traceback names
+        the id, since the id is what attaches.
+        """
+        conversation_id = self.view.responses.conversation
+        budget = getattr(self.client, "close_seconds", None)
+        limit = max(CONVERSATION_SECONDS, budget or 0)
+        try:
+            async with asyncio.timeout(limit):
+                return await self.client.update_conversation(conversation_id, metadata)
+        except TimeoutError:
+            raise RuntimeError(f"The delegation core did not attach the conversation within {limit:g} s") from None
+        except ProtocolError:
+            raise
+        except Exception as refused:
+            if isinstance(refused, LookupError) or hasattr(refused, "code"):
+                raise ProtocolError(
+                    "The conversation to continue is unknown, has ended, or serves another call",
+                    param=CONVERSATION_PARAM,
+                ) from None
+            raise
+
     def stop_handing(self) -> None:
         """Close step 2: send no new request and hand the frontend nothing; the readers still relay to the client."""
         self._closing = True
 
     async def close(self) -> None:
-        """Close step 4: refuse unsent requests, delete the conversation, let the readers end, close the call routes."""
+        """Close step 4: refuse unsent requests, delete the conversation, let the readers end, close the call routes.
+
+        A conversation that the core keeps for work outliving the call (``deleted: false``) stays named, so
+        ``session.closed`` tells the app its id.
+        """
         if self._closed:
             return
         self._closed = self._closing = True
@@ -381,7 +418,9 @@ class ServerDelegation:
         try:
             await self.sender.close()
             if conversation is not None:
-                await self.client.delete_conversation(conversation)
+                deleted = await self.client.delete_conversation(conversation)
+                if deleted.get("deleted") is False:
+                    self.conversation = conversation
             if self.readers:
                 await asyncio.gather(*self.readers, return_exceptions=True)
         finally:
@@ -545,7 +584,17 @@ class ServerDelegation:
         return False
 
     async def update(self, config: SessionConfig, patch: dict, client_event_id: str | None) -> SessionConfig:
-        """Apply a ``session.update`` patch and return the new settings; the core checks them in the background."""
+        """Apply a ``session.update`` patch and return the new settings; the core checks them in the background.
+
+        A ``delegation.responses.conversation`` that names the session's own conversation changes nothing.
+        """
+        delegation = patch.get("delegation") if isinstance(patch, dict) else None
+        responses = delegation.get("responses") if isinstance(delegation, dict) else None
+        own = isinstance(responses, dict) and self.conversation is not None
+        if own and responses.get("conversation") == self.conversation:
+            # The session's own conversation, as its events echo it.
+            responses = {key: value for key, value in responses.items() if key != "conversation"}
+            patch = {**patch, "delegation": {**delegation, "responses": responses}}
         updated = config.updated(patch)
         self._check(updated.delegation.responses, client_event_id)
         return updated

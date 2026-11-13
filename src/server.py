@@ -590,6 +590,20 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
         )
 
 
+async def _select_unnamed_slots(config: dict, example: dict) -> None:
+    """Fill ``config`` in place with the entries ``GET /api/services`` selects for the example's unnamed slots.
+
+    A slot is unnamed when a Realtime ``session.nvidia`` does not take its id key.
+    """
+    from gateways.realtime.session import unnamed_slot_ids
+
+    unnamed = unnamed_slot_ids(example["services"])
+    if unnamed:
+        listed = await _with_service_status(build_services_api_response())
+        selected = {id_field: entries[0]["id"] for slot, id_field in unnamed.items() if (entries := listed.get(slot))}
+        config.update(filter_session_config(selected))
+
+
 async def _ensure_services_ready_for_connection(config: dict, example: dict) -> None:
     """Verify selected services before the UI starts a session."""
     await _ensure_llm_ready_for_connection(config, example)
@@ -945,11 +959,16 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
         After ``session.update`` + the same readiness checks as ``/api/ws``,
         hands the socket to the selected example bot (``protocol=realtime``).
+        A slot whose id key ``session.nvidia`` does not take gets the entry
+        that ``GET /api/services`` selects, as the UI sends it, so the
+        readiness checks and the bot use that entry.
         """
         from gateways.realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
 
         async def _ensure_ready(config: dict) -> None:
-            await _ensure_services_ready_for_connection(config, _resolve_example(config))
+            example = _resolve_example(config)
+            await _select_unnamed_slots(config, example)
+            await _ensure_services_ready_for_connection(config, example)
 
         def _resolve_server_tools(config: dict) -> list[str]:
             _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)

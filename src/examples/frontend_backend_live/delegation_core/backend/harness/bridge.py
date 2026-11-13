@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import secrets
 import socket
@@ -38,12 +39,13 @@ class Door:
     """One session's door on the bridge: its server name, its bearer token and its toolset; a bare door serves none."""
 
     def __init__(self, name: str):
-        """Open a door named ``name``, with a fresh token."""
+        """Open a door named ``name``, with a fresh token; its calls run in a copy of the context it is opened in."""
         self.name = name
         self.token = secrets.token_urlsafe(24)
         # Set by the agent's tools/list: a failed MCP connect is silent at the ACP level.
         self.listed = asyncio.Event()
         self.retired = False
+        self.context = contextvars.copy_context()
 
     def tools(self) -> list[dict]:
         """Return the tools it serves, as MCP tools: none."""
@@ -72,8 +74,12 @@ class ConductorDoor(Door):
         self.place: Callable[[Any], Awaitable[str]] | None = None
 
     def bind(self, place: Callable[[Any], Awaitable[str]]) -> None:
-        """Apply the next calls through ``place`` (the running ``decide()``'s; after it ends the IM refuses)."""
+        """Apply the next calls through ``place`` (the running ``decide()``'s; after it ends the IM refuses).
+
+        The calls run in a copy of the context it is bound in, so a conductor kept for a later call serves that call.
+        """
         self.place = place
+        self.context = contextvars.copy_context()
 
     def tools(self) -> list[dict]:
         """Return the four control tools."""
@@ -114,7 +120,7 @@ class WorkerDoor(Door):
         self.held: list[HeldCall] = []
 
     def _compose(
-        self, task: TaskContext, sources: Sequence[ToolSource]
+        self, task: TaskContext, sources: Sequence[ToolSource], *, warn: bool = True
     ) -> tuple[set[str], dict[str, ToolSource], list[dict]]:
         """Build the toolset: the request's functions, each tool source's, then the work tools', each name once."""
         app_functions: set[str] = set()
@@ -128,11 +134,16 @@ class WorkerDoor(Door):
             for tool in source.tools():
                 name = tool.get("name")
                 if not name or name in app_functions or name in owners:
-                    logger.warning(f"harness.tool_collision door={self.name} name={name}: offered once only")
+                    if warn:
+                        logger.warning(f"harness.tool_collision door={self.name} name={name}: offered once only")
                     continue
                 owners[name] = source
                 served.append(mcp_tool(tool))
         return app_functions, owners, served
+
+    def serves(self, task: TaskContext, sources: Sequence[ToolSource]) -> bool:
+        """Return whether it can serve ``task`` as it is: the same toolset, no call held, not retired (no change)."""
+        return not (self.held or self.retired) and self._compose(task, sources, warn=False)[2] == self.served
 
     def rebind(self, task: TaskContext, sources: Sequence[ToolSource]) -> bool:
         """Serve ``task`` under the same name and token if its toolset is the one served; else return ``False``.
@@ -277,7 +288,10 @@ class McpBridge:
                 raise
             self.base_url = self.settings.url(sock.getsockname()[1])
             self._server = _QuietServer(self._gate(app))
-            self._serving = asyncio.create_task(self._server.serve(sock), name="harness-bridge")
+            # In an empty context: the server serves every session's door, not only the one whose code started it.
+            self._serving = asyncio.create_task(
+                self._server.serve(sock), name="harness-bridge", context=contextvars.Context()
+            )
             async with asyncio.timeout(self.start_timeout):
                 while not self._server.started:
                     if self._serving.done():
@@ -359,10 +373,18 @@ class McpBridge:
         import mcp_types as types
 
         door = self._door(ctx)
-        try:
-            text = await door.call(params.name, dict(params.arguments or {}))
-        except Exception as exc:
-            logger.exception(f"harness.bridge_call_failed door={door.name} name={params.name}")
-            text = door.failed(params.name, f"{type(exc).__name__}: {exc}")
+
+        async def serve() -> str:
+            try:
+                return await door.call(params.name, dict(params.arguments or {}))
+            except Exception as exc:
+                logger.exception(f"harness.bridge_call_failed door={door.name} name={params.name}")
+                return door.failed(params.name, f"{type(exc).__name__}: {exc}")
+
+        # In a fresh copy of the door's context, not the server's: what the call logs and starts is its session's.
+        # Started at once: the call reaches its door before a close already queued for this loop turn retires it.
+        loop = asyncio.get_running_loop()
+        call = asyncio.Task(serve(), loop=loop, name="harness-call", context=door.context.copy(), eager_start=True)
+        text = await call
         # Never an error result: an agent may pause a server whose calls failed a few times in a row.
         return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=False)

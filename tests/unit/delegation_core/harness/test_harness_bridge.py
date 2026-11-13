@@ -6,6 +6,8 @@
 """The tool bridge: MCP over streamable HTTP, spoken as a runtime would in plain JSON-RPC over ``httpx``."""
 
 import asyncio
+import contextlib
+import contextvars
 import gc
 import json
 import socket
@@ -14,6 +16,7 @@ import warnings
 from unittest import mock
 
 import httpx
+import uvloop
 
 from examples.frontend_backend_live.delegation_core.backend.harness.bridge import ConductorDoor, McpBridge, WorkerDoor
 from examples.frontend_backend_live.delegation_core.backend.harness.protocol import AppCall, CallRunning, CallSettled
@@ -22,6 +25,10 @@ from tests.unit.delegation_core.harness.doubles import vocabulary
 from tests.unit.delegation_core.helpers import MENU, TEXTS, FakeTaskContext
 
 ACCEPT = "application/json, text/event-stream"
+# The test's stand-in for what a call's code sets in its context, such as the call id its log lines carry.
+CALL = contextvars.ContextVar("call", default=None)
+# The app's server runs on uvloop under uvicorn; the other tests run on asyncio.
+LOOPS = {"asyncio": asyncio.new_event_loop, "uvloop": uvloop.new_event_loop}
 
 
 class Tools:
@@ -191,6 +198,82 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(await answer("cancel_work", {})), {"error": "cancel_work: missing work_id"})
         self.assertEqual(await answer("start_work", start), "start_work broke: RuntimeError: the IM broke")
         self.assertEqual(len(placed), 2)
+
+
+class Whose:
+    """A tool source whose one tool notes the call it runs for, in its call and in a task the call starts."""
+
+    label = "shop"
+
+    def __init__(self):
+        self.seen = []
+
+    def tools(self):
+        return [{"type": "function", "name": "whose", "parameters": {"type": "object", "properties": {}}}]
+
+    async def execute(self, call_id, name, arguments):
+        self.seen += [CALL.get(), await asyncio.create_task(self.read())]
+        return "{}"
+
+    async def read(self):
+        return CALL.get()
+
+
+@contextlib.asynccontextmanager
+async def served(door):
+    """Serve ``door`` on a real bridge; yield a runtime's client of it and the HTTP client it posts with."""
+    bridge = McpBridge(Bridge(bind="127.0.0.1:0"))
+    await bridge.start()
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            server = bridge.open(door)
+            client = McpClient(server.url, server.token)
+            await client.connect(http)
+            yield client, http
+    finally:
+        await bridge.aclose()
+
+
+class DoorContextTests(unittest.TestCase):
+    """A door's calls run in the context of the call its session serves, on each loop: its log lines carry its id."""
+
+    def on_each_loop(self, scenario):
+        for name, loop in LOOPS.items():
+            with self.subTest(loop=name):
+                asyncio.run(scenario(), loop_factory=loop)
+
+    def test_a_doors_calls_run_in_the_context_its_session_was_opened_in(self):
+        # The bridge's server runs in a context of its own and serves every call's doors.
+        async def scenario():
+            source = Whose()
+            opened = CALL.set("call B")
+            door = WorkerDoor("w1", FakeTaskContext(declared=()), (source,), asyncio.Queue(), tool_timeout_seconds=5)
+            CALL.reset(opened)
+            async with served(door) as (client, http):
+                await client.call(http, "whose", {})
+            self.assertEqual(source.seen, ["call B", "call B"])
+
+        self.on_each_loop(scenario)
+
+    def test_a_door_bound_again_in_a_later_call_runs_in_that_calls_context(self):
+        # A conductor kept for a later call: its decisions there log under that call's id.
+        async def scenario():
+            seen = []
+
+            async def place(decision):
+                seen.append(CALL.get())
+                return "Started W1 with W1.1."
+
+            door = ConductorDoor("c1", vocabulary())
+            async with served(door) as (client, http):
+                for call in ("call A", "call B"):
+                    bound = CALL.set(call)
+                    door.bind(place)
+                    CALL.reset(bound)
+                    await client.call(http, "start_work", {"delegations": ["d1"]})
+            self.assertEqual(seen, ["call A", "call B"])
+
+        self.on_each_loop(scenario)
 
 
 def ipv6_loopback() -> bool:

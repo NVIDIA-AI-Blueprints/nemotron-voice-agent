@@ -9,13 +9,16 @@ The core has no HTTP routes of its own. A caller reaches it in process through `
 | Endpoint | What the core does |
 | --- | --- |
 | `POST /v1/conversations` | Opens a conversation, served by an interaction manager (IM) session of its own. |
+| `POST /v1/conversations/{id}` | Attaches a later call to a kept conversation, with the call's metadata. |
 | `POST /v1/responses` | Admits the request and streams its one response, or refuses it before any event. |
 | `POST /v1/responses/input_tokens` | Checks a request's settings without running it, and counts its input. |
-| `GET /v1/conversations/{id}/items` | Lists the conversation's backend history. |
+| `GET /v1/conversations/{id}/items` | Lists the conversation's backend history. The core sets the `id` of each message in a request's input: a request's messages take its `live_delegation_id`, then that id with `.2`, `.3`, and so on. A request that names no delegation, and typed messages that come with function outputs, take an id that the core makes instead. |
 | `GET /v1/models/{model}` | Returns the model object when the backend serves `model`, and refuses any other model. |
-| `DELETE /v1/conversations/{id}` | Ends the conversation's IM session, which stops its work and ends every open response. |
+| `DELETE /v1/conversations/{id}` | Ends the conversation's IM session, which stops its work and ends every open response. A conversation that keeps work after its call answers `deleted: false` instead. |
 
-The core reads two `metadata` keys: `live_delegation_id` names the delegation, and `live_typed_run: "true"` marks a typed run. A request that names its delegation, brings no function outputs, and is not a typed run is a delegation, and any other request is the client's own. A request with no `conversation` is stateless: a one-shot IM session serves it and keeps nothing.
+The core reads three `metadata` keys: `live_delegation_id` names the delegation, `live_typed_run: "true"` marks a typed run, and `live_store: "true"` on a conversation lets its work outlive a call. A request that names its delegation, brings no function outputs, and is not a typed run is a delegation, and any other request is the client's own. A request with no `conversation` is stateless: a one-shot IM session serves it and keeps nothing.
+
+A conversation with `live_store: "true"` offers its tasks the `continue_after_call` work tool on a backend above `max_running: 1`. When its call ends while its records list work that a task marked with this tool, open or among the newest ended, `DELETE` keeps the conversation. Such work that is still open goes on, and a later call attaches with `POST /v1/conversations/{id}`. The gateway guide's [Work That Outlives the Call](../../../../docs/how-to/use-live-gateway.md#work-that-outlives-the-call) describes the flow.
 
 In the [Frontend/Backend Live example](../README.md), the composition root builds one core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the gateway's [server delegation](../../../../docs/how-to/use-live-gateway.md#server-delegation), in a conversation of its own. A client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one stateless request. The repository UI bot builds a core of its own for each bot session, from the core's settings with `ui_bot.core` merged over them, which set the cafe's `backend.prompt` and `backend.tools`.
 
@@ -36,12 +39,14 @@ The following table lists the `delegation` settings that you are most likely to 
 | --- | --- | --- |
 | `max_pending_delegations` | `16` | The most requests admitted and not yet running. The next one is refused. |
 | `client_tool_timeout_seconds` | `60` | How long the app's function outputs may take, counted from the end of the response with their calls. `null` waits until the session closes. |
-| `work_timeout_seconds` | `600` | The backstop on one Work. `null` turns it off. |
+| `work_timeout_seconds` | `600` | The backstop on one Work. `null` turns it off. Work that outlives the call has none. |
+| `after_call_seconds` | `172800` | How long a conversation kept for work that outlives its call stays after its last call, and again after that work ends. When that time runs out, it closes, and work still running stops. |
+| `max_after_call_conversations` | `8` | The most conversations at once whose work still runs after their call. A kept conversation whose work has ended does not count: it holds only memory until its keep time ends. |
 | `result_format` | `plain` | `plain`, or `speak_display`, which adds a `show` item for the screen before the answer to speak. |
 | `progress_note_seconds` | `1.0` | The shortest time between two progress notes of one delegation. `0` writes none. |
 | `context_tokens` | `24000` | The backend history's budget. Over it, the oldest requests leave the history, each one whole. |
 
-Every task of a conversation gets the `cancel_work` work tool and the caller and voice notes (`texts.caller_note` and `texts.voice_note`). A one-shot session offers no work tool.
+Every task of a conversation gets the `cancel_work` and `ask_caller` work tools, `show` too under `speak_display`, `continue_after_call` as described above, and the caller and voice notes (`texts.caller_note` and `texts.voice_note`). With `ask_caller`, a task says one short question to the caller and keeps working, and the caller's reply comes back as a new request. An app function with one of these names is refused together with the work tool. A server tool source must not use them, because its tool would replace the work tool. A one-shot session offers no work tool.
 
 ## Packages
 
@@ -60,7 +65,7 @@ The following table lists the core's packages:
 
 | Adapter | Package | What it runs |
 | --- | --- | --- |
-| `llm` (default) | [`backend/llm/`](backend/llm/) | The backend LLM, directly connected. The steer rule places each request: it joins the newest open Work, or starts one. It also serves stateless requests. |
+| `llm` (default) | [`backend/llm/`](backend/llm/) | The backend LLM, directly connected. The steer rule places each request: it joins the newest open Work, else continues the Work that ended last, else starts one. It also serves stateless requests. |
 | `llm-agent` | [`backend/agent/`](backend/agent/) | Backend LLM runs as workers. Above `max_running: 1`, a model conductor places every request, with one model call per decision. At `max_running: 1`, the steer rule places each request. |
 | `harness` | [`backend/harness/`](backend/harness/) | An external agent that its operator deploys, such as Hermes, over the Agent Client Protocol (ACP). Above `max_running: 1`, a conductor session of the agent places every request. At `max_running: 1`, the steer rule places each request. |
 

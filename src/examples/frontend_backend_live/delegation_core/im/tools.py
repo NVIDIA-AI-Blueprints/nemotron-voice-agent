@@ -16,11 +16,28 @@ if TYPE_CHECKING:
 class WorkTools:
     """One task's work tools (``port.ToolSource``)."""
 
-    def __init__(self, names: tuple[str, ...], texts: Texts, cancel: Callable[[], str], label: str):
-        """Offer ``names`` as ``texts.work_tools`` words them; ``cancel`` stops the task, ``label`` tags the display."""
-        self.names, self.texts, self.cancel, self.label = names, texts, cancel, label
-        self.schemas = texts.work_tools
-        self._run = {"show": self._show, "cancel_work": self._cancel_work}
+    def __init__(
+        self,
+        names: tuple[str, ...],
+        texts: Texts,
+        cancel: Callable[[], str],
+        ask: Callable[[str], str],
+        carry_on: Callable[[str], str],
+        label: str,
+    ):
+        """Offer ``names`` as ``texts.work_tools`` words them.
+
+        ``cancel`` stops the task, ``ask`` hands its question for the caller to the IM, ``carry_on`` hands the IM the
+        message that the work goes on after the call, and ``label`` tags the display.
+        """
+        self.names, self.texts, self.cancel, self.ask, self.carry_on = names, texts, cancel, ask, carry_on
+        self.label, self.schemas = label, texts.work_tools
+        self._run = {
+            "show": self._show,
+            "cancel_work": self._cancel_work,
+            "ask_caller": self._ask_caller,
+            "continue_after_call": self._continue_after_call,
+        }
 
     def tools(self) -> list[dict]:
         """Return the tools it offers, as Responses function tools."""
@@ -56,3 +73,15 @@ class WorkTools:
 
     def _cancel_work(self, given: dict) -> str:
         return self.cancel()
+
+    def _ask_caller(self, given: dict) -> str:
+        question = given.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise ValueError("ask_caller: question must be non-empty text")
+        return self.ask(question.strip())
+
+    def _continue_after_call(self, given: dict) -> str:
+        message = given.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("continue_after_call: message must be non-empty text")
+        return self.carry_on(message.strip())

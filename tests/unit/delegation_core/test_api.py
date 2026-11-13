@@ -13,6 +13,8 @@ from functools import partial
 from types import SimpleNamespace
 from unittest import mock
 
+from loguru import logger
+
 from examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
 from examples.frontend_backend_live.delegation_core.api.service import (
     MAX_REQUEST_DEPTH,
@@ -25,17 +27,26 @@ from examples.frontend_backend_live.delegation_core.backend.adapters import ADAP
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
 from examples.frontend_backend_live.delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
 from examples.frontend_backend_live.delegation_core.im.input import BackendTask
+from examples.frontend_backend_live.delegation_core.im.session import DelegationError, IMSession
 from examples.shared.delegation_contract import TERMINALS, ModelEndpoint
 from tests.unit.core_helpers import FakeChat, Sleep, chunk
 from tests.unit.delegation_core.helpers import (
     CORE_SETTINGS,
     LIMITS,
+    MARK,
     MENU,
     TEXTS,
+    ClosesWhenLetGo,
+    ScriptedAdapter,
     ScriptedProvider,
+    StartEach,
+    answer,
     answer_text,
     call_round,
+    marks,
     text_round,
+    until,
+    wait,
 )
 
 ENDPOINT = ModelEndpoint(model="org/test-model", base_url="http://localhost:1/v1")
@@ -46,6 +57,7 @@ CREATED = {"type": "response.created", "response": {"id": "r", "status": "in_pro
 # The core stores no responses.
 NOT_STORED = "previous_response_not_found"
 NOTES = (TEXTS.caller_note.strip(), TEXTS.voice_note.strip())
+STORED = {"live_session_id": "live_1", "live_store": "true"}
 
 
 def user(text: str) -> dict:
@@ -175,7 +187,7 @@ class ConversationTests(CoreCase):
                 await call(conversation)
         ledger = SimpleNamespace(session=SimpleNamespace(id="conv_1"))
         im = mock.Mock(ledger=ledger, history=[], close=mock.AsyncMock(side_effect=RuntimeError("cut short")))
-        cut_short = ResponsesService(lambda: im, stateless_session=lambda: im, backend=Rules())
+        cut_short = ResponsesService(lambda **hooks: im, stateless_session=lambda: im, backend=Rules())
         conversation = (await cut_short.create_conversation())["id"]
         with self.assertRaisesRegex(RuntimeError, "cut short"):
             await cut_short.delete_conversation(conversation)
@@ -189,16 +201,32 @@ class ConversationTests(CoreCase):
         first, second = await self.open(), await self.open({"live_session_id": "live_2"})
         held = await self.client.create_response(self.request(first, "One."))
         self.assertEqual(answer_text((await self.ask(self.request(second, "Two.")))[-1]), "Second.")
-        self.assertEqual((await self.client.list_conversation_items(second))["data"][0], user("Two."))
+        page = await self.client.list_conversation_items(second)
+        self.assertEqual(page["data"][0]["content"], user("Two.")["content"])
         await self.client.delete_conversation(second)
         self.assertEqual((first_model.closed, second_model.closed), (0, 1))
         gate.set()
         self.assertEqual(answer_text([event async for event in held][-1]), "First.")
         self.assertEqual(len(first_model.payloads), 1)
 
+    async def test_a_stored_conversation_with_no_work_after_the_call_is_forgotten_at_its_hang_up(self):
+        self.core(Model(text_round("Hi.")))
+        conversation = await self.open(STORED)
+        self.assertTrue((await self.client.delete_conversation(conversation))["deleted"])
+        with self.assertRaises(NotFound):
+            await self.client.list_conversation_items(conversation)
+
+    async def test_a_requests_messages_take_their_ids_from_its_delegation(self):
+        self.core(Model(text_round("Green and black.")))
+        conversation = await self.open()
+        mine = {**user("Which teas?"), "id": "msg_mine"}
+        await self.ask({**self.request(conversation), "input": [mine, user("Hot ones.")]})
+        page = await self.client.list_conversation_items(conversation)
+        self.assertEqual([item.get("id") for item in page["data"][:2]], ["item_1", "item_1.2"])
+
     async def test_each_request_kind_takes_its_admission(self):
         im = mock.Mock(ledger=SimpleNamespace(session=SimpleNamespace(id="conv_1")), history=[])
-        service = ResponsesService(lambda: im, stateless_session=lambda: im, backend=Rules())
+        service = ResponsesService(lambda **hooks: im, stateless_session=lambda: im, backend=Rules())
         conversation = (await service.create_conversation())["id"]
         typed = {"live_delegation_id": "item_3", "live_typed_run": "true"}
         for request in (
@@ -360,3 +388,116 @@ class StatelessTests(CoreCase):
         answered = await self.ask(self.request(conversation))
         self.assertEqual(answer_text(answered[-1]), "Hello.")
         self.assertEqual(stateless_model.payloads[0]["input"], [USER, CALL, OUTPUT])
+
+
+class KeptConversationTests(CoreCase):
+    """Conversations whose work goes on after their call: the hang-up that keeps one, and a later call's attach."""
+
+    def kept_core(self, *scripts, backend=ScriptedAdapter, **delegation):
+        """Return the in-process client of a core whose conversations play ``scripts`` in turn, three tasks at once.
+
+        Each request starts a Work of its own; ``backend`` is the scripted adapter's class.
+        """
+        settings = CORE_SETTINGS.delegation.model_copy(update={"close_grace_seconds": 0.01, **delegation})
+        waiting = list(scripts)
+
+        def new_backend():
+            made = backend(conductor=StartEach(), max_running=3)
+            made.scripts = waiting
+            return made
+
+        def session(**hooks):
+            return IMSession(new_backend(), DEFAULTS, settings, TEXTS, renew=new_backend, **hooks)
+
+        self.service = ResponsesService(session, stateless_session=session, backend=Rules())
+        self.client = LocalResponsesClient(self.service, close_seconds=None, close_core=lambda: asyncio.sleep(0))
+        self.addAsyncCleanup(self.client.aclose)
+        return self.client
+
+    async def marked(self, metadata=STORED) -> tuple[str, IMSession]:
+        """Open a conversation whose first request's task marks its Work; return it once marked, with its session."""
+        conversation = await self.open(metadata)
+        await self.client.create_response(self.request(conversation, "Compare every supplier."))
+        session = self.service.sessions[conversation]
+        await until(lambda: marks(session), "the mark")
+        return conversation, session
+
+    async def test_a_kept_conversation_is_left_and_attached_by_a_later_call(self):
+        gate = asyncio.Event()
+        self.kept_core([MARK, wait(gate), answer("The comparison is ready.")])
+        conversation, session = await self.marked()
+        deleted = await self.client.delete_conversation(conversation)
+        self.assertEqual(deleted, {"id": conversation, "object": "conversation.deleted", "deleted": False})
+        self.assertEqual((await self.client.list_conversation_items(conversation))["object"], "list")
+        attached = await self.client.update_conversation(conversation, {**STORED, "live_session_id": "live_2"})
+        self.assertEqual((attached["id"], attached["metadata"]["live_session_id"]), (conversation, "live_2"))
+
+        async def refusal(target: str, kind: type[Exception]) -> str:
+            with self.assertRaises(kind) as refused:
+                await self.client.update_conversation(target, STORED)
+            return str(refused.exception)
+
+        # One call holds it, an id names none, and one has ended: no refusal names the conversation.
+        refusals = [await refusal(conversation, DelegationError), await refusal("conv_unknown", NotFound)]
+        gate.set()
+        await session.close()
+        refusals.append(await refusal(conversation, NotFound))
+        self.assertEqual([text for text in refusals if "conv_" in text], [])
+
+    async def test_a_delete_cancelled_while_it_leaves_keeps_the_conversation(self):
+        gate, other = asyncio.Event(), asyncio.Event()
+        scripts = ([MARK, wait(gate), answer("The comparison is ready.")], [wait(other), answer("Free all day.")])
+        self.kept_core(*scripts, close_grace_seconds=5)
+        conversation, session = await self.marked()
+        calendar = {"live_delegation_id": "item_2"}
+        await self.client.create_response(self.request(conversation, "What is on my calendar?", metadata=calendar))
+        await until(lambda: "W2" in session.works, "the second Work")
+        deleting = asyncio.create_task(self.client.delete_conversation(conversation))
+        await until(lambda: session.detached, "the hang-up")
+        deleting.cancel()
+        await asyncio.gather(deleting, return_exceptions=True)
+        # The second Work ends in the hang-up's close grace; the hang-up goes on to its end.
+        other.set()
+        self.assertEqual((deleting.cancelled(), await session.leave()), (True, True))
+        self.assertEqual((await self.client.list_conversation_items(conversation))["object"], "list")
+        await self.client.update_conversation(conversation, STORED)
+        self.assertEqual(session.ledger.session.state, "active")
+        gate.set()
+
+    async def test_work_after_the_call_is_refused_beyond_the_conversations_allowed(self):
+        gate = asyncio.Event()
+        self.kept_core(*([MARK, wait(gate), answer("Done.")] for _ in range(2)), max_after_call_conversations=1)
+        sessions = [(await self.marked({**STORED, "live_session_id": f"live_{n}"}))[1] for n in (1, 2)]
+        self.assertEqual(
+            [marks(session) for session in sessions], [[TEXTS.continued_output], [TEXTS.not_continued_output]]
+        )
+        gate.set()
+
+    async def test_a_failed_close_at_the_keep_times_end_is_logged(self):
+        class FailsToClose(ScriptedAdapter):
+            async def close(self):
+                raise RuntimeError("the backend did not close")
+
+        logged = []
+        self.addCleanup(logger.remove, logger.add(logged.append, level="WARNING", format="{message}"))
+        self.kept_core([MARK, wait(asyncio.Event()), answer("Never.")], backend=FailsToClose, after_call_seconds=0.05)
+        conversation, _ = await self.marked()
+        self.assertFalse((await self.client.delete_conversation(conversation))["deleted"])
+        await until(lambda: [line for line in logged if "in the background" in line], "the keep time's close")
+        failed = [line for line in logged if "in the background" in line]
+        self.assertEqual(len(failed), 1)
+        with self.assertRaises(NotFound):
+            await self.client.list_conversation_items(conversation)
+
+    async def test_an_attach_while_the_keep_times_close_runs_is_not_found(self):
+        job = [MARK, wait(asyncio.Event()), answer("Never.")]
+        self.kept_core(job, backend=ClosesWhenLetGo, after_call_seconds=0.05)
+        # Before the client's own cleanup, which waits for the close.
+        self.addCleanup(lambda: [each.backend.may_close.set() for each in self.service.sessions.values()])
+        conversation, session = await self.marked()
+        self.assertFalse((await self.client.delete_conversation(conversation))["deleted"])
+        await until(lambda: session.closed, "the keep time's end")
+        # The close waits for the backend: the conversation is still listed, and has ended.
+        self.assertEqual((await self.client.list_conversation_items(conversation))["object"], "list")
+        with self.assertRaises(NotFound):
+            await self.client.update_conversation(conversation, STORED)

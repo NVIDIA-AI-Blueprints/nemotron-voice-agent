@@ -76,6 +76,9 @@ class HarnessPrompts(Settings):
     work: Text
     task: Text
     brief: Text
+    question: Text
+    after_call: Text
+    answer: Text
     none: Text
     worker_input: Text
     user: Text
@@ -98,9 +101,11 @@ class HarnessPrompts(Settings):
 FIELDS = {
     "conductor_input": ("arrivals", "works", "conversation"),
     "arrival": ("delegation", "text"),
-    "work": ("work", "state", "carrier", "requests", "tasks"),
-    "task": ("task", "state", "seconds", "brief", "steps", "note"),
+    "work": ("work", "state", "after_call", "carrier", "requests", "tasks"),
+    "task": ("task", "state", "seconds", "brief", "question", "steps", "note", "answer"),
     "brief": ("brief",),
+    "question": ("question",),
+    "answer": ("answer",),
     "worker_input": ("transcript",),
     "user": ("text",),
     "assistant": ("text",),
@@ -154,10 +159,9 @@ class HarnessSettings(Settings):
     permission_name: Text = Field("reject", alias="permission")
     start_timeout_seconds: Seconds = 60.0
     ready_timeout_seconds: Seconds = 15.0
+    # How long one turn may run, not counting a worker's waits for the app; it bounds a conductor's turn too.
     turn_timeout_seconds: Seconds = 300.0
-    # How long one conductor turn may run before it is cancelled; the steer rule places what it leaves.
-    conductor_timeout_seconds: Seconds = 20.0
-    # How long a stop, or the cancel of a turn, waits for the turn to end.
+    # How long a stop waits for the turn to end, and how long a cancel sent in the background may take.
     stop_timeout_seconds: Seconds = 10.0
     stop_grace_seconds: Seconds = 5.0
     # One call of a tool source or a work tool through the bridge; past it, its outcome is unclear.

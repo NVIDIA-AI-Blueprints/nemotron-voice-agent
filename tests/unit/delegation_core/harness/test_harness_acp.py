@@ -10,7 +10,10 @@ import json
 import socket
 import unittest
 
+from loguru import logger
+
 from examples.frontend_backend_live.delegation_core.backend.harness.acp import AcpAgent, AcpClient, SessionUpdates
+from examples.frontend_backend_live.delegation_core.backend.harness.acp.agent import close_session
 from examples.frontend_backend_live.delegation_core.backend.harness.acp.hermes import HermesAgent
 from examples.frontend_backend_live.delegation_core.backend.harness.permissions import Reject
 from examples.frontend_backend_live.delegation_core.backend.harness.protocol import (
@@ -24,11 +27,13 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
     UserText,
 )
 from examples.frontend_backend_live.delegation_core.backend.harness.worker import WorkerRun
-from tests.unit.delegation_core.harness.doubles import FakeHost, hermes, plain, scratch, until, wire
-from tests.unit.delegation_core.helpers import STEERING, FakeTaskContext, finished_items, read_all
+from tests.unit.delegation_core.harness.doubles import FakeHost, FakeTaskContext, hermes, plain, scratch, until, wire
+from tests.unit.delegation_core.helpers import STEERING, finished_items, read_all
 
 LOST = "the connection to the agent is lost"
 SERVER = McpServer("w1", "http://bridge.test/mcp", "token-1")
+# What an agent that closes sessions advertises in its initialize answer.
+CLOSE = {"sessionCapabilities": {"close": {}}}
 
 
 def hermes_events(scenario, server="client"):
@@ -118,14 +123,18 @@ class UpdateTests(unittest.TestCase):
 
 
 class Replay:
-    """The recorded runtime's side of the stream: answers each request with what the real Hermes sent."""
+    """The recorded runtime's side of the stream: answers each request with what the real Hermes sent.
 
-    def __init__(self, scenario, *, answered=True, ask_permission=False, refuse=None):
+    With ``capabilities``, its initialize answer advertises them, as an agent other than Hermes may.
+    """
+
+    def __init__(self, scenario, *, answered=True, ask_permission=False, refuse=None, capabilities=None):
         self.answered = answered
         self.steps = [step for step in wire(scenario) if answered or "end" not in step]
         self.session = next(step["session"] for step in self.steps if "session" in step)
         self.ask_permission = ask_permission
         self.refuse = refuse or {}
+        self.capabilities = capabilities
         self.received: list[dict] = []
         self.closed = asyncio.Event()
         self.permission_answer = None
@@ -143,7 +152,8 @@ class Replay:
 
     async def _serve(self):
         prompts = iter([step for step in self.steps if "prompt" in step])
-        results = {"initialize": {"protocolVersion": 1}, "session/new": {"sessionId": self.session}}
+        initialized = {"protocolVersion": 1, **({"agentCapabilities": self.capabilities} if self.capabilities else {})}
+        results = {"initialize": initialized, "session/new": {"sessionId": self.session}, "session/close": {}}
         try:
             while line := await self.their_reader.readline():
                 message = json.loads(line)
@@ -193,11 +203,17 @@ class Replay:
     def sent(self, method):
         return [message for message in self.received if message.get("method") == method]
 
+    def closes(self):
+        """Return the session of each ``session/close`` it read, in order."""
+        return [message["params"]["sessionId"] for message in self.sent("session/close")]
+
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):
-    async def connect(self, replay):
+    async def connect(self, replay, agent=None):
         self.replay, self.mailbox = replay, asyncio.Queue()
-        self.client = AcpClient(replay, hermes(), permission=Reject(), start_timeout_seconds=5)
+        self.client = AcpClient(
+            replay, agent or hermes(), permission=Reject(), start_timeout_seconds=5, stop_grace_seconds=5
+        )
         self.addAsyncCleanup(self.client.close)
         await self.client.open()
         return await self.client.new_session("/work/w1", SERVER, self.mailbox)
@@ -308,7 +324,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_cancelled_turns_batch_goes_to_the_same_session(self):
         host, replay = FakeHost(plain()), Replay("cancel_then_prompt")
-        client = AcpClient(replay, host.settings.agent, permission=Reject(), start_timeout_seconds=5)
+        client = AcpClient(
+            replay, host.settings.agent, permission=Reject(), start_timeout_seconds=5, stop_grace_seconds=5
+        )
         host.runtime.client = client
         self.addAsyncCleanup(client.close)
         await client.open()
@@ -325,4 +343,53 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prompts[1]["params"]["prompt"][0]["text"], host.renderer.steering(steering))
         answers = [(item["phase"], item["content"][0]["text"]) for item in finished_items(rest)]
         self.assertEqual((answers, task.settled), ([("final_answer", "ok")], [("steer_1", "applied")]))
-        self.assertEqual(host.kept.session.id, replay.session)
+        self.assertEqual([session.id for session in host.idle()], [replay.session])
+
+    async def test_a_retired_session_is_closed_once_where_its_agent_class_says(self):
+        # By default where the agent advertises close. Hermes advertises none: a close it got would free nothing, and it
+        # keeps each session until it exits.
+        class Closes(AcpAgent):
+            def close_request(self, advertised):
+                return close_session
+
+        class Keeps(AcpAgent):
+            def close_request(self, advertised):
+                return None
+
+        for name, agent, capabilities, closes in (
+            ("advertised", None, CLOSE, 1),
+            ("not advertised", None, None, 0),
+            ("a class that closes, none advertised", Closes(), None, 1),
+            ("a class that keeps, close advertised", Keeps(), CLOSE, 0),
+        ):
+            with self.subTest(name):
+                session = await self.connect(Replay("pong", capabilities=capabilities), agent)
+                self.assertEqual(session.retire(), closes == 1)
+                # Sent in the background, so a retire never waits for the agent.
+                self.assertEqual((self.replay.closes(), session.retire()), ([], False))
+                await self.client.close()
+                self.assertEqual(self.replay.closes(), [session.id] * closes)
+
+    async def test_a_failed_close_is_logged_and_the_connection_goes_on(self):
+        # An agent may answer the close of a session it does not have with -32002: the core counts that session as
+        # closed.
+        for code, message, line in (
+            (-32603, "Internal error", "harness.session_close_failed"),
+            (-32002, "Resource not found", "harness.session_closed"),
+        ):
+            with self.subTest(code=code):
+                refusal = {"code": code, "message": message}
+                session = await self.connect(Replay("pong", capabilities=CLOSE, refuse={"session/close": refusal}))
+                logged = []
+                self.addCleanup(logger.remove, logger.add(logged.append, level="DEBUG", format="{message}"))
+                session.retire()
+                await until(lambda: self.replay.closes() and not self.client.closes)
+                self.assertEqual(
+                    [each.split()[0] for each in logged if each.startswith("harness.session_close")], [line]
+                )
+                self.assertTrue(self.client.alive)
+
+    async def test_the_clients_close_closes_each_session_before_the_stream_ends(self):
+        session = await self.connect(Replay("pong", capabilities=CLOSE))
+        await self.client.close()
+        self.assertEqual((self.replay.closes(), self.client.closes), ([session.id], set()))

@@ -12,6 +12,7 @@ from typing import Any
 from loguru import logger
 from openai import AsyncOpenAI
 
+from examples.frontend_backend_live.delegation_core.items import input_item
 from examples.shared.delegation_contract import ModelEndpoint
 from examples.shared.ids import uid
 
@@ -44,7 +45,8 @@ class OpenAIResponsesBackend(Backend):
         ``store: false`` keeps nothing on the hosted API, and one ``prompt_cache_key`` per provider reuses the prefix.
         Thinking that the endpoint's switch or the round turns off is also sent as ``reasoning.effort: none``, which a
         server that ignores ``chat_template_kwargs`` reads. A tool the client runs is left out (:func:`client_run`), and
-        a ``tool_choice`` that only a tool left out matches becomes ``auto``, as on chat completions.
+        a ``tool_choice`` that only a tool left out matches becomes ``auto``, as on chat completions. A message other
+        than an output message goes without its ``id`` (:func:`input_item`).
         """
         extra = self.endpoint.extra_params
         request = {name: extra[key] for key, name in ENDPOINT_PARAMS.items() if key in extra}
@@ -68,7 +70,7 @@ class OpenAIResponsesBackend(Backend):
             request["tool_choice"] = "auto" if _named(choice) in gone else choice
         request.update(
             model=payload.get("model") or self.endpoint.model,
-            input=payload["input"],
+            input=[input_item(item) for item in payload["input"]],
             store=False,
             prompt_cache_key=self.cache_key,
             stream=True,

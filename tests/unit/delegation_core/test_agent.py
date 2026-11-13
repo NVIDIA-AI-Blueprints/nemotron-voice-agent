@@ -53,6 +53,7 @@ from tests.unit.delegation_core.helpers import (
     FAST,
     LIMITS,
     NO_RETRY,
+    QUESTION,
     TEXTS,
     FakeDecisionTarget,
     FakeTaskContext,
@@ -179,7 +180,7 @@ async def read(stream) -> list[dict]:
 class SourceTests(unittest.IsolatedAsyncioTestCase):
     def test_it_describes_what_it_serves_without_credentials(self):
         conductor = {"model": "other/model", "timeout_seconds": 4.0}
-        conductor |= {"memory_tokens": 2000, "max_output_tokens_per_request": 128, "temperature": None}
+        conductor |= {"memory_tokens": 2000, "temperature": None}
         conductor |= {"reasoning_effort": "low"}
         worker = {"max_tool_rounds": 5}
         block = {"max_running": 4, "conductor": conductor, "worker": worker}
@@ -328,7 +329,7 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["instructions"], TEXTS.conductor_prompt.format(max_running=3))
         self.assertEqual([tool["name"] for tool in payload["tools"]], list(TEXTS.control_tools))
         self.assertEqual((payload["tool_choice"], payload["parallel_tool_calls"]), ("required", False))
-        self.assertEqual(payload["max_output_tokens"], 2 * 256)
+        self.assertNotIn("max_output_tokens", payload)
         self.assertEqual((payload["reasoning"], payload["model"]), ({"effort": "none"}, ENDPOINT.model))
         self.assertEqual(await decide(conductor_on(model), given()), [])
         unset = ScriptedProvider(decisions(start("D1")))
@@ -352,6 +353,24 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(work["requests"], teas)
         task = {"task_id": "W1.2", "state": "answered", "brief": None, "steps": ["get_menu: done"], "acted": True}
         self.assertEqual(work["tasks"][1], {**task, "progress": "Looking.", "seconds": 2.2})
+
+    async def test_a_tasks_open_question_is_read_only_while_it_holds_one(self):
+        model = ScriptedProvider(decisions(steer("W1", "D2", task_id="W1.2")))
+        work = a_work("W1", "running", "running")
+        asked = replace(work, tasks=(work.tasks[0], replace(work.tasks[1], question=QUESTION)))
+        await decide(conductor_on(model), given(a_request("D2", "A latte."), works=(asked,)))
+        silent, asking = round_data(model.payloads[0])["works"][0]["tasks"]
+        self.assertNotIn("question", silent)
+        self.assertEqual(asking["question"], QUESTION)
+
+    async def test_a_work_that_outlives_the_call_is_read_with_its_mark_and_answers(self):
+        result = "The suppliers, ranked by price."
+        model = ScriptedProvider(decisions(answer_status("D2", f"Yes: {result}")))
+        work = a_work("W1", state="answered")
+        kept = replace(work, after_call=True, tasks=(replace(work.tasks[0], answer=result),))
+        await decide(conductor_on(model), given(a_request("D2", "Is my research ready?"), works=(kept,)))
+        (read,) = round_data(model.payloads[0])["works"]
+        self.assertEqual((read["continues_after_call"], read["tasks"][0]["answer"]), (True, result))
 
     async def test_each_control_call_becomes_its_decision(self):
         round_ = decisions(
@@ -464,7 +483,8 @@ class AgentTests(IMCase):
         self.assertEqual(len(workers.payloads), 2)
 
     async def test_an_answer_with_no_open_work_is_refused(self):
-        # No records stand behind it, so the IM refuses the answer; the request is left, and the steer rule starts it.
+        # No records stand behind it, so the IM refuses the answer; the request is left, and the IM's fallback rule
+        # starts it.
         conductor = ScriptedProvider(decisions(answer_status("D1", "Your table is booked.")))
         workers = ScriptedProvider(text_round("Friday at seven is free; shall I book it?"))
         im = self.session(self.agent(conductor, workers))

@@ -76,8 +76,16 @@ class LocalResponsesClient:
         """Open a conversation (``POST /v1/conversations``) and return the conversation object."""
         return round_trip(await _refusals_as_json(self.service.create_conversation(round_trip(metadata))))
 
+    async def update_conversation(self, conversation_id: str, metadata: dict[str, str]) -> dict:
+        """Attach a later call to a kept conversation (``POST /v1/conversations/{id}``) and return the conversation."""
+        update = self.service.update_conversation(round_trip(conversation_id), round_trip(metadata))
+        return round_trip(await _refusals_as_json(update))
+
     async def delete_conversation(self, conversation_id: str) -> dict:
-        """Delete a conversation, which stops its work (``DELETE /v1/conversations/{id}``); return the deleted one."""
+        """Delete a conversation (``DELETE /v1/conversations/{id}``); return the deleted one.
+
+        Its work stops, unless work that outlives the call keeps the conversation: then ``deleted`` is ``false``.
+        """
         return round_trip(await _refusals_as_json(self.service.delete_conversation(round_trip(conversation_id))))
 
     async def retrieve_model(self, model: str) -> dict:
@@ -97,5 +105,8 @@ class LocalResponsesClient:
         return round_trip(await _refusals_as_json(self.service.list_conversation_items(round_trip(conversation_id))))
 
     async def aclose(self) -> None:
-        """Release the core, by the close the root handed this client."""
-        await self._close_core()
+        """Close every conversation the core still serves, kept ones included, then release the core by its close."""
+        try:
+            await self.service.aclose()
+        finally:
+            await self._close_core()

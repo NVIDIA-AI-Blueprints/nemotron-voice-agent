@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -30,15 +30,16 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     listed,
     message_phase,
 )
-from examples.frontend_backend_live.delegation_core.im.conversation import TaskHistory
+from examples.frontend_backend_live.delegation_core.im.conversation import TaskHistory, with_ids
 from examples.frontend_backend_live.delegation_core.im.input import settings_for, task_request, user_message, with_parts
 from examples.frontend_backend_live.delegation_core.im.results import CallReports, ControlCalls
 from examples.frontend_backend_live.delegation_core.im.stop import AtBackstop, AtDeadline, StopReason
-from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter
+from examples.frontend_backend_live.delegation_core.im.stream import ResponseWriter, output_message
 from examples.frontend_backend_live.delegation_core.im.tools import WorkTools
 from examples.frontend_backend_live.delegation_core.items import message_text
 from examples.frontend_backend_live.delegation_core.ledger.records import Runner, Task, Work
 from examples.frontend_backend_live.delegation_core.ledger.records import Steering as SteeringRecord
+from examples.shared.ids import uid
 
 if TYPE_CHECKING:
     from examples.frontend_backend_live.delegation_core.config import Texts
@@ -48,6 +49,8 @@ if TYPE_CHECKING:
 OFFICIAL_REASONS = frozenset({"max_output_tokens", "content_filter"})
 TOO_MANY_REQUESTS = 429
 RECORD_TEXT_CHARS = 300
+# The newest steps the records show of a task whose Work goes on after the call, which keeps adding steps.
+RECORD_STEPS = 10
 ITEM_REPORTS = CallReports()
 CONTROL_REPORTS = ControlCalls()
 
@@ -123,6 +126,7 @@ class TaskRun:
         """Make a task of ``work``, run for its ``Task`` record."""
         self.work, self.session, self.record = work, work.session, record
         self.work_id, self.task_id, self.brief = work.id, record.id, record.brief
+        self.continues = work.record.continues
         self.ended = False
         self.run: BackendRun | None = None
         self.view: TaskHistory | None = None
@@ -152,7 +156,10 @@ class TaskRun:
         shown = self.session.result_format.tools()
         self.displays = frozenset(shown)
         names = tuple(dict.fromkeys((*shown, *self.session.work_tools)))
-        self.work_tools = WorkTools(names, self.texts, self.cancel_own, self.session.settings.display_label)
+        label = self.session.settings.display_label
+        self.work_tools = WorkTools(
+            names, self.texts, self.cancel_own, self.ask_caller, self.continue_after_call, label
+        )
         self._readers: dict[str, Callable[[dict], None]] = {
             "response.created": self._attempt_opened,
             "response.output_item.done": self._item_done,
@@ -174,7 +181,7 @@ class TaskRun:
                 if self.stop_reason is not None or not self.app_calls:
                     break
                 if self._gated():
-                    # The gate refused the app's calls: the run goes on with the newer input once it is placed.
+                    # The gate refused the app's calls: the run goes on once no request waits for a decision.
                     await self.session.decided()
                     if self.stop_reason is not None:
                         break
@@ -205,6 +212,11 @@ class TaskRun:
         """Whether its run holds a slot."""
         return self.record.state == "running"
 
+    @property
+    def after_call(self) -> bool:
+        """Whether its Work goes on after the call, so the call's per-turn limit does not apply to its turns."""
+        return self.work.record.after_call
+
     async def _slot(self) -> None:
         """Wait for a slot, then move to ``running``."""
         self.grant = self.session.request_slot(self)
@@ -231,16 +243,22 @@ class TaskRun:
                 await close()
 
     def _gated(self) -> bool:
-        """Apply the commit gate to the round's app calls as they would go out; return whether it refused them.
+        """Refuse the round's app calls after the call or at the commit gate; return whether it refused them.
 
-        Their route was decided when the round completed, and newer input may have come while its backend calls ran.
+        Their route was decided when the round completed, and newer input may have come, or the call may have ended,
+        while its backend calls ran.
         """
-        if not self.newer_input_waits():
+        texts = self.session.texts
+        if self.work.unheard():
+            reason, output = "after_call", texts.after_call_output
+        elif self.newer_input_waits():
+            reason, output = "not_run", texts.not_run_output
+        else:
             return False
         for call_id, call in self.app_calls.items():
             self.routes[call_id] = "refused"
-            self.refusals[call_id] = self.session.texts.not_run_output
-            self._refuse(call)
+            self.refusals[call_id] = output
+            self._refuse(call, reason)
         self.app_calls = {}
         return True
 
@@ -315,6 +333,15 @@ class TaskRun:
         self.own_cancel = True
         return self.session.texts.outcomes["cancel_requested"].format(work=self.work_id, tasks=self.task_id)
 
+    def ask_caller(self, question: str) -> str:
+        """Hand ``question`` to the Work for the task's own ``ask_caller``; the task runs on and keeps its slot."""
+        self.work.ask(self, question)
+        return self.session.texts.asked_output
+
+    def continue_after_call(self, message: str) -> str:
+        """Hand ``message`` to the Work for the task's own ``continue_after_call``; return what the Work answers."""
+        return self.work.continue_after_call(self, message)
+
     def _attempt_opened(self, raw: dict) -> None:
         self.attempt, self.last_terminal = [], None
 
@@ -353,8 +380,9 @@ class TaskRun:
             self._answer(answer)
 
     def _answer(self, message: dict) -> None:
-        """Mark the round answered, and have the Work write ``message``."""
+        """Mark the round answered, keep its text on the task's record, and have the Work write ``message``."""
         self.answered = True
+        self.record.answer = message_text(message)
         self.trace("im.answer.written")
         self.work.answer(self, message)
 
@@ -384,8 +412,8 @@ class TaskRun:
             self.routes[call_id] = "refused" if refusal is not None else self._route(name)
             self._step(call_id, "started", name)
             if refusal is not None:
-                self.refusals[call_id] = refusal
-                self._refuse(call)
+                reason, self.refusals[call_id] = refusal
+                self._refuse(call, reason)
             else:
                 self.session.call_routed(call)
         return self.routes[call_id]
@@ -394,28 +422,33 @@ class TaskRun:
         """Return the not-run output the IM gave a call it refused."""
         return self.refusals[call_id]
 
-    def _refusal(self, call: dict) -> str | None:
-        """Return the not-run output that says why the IM will not run ``call``, or ``None`` when it runs.
+    def _refusal(self, call: dict) -> tuple[str, str] | None:
+        """Return why the IM will not run ``call``, as the reason and the not-run output, or ``None`` when it runs.
 
-        The reasons, in order: a stop or the task's own ``cancel_work``; a function the app and a work tool both name;
-        an app function the ``allowed_tools`` tool choice leaves out; newer input waiting (the commit gate); an app
-        call that repeats the newest call that ran, which this task made and the app answered, with no request since.
+        The reasons, in order: ``stopped``, a stop or the task's own ``cancel_work``; ``after_call``, an app function or
+        ``ask_caller`` while nobody hears the Work, which goes on after the call; ``clash``, a function the app and a
+        work tool both name; ``unlisted``, an app function the ``allowed_tools`` tool choice leaves out; ``not_run``,
+        newer input waiting (the commit gate); ``repeated``, an app call that repeats the newest call that ran, which
+        this task made and the app answered, with no request since.
         """
         texts, name, settings = self.session.texts, call.get("name", ""), self.work.settings
         declared = [tool for tool in settings.tools if tool.get("type") == "function" and tool.get("name") == name]
         if self.stop_reason is not None or self.own_cancel:
-            return texts.stopped_output
+            return "stopped", texts.stopped_output
+        if (declared or name == "ask_caller") and self.work.unheard():
+            return "after_call", texts.after_call_output
         if declared and name in self.work_tools.names:
-            return texts.clash_output
+            return "clash", texts.clash_output
         allowed = allowed_tools(settings.tool_choice)
         if declared and not any(listed(tool, allowed) for tool in declared):
-            return texts.unlisted_output
+            return "unlisted", texts.unlisted_output
         if self.newer_input_waits():
-            return texts.not_run_output
+            return "not_run", texts.not_run_output
         # A Work that took another request may ask for the same call again.
         if not declared or len(self.work.requests) > 1:
             return None
-        return self.session.repeated_output(call, self.task_id)
+        output = self.session.repeated_output(call, self.task_id)
+        return ("repeated", output) if output is not None else None
 
     def _route(self, name: str) -> Route:
         """Return who runs a call the IM lets run: the app for a function the request declared, else the backend."""
@@ -436,13 +469,17 @@ class TaskRun:
         declared = any(tool.get("type") == "function" and tool.get("name") == name for tool in self.work.settings.tools)
         return "app" if declared else "backend"
 
-    def _refuse(self, call: dict) -> None:
-        """Refuse ``call``: its action is ``not_run``, and its output is the not-run output that says why."""
+    def _refuse(self, call: dict, reason: str) -> None:
+        """Refuse ``call``: its action is ``not_run``, and its output is the not-run output that says why.
+
+        Its trace names ``reason``, never the output: a repeated call's output holds the app's earlier answer.
+        """
         call_id = call.get("call_id", "")
         output = self.refusals[call_id]
         self.outputs[call_id] = {"type": "function_call_output", "call_id": call_id, "output": output}
         self.session.action(self, call, "not_run")
         self._step(call_id, "not_run", call.get("name", ""))
+        self.trace("tools.refused", call_id=call_id, name=call.get("name", ""), reason=reason)
 
     def tool_started(self, call: dict, source: str) -> None:
         """Report a backend call as it starts: an ``mcp_call`` item, unless it is one of the IM's control tools."""
@@ -500,13 +537,17 @@ class TaskRun:
         return BoundaryInput(tuple(outputs), steering)
 
     def settle(self, steering: Steering, delivery: Delivery) -> None:
-        """Settle a batch the adapter took: ``applied`` lands it, ``not_applied`` keeps it for later."""
+        """Settle a batch the adapter took: ``applied`` lands it, ``not_applied`` keeps it for later.
+
+        A batch that lands clears the task's question: only the worker can tell whether it answers it.
+        """
         waiting = self.taken.pop(steering.id, None)
         if waiting is None:
             return
         waiting.record.move(delivery)
         if delivery == "applied":
             self.view.join(list(steering.items))
+            self.record.question = None
             self.work.land(waiting.batch)
         else:
             self.steering.appendleft(waiting)
@@ -535,13 +576,31 @@ class TaskRun:
         """Return one line per call it made, with the call's outcome so far."""
         return tuple(self.step_line(call_id) for call_id in self.steps)
 
+    def record_steps(self) -> tuple[str, ...]:
+        """Return the step lines the records show: only the newest ``RECORD_STEPS`` once its Work outlives the call."""
+        lines = self.step_lines()
+        return lines[-RECORD_STEPS:] if self.after_call else lines
+
+    def record_answer(self) -> str | None:
+        """Return the start of its answer as the records show it: only once its Work outlives the call."""
+        answer = self.record.answer
+        return answer[:RECORD_TEXT_CHARS] if self.after_call and answer else None
+
     def summary(self) -> TaskSummary:
         """Return the task as a conductor and the work records read it; an ended task says how it ended."""
         record = self.record
         end = record.ended_at if record.ended_at is not None else time.monotonic()
         seconds = end - record.started_at if record.started_at is not None else 0.0
         return TaskSummary(
-            record.id, record.state, record.brief, self.step_lines(), record.acted, record.progress, seconds
+            record.id,
+            record.state,
+            record.brief,
+            self.record_steps(),
+            record.acted,
+            record.progress,
+            seconds,
+            record.question,
+            self.record_answer(),
         )
 
 
@@ -606,7 +665,9 @@ class WorkRun:
             limit = self.session.settings.work_timeout_seconds
             if limit is not None:
                 self._backstop = asyncio.get_running_loop().call_later(limit, self.stop_soon, AtBackstop())
-            self.session.observe("backend.dequeue", delegation_id=self.carrier, work_id=self.id)
+            self.session.observe(
+                "backend.dequeue", delegation_id=self.carrier, work_id=self.id, continues=self.record.continues
+            )
         task.record.started_at = time.monotonic()
         task.view = self.session.history_for(self, task)
         return self.session.backend.start(task)
@@ -616,18 +677,38 @@ class WorkRun:
         return task_request(self.settings, *self.session.instruction_notes())
 
     def steering_items(self, batch: Batch) -> list[dict]:
-        """Return a batch's requests as a task takes them: the records block and the closing line in the newest one."""
+        """Return a batch's requests as a task takes them: the records block and the closing line in the newest one.
+
+        The records list the batch's requests under this Work, which they join.
+        """
         if not batch.delegations:
             return list(batch.items)
-        return with_parts(batch.items, *self.session.records_parts())
+        return with_parts(batch.items, *self.session.records_parts(joining={self.id: batch.delegations}))
 
     def write(self, action: Callable[[ResponseWriter], None]) -> None:
-        """Write into the carrier's response now, or hold it, in order, until a response of it is in progress."""
+        """Write into the carrier's response now, or hold it, in order, until a response of it is in progress.
+
+        While nobody hears the Work (:meth:`unheard`), what it writes is dropped.
+        """
         writer = self.session.book.running(self.carrier)
         if writer is None or self.held:
-            self.held.append(action)
+            if not self.unheard():
+                self.held.append(action)
             return
         action(writer)
+
+    def unheard(self) -> bool:
+        """Return whether nobody hears the Work now, as after the call's end until a newer request takes it over.
+
+        It outlives the call with no stop asked, the call has ended or its carrier has no open response, and it owes the
+        app no output.
+        """
+        return (
+            self.record.after_call
+            and self.stop_reason is None
+            and (self.session.detached or self.session.book.writer(self.carrier) is None)
+            and not self.parked()
+        )
 
     def flush(self) -> None:
         """Write what was held, in order, while the carrier's response is in progress."""
@@ -657,6 +738,43 @@ class WorkRun:
         if line and self.session.book.writer(self.carrier) is not None:
             self.start_response()
             self.session.book.running(self.carrier).message(line, "final_answer")
+
+    def ask(self, task: TaskRun, question: str) -> None:
+        """Write a task's question as its own ``final_answer`` item, at once or held; the response stays open.
+
+        Once it is written, the task holds it as its open question; a task stopping by then writes nothing.
+        """
+
+        def written(writer: ResponseWriter) -> None:
+            if task.stop_reason is not None or task.own_cancel:
+                return
+            writer.message(question, "final_answer")
+            task.record.question = question
+            task.trace("im.question.written")
+
+        self.write(written)
+
+    def continue_after_call(self, task: TaskRun, message: str) -> str:
+        """Let the Work outlive the call, for a task's ``continue_after_call``; return what the task is told.
+
+        In one step it writes ``message`` as a ``final_answer``, while the response stays open, marks the Work and
+        lifts its backstop. It is refused while the message would be held, for a task that is stopping, and when the
+        session has no room for more work after the call (``IMSession.room_after_call``). A Work marked already writes
+        nothing again.
+        """
+        texts = self.session.texts
+        if self.record.after_call:
+            return texts.continued_output
+        held = self.held or self.session.book.running(self.carrier) is None
+        stopping = task.stop_reason is not None or task.own_cancel
+        if held or stopping or not self.session.room_after_call(self):
+            return texts.not_continued_output
+        self.write(lambda writer: writer.message(message, "final_answer"))
+        self.record.after_call = True
+        if self._backstop is not None:
+            self._backstop.cancel()
+        task.trace("im.work.after_call")
+        return texts.continued_output
 
     def start_response(self) -> None:
         """Put the carrier's open response in progress (once); what was held while it was closed follows."""
@@ -719,8 +837,9 @@ class WorkRun:
         """Steer the open tasks with typed messages that came with outputs; the ``waiting`` tasks take them first.
 
         They are no request: no records block, handover or follow-up Work; untaken, they join the conversation last.
+        They carry ids of their own (``with_ids``).
         """
-        batch = Batch([], list(messages), None)
+        batch = Batch([], with_ids(messages, uid("item")), None)
         first = [task for task in waiting if task.stop_reason is None and not task.ended]
         self._steer(batch, [task for task in self.open_tasks() if task not in first])
         for task in first:
@@ -765,8 +884,16 @@ class WorkRun:
             self._take_over(taker)
 
     def _take_over(self, taker: str) -> None:
-        """Make ``taker`` carry the Work: hand over at once, or later if the carrier's response waits for the app."""
-        if self.session.book.writer(self.carrier) is None:
+        """Make ``taker`` carry the Work: hand over at once, or later if the carrier's response waits for the app.
+
+        A Work that nobody hears (:meth:`unheard`) waits for no app, so ``taker`` takes it over at once. A taker whose
+        call has ended never takes the Work from a carrier that a call hears: it joins the Work and ends
+        ``handed_over``.
+        """
+        if self.session.book.writer(taker) is None and self.session.book.writer(self.carrier) is not None:
+            self.session.ledger.delegations[taker].move("handed_over")
+            return
+        if self.session.book.writer(self.carrier) is None and not self.unheard():
             self.deferred.append(taker)
             return
         self._hand_over(taker)
@@ -897,8 +1024,12 @@ class WorkRun:
         """Return what the ended Work adds to the conversation: its requests, then each task's own items.
 
         A call left without an output gets the one its task holds, else ``texts.owed_output``; untaken typed messages
-        come last.
+        come last. A Work that outlived the call adds its requests, then the answer of each task that answered.
         """
+        if self.record.after_call:
+            items = [item for delegation in self.requests for item in self.session.request_items(delegation)]
+            answers = [task.record.answer for task in self.tasks if task.record.state == "answered"]
+            return items + [output_message(uid("msg"), answer, "final_answer") for answer in answers if answer]
         items = list(self.requested)
         for task in self.tasks:
             if task.view is not None:
@@ -911,19 +1042,32 @@ class WorkRun:
         requests = tuple(Request(d, tuple(self.session.request_items(d))) for d in self.requests)
         tasks = tuple(task.summary() for task in self.tasks)
         end = self.ended_at if self.ended_at is not None else time.monotonic()
-        return WorkSummary(self.id, self.record.state, self.carrier, requests, tasks, end - self.record.queued_at)
+        seconds = end - self.record.queued_at
+        return WorkSummary(self.id, self.record.state, self.carrier, requests, tasks, seconds, self.record.after_call)
 
-    def record_line(self) -> dict:
-        """Return the Work as the records block shows it to the backend: one JSON object."""
-        steps = [line for task in self.tasks for line in task.step_lines()]
+    def record_line(self, joining: Sequence[str] = ()) -> dict:
+        """Return the Work as the records block shows it to the backend: one JSON object.
+
+        A Work that outlives the call says so, and shows the start of each task's answer. ``joining`` names requests
+        that join it with the steer being read, listed after its own.
+        """
+        steps = [line for task in self.tasks for line in task.record_steps()]
         notes = [task.record.progress for task in self.tasks if task.record.progress]
-        texts = [request_text(self.session.request_items(d)) for d in self.requests]
+        questions = [task.record.question for task in self.tasks if task.record.question]
+        answers = [answer for task in self.tasks if (answer := task.record_answer())]
+        texts = [request_text(self.session.request_items(d)) for d in dict.fromkeys([*self.requests, *joining])]
         line: dict[str, Any] = {"work": self.id, "state": self.record.state, "requests": texts, "steps": steps}
         if notes:
             line["progress"] = notes[-1]
+        if questions:
+            line["questions"] = questions
+        if self.record.after_call:
+            line["continues_after_call"] = True
+        if answers:
+            line["answers"] = answers
         return line
 
 
 def brief_message(template: str, brief: str) -> dict:
-    """Return a conductor's brief for one task, as ``texts.task_line`` in a user message of its own."""
-    return user_message(template.format(task=brief))
+    """Return a conductor's brief for one task, as ``texts.task_line`` in a user message of its own, with its own id."""
+    return {**user_message(template.format(task=brief)), "id": uid("msg")}
