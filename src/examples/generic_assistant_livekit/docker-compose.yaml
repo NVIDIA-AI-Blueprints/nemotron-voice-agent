@@ -107,7 +107,7 @@ services:
     volumes:
       - ../../../services.yaml:/app/services.yaml:ro
       - ./:/app/src/examples/generic_assistant_livekit:ro
-      - livekit_state:/state:ro
+      - livekit_state:/state
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: cloud
@@ -127,7 +127,7 @@ services:
     volumes:
       - ../../../services.yaml:/app/services.yaml:ro
       - ./:/app/src/examples/generic_assistant_livekit:ro
-      - livekit_state:/state:ro
+      - livekit_state:/state
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: server
@@ -147,7 +147,7 @@ services:
     volumes:
       - ../../../services.yaml:/app/services.yaml:ro
       - ./:/app/src/examples/generic_assistant_livekit:ro
-      - livekit_state:/state:ro
+      - livekit_state:/state
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: single-gpu

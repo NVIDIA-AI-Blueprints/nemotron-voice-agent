@@ -171,11 +171,11 @@ src/examples/generic_assistant_livekit/run.sh clean --image -y   # all profiles,
 
 ## Voice Selection
 
-After you connect, the **Voice** list shows the voices that the TTS server offers. Select one to switch. The agent uses it from the next reply and says a short sample, which does not enter the conversation history.
+The **Voice** list shows the voices that the TTS server offers. Choose a voice before you connect, and the session starts with it. You can also change it during the session: the agent uses the new voice from its next reply and says a short sample, which does not enter the conversation history.
 
-- **Discovery:** the agent asks the TTS server for its voices when a session starts. This works for NVIDIA Cloud, the Magpie NIM, and NeMo-Speech.cpp. If the server cannot be asked, the list has only the default voice.
+- **Discovery:** when the agent worker starts, it asks the TTS server for its voices and publishes the list to the `livekit_state` volume. It retries until the server answers, so the list appears after the speech server finishes loading. The UI shows `Loading voices…` until then. This works for NVIDIA Cloud, the Magpie NIM, and NeMo-Speech.cpp.
 - **Language and default:** the list shows voices for the catalog entry's language, `en-US` by default. The default voice is `voice_id` in `services.yaml` (refer to [Configure TTS](../../../docs/how-to/configure-tts.md#voices--emotions)).
-- **Validation:** the agent ignores any voice that the server did not list.
+- **Validation:** the UI server and the agent ignore any voice that the server did not list.
 - **Scope:** the choice applies to the current session only.
 
 ## Remote Browser Access
@@ -200,7 +200,7 @@ SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or inter
 | `tools.py`, `tool_wrapper.py` | Weather and date tool logic, and the wrapper that reports tool calls to the UI |
 | `voices.py` | Lists the voices a speech server offers, and validates voice-change requests |
 | `credentials.py` | Generates the LiveKit key and secret and the server config |
-| `ui_server.py`, `ui/` | Web UI and the join-token endpoint |
+| `ui_server.py`, `ui/` | Web UI, the join-token endpoint, and the voice list endpoint |
 | `run.sh` | Helper script to start, wait for, stop, and clean up a profile |
 | `docker-compose.yaml`, `Dockerfile`, `.env.example` | Services, image, and environment template |
 | `pyproject.toml`, `uv.lock` | Example-only dependencies |

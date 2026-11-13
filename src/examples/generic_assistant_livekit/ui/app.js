@@ -115,7 +115,8 @@ function showModels(models) {
 async function connect() {
   $('connect').disabled = true;
   setStatus('Requesting token…');
-  const { token } = await (await fetch('/token')).json();
+  const voice = voicesLoaded ? `?voice=${encodeURIComponent($('voice').value)}` : '';
+  const { token } = await (await fetch(`/token${voice}`)).json();
   room = new Room({ adaptiveStream: true, dynacast: true });
 
   room.registerTextStreamHandler('lk.transcription', onTranscription);
@@ -154,30 +155,41 @@ async function connect() {
   $('meter').classList.remove('hidden');
 }
 
-// The voices the agent's speech server offers, reported when the session starts. Picking one sends a command to the
-// agent, which uses the new voice from its next reply and says a short sample.
+// The voices the TTS server offers. The agent worker publishes them when it starts, so the list is available before you
+// connect. Choosing a voice before connecting sets the voice for the whole session. Choosing one during a session sends
+// a command to the agent, which uses the new voice from its next reply and says a short sample.
+let voicesLoaded = false;
+
 function showVoices(voices, current) {
   const select = $('voice');
   select.innerHTML = '';
   for (const voice of voices) select.add(new Option(voice.name, voice.id, false, voice.id === current));
   select.disabled = voices.length < 2;
   select.title = voices.length < 2 ? 'The speech server offers one voice' : '';
+  voicesLoaded = voices.length > 0;
+}
+
+async function loadVoices() {
+  $('voice').innerHTML = '<option>Loading voices…</option>';
+  $('voice').disabled = true;
+  for (let attempt = 0; attempt < 45; attempt++) {  // the speech server can still be loading models
+    try {
+      const { voices, default: current } = await (await fetch('/voices')).json();
+      if (voices.length) { showVoices(voices, current); return; }
+    } catch (e) { /* retry */ }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  $('voice').innerHTML = '<option>Default voice (list unavailable)</option>';
 }
 
 $('voice').onchange = async () => {
-  if (!room) return;
+  if (!room) return;  // before connecting, the choice is sent with the join token
   const message = JSON.stringify({ type: 'set_voice', voice: $('voice').value });
   await room.localParticipant.publishData(new TextEncoder().encode(message), { reliable: true, topic: CONTROL_TOPIC });
 };
 
-function resetVoices() {
-  $('voice').innerHTML = '<option>Connect to choose a voice</option>';
-  $('voice').disabled = true;
-}
-
 function reset() {
   room = null;
-  resetVoices();
   $('connect').textContent = 'Connect';
   $('connect').classList.replace('danger', 'primary');
   $('connect').disabled = false;
@@ -187,6 +199,7 @@ function reset() {
   setStatus('Disconnected');
 }
 
+loadVoices();
 $('connect').onclick = () => (room ? room.disconnect() : connect());
 $('mute').onclick = async () => {
   const on = room.localParticipant.isMicrophoneEnabled;

@@ -5,7 +5,14 @@
 
 import json
 
-from examples.generic_assistant_livekit.voices import parse_set_voice, parse_voices, with_current
+from examples.generic_assistant_livekit.voices import (
+    choose_voice,
+    parse_set_voice,
+    parse_voices,
+    read_voices_file,
+    with_current,
+    write_voices_file,
+)
 
 
 def test_magpie_multilingual_returns_only_the_requested_language():
@@ -91,3 +98,33 @@ def test_set_voice_ignores_other_and_malformed_messages():
     assert parse_set_voice(b"not json", allowed) is None
     assert parse_set_voice(b"\xff\xfe", allowed) is None
     assert parse_set_voice(None, allowed) is None
+
+
+def test_choose_voice_uses_only_listed_voices():
+    available = ["Magpie-Multilingual.EN-US.Aria", "Magpie-Multilingual.EN-US.Mia"]
+    assert choose_voice("Magpie-Multilingual.EN-US.Mia", available, "default") == "Magpie-Multilingual.EN-US.Mia"
+    assert choose_voice("Magpie-Multilingual.EN-US.Evil", available, "default") == "default"
+    assert choose_voice(None, available, "default") == "default"
+    assert choose_voice(["Aria"], available, "default") == "default"
+
+
+def test_voices_file_round_trip_is_atomic_and_readable(tmp_path):
+    path = tmp_path / "state" / "voices.json"
+    voices = [{"id": "Aria", "name": "Aria"}, {"id": "Mia", "name": "Mia"}]
+    write_voices_file(path, voices, "Aria")
+    assert read_voices_file(path) == {"voices": voices, "default": "Aria"}
+    assert [p.name for p in path.parent.iterdir()] == ["voices.json"]  # no temporary files left behind
+    write_voices_file(path, voices[:1], "Aria")
+    assert read_voices_file(path)["voices"] == voices[:1]
+
+
+def test_reading_a_missing_or_broken_voices_file_returns_an_empty_list(tmp_path):
+    empty = {"voices": [], "default": ""}
+    assert read_voices_file(tmp_path / "missing.json") == empty
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    assert read_voices_file(bad) == empty
+    bad.write_text(json.dumps({"voices": "nope"}))
+    assert read_voices_file(bad) == empty
+    bad.write_text(json.dumps({"voices": [{"id": "x"}, {"id": "Aria", "name": "Aria"}, 7], "default": "Aria"}))
+    assert read_voices_file(bad)["voices"] == [{"id": "Aria", "name": "Aria"}]

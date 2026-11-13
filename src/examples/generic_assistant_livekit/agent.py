@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Literal
@@ -22,7 +23,15 @@ from .config import AgentConfig, load_config
 from .credentials import apply_to_environ
 from .tool_wrapper import traced_tool
 from .tools import current_datetime, current_weather
-from .voices import fetch_synthesis_params, parse_set_voice, parse_voices, with_current
+from .voices import (
+    VOICES_FILE,
+    choose_voice,
+    fetch_synthesis_params,
+    parse_set_voice,
+    parse_voices,
+    with_current,
+    write_voices_file,
+)
 
 log = logging.getLogger("generic-assistant-livekit")
 
@@ -91,7 +100,7 @@ class SwitchableTTS(nvidia.TTS):
         self._opts.voice = voice
 
 
-def discover_voices(cfg: AgentConfig) -> list[dict[str, str]]:
+def discover_voices(cfg: AgentConfig, quiet: bool = False) -> list[dict[str, str]]:
     """Return the voices the TTS server offers for the session language. Empty when the server cannot be asked."""
     try:
         params = fetch_synthesis_params(
@@ -102,16 +111,16 @@ def discover_voices(cfg: AgentConfig) -> list[dict[str, str]]:
         )
         return parse_voices(params, cfg.tts_language)
     except Exception as exc:
-        log.warning("could not list TTS voices: %s", exc)
+        (log.debug if quiet else log.warning)("could not list TTS voices: %s", exc)
         return []
 
 
-def build_tts(cfg: AgentConfig) -> SwitchableTTS:
-    """Build the TTS client."""
+def build_tts(cfg: AgentConfig, voice: str | None = None) -> SwitchableTTS:
+    """Build the TTS client. `voice` overrides the catalog default."""
     return SwitchableTTS(
         server=cfg.tts_server,
         use_ssl=cfg.hosted,
-        voice=cfg.tts_voice,
+        voice=voice or cfg.tts_voice,
         function_id=cfg.tts_function_id,
         language_code=cfg.tts_language,
         sample_rate=cfg.tts_sample_rate,
@@ -130,13 +139,34 @@ def build_llm(cfg: AgentConfig) -> openai.LLM:
     )
 
 
+def publish_voices(cfg: AgentConfig, state_dir: Path, retry_s: float = 10, refresh_s: float = 300) -> None:
+    """Keep the state volume's voice list current, so the UI can offer voices before a session starts.
+
+    Runs in a thread of the worker process. It retries until the TTS server answers, because the server can still be
+    loading models when the worker starts, and it removes a list left by another profile first.
+    """
+    path = state_dir / VOICES_FILE
+    try:
+        path.unlink(missing_ok=True)
+        while True:
+            voices = discover_voices(cfg, quiet=True)
+            if voices:
+                write_voices_file(path, with_current(voices, cfg.tts_voice), cfg.tts_voice)
+                time.sleep(refresh_s)
+            else:
+                time.sleep(retry_s)
+    except OSError as exc:
+        log.warning("cannot publish the voice list to %s: %s", state_dir, exc)
+
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     """Join the room, wire the cascaded pipeline, and greet the user."""
     cfg = load_config()
     prompt = load_prompt()
+    voices_task = asyncio.ensure_future(asyncio.to_thread(discover_voices, cfg))
     await ctx.connect()
-    await ctx.wait_for_participant()
+    participant = await ctx.wait_for_participant()
 
     def emit(kind: str, **data) -> None:
         payload = json.dumps({"type": kind, "ts": time.time(), **data}).encode()
@@ -147,8 +177,11 @@ async def entrypoint(ctx: JobContext):
             lambda t: t.cancelled() or t.exception() and log.warning("event publish failed: %s", t.exception())
         )
 
-    tts = build_tts(cfg)
-    voices_task = asyncio.ensure_future(asyncio.to_thread(discover_voices, cfg))
+    # The voice chosen in the UI before connecting arrives as a participant attribute. Only listed voices are used.
+    voices = with_current(await voices_task, cfg.tts_voice)
+    names = {voice["id"]: voice["name"] for voice in voices}
+    chosen = choose_voice(participant.attributes.get("voice"), names, cfg.tts_voice)
+    tts = build_tts(cfg, chosen)
     session = AgentSession(vad=silero.VAD.load(), stt=build_stt(cfg), llm=build_llm(cfg), tts=tts)
 
     @session.on("agent_state_changed")
@@ -167,8 +200,6 @@ async def entrypoint(ctx: JobContext):
 
     agent = Agent(instructions=prompt["content"], tools=[traced_tool(fn, emit) for fn in TOOLS])
     await session.start(agent=agent, room=ctx.room)
-    voices = with_current(await voices_task, cfg.tts_voice)
-    names = {voice["id"]: voice["name"] for voice in voices}
     emit("session", recipe=cfg.recipe, models=cfg.models())
     emit("voices", voices=voices, current=tts._opts.voice)
 
@@ -187,4 +218,10 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
+    # Only the main worker process runs this block, not the job processes that import the module.
+    threading.Thread(
+        target=publish_voices,
+        args=(load_config(), Path(os.environ.get("LIVEKIT_STATE_DIR", "/state"))),
+        daemon=True,
+    ).start()
     cli.run_app(server)

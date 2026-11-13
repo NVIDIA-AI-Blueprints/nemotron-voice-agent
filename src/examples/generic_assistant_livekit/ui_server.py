@@ -11,13 +11,29 @@ import uuid
 from datetime import timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from livekit import api
 
-from .credentials import apply_to_environ
+from .credentials import DEFAULT_STATE_DIR, apply_to_environ
+from .voices import VOICES_FILE, choose_voice, read_voices_file
 
 PUBLIC = Path(__file__).with_name("ui")
+
+
+def voices_path() -> Path:
+    """Return the voice list that the agent worker publishes into the state volume."""
+    return Path(os.environ.get("LIVEKIT_STATE_DIR", DEFAULT_STATE_DIR)) / VOICES_FILE
+
+
+def send_json(handler: SimpleHTTPRequestHandler, payload: dict) -> None:
+    """Send a JSON response."""
+    body = json.dumps(payload).encode()
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -33,23 +49,26 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
-        """Route /token to the token endpoint and everything else to static files."""
-        if urlsplit(self.path).path != "/token":
+        """Serve /voices and /token, and static files for everything else."""
+        url = urlsplit(self.path)
+        if url.path == "/voices":
+            return send_json(self, read_voices_file(voices_path()))
+        if url.path != "/token":
             return super().do_GET()
+        listed = read_voices_file(voices_path())
+        requested = parse_qs(url.query).get("voice", [None])[0]
+        voice = choose_voice(requested, [v["id"] for v in listed["voices"]], "")
         room = f"voice-{uuid.uuid4().hex[:8]}"  # a new room each time, so the agent dispatches per session
+        grants = api.VideoGrants(room_join=True, room=room)
         token = (
             api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
             .with_identity(f"user-{uuid.uuid4().hex[:6]}")
-            .with_grants(api.VideoGrants(room_join=True, room=room))
+            .with_attributes({"voice": voice} if voice else {})  # the agent reads the chosen voice when it joins
+            .with_grants(grants)
             .with_ttl(timedelta(hours=1))
             .to_jwt()
         )
-        body = json.dumps({"token": token, "room": room}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        send_json(self, {"token": token, "room": room})
 
 
 def main() -> None:
