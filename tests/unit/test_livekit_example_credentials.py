@@ -84,3 +84,12 @@ def test_a_damaged_credentials_file_is_replaced_with_a_new_pair(tmp_path):
         creds = credentials.load_or_create(tmp_path, env={})
         assert creds["api_key"].startswith("lk") and len(creds["api_secret"]) >= 32
         assert json.loads((tmp_path / credentials.CREDENTIALS_FILE).read_text()) == creds
+
+
+def test_apply_to_environ_refuses_empty_or_damaged_stored_credentials(tmp_path):
+    for damaged in ("{not json", json.dumps({"api_key": "", "api_secret": ""}), json.dumps({"api_key": "only-key"})):
+        (tmp_path / credentials.CREDENTIALS_FILE).write_text(damaged)
+        environ = {}
+        with pytest.raises(RuntimeError, match="empty or damaged"):
+            credentials.apply_to_environ(tmp_path, environ)
+        assert environ == {}  # nothing blank was loaded

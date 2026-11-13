@@ -85,7 +85,9 @@ def apply_to_environ(state_dir: Path | None = None, environ: MutableMapping[str,
     path = state_dir / CREDENTIALS_FILE
     if not path.exists():
         raise RuntimeError(f"LiveKit credentials not found at {path}. Start the livekit-init service first.")
-    creds = json.loads(path.read_text())
+    creds = _read_credentials(path)
+    if creds is None:  # damaged or empty: livekit-init replaces such a file the next time it runs
+        raise RuntimeError(f"LiveKit credentials in {path} are empty or damaged. Run the livekit-init service again.")
     environ["LIVEKIT_API_KEY"] = creds["api_key"]
     environ["LIVEKIT_API_SECRET"] = creds["api_secret"]
 
