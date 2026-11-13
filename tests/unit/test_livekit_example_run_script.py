@@ -145,14 +145,26 @@ case "$args" in
       case "$args" in *"ps -q $svc"*) echo "id-$svc" ;; esac
     done ;;
   *"ps -q"*) echo abc123 ;;
-  *"inspect"*"Health.Status"*)
-    n=$(cat "$counter" 2>/dev/null || echo 0)
-    echo $((n + 1)) > "$counter"
-    set -- $FAKE_HEALTH
-    shift $n 2>/dev/null || true
-    echo "${1:-${FAKE_HEALTH##* }}" ;;
-  *"inspect"*".State.Status"*) echo "${FAKE_STATE_STATUS:-running}" ;;
-  *"inspect"*".Name"*) echo /livekit-nvidia-llm-vllm ;;
+  *"inspect"*)
+    id="${args##* }"; svc="${id#id-}"
+    case "$args" in
+      *"Health.Status"*)
+        case " ${FAKE_HEALTH_SERVICES:-livekit-nvidia-llm-vllm} " in
+          *" $svc "*)
+            n=$(cat "$counter" 2>/dev/null || echo 0)
+            echo $((n + 1)) > "$counter"
+            set -- $FAKE_HEALTH
+            shift $n 2>/dev/null || true
+            echo "${1:-${FAKE_HEALTH##* }}" ;;
+          *) echo "" ;;
+        esac ;;
+      *".State.ExitCode"*) [ "$svc" = livekit-init ] && echo "${FAKE_INIT_EXIT:-0}" || echo 137 ;;
+      *".State.Status"*)
+        if [ "$svc" = livekit-init ]; then echo "${FAKE_INIT_STATE:-exited}"
+        else case " $FAKE_STOPPED " in *" $svc "*) echo exited ;; *) echo "${FAKE_STATE_STATUS:-running}" ;; esac
+        fi ;;
+      *".Name"*) echo "/$svc" ;;
+    esac ;;
   *"logs --tail 1"*) echo "Loading weights took 12.3 seconds" ;;
 esac
 exit 0
@@ -219,6 +231,39 @@ def test_wait_does_not_report_ready_while_a_service_has_no_container(tmp_path):
     assert result.returncode != 0
     assert "livekit-nemo-speech: not created" in result.stderr
     assert "Ready to connect" not in result.stderr
+
+
+SINGLE_GPU_SERVICES = "livekit-init livekit-server livekit-nvidia-llm-vllm livekit-nemo-speech livekit-agent-single-gpu"
+
+
+def test_wait_succeeds_when_every_container_runs_and_init_has_exited(tmp_path):
+    result = run_wait(tmp_path, "healthy", timeout="5", FAKE_SERVICES=SINGLE_GPU_SERVICES)
+    assert result.returncode == 0, result.stderr
+    assert "Ready to connect" in result.stderr
+
+
+@pytest.mark.parametrize("stopped", ["livekit-nemo-speech", "livekit-agent-single-gpu", "livekit-server"])
+def test_wait_flags_a_stopped_container_even_without_a_health_check(tmp_path, stopped):
+    # The speech sidecar, the agent, and the LiveKit server have no health check, so only their state shows a crash.
+    # The agent's log can still contain "registered worker" after it stops.
+    result = run_wait(tmp_path, "healthy", timeout="1", FAKE_SERVICES=SINGLE_GPU_SERVICES, FAKE_STOPPED=stopped)
+    assert result.returncode != 0
+    assert f"{stopped} is exited" in result.stderr
+    assert "Ready to connect" not in result.stderr
+
+
+@pytest.mark.parametrize(("init_state", "init_exit"), [("exited", "1"), ("running", "0")])
+def test_wait_requires_livekit_init_to_finish_successfully(tmp_path, init_state, init_exit):
+    result = run_wait(
+        tmp_path,
+        "healthy",
+        timeout="1",
+        FAKE_SERVICES=SINGLE_GPU_SERVICES,
+        FAKE_INIT_STATE=init_state,
+        FAKE_INIT_EXIT=init_exit,
+    )
+    assert result.returncode != 0
+    assert "livekit-init: has not finished setting up LiveKit" in result.stderr
 
 
 def test_wait_lists_stopped_containers_too(tmp_path):

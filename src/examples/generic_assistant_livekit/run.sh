@@ -351,7 +351,7 @@ cmd_logs() {
 cmd_wait() {
   [ $# -ge 1 ] || usage
   require_docker
-  local name="$1" timeout="${2:-3600}" p start now ids id svc status state pending detail cname last label unready hinted=0
+  local name="$1" timeout="${2:-3600}" p start now id svc status state code pending cname last label unready hinted=0
   p="$(profile_name "$name")"
   start="$(date +%s)"
   info "Waiting up to ${timeout}s for the $name profile to become healthy (progress every ${WAIT_INTERVAL:-15}s)..."
@@ -360,27 +360,32 @@ cmd_wait() {
     return 0
   fi
   while true; do
-    ids=""
     pending=""
     unready=0
-    # List every service of the profile with `ps -a`, so a stopped or never-created container cannot be skipped.
+    # Check every service of the profile, stopped ones included (`ps -a`). Only livekit-init may be stopped, and only
+    # after it exits successfully. A container without a health check must still be running, so a crashed sidecar or
+    # agent cannot pass as ready.
     for svc in $(dc_quiet --profile "$p" config --services); do
       id="$(dc_quiet --profile "$p" ps -a -q "$svc" | head -n 1)"
       if [ -z "$id" ]; then
         pending="$pending
   - $svc: not created"
-      else
-        ids="$ids $id"
+        continue
       fi
-    done
-    for id in $ids; do
-      status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id")"
       state="$(docker inspect -f '{{.State.Status}}' "$id")"
       cname="$(docker inspect -f '{{.Name}}' "$id" | sed 's#^/##')"
-      if [ "$state" = restarting ] || { [ "$state" = exited ] && [ -n "$status" ]; }; then
-        detail="$cname is $state. Check: $0 logs $name"
+      if [ "$svc" = livekit-init ]; then
+        code="$(docker inspect -f '{{.State.ExitCode}}' "$id")"
+        if [ "$state" != exited ] || [ "$code" != 0 ]; then
+          pending="$pending
+  - $cname: has not finished setting up LiveKit ($state, exit code $code). Check: $0 logs $name init"
+        fi
+        continue
+      fi
+      status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id")"
+      if [ "$state" != running ]; then
         pending="$pending
-  - $detail"
+  - $cname is $state. Check: $0 logs $name"
       elif [ -n "$status" ] && [ "$status" != healthy ]; then
         label="starting"
         if [ "$status" = unhealthy ]; then label="not ready yet"; unready=1; fi
