@@ -127,6 +127,11 @@ def answer_text(event):
     return message_text(messages[-1]) if messages else None
 
 
+def without_ids(items):
+    """Return ``items`` with no ``id`` fields, to compare messages with what their sender wrote."""
+    return [{key: value for key, value in item.items() if key != "id"} for item in items]
+
+
 def records_of(message):
     """Return the work records a request's message carries, one per line of its records block."""
     head = TEXTS.records_block.split("{records}")[0]
@@ -565,6 +570,23 @@ class WorkTool(ScriptStep):
             run.routes += [run.task.route(later) for later in self.later]
 
 
+QUESTION = "Which coffee would you like: espresso, latte, cappuccino or cold brew?"
+MESSAGE = "This takes a while; I will keep at it after we hang up."
+MARK = WorkTool("continue_after_call", {"message": MESSAGE})
+
+
+def asking(question=QUESTION):
+    """Return a round that asks the caller ``question`` with the ``ask_caller`` work tool."""
+    return WorkTool("ask_caller", {"question": question})
+
+
+def marks(session):
+    """Return what each continue_after_call that returned told its task, in order."""
+    return [
+        each.output for each in session.ledger.actions.values() if each.name == "continue_after_call" and each.ended
+    ]
+
+
 @dataclass
 class _Wait(ScriptStep):
     event: asyncio.Event
@@ -694,7 +716,7 @@ class ScriptedAdapter:
         self.scripts, self.run, self.max_running = list(scripts), run, max_running
         self._conductor = conductor if conductor is not None else SteerOpenWork()
         self.delivery, self.stop_outcome, self.stop_delay = delivery, stop_outcome, stop_delay
-        self.runs, self.closed = [], False
+        self.runs, self.closed, self.released = [], False, 0
 
     def conductor(self):
         return self._conductor
@@ -704,8 +726,24 @@ class ScriptedAdapter:
         self.runs.append(self.run(self, task, script(task) if callable(script) else script))
         return self.runs[-1]
 
+    def release_idle(self):
+        self.released += 1
+
     async def close(self):
         self.closed = True
+
+
+class ClosesWhenLetGo(ScriptedAdapter):
+    """A scripted adapter whose close runs until the test lets it end."""
+
+    def __init__(self, *scripts, **options):
+        super().__init__(*scripts, **options)
+        self.may_close, self.closes = asyncio.Event(), 0
+
+    async def close(self):
+        self.closes += 1
+        await self.may_close.wait()
+        await super().close()
 
 
 class StartEach:
@@ -770,37 +808,63 @@ class Wire:
             yield self
 
 
+async def turns(count=30):
+    """Let every task that is ready take its next steps."""
+    for _ in range(count):
+        await asyncio.sleep(0)
+
+
+async def until(predicate, what, timeout=4.0):
+    """Wait until ``predicate()`` holds; after ``timeout`` seconds, fail the test naming ``what``."""
+    try:
+        async with asyncio.timeout(timeout):
+            while not predicate():
+                await asyncio.sleep(0.01)
+    except TimeoutError:
+        raise AssertionError(f"timed out waiting for {what}") from None
+
+
 class IMCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.wire = self.enterContext(Wire().recording())
         self.traces = []
 
-    def session(self, adapter, *, texts=TEXTS, **changes):
+    def session(self, adapter, *, texts=TEXTS, continuable=False, **changes):
         """Start an IM session on ``adapter`` with the core's settings, which ``changes`` override, and ``texts``.
 
-        ``changes`` may also give the session's ``result_format`` and ``output_steps``.
+        ``changes`` may also give the session's ``result_format``, ``output_steps`` and ``renew``, which returns
+        ``adapter`` again unless told. ``continuable`` opts the conversation in to keep its work after its call, as a
+        Live session's ``store: true`` does.
         """
-        options = {name: changes.pop(name) for name in ("result_format", "output_steps") if name in changes}
+        options = {name: changes.pop(name) for name in ("result_format", "output_steps", "renew") if name in changes}
+        options.setdefault("renew", lambda: adapter)
         # A test's last close does not wait for the runs it left hanging.
         changes.setdefault("close_grace_seconds", 0.01)
         settings = CORE_SETTINGS.delegation.model_copy(update=changes)
         observe = lambda kind, **fields: self.traces.append((kind, fields))  # noqa: E731
         im = IMSession(adapter, DEFAULTS, settings, texts, **options, observe=observe)
+        im.continuable = continuable
         im.start()
         self.addAsyncCleanup(im.close)
         return im
 
+    def traced(self, kind):
+        """Return the fields of each trace of ``kind``, in order."""
+        return [fields for each, fields in self.traces if each == kind]
+
+    async def hang_up(self, im):
+        """End the call as the gateway's DELETE does; return whether the session is kept for a later call."""
+        return await asyncio.wait_for(im.leave(), 2)
+
+    async def call_again(self, im):
+        """Attach a later call to a session kept for one."""
+        await asyncio.wait_for(im.attach(), 2)
+
     async def turns(self, count=30):
-        for _ in range(count):
-            await asyncio.sleep(0)
+        await turns(count)
 
     async def until(self, predicate, what, timeout=4.0):
-        try:
-            async with asyncio.timeout(timeout):
-                while not predicate():
-                    await asyncio.sleep(0.01)
-        except TimeoutError:
-            raise AssertionError(f"timed out waiting for {what}") from None
+        await until(predicate, what, timeout)
 
     async def admit_each(self, im, *requests, settings=None):
         """Admit one request per text as D1, D2 ..., letting everything ready run after each; return their streams."""

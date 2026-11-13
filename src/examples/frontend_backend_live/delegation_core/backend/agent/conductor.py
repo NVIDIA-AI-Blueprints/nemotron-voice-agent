@@ -50,7 +50,7 @@ class LlmConductor:
         self.memory = ConductorMemory(settings.memory_tokens)
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
-        """Place the new requests that the model's calls name; the IM's steer rule places any left.
+        """Place the new requests that the model's calls name; the IM's fallback rule places any left.
 
         A round that fails, times out or whose ``place`` raises is logged as ``conductor.failed``; only a cancel raises.
         """
@@ -76,8 +76,11 @@ class LlmConductor:
         if provider is not None:
             await provider.close()
 
-    def payload(self, given: ConductorInput, decision_round: DecisionRound) -> dict:
-        """Build the round's request: the instructions, the memory, this round's input and the control tools."""
+    def payload(self, decision_round: DecisionRound) -> dict:
+        """Build the round's request: the instructions, the memory, this round's input and the control tools.
+
+        It sets no output limit: the model's catalog entry sets it, as for every call of that model.
+        """
         payload = {
             "model": self.model,
             "instructions": self.vocabulary.instructions(self.max_running),
@@ -85,7 +88,6 @@ class LlmConductor:
             "tools": self.vocabulary.conductor_tools(),
             "tool_choice": TOOL_CHOICE,
             "parallel_tool_calls": PARALLEL_TOOL_CALLS,
-            "max_output_tokens": self.settings.max_output_tokens_per_request * len(given.arrivals),
         }
         if self.settings.reasoning_effort is not None:
             payload["reasoning"] = {"effort": self.settings.reasoning_effort}
@@ -93,7 +95,7 @@ class LlmConductor:
 
     async def _ask(self, given: ConductorInput, decision_round: DecisionRound, place: Place) -> None:
         """Make one model call, placing each finished call at once; only the wait for the model is timed."""
-        payload = self.payload(given, decision_round)
+        payload = self.payload(decision_round)
         logger.debug(
             "conductor.request model={} requests={} memory_items={}",
             self.model,

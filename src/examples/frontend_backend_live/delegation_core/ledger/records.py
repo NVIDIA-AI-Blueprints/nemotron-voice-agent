@@ -53,9 +53,9 @@ class Record:
 
 @dataclass(eq=False)
 class Session(Record):
-    """One IM session: ``active`` from its start, ``ended`` once it closed."""
+    """One IM session: ``active`` while a call is attached, ``detached`` while it waits for a later call, ``ended``."""
 
-    MOVES = moves(active=("ended",), ended=())
+    MOVES = moves(active=("detached", "ended"), detached=("active", "ended"), ended=())
     START = "active"
 
 
@@ -63,7 +63,7 @@ class Session(Record):
 class Delegation(Record):
     """One delegation: one request and the responses that answer it; its id is ``metadata.live_delegation_id``."""
 
-    # It never fails while queued: an arrival no decision placed is placed by the steer rule.
+    # It never fails while queued: an arrival no decision placed is placed by the IM's fallback rule.
     MOVES = moves(
         queued=("running", "answered", "handed_over", "cancelled"),
         running=("waiting_client", "answered", "handed_over", "failed", "cancelled"),
@@ -78,6 +78,8 @@ class Delegation(Record):
     input: list[dict] = field(default_factory=list)
     settings: dict = field(default_factory=dict)
     work: str = ""
+    # The tasks of its Work that it joined, once placed.
+    tasks: tuple[str, ...] = ()
     responses: list[str] = field(default_factory=list)
 
 
@@ -131,6 +133,9 @@ class Task(Record):
     brief: str | None = None
     acted: bool = False
     progress: str | None = None
+    question: str | None = None
+    # The text of its answer, once it answered.
+    answer: str | None = None
     started_at: float | None = None
     ended_at: float | None = None
     stop: Stop = field(init=False)
@@ -161,13 +166,17 @@ class Work(Record):
     settings: dict = field(default_factory=dict)
     tasks: list[Task] = field(default_factory=list)
     queued_at: float = field(default_factory=time.monotonic)
+    # The Work or task (W1, W1.2) whose thread it continues, by the IM's placement; None for a new thread.
+    continues: str | None = None
+    # Set once a task's continue_after_call was written: the Work goes on after the call ends.
+    after_call: bool = False
 
 
 @dataclass(eq=False)
 class Steering(Record):
     """Requests that joined a running or waiting task and wait for its next safe point; its ids are S1, S2 ..."""
 
-    # Unapplied when its task ends, it goes follow_up: its requests start a follow-up Work, so nothing said is lost.
+    # Unapplied when its task ends, it goes follow_up: its requests start a follow-up Work, unless their call has ended.
     MOVES = moves(
         waiting=("taken", "follow_up"),
         taken=("applied", "not_applied", "follow_up"),

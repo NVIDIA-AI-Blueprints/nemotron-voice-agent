@@ -118,6 +118,16 @@ class BackendConfig(StrictModel):
     text: TextConfig | None = None
     service_tier: Literal["auto", "default", "fast_tier_temp_pilot", "flex", "priority", "ultrafast"] | None = "auto"
     max_output_tokens: int | None = Field(default=None, ge=16)
+    # This server's own field: the core conversation a store: true session continues, set at the start only.
+    conversation: str | None = None
+
+    @field_validator("conversation")
+    @classmethod
+    def named_conversation(cls, value: str | None) -> str | None:
+        """Refuse a blank conversation id."""
+        if value is not None and not value.strip():
+            raise ValueError("conversation must not be blank")
+        return value
 
     @model_validator(mode="after")
     def size_limit(self):
@@ -146,6 +156,7 @@ class BackendConfig(StrictModel):
 # A session.update merges these objects key by key, so a new reasoning.effort keeps its summary; an object tool_choice
 # is replaced whole, since its shapes differ by type.
 MERGED = frozenset({"reasoning", "text"})
+CONVERSATION_PARAM = "session.delegation.responses.conversation"
 
 
 def _merged(current: dict, patch: dict) -> dict:
@@ -211,7 +222,14 @@ class ResponsesDelegationConfig(StrictModel):
         changes = _delegation_changes(patch, self.type)
         current = self.model_dump()
         if isinstance(changes.get("responses"), dict):
-            changes["responses"] = _merged(current["responses"], changes["responses"])
+            responses = changes["responses"]
+            if "conversation" in responses and responses["conversation"] != self.responses.conversation:
+                raise ProtocolError(
+                    "delegation.responses.conversation cannot change after startup",
+                    "immutable_field_update",
+                    CONVERSATION_PARAM,
+                )
+            changes["responses"] = _merged(current["responses"], responses)
         return type(self).model_validate({**current, **changes})
 
 
@@ -278,6 +296,14 @@ class SessionConfig(StrictModel):
         if value:
             raise ValueError("Decisions triggers are not supported by this server")
         return value
+
+    @model_validator(mode="after")
+    def stored_conversation(self):
+        """Refuse a conversation to continue unless the session sets ``store: true``, as its own opt-in."""
+        responses = self.delegation.responses
+        if responses is not None and responses.conversation is not None and not self.store:
+            raise ProtocolError("delegation.responses.conversation needs store: true", param=CONVERSATION_PARAM)
+        return self
 
     @field_validator("delegation", mode="before")
     @classmethod

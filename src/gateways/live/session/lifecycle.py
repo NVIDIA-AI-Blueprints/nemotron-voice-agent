@@ -29,20 +29,33 @@ FRONTEND_CLOSE_SECONDS = 10
 
 
 async def start(session: LiveProtocolSession, client_event_id: str | None) -> None:
-    """Open the delegation part, start the frontend adapter, then announce ``session.started``."""
+    """Open the delegation part, start the frontend adapter, then announce ``session.started``.
+
+    A ``ProtocolError`` of the delegation part's open, such as a refused conversation or a core that could not be built,
+    reaches the client as itself; any other failure as a ``pipeline_error``. Either way the session closes.
+    """
     if session.status != "created":
         raise ProtocolError("Session already started", "session_already_started")
     session.status = "starting"
     session.started_at = time.monotonic()
+    refused: ProtocolError | None = None
     try:
-        await session.delegation.open(session.delegation_view)
+        try:
+            await session.delegation.open(session.delegation_view)
+        except ProtocolError as exc:
+            refused = exc
+            raise
         # A session closed while its delegation part opened starts no frontend.
         if session.status == "starting":
             await session.frontend.start(session.adapter_view, session.delegation_port)
     except Exception as exc:
-        logger.exception(f"session={session.id} start failed: {exc}")
-        message = "The voice pipeline could not start. Check server model access and configuration."
-        await session.report_error(message, client_event_id)
+        if refused is not None:
+            logger.warning(f"session={session.id} start failed: {exc}")
+            await session.reply_error(refused, client_event_id)
+        else:
+            logger.exception(f"session={session.id} start failed: {exc}")
+            message = "The voice pipeline could not start. Check server model access and configuration."
+            await session.report_error(message, client_event_id)
         await session.close("connection_lost", asked_by="the gateway: the start failed")
         raise
     if session.status != "starting":

@@ -12,7 +12,9 @@ from examples.frontend_backend_live.delegation_core.im.results import SpeakDispl
 from examples.frontend_backend_live.delegation_core.im.session import FUNCTION_CALL_OUTPUTS_REQUIRED, DelegationError
 from tests.unit.core_helpers import load
 from tests.unit.delegation_core.helpers import (
+    MARK,
     MENU,
+    QUESTION,
     TEXTS,
     Act,
     IMCase,
@@ -26,6 +28,7 @@ from tests.unit.delegation_core.helpers import (
     app_call,
     app_outputs,
     ask,
+    asking,
     call_item,
     checkpoint,
     finished_items,
@@ -34,8 +37,10 @@ from tests.unit.delegation_core.helpers import (
     placing,
     planned,
     read_all,
+    said,
     texts,
     wait,
+    without_ids,
 )
 
 SPEAK_DISPLAY = SpeakDisplay(TEXTS.result_formats["speak_display"])
@@ -48,10 +53,15 @@ VEGAN = {"type": "message", "role": "user", "content": "Make the food vegan."}
 MILK = {"type": "message", "role": "user", "content": "With milk, please."}
 ENDINGS = load()
 STOCK = call_item("lookup_stock", {}, "call_stock")
+WHERE = {"work_id": "W1", "task_id": "W1.1", "delegation_id": "D1"}
 
 
 def outputs(history: list[dict]) -> dict[str, str]:
     return {item["call_id"]: item["output"] for item in history if item.get("type") == "function_call_output"}
+
+
+def asks(call_id: str) -> dict:
+    return call_item("ask_caller", {"question": QUESTION}, call_id)
 
 
 class Round(ScriptStep):
@@ -127,6 +137,10 @@ class CallTests(IMCase):
         im = self.session(adapter, **changes)
         return adapter, im, await read_all(im.admit(ask(request), delegation_id="D1", settings=settings).stream)
 
+    def refusals(self) -> list[tuple[str, str]]:
+        """Return the call and the reason of each refusal traced, in order."""
+        return [(fields["call_id"], fields["reason"]) for fields in self.traced("tools.refused")]
+
     async def test_a_call_while_steering_waits_is_refused_until_it_lands(self):
         gate = asyncio.Event()
         adapter = ScriptedAdapter([wait(gate), answer()])
@@ -153,6 +167,7 @@ class CallTests(IMCase):
         }
         for gated, (calls, routes, kept) in cases.items():
             with self.subTest(gated):
+                self.traces.clear()
                 gate = asyncio.Event()
                 adapter = ScriptedAdapter([Round(*calls, **{gated: gate}), answer("Nothing was ordered.")])
                 streams = await self.admit_each(self.session(adapter), "Order two.", "Never mind.", settings=MENU_APP)
@@ -166,6 +181,9 @@ class CallTests(IMCase):
                 newer = next(n for n, item in enumerate(history) if "Never mind." in str(item))
                 last_output = max(n for n, item in enumerate(history) if item.get("type") == "function_call_output")
                 self.assertLess(last_output, newer)
+                # Every call but the lookup, which ran before the newer input came.
+                kept_back = [call["call_id"] for call in calls if call is not lookup]
+                self.assertEqual(self.refusals(), [(call_id, "not_run") for call_id in kept_back])
 
     async def test_a_call_waits_while_the_conductor_decides(self):
         handover = TEXTS.handover_line.format(delegation="D2")
@@ -205,6 +223,160 @@ class CallTests(IMCase):
         self.assertEqual(calls, [("delegation_core", "show")])
         self.assertEqual((texts(events), events[-1]["type"]), (["Stopped as asked."], "response.completed"))
 
+    async def test_an_ask_writes_its_question_and_the_task_runs_on(self):
+        gate = asyncio.Event()
+        adapter = ScriptedAdapter([asking(), wait(gate), answer("A latte, then.")])
+        im = self.session(adapter)
+        stream = im.admit(ask("A muffin and a coffee."), delegation_id="D1").stream
+        await self.until(lambda: self.traced("im.question.written"), "the question")
+        await self.turns()
+        written = [event for _, event in self.wire.events]
+        self.assertEqual((said(written), function_calls(written)), ([("final_answer", QUESTION)], []))
+        (response,) = im.ledger.delegations["D1"].responses
+        self.assertEqual(im.ledger.responses[response].state, "in_progress")
+        record = im.ledger.tasks["W1.1"]
+        self.assertEqual((record.state, record.result.state, record.question), ("running", "none", QUESTION))
+        self.assertEqual(self.traced("im.question.written"), [WHERE])
+        gate.set()
+        events = await read_all(stream)
+        self.assertEqual(
+            (said(events), events[-1]["type"]),
+            ([("final_answer", QUESTION), ("final_answer", "A latte, then.")], "response.completed"),
+        )
+        self.assertEqual(outputs(adapter.runs[0].histories[-1])["call_W1.1_ask_caller_1"], TEXTS.asked_output)
+        self.assertEqual(record.result.state, "pushed")
+
+    async def test_an_ask_after_the_tasks_own_cancel_work_is_refused(self):
+        adapter = ScriptedAdapter([WorkTool("cancel_work", {}, (asks("call_ask"),)), answer("Stopped as asked.")])
+        events = await read_all(self.session(adapter).admit(ask("Stop."), delegation_id="D1").stream)
+        run = adapter.runs[0]
+        self.assertEqual(run.routes, ["backend", "refused"])
+        self.assertEqual(outputs(run.histories[-1])["call_ask"], TEXTS.stopped_output)
+        self.assertEqual((texts(events), run.task.record.question), (["Stopped as asked."], None))
+        refused = {**WHERE, "call_id": "call_ask", "name": "ask_caller", "reason": "stopped"}
+        self.assertEqual(self.traced("tools.refused"), [refused])
+
+    async def asking_while_the_app_works(self, go_on: asyncio.Event, *later, **settings) -> tuple:
+        """Split D1 into a task whose app call ends D1's response, and a task that then asks, its question held.
+
+        The asking task answers once ``go_on`` is set; ``later`` holds the conductor's plans for the next arrivals.
+        Return the session and D1's events.
+        """
+        parked = asyncio.Event()
+        menu = [app_call(call_id="call_menu"), answer("Menu.")]
+        asker = [wait(parked), asking(), wait(go_on), answer("Noted.")]
+        conductor = planned(placing(Start(("D1",), ("menu", "coffee"))), *later)
+        im = self.session(ScriptedAdapter(menu, asker, conductor=conductor, max_running=2), **settings)
+        first = await read_all(im.admit(ask("The menu, and a coffee."), delegation_id="D1", settings=MENU_APP).stream)
+        parked.set()
+        actions, asked = im.ledger.actions, "call_W1.2_ask_caller_1"
+        await self.until(lambda: asked in actions and actions[asked].ended, "the ask to return")
+        self.assertEqual((im.ledger.tasks["W1.2"].question, self.traced("im.question.written")), (None, []))
+        self.assertNotIn(QUESTION, texts([event for _, event in self.wire.events]))
+        return im, first
+
+    async def test_a_question_held_while_the_app_works_goes_out_first(self):
+        go_on = asyncio.Event()
+        im, first = await self.asking_while_the_app_works(go_on)
+        continuation = im.admit_client_request(app_outputs(first), delegation_id="D1", settings=MENU_APP)
+        self.assertEqual(im.ledger.tasks["W1.2"].question, QUESTION)
+        go_on.set()
+        rest = await asyncio.wait_for(read_all(continuation.stream), 2)
+        self.assertEqual(said(rest)[0], ("final_answer", QUESTION))
+        self.assertEqual(sorted(texts(rest)[1:]), ["Menu.", "Noted."])
+        self.assertEqual(len(self.traced("im.question.written")), 1)
+
+    async def test_a_held_question_is_never_said_when_its_work_stops_at_the_deadline(self):
+        im, _ = await self.asking_while_the_app_works(asyncio.Event(), client_tool_timeout_seconds=0.2)
+        await self.until(lambda: not im.works, "the deadline")
+        self.assertEqual((im.ledger.works["W1"].state, im.ledger.tasks["W1.2"].question), ("failed", None))
+        self.assertEqual(self.traced("im.question.written"), [])
+        self.assertNotIn(QUESTION, texts([event for _, event in self.wire.events]))
+
+    async def test_a_held_question_is_never_said_when_a_newer_request_stops_its_task(self):
+        stop = placing(Cancel("W1", "W1.2"), Answer("D2", "No coffee, then."))
+        im, first = await self.asking_while_the_app_works(asyncio.Event(), stop)
+        await asyncio.wait_for(read_all(im.admit(ask("Skip the coffee."), delegation_id="D2").stream), 2)
+        await self.until(lambda: im.ledger.tasks["W1.2"].ended, "the coffee task's stop")
+        rest = await self.answer_calls(im, first, settings=MENU_APP)
+        self.assertEqual(texts(rest), ["Menu."])
+        self.assertEqual((im.ledger.tasks["W1.2"].question, self.traced("im.question.written")), (None, []))
+
+    async def test_continue_after_call_is_offered_to_a_kept_conversation_above_one_slot(self):
+        offered, kept = ["cancel_work", "ask_caller"], ["cancel_work", "ask_caller", "continue_after_call"]
+        for continuable, max_running, names in ((True, 2, kept), (False, 2, offered), (True, 1, offered)):
+            with self.subTest(continuable=continuable, max_running=max_running):
+                gate = asyncio.Event()
+                adapter = ScriptedAdapter([wait(gate), answer()], max_running=max_running)
+                await self.admit_each(self.session(adapter, continuable=continuable), "Hi.")
+                self.assertEqual([tool["name"] for tool in adapter.runs[0].task.tools().tools()], names)
+                gate.set()
+
+    async def test_after_the_call_a_kept_works_app_calls_and_asks_are_refused(self):
+        hung_up, attached = asyncio.Event(), asyncio.Event()
+        job = [
+            MARK,
+            wait(hung_up),
+            Round(call_item("get_menu", {}, "call_menu_1"), asks("call_ask_1")),
+            wait(attached),
+            Round(call_item("get_menu", {}, "call_menu_2"), asks("call_ask_2")),
+            answer("The comparison is ready."),
+        ]
+        adapter = ScriptedAdapter(job, max_running=2)
+        im = self.session(adapter, continuable=True)
+        im.admit(ask("Compare every supplier."), delegation_id="D1", settings=MENU_APP)
+        await self.until(lambda: self.traced("im.work.after_call"), "the mark")
+        self.assertTrue(await self.hang_up(im))
+        hung_up.set()
+        await self.until(lambda: len(self.traced("tools.refused")) == 2, "the calls after the hang-up")
+        # A later call: no request of it has taken the work over.
+        await self.call_again(im)
+        attached.set()
+        await self.until(lambda: not im.works, "the job's end")
+        calls = ("call_menu_1", "call_ask_1", "call_menu_2", "call_ask_2")
+        self.assertEqual(self.refusals(), [(call_id, "after_call") for call_id in calls])
+        read = outputs(adapter.runs[0].histories[-1])
+        self.assertEqual({read[call_id] for call_id in calls}, {TEXTS.after_call_output})
+        self.assertEqual((im.ledger.works["W1"].state, im.ledger.tasks["W1.1"].question), ("answered", None))
+        self.assertEqual(function_calls([event for _, event in self.wire.events]), [])
+
+    async def test_a_kept_works_calls_are_refused_once_the_call_ends(self):
+        with self.subTest("made in the hang-up's close grace"):
+            gate, other = asyncio.Event(), asyncio.Event()
+            job = [MARK, wait(gate), Round(call_item("get_menu", {}, "call_menu"), asks("call_ask")), wait(other)]
+            scripts = ([*job, answer("Done.")], [wait(other), answer("Calendar.")])
+            conductor = planned(placing(Start(("D1",))), placing(Start(("D2",))))
+            adapter = ScriptedAdapter(*scripts, conductor=conductor, max_running=3)
+            im = self.session(adapter, continuable=True, close_grace_seconds=5)
+            im.admit(ask("Compare every supplier."), delegation_id="D1", settings=MENU_APP)
+            await self.until(lambda: self.traced("im.work.after_call"), "the mark")
+            im.admit(ask("What is on my calendar?"), delegation_id="D2")
+            await self.until(lambda: im.ledger.tasks.get("W2.1") and im.ledger.tasks["W2.1"].state == "running", "W2")
+            leaving = asyncio.ensure_future(im.leave())
+            await self.until(lambda: im.detached, "the hang-up")
+            gate.set()
+            await self.until(lambda: len(self.traced("tools.refused")) == 2, "the refusals")
+            self.assertEqual({fields["reason"] for fields in self.traced("tools.refused")}, {"after_call"})
+            self.assertEqual((im.parked, im.ledger.tasks["W1.1"].question, leaving.done()), ({}, None, False))
+            other.set()
+            self.assertTrue(await asyncio.wait_for(leaving, 2))
+            await self.until(lambda: not im.works, "the job's end")
+            self.assertEqual(im.ledger.works["W1"].state, "answered")
+        self.traces.clear()
+        with self.subTest("routed before the hang-up"):
+            ran = asyncio.Event()
+            rounds = [MARK, Round(call_item("lookup", {}, "call_own"), call_item("get_menu", {}, "call_app"), ran=ran)]
+            im = self.session(ScriptedAdapter([*rounds, answer("Done.")], max_running=2), continuable=True)
+            im.admit(ask("Compare every supplier."), delegation_id="D1", settings=MENU_APP)
+            await self.until(lambda: "call_own" in im.ledger.actions, "the lookup, its round's app call routed")
+            self.assertEqual(im.ledger.actions["call_app"].runner, "app")
+            self.assertTrue(await self.hang_up(im))
+            ran.set()
+            await self.until(lambda: not im.works, "the job's end")
+            self.assertEqual([fields["reason"] for fields in self.traced("tools.refused")], ["after_call"])
+            self.assertEqual((im.ledger.works["W1"].state, im.parked), ("answered", {}))
+        self.assertEqual(function_calls([event for _, event in self.wire.events]), [])
+
     async def test_a_refused_call_gets_its_reason(self):
         show_tool = {"type": "function", "name": "show", "parameters": {"type": "object", "properties": {}}}
         plain = {"tools": [show_tool]}
@@ -213,6 +385,7 @@ class CallTests(IMCase):
         rows = (("book", ["Stop."], plain, stopped), ("show", ["Stop."], listed, stopped))
         for tool, newer, settings, reason in (*rows, ("show", [], plain, clash), ("show", [], listed, clash)):
             with self.subTest(reason, tool=tool, listed=settings is listed):
+                self.traces.clear()
                 gate, conductor = asyncio.Event(), planned(placing(Start(("D1",))), placing(Cancel("W1")))
                 adapter = ScriptedAdapter([wait(gate), answer()], conductor=conductor, stop_delay=0.05)
                 im = self.session(adapter, result_format=SPEAK_DISPLAY)
@@ -220,6 +393,7 @@ class CallTests(IMCase):
                 task = adapter.runs[0].task
                 self.assertEqual(task.route(call_item(tool, {}, "call_1")), "refused")
                 self.assertEqual(task.take_boundary_input().outputs[0]["output"], reason)
+                self.assertEqual(self.refusals(), [("call_1", "stopped" if reason == stopped else "clash")])
                 gate.set()
 
     async def test_only_an_app_function_the_list_leaves_out_is_refused(self):
@@ -238,6 +412,8 @@ class CallTests(IMCase):
         routes = [task.route(call_item(name, {}, f"call_{name}")) for name in names]
         self.assertEqual(routes, ["refused", "app", "backend", "backend"])
         self.assertEqual(task.take_boundary_input().outputs[0]["output"], TEXTS.unlisted_output)
+        refused = [("early_set_decaf", "unlisted"), ("early_get_menu", "not_run"), ("call_set_decaf", "unlisted")]
+        self.assertEqual(self.refusals(), refused)
         gate.set()
 
     async def test_a_stopped_tasks_unanswered_call_is_owed(self):
@@ -329,9 +505,11 @@ class CallTests(IMCase):
         gate.set()
         self.assertEqual(texts(await asyncio.wait_for(read_all(rest.stream), 2)), ["Drink.", "Food."])
         drink, food = im.backend.runs[:2]
-        *_, output, typed = drink.histories[-1]
+        *_, output, typed = without_ids(drink.histories[-1])
         self.assertEqual((output["type"], typed), ("function_call_output", VEGAN))
-        self.assertIn(VEGAN, food.histories[-1])
+        # One message, with an id of its own, in every task's view.
+        self.assertNotIn(drink.histories[-1][-1].get("id"), (None, "D1"))
+        self.assertIn(drink.histories[-1][-1], food.histories[-1])
 
     async def test_typed_words_of_a_stopped_task_reach_the_open_tasks(self):
         gate = asyncio.Event()
@@ -341,7 +519,7 @@ class CallTests(IMCase):
         rest = im.admit_client_request([*app_outputs(first), VEGAN], delegation_id="D1", settings=MENU_APP)
         gate.set()
         self.assertEqual(texts(await asyncio.wait_for(read_all(rest.stream), 2)), ["Food."])
-        self.assertIn(VEGAN, im.backend.runs[1].histories[-1])
+        self.assertIn(VEGAN, without_ids(im.backend.runs[1].histories[-1]))
 
     async def test_typed_words_no_task_takes_join_the_conversation(self):
         gate = asyncio.Event()
@@ -350,7 +528,7 @@ class CallTests(IMCase):
         await self.turns()
         rest = im.admit_client_request([*app_outputs(first), VEGAN], delegation_id="D1", settings=MENU_APP)
         self.assertEqual(texts(await asyncio.wait_for(read_all(rest.stream), 2)), ["Food."])
-        self.assertIn(VEGAN, im.history)
+        self.assertIn(VEGAN, without_ids(im.history))
 
     async def test_typed_words_never_applied_join_and_start_no_work(self):
         im = self.session(ScriptedAdapter([app_call(), checkpoint(), answer("Teas.")], delivery="not_applied"))
@@ -358,7 +536,7 @@ class CallTests(IMCase):
         rest = im.admit_client_request([*app_outputs(first), MILK], delegation_id="D1", settings=MENU_APP)
         self.assertEqual(texts(await asyncio.wait_for(read_all(rest.stream), 2)), ["Teas."])
         await self.turns()
-        self.assertIn(MILK, im.history)
+        self.assertIn(MILK, without_ids(im.history))
         self.assertNotIn("im.follow_up", [kind for kind, _ in self.traces])
 
     async def test_typed_words_go_after_the_outputs_before_a_steered_one(self):
@@ -368,7 +546,7 @@ class CallTests(IMCase):
         rest = im.admit_client_request([*app_outputs(first), MILK], delegation_id="D1", settings=MENU_APP)
         await asyncio.wait_for(read_all(rest.stream), 2)
         self.assertEqual(texts(await asyncio.wait_for(read_all(second.stream), 2)), ["Green: two."])
-        *_, output, typed, steered = adapter.runs[0].histories[-1]
+        *_, output, typed, steered = without_ids(adapter.runs[0].histories[-1])
         self.assertEqual((output["type"], typed), ("function_call_output", MILK))
         parts = [part["text"] for part in steered["content"]]
         self.assertEqual((parts[0], parts[-1]), ("Green only.", TEXTS.closing_line))
@@ -395,6 +573,9 @@ class CallTests(IMCase):
         repeated = TEXTS.repeated_call_output.format(output=NOT_FOUND)
         read = outputs(adapter.runs[0].histories[-1])
         self.assertEqual(read, {"call_1": NOT_FOUND, "call_2": NOT_FOUND, "call_3": repeated})
+        # Its trace names the reason, never the output, which holds the app's earlier answer.
+        refused = {**WHERE, "call_id": "call_3", "name": "get_order", "reason": "repeated"}
+        self.assertEqual(self.traced("tools.refused"), [refused])
 
     async def test_calls_routed_before_their_round_all_reach_the_app(self):
         calls = [call_item("get_order", LOOKUP, "call_1"), call_item("get_order", LOOKUP, "call_2")]

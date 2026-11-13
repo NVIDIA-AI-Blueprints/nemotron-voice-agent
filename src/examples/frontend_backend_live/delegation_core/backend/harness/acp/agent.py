@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -14,7 +14,18 @@ from pydantic import ValidationError
 from examples.shared.strict_settings import StrictSettings
 
 if TYPE_CHECKING:
+    from acp.client.connection import ClientSideConnection
+    from acp.schema import AgentCapabilities
+
     from .updates import SessionUpdates
+
+# What ends one session in the agent: sent on the client's connection with the session's id.
+CloseRequest = Callable[["ClientSideConnection", str], Awaitable[Any]]
+
+
+async def close_session(conn: ClientSideConnection, session_id: str) -> None:
+    """End one session with ACP's ``session/close``."""
+    await conn.close_session(session_id=session_id)
 
 
 class AcpAgent:
@@ -77,3 +88,11 @@ class AcpAgent:
     def no_answer(self, total: int | None, total_before: int | None) -> str | None:
         """Return why an ``end_turn`` turn gave no answer: ``None``, since a plain agent's always gave one."""
         return None
+
+    def close_request(self, advertised: AgentCapabilities) -> CloseRequest | None:
+        """Return what ends a session in the agent: ``session/close`` when its ``initialize`` answer advertised it.
+
+        ``None`` sends nothing, and the agent keeps each session until its process ends.
+        """
+        sessions = advertised.session_capabilities
+        return close_session if sessions is not None and sessions.close is not None else None

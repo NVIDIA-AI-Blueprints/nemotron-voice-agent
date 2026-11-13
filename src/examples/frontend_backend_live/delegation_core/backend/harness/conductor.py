@@ -14,24 +14,24 @@ from loguru import logger
 from examples.frontend_backend_live.delegation_core.backend.port import ConductorInput, Place
 
 from .bridge import ConductorDoor
-from .protocol import HarnessSession, Mailbox, PromptEnded, Runtime
-from .runtime import give_back
+from .protocol import HarnessSession, Mailbox, PromptEnded, Runtime, Wake, usage_total
+from .runtime import cancel_in_background, give_back
 
 if TYPE_CHECKING:
     from .adapter import HarnessAdapter
-
-# The stop reason that keeps the session, by whether a cancel went out: after a cancel, end_turn may have crossed it,
-# and an idle agent takes a stray cancel for its next prompt. A cancelled prompt may join the session's next one.
-KEPT = {False: "end_turn", True: "cancelled"}
 
 
 class _Turn:
     """One conductor turn: it reads the session's events until its prompt ends, and ignores the rest."""
 
-    def __init__(self, prompt: int):
+    def __init__(self, prompt: int, total_before: int | None, started: float):
         self.prompt = prompt
+        # The session's token total before the prompt, for the agent class's check of a model call.
+        self.total_before = total_before
+        # The loop time the prompt went out, and the backstop that fires turn_timeout_seconds after it.
+        self.started = started
+        self.timer: asyncio.TimerHandle | None = None
         self.ended: PromptEnded | None = None
-        self.cancel_sent = False
 
     def prompt_ended(self, event: PromptEnded) -> None:
         if event.prompt == self.prompt:
@@ -58,7 +58,12 @@ class HarnessConductor:
         self.mailbox: Mailbox = asyncio.Queue()
         self.blocks: tuple[str, ...] = ()
         self.fresh = True
+        # The session's turn until its end is judged, and the token total the session last reported.
+        self.turn: _Turn | None = None
+        self.total: int | None = None
         self._opening: asyncio.Task | None = None
+        # One reader of the session's events at a time, so two decide() calls never split a turn's events.
+        self._reading = asyncio.Lock()
 
     def warm(self) -> None:
         """Open the session in the background, so the first request does not wait for the agent's start."""
@@ -69,7 +74,12 @@ class HarnessConductor:
     async def decide(self, given: ConductorInput, place: Place) -> None:
         """Prompt the session with the rendered input; each control call is placed, and the IM places what is left.
 
-        A turn is bounded by ``conductor_timeout_seconds``; a failed turn retires the session.
+        It reads its turn to its end. A cancelled ``decide()`` also reads the running turn to its end before it ends,
+        so a restarted one reads records built once the agent is free; one cancelled again leaves the turn running,
+        and ``close()`` ends any reading and cancels the turn. A ``decide()`` never prompts a busy agent: a turn still
+        running, such as one a hang-up left, is read to its end first. A turn that fails, in which the agent class
+        finds no model call, or that still runs ``turn_timeout_seconds`` after its prompt (cancelled then) retires the
+        session, as a failed ``decide()`` does.
         """
         try:
             await self._turn(given, place)
@@ -78,49 +88,72 @@ class HarnessConductor:
             await self._retire(cancel=True)
 
     async def _turn(self, given: ConductorInput, place: Place) -> None:
-        session = await self._session()
-        self.door.bind(place)
-        text = self.host.renderer.conductor_input(given, fresh=self.fresh)
-        if self.fresh and self.blocks:
-            text = "\n\n".join([*self.blocks, text])
-        turn = _Turn(session.prompt(text))
         try:
-            await self._read(turn, self.settings.conductor_timeout_seconds)
+            session = await self._free()
+            self.door.bind(place)
+            text = self.host.renderer.conductor_input(given, fresh=self.fresh)
+            if self.fresh and self.blocks:
+                text = "\n\n".join([*self.blocks, text])
+            loop = asyncio.get_running_loop()
+            turn = self.turn = _Turn(session.prompt(text), self.total, loop.time())
+            turn.timer = loop.call_later(self.settings.turn_timeout_seconds, self._overran, turn)
+            self.fresh = False
+            await self._read(turn)
         except asyncio.CancelledError:
-            await self._stop(session, turn)
+            # The agent's turn runs on; on a restart its calls count, and the IM builds the next input after it ends.
+            while self.turn is not None:
+                await self._read(self.turn)
             raise
-        if turn.ended is None:
-            logger.warning(f"harness.conductor_timed_out after {self.settings.conductor_timeout_seconds:g} s")
-            await self._stop(session, turn)
-            return
-        self.fresh = False
-        await self._keep_or_retire(turn)
 
-    async def _read(self, turn: _Turn, seconds: float) -> None:
-        with contextlib.suppress(TimeoutError):
-            async with asyncio.timeout(seconds):
-                while turn.ended is None:
-                    (await self.mailbox.get()).apply(turn)
+    async def _free(self) -> HarnessSession:
+        """Return the session once its agent is free: a turn still running is read to its end and judged first.
 
-    async def _stop(self, session: HarnessSession, turn: _Turn) -> None:
-        """Cancel the running turn and read on until it ends, for at most ``stop_timeout_seconds``."""
-        try:
-            turn.cancel_sent = await session.cancel()
-            await self._read(turn, self.settings.stop_timeout_seconds)
-        finally:
-            # A decide() cancelled again during the wait leaves the turn running, and the session is retired.
-            await self._keep_or_retire(turn)
+        Such a turn is one a ``decide()`` cancelled twice left, such as at a hang-up; when judging it retires the
+        session, a fresh one opens.
+        """
+        session = await self._session()
+        while self.turn is not None:
+            await self._read(self.turn)
+            session = await self._session()
+        return session
 
-    async def _keep_or_retire(self, turn: _Turn) -> None:
-        """Keep the session for the next ``decide()`` if its turn ended as ``KEPT`` names; else retire it."""
-        ended = turn.ended
-        if ended is not None and ended.error is None and ended.stop_reason == KEPT[turn.cancel_sent]:
-            return
-        if ended is None:
-            logger.warning("harness.conductor_turn_not_ended after its cancel")
+    async def _read(self, turn: _Turn) -> None:
+        """Read the turn's events until it ends, then judge it; a drop (backstop or ``close()``) ends the reading.
+
+        Another ``decide()`` still reading the turn reads it first, and this one judges nothing it judged.
+        """
+        async with self._reading:
+            mailbox = self.mailbox
+            while turn.ended is None and turn is self.turn:
+                (await mailbox.get()).apply(turn)
+            if turn is self.turn:
+                await self._judge(turn)
+
+    async def _judge(self, turn: _Turn) -> None:
+        """Keep the session if its turn ended ``end_turn`` with no error, unless its agent class finds no model call."""
+        ended, total = turn.ended, usage_total(turn.ended.usage)
+        turn.timer.cancel()
+        self.turn = None
+        if total is not None:
+            self.total = total
+        if ended.error is None and ended.stop_reason == "end_turn":
+            reason = self.settings.agent.no_answer(total, turn.total_before)
+            if reason is None:
+                return
+            logger.warning(f"harness.conductor_turn_ended stop={ended.stop_reason}: {reason}")
         else:
             logger.warning(f"harness.conductor_turn_ended stop={ended.stop_reason} error={ended.error}")
         await self._retire(cancel=False)
+
+    def _overran(self, turn: _Turn) -> None:
+        """Cancel a turn still running ``turn_timeout_seconds`` after its prompt, once, and retire its session."""
+        session = self.session
+        if turn is not self.turn or turn.prompt not in session.outstanding:
+            return
+        seconds = asyncio.get_running_loop().time() - turn.started
+        logger.warning(f"harness.conductor_turn_overran seconds={seconds:.3f}")
+        cancel_in_background(session, self.settings.stop_timeout_seconds)
+        self._drop()
 
     async def _session(self) -> HarnessSession:
         """Return the open session, else the one opening, else a new one.
@@ -165,16 +198,26 @@ class HarnessConductor:
             raise
         self.runtime, self.session, self.door, self.mailbox = runtime, session, door, mailbox
         self.blocks, self.fresh = blocks, True
+        self.turn, self.total = None, 0
         logger.debug(f"harness.conductor_opened server={name} session={session.id}")
 
     async def _retire(self, *, cancel: bool) -> None:
         """Retire the session, cancelling a running prompt if ``cancel`` is set, and warm a fresh one."""
-        session, door, runtime = self.session, self.door, self.runtime
-        self.session = self.door = self.runtime = None
+        session = self.session
+        self._drop()
+        if cancel and session is not None and session.outstanding:
+            with contextlib.suppress(Exception):
+                await session.cancel()
+
+    def _drop(self) -> None:
+        """Retire the session, its turn and the turn's backstop at once, and warm a fresh one; it sends no cancel."""
+        session, door, runtime, turn = self.session, self.door, self.runtime, self.turn
+        self.session = self.door = self.runtime = self.turn = self.total = None
+        if turn is not None:
+            turn.timer.cancel()
+            # Wakes a decide() still reading the turn, so it stops.
+            self.mailbox.put_nowait(Wake())
         if session is not None:
-            if cancel and session.outstanding:
-                with contextlib.suppress(Exception):
-                    await session.cancel()
             session.retire()
         if door is not None:
             self.host.bridge.close(door, "")

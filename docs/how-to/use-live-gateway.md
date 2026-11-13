@@ -16,6 +16,7 @@ The following table compares OpenAI's hosted GPT-Live API with this gateway:
 | An unrelated request while work is open | Runs as its own delegation | Joins the open work with the `llm` adapter or at `max_running` 1, so the caller hears both answers together. Above 1, the conductor can start separate work. |
 | Captions | Stream with the speech | Each sentence's `session.output_transcript.delta` arrives after its audio has played |
 | Stored recordings and session forks | Available | Not available |
+| `store: true` | Keeps the voice session for forks and recordings, and backend work ends with the session | Keeps backend work that outlives the call, and its records, for a later session, as [Work That Outlives the Call](#work-that-outlives-the-call) describes |
 
 ## Routes
 
@@ -78,7 +79,7 @@ When the talker delegates a turn, the lead-in that it words in the same decision
 
 ### Server Delegation
 
-For each session, the server delegation opens a conversation in the core and sends each request to it in order, with the session's current `delegation.responses` settings. The session fails to start when the core cannot create the conversation within 10 seconds. The server delegation also does the following:
+For each session, the server delegation opens a conversation in the core and sends each request to it in order, with the session's current `delegation.responses` settings. The session fails to start when the core cannot create the conversation within 10 seconds. A start that continues a conversation waits up to 25 seconds by default instead (`delegation.close_grace_seconds` plus twice `delegation.stop_timeout_seconds`), while the core ends the earlier call. A start that comes while the earlier session still closes its frontend adapter is refused, so start it after the earlier session has closed. The server delegation also does the following:
 
 - It holds the client's call results and typed messages from `response.item.create`, at most 512 results and 16 messages, and sends them at `response.create`. When the core refuses a request as invalid, such as one with two results for one call, the client gets `invalid_value`, and the server delegation drops what that request carried.
 - It checks the `delegation.responses` settings in the background with `POST /v1/responses/input_tokens`, and reports a setting that the backend refuses as a nonfatal `responses_validation_failed` error. The session keeps the setting, so a model that the backend does not serve fails each delegation, except on the harness, which runs its agent's own model.
@@ -104,6 +105,23 @@ The core writes no apology of its own and never retries work, so a client that s
 
 - `response.create` continues each waiting response whose calls all have results. When it would continue none while results are still owed, it is refused with `function_call_outputs_required`.
 - With the core's `delegation.result_format` set to `speak_display`, a result's screen-only detail comes before its answer, as an `mcp_call` item named `show`, with server label `delegation_core`, whose `output` is the display.
+- A task can ask the caller a question while its work goes on. The question is a `final_answer` message while the response is still `in_progress`, and more items and the task's answer can follow. A `final_answer` is one result for the caller; only the response's terminal event ends the delegation. When the caller's reply joins the work while this response is still open, its `response.in_progress` names this response in `previous_response_id`, and this delegation still ends answered.
+- The core's work tools use the names `cancel_work` and `ask_caller`, `show` with `speak_display`, and `continue_after_call` where [work can outlive the call](#work-that-outlives-the-call). A function in `delegation.responses.tools` with one of these names is refused, together with the work tool.
+
+### Work That Outlives the Call
+
+A session that sets `store: true` lets long backend work go on after the caller hangs up. The core offers each task the `continue_after_call` work tool when the backend runs more than one task at once: with `llm-agent` or `harness` above `max_running: 1`. A task calls it when its work will take longer than the caller should wait and needs nothing more from the caller or the app. The caller hears the task's message as a `final_answer` while the response stays `in_progress`.
+
+When the session closes, the core keeps the conversation while its records list such work, open or among the newest ended work. The other work stops as at any close, and so does such work that waits for the app's function outputs. Every open response ends `cancelled`. With nobody on the call, the app's functions and `ask_caller` do not run, and the work's events reach no client. A request that the caller added to the work during the call does not run if the work ends before a task takes it in, so the caller asks for it again in a later call.
+
+`session.started` names the core's conversation in `delegation.responses.conversation`. `session.closed` names it only when the core kept the conversation, so keep the id for a later call only then. A start that names the id and ends before `session.started`, by your own close or with an `error` other than `invalid_value`, leaves the conversation as it was. In that case, keep the id and try again. To continue, start a session with `store: true` and the id in `delegation.responses.conversation`. When the caller asks, the backend answers from the work's records. The following rules apply:
+
+- `delegation.responses.conversation` is set at the start only, and it needs `store: true`.
+- An id that is unknown, has expired, or belongs to a session that is still open fails the start with `invalid_value` on `session.delegation.responses.conversation`. Over WebRTC, the offer is answered, but the connection never opens and no event arrives. After a hang-up, retry after the earlier session has closed.
+- The core keeps the conversation in this server process's memory for `delegation.after_call_seconds` (2 days) after its last call, and for that long again after its work ends. When that time runs out, the conversation closes, and work still running stops. A restart or deploy loses it and stops its work.
+- `continue_after_call` is refused when such work would take every task slot of the backend, or when `delegation.max_after_call_conversations` (8) other conversations already have such work running. The task then finishes its work during the call.
+- Whoever holds the id hears the work's results, so pass it only for a caller that your app has identified. Without `LIVE_API_TOKEN`, the id alone is enough.
+- A Pipecat 1.15 app sets `store=True` in `OpenAILiveLLMService.Settings`, and its `on_session_started` handler gets the session that names the id. To continue, the app passes the id in the `extra` of its `ResponsesDelegation` settings, for example `OpenAIResponsesLLMService.Settings(model="<backend model>", extra={"conversation": "<id>"})`. Pipecat 1.15 does not pass `session.closed` to the app, so the app learns whether the core kept the conversation only from the next start with the id.
 
 ## Steer a Session
 

@@ -18,6 +18,8 @@ from .workdir import WorkFolder
 
 # The waits for retired sessions' last prompts, kept so none is collected while it waits.
 _ENDINGS: set[asyncio.Future] = set()
+# The cancels sent in the background, kept until sent or timed out so none is collected before it is sent.
+_CANCELS: set[asyncio.Future] = set()
 
 
 def give_back(runtime: Runtime, session: HarnessSession | None) -> None:
@@ -29,6 +31,14 @@ def give_back(runtime: Runtime, session: HarnessSession | None) -> None:
     _ENDINGS.add(ending)
     ending.add_done_callback(_ENDINGS.discard)
     ending.add_done_callback(lambda _: runtime.leave())
+
+
+def cancel_in_background(session: HarnessSession, seconds: float) -> None:
+    """Cancel ``session``'s running turn in the background, within ``seconds``, and retrieve the cancel's error."""
+    cancel = asyncio.ensure_future(asyncio.wait_for(session.cancel(), seconds))
+    _CANCELS.add(cancel)
+    cancel.add_done_callback(_CANCELS.discard)
+    cancel.add_done_callback(lambda done: done.cancelled() or done.exception())
 
 
 class RuntimeProcess:

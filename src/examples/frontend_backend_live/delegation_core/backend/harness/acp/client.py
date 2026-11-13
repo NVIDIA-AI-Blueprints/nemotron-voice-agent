@@ -17,6 +17,7 @@ from acp.client.connection import ClientSideConnection
 from acp.connection import StreamDirection, StreamEvent
 from acp.meta import CLIENT_METHODS
 from acp.schema import (
+    AgentCapabilities,
     AllowedOutcome,
     ClientCapabilities,
     DeniedOutcome,
@@ -30,7 +31,7 @@ from acp.schema import (
 from loguru import logger
 
 from ..protocol import Mailbox, McpServer, PermissionAnswer, PromptEnded
-from .agent import AcpAgent
+from .agent import AcpAgent, CloseRequest
 from .transports import Transport
 from .updates import SessionUpdates
 
@@ -40,6 +41,9 @@ LOST = "the connection to the agent is lost"
 CLOSED = "the client closed"
 # A cap on an agent's error data in a reason, which goes on the wire in a task's error text.
 ERROR_DATA_CHARS = 300
+# The error (JSON-RPC resource not found) with which an agent may answer the close of a session it does not have: the
+# core counts that session as closed.
+NOT_FOUND = -32002
 
 
 def reason(exc: BaseException) -> str:
@@ -91,6 +95,11 @@ class AcpSession:
     def outstanding(self) -> frozenset[int]:
         """The prompts sent and not ended yet."""
         return frozenset(self._outstanding)
+
+    @property
+    def alive(self) -> bool:
+        """Whether it can still serve: its connection is open and it is not retired (ACP reports no session's end)."""
+        return self.client.alive and not self.retired
 
     async def ended(self, prompt: int) -> None:
         """Return once ``prompt`` has ended."""
@@ -172,10 +181,16 @@ class AcpSession:
             return True
         return False
 
-    def retire(self) -> None:
-        """Stop reading updates for the session; the agent may keep it until it exits."""
+    def retire(self) -> bool:
+        """Stop reading updates for the session, and close it in the agent as its class's close request says.
+
+        Return whether a close went out (in the background); with none, the agent may keep the session until it exits.
+        """
+        if self.retired:
+            return False
         self.retired = True
         self.client.sessions.pop(self.id, None)
+        return self.client.send_close(self.id)
 
 
 class AcpClient:
@@ -188,13 +203,21 @@ class AcpClient:
         *,
         permission: PermissionAnswer,
         start_timeout_seconds: float,
+        stop_grace_seconds: float,
     ):
-        """Speak ACP over ``transport`` to the agent of ``agent``'s class; nothing connects until :meth:`open`."""
+        """Speak ACP over ``transport`` to the agent of ``agent``'s class; nothing connects until :meth:`open`.
+
+        Its close waits up to ``stop_grace_seconds`` for the sessions' closes before it closes the transport.
+        """
         self.transport, self.agent, self.permission = transport, agent, permission
-        self.start_timeout = start_timeout_seconds
+        self.start_timeout, self.stop_grace = start_timeout_seconds, stop_grace_seconds
         self.conn: ClientSideConnection | None = None
+        # What the agent's initialize answer advertised: loadSession, and sessionCapabilities (close, resume, fork).
+        self.advertised = AgentCapabilities()
         self.sessions: dict[str, AcpSession] = {}
         self.prompts: set[asyncio.Task] = set()
+        # The sessions' closes sent in the background, kept until each is answered.
+        self.closes: set[asyncio.Task] = set()
         self.ended: str | None = None
         self._watch: asyncio.Task | None = None
         self._ending: asyncio.Task | None = None
@@ -227,6 +250,7 @@ class AcpClient:
             raise RuntimeError(f"The agent answered initialize with an error: {reason(exc)}") from exc
         if response.protocol_version != PROTOCOL_VERSION:
             raise RuntimeError(f"The agent speaks ACP version {response.protocol_version}, not {PROTOCOL_VERSION}")
+        self.advertised = response.agent_capabilities or AgentCapabilities()
 
     async def new_session(self, cwd: Path, server: McpServer, mailbox: Mailbox) -> AcpSession:
         """Open a session in ``cwd`` whose one MCP server is ``server``, its bearer token in a header."""
@@ -251,6 +275,29 @@ class AcpClient:
         session = AcpSession(self, response.session_id, mailbox, SessionUpdates(self.agent, server.name))
         self.sessions[session.id] = session
         return session
+
+    def send_close(self, session_id: str) -> bool:
+        """Send the agent class's close request for one session in the background; return whether it went out."""
+        request = self.agent.close_request(self.advertised)
+        if request is None or not self.alive:
+            return False
+        sending = asyncio.create_task(self._close(request, session_id), name="acp-close")
+        self.closes.add(sending)
+        sending.add_done_callback(self.closes.discard)
+        return True
+
+    async def _close(self, request: CloseRequest, session_id: str) -> None:
+        """Send one session's close; an error is only logged, and a session the agent does not have counts as closed."""
+        try:
+            await request(self.conn, session_id)
+        except RequestError as exc:
+            if exc.code != NOT_FOUND:
+                logger.warning(f"harness.session_close_failed session={session_id} {reason(exc)}")
+                return
+        except Exception as exc:
+            logger.warning(f"harness.session_close_failed session={session_id} {reason(exc)}")
+            return
+        logger.debug(f"harness.session_closed session={session_id}")
 
     def _observe(self, event: StreamEvent) -> None:
         """Route each incoming ``session/update`` to its session's mailbox, in wire order.
@@ -300,10 +347,19 @@ class AcpClient:
         await asyncio.gather(*waiting, return_exceptions=True)
 
     async def close(self) -> None:
-        """Close the transport (the agent ends its sessions and exits), then the SDK connection; every prompt ends."""
-        self.ended = self.ended or CLOSED
+        """Retire every session and wait for its close, then close the transport: the agent ends its sessions and exits.
+
+        A close still waiting after ``stop_grace_seconds`` is dropped. The SDK connection closes; every prompt ends.
+        """
         for session in list(self.sessions.values()):
             session.retire()
+        self.ended = self.ended or CLOSED
+        if self.closes:
+            await asyncio.wait(set(self.closes), timeout=self.stop_grace)
+        waiting = [sending for sending in self.closes if not sending.done()]
+        for sending in waiting:
+            sending.cancel()
+        await asyncio.gather(*waiting, return_exceptions=True)
         await self.transport.close()
         await self._end_prompts()
         if self._watch is not None:

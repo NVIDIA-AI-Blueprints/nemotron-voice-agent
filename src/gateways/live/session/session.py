@@ -146,13 +146,23 @@ class LiveProtocolSession:
         return 0 if self.started_at is None else int((time.monotonic() - self.started_at) * 1000)
 
     def snapshot(self) -> dict:
-        """Return the session resource of lifecycle events: always ``active``, and without MCP credentials."""
-        return {
+        """Return the session resource of lifecycle events: always ``active``, and without MCP credentials.
+
+        A ``store: true`` session in Responses mode names its core conversation in ``delegation.responses``, while
+        the delegation part holds it: from the start, and at the close only when the core kept the conversation.
+        """
+        snapshot = {
             **self.config.public_dump(),
             "id": self.id,
             "status": "active",
             "expires_at": self.expires_at,
         }
+        responses = snapshot["delegation"].get("responses")
+        if responses is not None and self.config.store:
+            responses.pop("conversation", None)
+            if self.delegation.conversation is not None:
+                responses["conversation"] = self.delegation.conversation
+        return snapshot
 
     async def history(self) -> dict:
         """Return what the session's models hold now: the adapter's half and the delegation part's ``backend``."""
@@ -345,6 +355,11 @@ class DelegationSideView:
     def acknowledgement_delay_ms(self) -> int:
         """The session's ``delegation.acknowledgement_delay_ms``, as ``session.update`` last changed it."""
         return self._session.config.delegation.acknowledgement_delay_ms
+
+    @property
+    def store(self) -> bool:
+        """The session's ``store``, its opt-in to keep backend work that outlives the call."""
+        return self._session.config.store
 
     async def emit(self, kind: str, **fields: Any) -> None:
         """Send a delegation event; refuse every other event type with ``ValueError``."""

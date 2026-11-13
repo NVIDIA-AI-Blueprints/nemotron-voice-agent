@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Callable, Mapping
@@ -12,13 +13,15 @@ from copy import deepcopy
 from typing import Any, Protocol
 
 from examples.frontend_backend_live.delegation_core.im.input import request_settings
-from examples.frontend_backend_live.delegation_core.im.session import IMSession
+from examples.frontend_backend_live.delegation_core.im.session import DelegationError, IMSession
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
-from examples.shared.delegation_contract import DELEGATION_ID, TYPED_RUN
+from examples.shared.delegation_contract import DELEGATION_ID, STORE, TYPED_RUN
 from examples.shared.ids import approx_tokens
 
 MODEL_OWNER = "delegation_core"
 MAX_REQUEST_DEPTH = 64
+# A refusal never names a conversation: its id is what lets a later call attach to it.
+NOT_FOUND = "Conversation not found"
 
 
 def nested_deeper_than(value: object, limit: int) -> bool:
@@ -63,23 +66,27 @@ class ResponsesService:
 
     def __init__(
         self,
-        new_session: Callable[[], IMSession],
+        new_session: Callable[..., IMSession],
         *,
         stateless_session: Callable[[], IMSession],
         backend: BackendRules,
     ):
-        """Serve the conversations of a core whose IM sessions ``new_session`` makes, one for each conversation."""
+        """Serve the conversations of a core whose IM sessions ``new_session`` makes, one for each conversation.
+
+        ``new_session`` gets each session's ``room`` and ``on_closed`` hooks as keywords.
+        """
         self.new_session, self.stateless_session, self.backend = new_session, stateless_session, backend
         self.sessions: dict[str, IMSession] = {}
         self.conversations: dict[str, dict] = {}
         self.created_at = int(time.time())
 
     async def create_conversation(self, metadata: dict[str, str] | None = None) -> dict:
-        """Start a new IM session for a new conversation (``POST /v1/conversations``); return its object."""
-        metadata = {} if metadata is None else metadata
-        if not isinstance(metadata, dict) or not all(isinstance(value, str) for value in metadata.values()):
-            raise InvalidRequest("A conversation's metadata must be an object of strings", param="metadata")
-        session = self.new_session()
+        """Start a new IM session for a new conversation (``POST /v1/conversations``); return its object.
+
+        ``live_store: "true"`` in its metadata lets its work outlive a call, as :meth:`delete_conversation` says.
+        """
+        metadata = _metadata(metadata)
+        session = self.new_session(room=self._room, on_closed=self._closed)
         conversation_id = session.ledger.session.id
         conversation = {
             "id": conversation_id,
@@ -88,18 +95,64 @@ class ResponsesService:
             "metadata": deepcopy(metadata),
         }
         self.sessions[conversation_id], self.conversations[conversation_id] = session, conversation
+        session.continuable = metadata.get(STORE) == "true"
         session.start()
         return deepcopy(conversation)
 
-    async def delete_conversation(self, conversation_id: str) -> dict:
-        """End a conversation's IM session, then forget it (``DELETE /v1/conversations/{id}``)."""
+    async def update_conversation(self, conversation_id: str, metadata: dict[str, str] | None = None) -> dict:
+        """Attach a later call to a kept conversation, with its new metadata (``POST /v1/conversations/{id}``).
+
+        Return the conversation's object. ``NotFound`` for a conversation that is unknown or has ended, and
+        ``DelegationError`` for one that another call holds.
+        """
+        metadata = _metadata(metadata)
         session = self._session(conversation_id)
+        try:
+            await session.attach()
+        except DelegationError:
+            if session.closed:
+                raise NotFound(NOT_FOUND) from None
+            raise
+        conversation = self.conversations[session.ledger.session.id]
+        conversation["metadata"] = deepcopy(metadata)
+        session.continuable = metadata.get(STORE) == "true"
+        return deepcopy(conversation)
+
+    async def delete_conversation(self, conversation_id: str) -> dict:
+        """End a conversation's IM session, then forget it (``DELETE /v1/conversations/{id}``).
+
+        A conversation with ``live_store: "true"`` in its metadata is kept instead while its records list work that
+        outlives the call, open or among the newest ended (``IMSession.leave``): such work still open goes on, it
+        answers ``deleted: false``, and a later call can attach with :meth:`update_conversation`. A kept conversation is
+        forgotten once its session closes.
+        """
+        session = self._session(conversation_id)
+        if session.continuable:
+            kept = await session.leave()
+            return {"id": conversation_id, "object": "conversation.deleted", "deleted": not kept}
         try:
             await session.close()
         finally:
-            if self.sessions.get(conversation_id) is session:
-                del self.sessions[conversation_id], self.conversations[conversation_id]
+            self._closed(session)
         return {"id": conversation_id, "object": "conversation.deleted", "deleted": True}
+
+    def _room(self, session: IMSession) -> bool:
+        """Return whether ``session``'s work may outlive its call by the cap of such conversations.
+
+        Fewer than its ``max_after_call_conversations`` other conversations have work open that outlives their call.
+        """
+        others = sum(other.runs_after_call for other in self.sessions.values() if other is not session)
+        return others < session.settings.max_after_call_conversations
+
+    def _closed(self, session: IMSession) -> None:
+        """Forget ``session``'s conversation while the session serves it."""
+        conversation_id = session.ledger.session.id
+        if self.sessions.get(conversation_id) is session:
+            del self.sessions[conversation_id], self.conversations[conversation_id]
+
+    async def aclose(self) -> None:
+        """Close every conversation's IM session at once, kept ones included, so no work outlives the server."""
+        await asyncio.gather(*(session.close() for session in list(self.sessions.values())), return_exceptions=True)
 
     async def list_conversation_items(self, conversation_id: str) -> dict:
         """Return the backend history, oldest first, as one list page (``GET /v1/conversations/{id}/items``)."""
@@ -118,7 +171,7 @@ class ResponsesService:
             conversation_id = conversation_id.get("id")
         session = self.sessions.get(conversation_id) if isinstance(conversation_id, str) else None
         if session is None:
-            raise NotFound(f"Conversation {conversation_id!r} not found")
+            raise NotFound(NOT_FOUND)
         return session
 
     async def retrieve_model(self, model: str) -> dict:
@@ -173,6 +226,14 @@ class ResponsesService:
             await session.close()
             raise
         return StatelessStream(admission.stream, session)
+
+
+def _metadata(metadata: object) -> dict[str, str]:
+    """Return a conversation's metadata, ``{}`` for none; ``InvalidRequest`` unless it is an object of strings."""
+    metadata = {} if metadata is None else metadata
+    if not isinstance(metadata, dict) or not all(isinstance(value, str) for value in metadata.values()):
+        raise InvalidRequest("A conversation's metadata must be an object of strings", param="metadata")
+    return metadata
 
 
 def checked(params: dict) -> tuple[list[dict], dict]:

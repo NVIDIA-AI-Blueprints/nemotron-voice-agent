@@ -8,6 +8,7 @@
 import asyncio
 import base64
 import json
+import traceback
 import unittest
 from unittest import mock
 
@@ -22,6 +23,8 @@ from tests.unit.live_helpers import ClientSocket, Collector, FakeAdapter, Stream
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]
 AUDIO = base64.b64encode(b"\x01\x00" * 480).decode()
 REFUSED_MODEL = ("responses_validation_failed", "session.delegation.responses.model")
+REFUSED_CONVERSATION = ("invalid_value", "session.delegation.responses.conversation")
+KEPT = "conv_kept"  # a conversation the core keeps for a later call, its work going on
 SHOWN = {"type": "mcp", "server_label": "crm", "server_url": "https://crm.example/mcp"}
 MCP = {**SHOWN, "authorization": "Bearer secret-token", "headers": {"X-Api-Key": "secret-key"}}
 
@@ -59,7 +62,7 @@ class Stalling(Collector):
 class View:
     """The session's delegation view (``gateways.live.ports.DelegationView``): the input clock, and the events sent."""
 
-    id, responses, acknowledgement_delay_ms = "live_test", None, 0
+    id, responses, acknowledgement_delay_ms, store = "live_test", None, 0, False
 
     def __init__(self, input_ms=0):
         self.input_ms, self.events = input_ms, []
@@ -199,6 +202,51 @@ class ConversationTests(Case):
         self.assertEqual(ended, sorted(delegations[:2]))
         self.assertNotIn("response.failed", [kind for kind, _ in self.ends()])
         self.assertEqual([kind for _, kind in self.core.heard], ["response.created"] * 3)
+
+    async def test_a_stored_session_opens_its_conversation_with_store_for_the_core(self):
+        await self.start(config=responses_config(store=True))
+        self.assertEqual(self.core.metadata, {"live_session_id": self.session.id, "live_store": "true"})
+
+    async def test_an_attach_waits_up_to_the_cores_close_budget(self):
+        # The call before may still be closing: an attach outwaits a create's limit, up to the core's close budget.
+        self.build(config=responses_config(conversation=KEPT, store=True))
+        self.core.kept, self.core.close_seconds, self.core.hold["update"] = {KEPT}, 5, asyncio.Event()
+        with mock.patch.object(passthrough, "CONVERSATION_SECONDS", 0.1):
+            starting = asyncio.create_task(self.session.start("start_1"))
+            await asyncio.sleep(0.2)
+            self.core.hold["update"].set()
+            await starting
+        self.assertEqual((self.session.status, self.client.kinds()[0]), ("active", "session.started"))
+
+    async def test_a_close_during_the_attach_gives_the_conversation_back(self):
+        # Deleted as a conversation created meanwhile is, so the core keeps it again for its work.
+        self.build(config=responses_config(conversation=KEPT, store=True))
+        self.core.kept, self.core.keeps, self.core.hold["update"] = {KEPT}, True, asyncio.Event()
+        starting = asyncio.create_task(self.session.start("start_1"))
+        await self.until(lambda: "update" in self.core.log)
+        await self.session.close("remote_hangup")
+        self.core.hold["update"].set()
+        await starting
+        self.assertEqual((self.core.log, self.core.kept), (["update", "close", "delete", "close"], {KEPT}))
+        self.assertNotIn("session.started", self.client.kinds())
+
+    async def test_an_attach_that_ends_with_no_refusal_leaves_the_conversation_kept(self):
+        # A start that ends before session.started with no invalid_value: the app keeps the id and tries again.
+        for how, codes in (("past its limit", ["pipeline_error"]), ("cancelled", [])):
+            with self.subTest(how):
+                self.build(config=responses_config(conversation=KEPT, store=True))
+                self.core.kept, self.core.hold["update"] = {KEPT}, asyncio.Event()
+                if how == "past its limit":
+                    with mock.patch.object(passthrough, "CONVERSATION_SECONDS", 0.1), self.assertRaises(RuntimeError):
+                        await self.session.start("start_1")
+                else:  # a WebRTC start runs as a session task, which a peer that leaves cancels
+                    self.session.spawn(self.session.start("start_1"), "start")
+                    await self.until(lambda: "update" in self.core.log)
+                    await self.session.close("remote_hangup")
+                closed = self.client.events[-1]
+                self.assertEqual(([e["code"] for e in self.errors()], closed["type"]), (codes, "session.closed"))
+                self.assertNotIn("conversation", closed["session"]["delegation"]["responses"])
+                self.assertEqual((self.core.log, self.core.kept), (["update", "close"], {KEPT}))
 
 
 class RelayTests(Case):
@@ -525,6 +573,29 @@ class PartTests(Case):
         self.assertEqual([request["metadata"] for request in core.requests], [{"live_delegation_id": delegation_id}])
         self.assertEqual(core.heard, [])
         await self.until(lambda: len(core.heard) == 2)
+
+    async def test_a_conversation_the_core_refuses_is_an_error_on_its_param(self):
+        # The id is what attaches, so neither the error nor its traceback names it.
+        held = RuntimeError(f"{KEPT} serves another call")
+        held.code = None
+        view = View()
+        view.store, view.responses = True, responses_config(conversation=KEPT, store=True).delegation.responses
+        for refusal in (LookupError(f"Conversation {KEPT} not found"), held):
+            with self.subTest(refusal=type(refusal).__name__):
+                core = FakeAdapter()
+                core.fail["update"] = refusal
+                with self.assertRaises(ProtocolError) as refused:
+                    await ServerDelegation(core).open(view)
+                self.assertEqual((refused.exception.code, refused.exception.param), REFUSED_CONVERSATION)
+                self.assertNotIn(KEPT, "".join(traceback.format_exception(refused.exception)))
+        # Any other failure is no refusal of the id: it reaches the start as itself, so the app keeps the id.
+        for failure in (RuntimeError("the backend could not be built"), ProtocolError("No core", "server_error")):
+            with self.subTest(failure=type(failure).__name__):
+                core = FakeAdapter()
+                core.fail["update"] = failure
+                with self.assertRaises(type(failure)) as failed:
+                    await ServerDelegation(core).open(view)
+                self.assertIs(failed.exception, failure)
 
     async def test_a_continuation_never_overtakes_the_end_it_continues(self):
         # The waiting response's terminal may come after the continuation is accepted; its reader still relays first.

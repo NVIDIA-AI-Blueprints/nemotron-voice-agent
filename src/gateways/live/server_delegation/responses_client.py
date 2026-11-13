@@ -28,8 +28,19 @@ class ResponsesClient(Protocol):
     async def create_conversation(self, metadata: dict[str, str]) -> dict:
         """Open a conversation (``POST /v1/conversations``) and return the conversation object."""
 
+    async def update_conversation(self, conversation_id: str, metadata: dict[str, str]) -> dict:
+        """Attach a later call to a kept conversation with new metadata (``POST /v1/conversations/{id}``).
+
+        Return the conversation object. A conversation that is unknown or has ended raises ``LookupError``, and one
+        that another call holds raises an exception with a ``code`` attribute, an official code or ``None``.
+        """
+
     async def delete_conversation(self, conversation_id: str) -> dict:
-        """Delete the conversation (``DELETE /v1/conversations/{id}``); the core also stops its work."""
+        """Delete the conversation (``DELETE /v1/conversations/{id}``) and return the deleted object.
+
+        The core stops its work, unless work that outlives the call keeps the conversation: then ``deleted`` is
+        ``false``, and a later call can attach to it.
+        """
 
     async def retrieve_model(self, model: str) -> dict:
         """Return the model object (``GET /v1/models/{model}``); raise ``ValueError`` if the core does not serve it."""

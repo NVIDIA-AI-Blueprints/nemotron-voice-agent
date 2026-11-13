@@ -42,10 +42,11 @@ from .protocol import (
     ToolCardEnd,
     UserText,
     Wake,
+    usage_total,
 )
 from .render import output_text
-from .runtime import give_back
-from .sessions import KeptSession, keys
+from .runtime import cancel_in_background, give_back
+from .sessions import KeptSession, keys, unread
 
 if TYPE_CHECKING:
     from .adapter import HarnessAdapter
@@ -53,20 +54,9 @@ if TYPE_CHECKING:
 OPEN_ATTEMPTS = 2
 LOGGED_TEXT_CHARS = 300
 
-# The cancels sent in the background, kept until sent or timed out so none is collected before it is sent.
-_CANCELS: set[asyncio.Future] = set()
-
 
 class HarnessTurnError(RuntimeError):
     """The agent's turn gave no answer the run can pass on (its text is logged, never spoken)."""
-
-
-def usage_total(usage: Mapping[str, Any] | None) -> int | None:
-    """Return the session's token total an agent reported (ACP ``totalTokens``), or ``None``."""
-    if not usage:
-        return None
-    total = usage.get("totalTokens")
-    return total if isinstance(total, int) else None
 
 
 @dataclass
@@ -113,6 +103,8 @@ class _Turn:
     cancelled_by_us: bool = False
     seen: bool = False
     early: list[Steering] = field(default_factory=list)
+    # The first turn of a session taken from the pool: a failure before any update moves the task to a fresh session.
+    reused: bool = False
 
     @property
     def cancel_pending(self) -> bool:
@@ -148,6 +140,8 @@ class WorkerRun:
         self.instructions = ""
         # The keys of every item the session was shown or wrote, in the IM's order.
         self.shown: list[tuple] = []
+        # Every Work and task the session served before this task, when it was taken from the pool.
+        self.served: list[str] = []
         # Prompts whose end the run has not read, in mailbox order: the session's own set runs ahead of the mailbox.
         self.open_prompts: set[int] = set()
         self.total: int | None = None
@@ -246,12 +240,25 @@ class WorkerRun:
         return outcome
 
     async def release(self) -> None:
-        """Keep the session for a later task if the adapter takes it, else retire it; either way give back its place."""
+        """Pool the session for a later task if it can serve one, else retire it; either way give back its place.
+
+        A session that the pool's bound evicts to make room is retired, and so is one released while the pool is
+        closed, or by a task whose Work outlived the call: no later task's history holds that Work's steps.
+        """
         kept = self._kept()
-        if kept is not None and self.host.keep(kept):
+        if kept is not None:
             self.runtime = self.session = self.door = None
             kept.runtime.leave()
+            if self.task.after_call:
+                self._retire_kept(kept, "a marked task")
+                return
+            evicted = self.host.keep(kept)
+            if evicted is kept:
+                self._retire_kept(kept, "the pool closed")
+                return
             self.task.trace("harness.session_kept", server=kept.door.name, session=kept.session.id)
+            if evicted is not None:
+                self._retire_kept(evicted, "evicted")
             return
         self._close_door(self.task.texts.stopped_output)
         session = self.session
@@ -273,60 +280,123 @@ class WorkerRun:
         if self.turn is not None and self.turn.cancel_pending:
             return None
         left = (session.outstanding, self.reprompts, self.next_prompts, self.sent, self.forwarded, self.app_queue)
-        if any(left) or self.running or self.cards_open or door.held or not runtime.client.alive:
+        lost = not (runtime.client.alive and session.alive)
+        if any(left) or self.running or self.cards_open or door.held or lost:
             return None
-        shown = list(self.shown)
+        served = [*self.served, self.task.work_id, self.task.task_id]
         return KeptSession(
-            runtime, session, door, self.mailbox, self.instructions, shown, self.total, self.usage, self.tool_rows
+            runtime,
+            session,
+            door,
+            self.mailbox,
+            self.instructions,
+            list(self.shown),
+            self.total,
+            self.usage,
+            self.tool_rows,
+            served,
+            self.task.task_id,
+            time.monotonic(),
         )
 
     async def _open(self) -> None:
-        """Take the kept session when it fits (:meth:`_adopt`), else open a fresh one, and prompt it."""
-        kept = self.host.take_kept()
-        if kept is not None and self._adopt(kept):
-            return
-        self.runtime = await self.host.shared(self.host.workers)
-        await self._open_session(self.task.request().get("instructions") or "")
+        """Take the first idle session of its thread that fits (:meth:`_adopt`), else open a fresh one, and prompt it.
 
-    def _adopt(self, kept: KeptSession) -> bool:
-        """Take over ``kept`` when it fits, and prompt it with the items it has not read; else retire it (``False``)."""
+        The history is read before the walk, so one over the budget fails the task and leaves every idle session as it
+        was. The walk never awaits, so two tasks never take the same session, and its checks (:meth:`_misfit`) retire
+        only a lost session.
+        """
+        history = self.task.history()
         instructions = self.task.request().get("instructions") or ""
-        fits = kept.runtime.client.alive and kept.instructions == instructions
-        if not (fits and self.host.take_place(kept.runtime)):
-            kept.retire(self.host.bridge)
-            return False
-        if not kept.door.rebind(self.task, self.host.tools):
-            return self._retire_kept(kept)
+        why = []
+        for kept in self.host.candidates(self.task):
+            misfit = self._misfit(kept, instructions, history)
+            if misfit is None:
+                misfit = self._adopt(kept, instructions)
+                if misfit is None:
+                    return
+            why.append(misfit)
+        self.runtime = await self.host.shared(self.host.workers)
+        await self._open_session(
+            self.task.request().get("instructions") or "", why or ["no idle session of its thread"]
+        )
+
+    def _misfit(self, kept: KeptSession, instructions: str, history: list[dict]) -> str | None:
+        """Return why the idle session ``kept`` cannot serve the task; else ``None``.
+
+        A session whose process or session is lost is retired on the way; any other stays idle as it was.
+        """
+        if not (kept.runtime.client.alive and kept.session.alive):
+            why = "session lost" if kept.runtime.client.alive else "process lost"
+            self.host.take_kept(kept)
+            self._retire_kept(kept, why)
+            return why
+        if kept.instructions != instructions:
+            return "other instructions"
+        if not kept.door.serves(self.task, self.host.tools):
+            return "another toolset"
+        return unread(kept.shown, history).why
+
+    def _adopt(self, kept: KeptSession, instructions: str) -> str | None:
+        """Take over ``kept``, which fits: a turn place, waiting steering, its door, then the items it has not read.
+
+        Return ``None`` once it is prompted. A full process, or a history that the steering left it unfit for, returns
+        why, and a failure is raised; either way the session stays idle as it was, its place given back.
+        """
+        if not self.host.take_place(kept.runtime):
+            return "process full"
         try:
+            # Steering joins at the end, after the session's last answer, so it is new to the session.
+            self._apply_before_prompt([])
             history = self.task.history()
-            # Steering joins at the end: it is applied only if the history before it begins with what the session read.
-            if keys(history)[: len(kept.shown)] == kept.shown:
-                self._apply_before_prompt([])
-                history = self.task.history()
         except BaseException:
-            # The task fails, its history over the budget: the session leaves nothing behind.
-            self._retire_kept(kept)
+            # The task fails, its history over the budget.
+            kept.runtime.leave()
             raise
-        shown = keys(history)
-        if shown[: len(kept.shown)] != kept.shown or len(shown) == len(kept.shown):
-            return self._retire_kept(kept)
+        missed = unread(kept.shown, history)
+        if missed.items is None or not kept.door.rebind(self.task, self.host.tools):
+            kept.runtime.leave()
+            return missed.why or "another toolset"
+        self.host.take_kept(kept)
         self.runtime, self.session, self.door, self.mailbox = kept.runtime, kept.session, kept.door, kept.mailbox
         while not self.mailbox.empty():
             self.mailbox.get_nowait()
-        self.instructions, self.shown = instructions, shown
+        # Once sent what it has not read, the session has read what it read before and the whole history.
+        self.instructions, self.served = instructions, list(kept.served)
+        self.shown = [*kept.shown, *keys(missed.items)]
         self.total, self.usage, self.tool_rows = kept.total, kept.usage, kept.tool_rows
-        rest = history[len(kept.shown) :]
-        self.task.trace("harness.session_reused", server=kept.door.name, session=kept.session.id, items=len(rest))
-        self._start_turn(self.session.prompt(self.host.renderer.transcript(rest)))
-        return True
+        self.task.trace(
+            "harness.session_reused",
+            server=kept.door.name,
+            session=kept.session.id,
+            items=len(missed.items),
+            continues=self.task.continues is not None and self.task.continues in kept.served,
+            idle=round(time.monotonic() - kept.idle_since, 3),
+            before=missed.before,
+            absent=missed.absent,
+            last_task=kept.last_task,
+        )
+        self._start_turn(self.session.prompt(self.host.renderer.transcript(missed.items)))
+        self.turn.reused = True
+        return None
 
-    def _retire_kept(self, kept: KeptSession) -> bool:
-        kept.runtime.leave()
-        kept.retire(self.host.bridge)
-        return False
+    def _retire_kept(self, kept: KeptSession, why: str) -> None:
+        """Retire ``kept``, an idle session out of the pool that holds no place, and say why."""
+        closed = kept.retire(self.host.bridge)
+        self.task.trace(
+            "harness.session_retired",
+            server=kept.door.name,
+            session=kept.session.id,
+            last_task=kept.last_task,
+            why=why,
+            closed=closed,
+        )
 
-    async def _open_session(self, instructions: str, batches: tuple[Steering, ...] = ()) -> None:
-        """Open a fresh session in the run's runtime and prompt it with the history, ``batches`` applied."""
+    async def _open_session(self, instructions: str, why: list[str], batches: tuple[Steering, ...] = ()) -> None:
+        """Open a fresh session in the run's runtime and prompt it with the history, ``batches`` applied.
+
+        ``why`` says why the task opens a fresh session: one reason per idle session it tried, or why it left its own.
+        """
         runtime, started = self.runtime, time.monotonic()
         for attempt in range(1, OPEN_ATTEMPTS + 1):
             name = runtime.server_name(self.host.workers.prefix)
@@ -358,10 +428,9 @@ class WorkerRun:
             raise RuntimeError("The agent did not list the session's tools: its MCP connection to the bridge failed")
         self.mailbox, self.door, self.session = mailbox, door, session
         self.total, self.usage = 0, None
-        self.instructions = instructions
-        self.task.trace(
-            "harness.session_opened", server=name, session=session.id, seconds=round(time.monotonic() - started, 3)
-        )
+        self.instructions, self.served = instructions, []
+        seconds = round(time.monotonic() - started, 3)
+        self.task.trace("harness.session_opened", server=name, session=session.id, seconds=seconds, why=why)
         if self.stopped:
             await self.release()
             return
@@ -418,15 +487,21 @@ class WorkerRun:
             yield event
 
     async def _next(self) -> SessionEvent | _TimedOut:
-        """Return the session's next event, or a :class:`_TimedOut` once the turn's reading time is up."""
+        """Return the session's next event, or a :class:`_TimedOut` once the turn's reading time is up.
+
+        A task whose Work outlives the call reads with no time limit: the keep time and the stop door bound it.
+        """
         turn = self.turn
-        if turn is None:
+        if turn is None or self.task.after_call:
             return await self.mailbox.get()
         started = time.monotonic()
         try:
             async with asyncio.timeout(max(self.settings.turn_timeout_seconds - turn.used, 0.001)):
                 return await self.mailbox.get()
         except TimeoutError:
+            # Another task of the Work may have marked it while this one waited.
+            if self.task.after_call:
+                return await self.mailbox.get()
             return _TimedOut()
         finally:
             turn.used += time.monotonic() - started
@@ -553,9 +628,14 @@ class WorkerRun:
             async for event in self._close(None):
                 yield event
             if turn.cancel_pending:
-                await self._reopen()
+                await self._reopen("a cancel it may still take")
             else:
                 self._reprompt_now()
+            return
+        if failure is not None and turn.reused and not turn.seen:
+            async for event in self._close(None):
+                yield event
+            await self._renew()
             return
         if failure is not None:
             async for event in self._fail(failure, self._last_text()):
@@ -656,8 +736,24 @@ class WorkerRun:
         self.next_prompts, self.reprompts = [*self.next_prompts, *self.reprompts], []
         self._prompt_next_now()
 
-    async def _reopen(self) -> None:
-        """Open a fresh session after a turn our cancel may still reach, prompted with the history and the batches."""
+    async def _renew(self) -> None:
+        """Retire a session taken from the pool whose first prompt failed before any update; go on in a fresh one.
+
+        Nothing of the task reached it, so the fresh session takes the whole history with the batches left waiting.
+        """
+        turn, session = self.turn, self.session
+        self.reprompts = [*turn.early, *self.next_prompts, *self.reprompts]
+        turn.early, self.session = [], None
+        closed = session.retire()
+        why = "a failed first prompt"
+        self.task.trace("harness.session_retired", server=self.door.name, session=session.id, why=why, closed=closed)
+        await self._reopen(why)
+
+    async def _reopen(self, why: str) -> None:
+        """Open a fresh session in place of the run's, prompted with the history and the batches, saying ``why``.
+
+        It follows a turn that our cancel may still reach, or a first prompt that failed on a session from the pool.
+        """
         batches, self.reprompts = self.reprompts, []
         self._close_door(self.task.texts.not_run_output)
         if self.session is not None:
@@ -666,7 +762,7 @@ class WorkerRun:
         self.open_prompts = set()
         self.running, self.cards_open, self.runtime_calls = set(), set(), {}
         self.tool_rows, self.current_message = False, None
-        await self._open_session(self.task.request().get("instructions") or "", tuple(batches))
+        await self._open_session(self.task.request().get("instructions") or "", [why], tuple(batches))
 
     def steer_in_turn(self, steering: Steering) -> None:
         """Send the batch as the agent's own steer while the turn's prompt runs, else as the next prompt."""
@@ -713,10 +809,7 @@ class WorkerRun:
         if turn is None or turn.cancelled_by_us or session is None or not session.outstanding:
             return
         turn.cancelled_by_us = True
-        cancel = asyncio.ensure_future(asyncio.wait_for(session.cancel(), self.settings.stop_timeout_seconds))
-        _CANCELS.add(cancel)
-        cancel.add_done_callback(_CANCELS.discard)
-        cancel.add_done_callback(lambda done: done.cancelled() or done.exception())
+        cancel_in_background(session, self.settings.stop_timeout_seconds)
 
     def _acked(self) -> list[_SentSteer]:
         return [sent for sent in self.sent.values() if sent.acked and not sent.settled]
