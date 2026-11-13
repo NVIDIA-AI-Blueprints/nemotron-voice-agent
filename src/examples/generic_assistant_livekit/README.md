@@ -41,12 +41,12 @@ The agent uses the first entry of each slot that the `generic-assistant` example
 
 ## Recommended Hardware
 
-Pick the profile for your hardware. The support matches the `generic-assistant` example in the [Getting Started guide](../../../docs/01-getting-started.md).
+Pick the profile for your hardware. The support follows the `generic-assistant` example in the [Getting Started guide](../../../docs/01-getting-started.md), with the DGX Spark exception noted in the table.
 
 | Hardware | Profile | Notes |
 | --- | --- | --- |
 | No local GPU | Cloud: `generic-assistant-livekit` | Models run on NVIDIA Cloud. You need `NVIDIA_API_KEY` and internet access. |
-| Workstation or server GPU | Server: `generic-assistant-livekit/server` | NVIDIA NIM containers. Do not use on DGX Spark or Jetson Thor. |
+| Workstation or server GPU | Server: `generic-assistant-livekit/server` | NVIDIA NIM containers. The Getting Started guide lists this profile for workstations only. It also ran on a DGX Spark in our testing, with a first start of 40 minutes or more, but that combination is not officially supported. |
 | Workstation, DGX Spark, or Jetson Thor | Single GPU: `generic-assistant-livekit/single-gpu` | vLLM for the LLM and NeMo-Speech.cpp for ASR and TTS. This is the profile for DGX Spark and Jetson Thor. |
 
 For the Server and Single GPU profiles, use a machine that is not running other model servers:
@@ -89,7 +89,7 @@ Run all commands from the repository root, on the machine that hosts the deploym
    src/examples/generic_assistant_livekit/run.sh up cloud
    ```
 
-   **Option B: Server with NIM.** Use this option on a workstation or server GPU, not on DGX Spark or Jetson Thor.
+   **Option B: Server with NIM.** Use this option on a workstation or server GPU. It also worked on a DGX Spark in our testing, but only Single GPU is documented for DGX Spark and Jetson Thor.
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh up server
