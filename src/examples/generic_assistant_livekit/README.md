@@ -142,7 +142,7 @@ Run all commands from the repository root, on the machine that hosts the deploym
 
    The sidecars extend the service definitions in [`docker/`](../../../docker) and have network aliases that match the hostnames in `services.yaml`. The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up` command again so that the agent is recreated too.
 
-6. Open `http://localhost:3000/`, select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
+6. Open `http://localhost:3000/`. The header shows the deployment mode and the models in use, with the runtime that serves each one. Select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
 7. When you are done, stop the profile. Omit the profile to stop all of them:
 

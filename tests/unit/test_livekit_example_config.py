@@ -76,3 +76,20 @@ def test_models_summary_for_the_ui():
     models = config.load_config("cloud", env={}, catalog=CATALOG).models()
     assert [m["kind"] for m in models] == ["ASR", "LLM", "TTS"]
     assert all(m["runs"] == "NVIDIA Cloud" for m in models)
+
+
+def test_models_name_the_runtime_for_each_recipe():
+    server = config.load_config("server", env={}, catalog=CATALOG).models()
+    assert [m["runs"] for m in server] == ["NVIDIA NIM"] * 3
+    single = config.load_config("single-gpu", env={}, catalog=CATALOG).models()
+    assert {m["kind"]: m["runs"] for m in single} == {"ASR": "NeMo-Speech.cpp", "LLM": "vLLM", "TTS": "NeMo-Speech.cpp"}
+
+
+def test_deployment_summary_has_a_label_and_the_model_ids():
+    deployment = config.load_config("single-gpu", env={}, catalog=CATALOG).deployment()
+    assert deployment["recipe"] == "single-gpu"
+    assert deployment["label"] == "Single GPU"
+    llm = next(m for m in deployment["models"] if m["kind"] == "LLM")
+    assert llm["id"] == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert config.load_config("server", env={}, catalog=CATALOG).deployment()["label"] == "Server (NIM)"
+    assert config.load_config("cloud", env={}, catalog=CATALOG).deployment()["label"] == "Cloud"

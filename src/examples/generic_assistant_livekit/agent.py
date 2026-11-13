@@ -21,6 +21,7 @@ from livekit.plugins import nvidia, openai, silero
 
 from .config import AgentConfig, load_config
 from .credentials import apply_to_environ
+from .state import DEPLOYMENT_FILE, write_json_atomic
 from .tool_wrapper import traced_tool
 from .tools import current_datetime, current_weather
 from .voices import (
@@ -219,9 +220,11 @@ async def entrypoint(ctx: JobContext):
 
 if __name__ == "__main__":
     # Only the main worker process runs this block, not the job processes that import the module.
-    threading.Thread(
-        target=publish_voices,
-        args=(load_config(), Path(os.environ.get("LIVEKIT_STATE_DIR", "/state"))),
-        daemon=True,
-    ).start()
+    config = load_config()
+    state_dir = Path(os.environ.get("LIVEKIT_STATE_DIR", "/state"))
+    try:
+        write_json_atomic(state_dir / DEPLOYMENT_FILE, config.deployment())  # the UI shows the mode and models
+    except OSError as exc:
+        log.warning("cannot publish the deployment to %s: %s", state_dir, exc)
+    threading.Thread(target=publish_voices, args=(config, state_dir), daemon=True).start()
     cli.run_app(server)

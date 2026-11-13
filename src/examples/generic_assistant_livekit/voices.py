@@ -17,11 +17,11 @@ synthesis config that each server returns from `GetRivaSynthesisConfig`:
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
+
+from .state import read_json, write_json_atomic
 
 VOICES_FILE = "voices.json"  # written by the agent worker into the state volume, read by the UI server
 PLAIN_PREFIXES = {
@@ -103,22 +103,17 @@ def choose_voice(requested: object, available: Iterable[str], default: str) -> s
 
 
 def write_voices_file(path: Path, voices: list[dict[str, str]], default: str) -> None:
-    """Write the voice list for the UI server. The write is atomic, so a reader never sees a partial file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".voices-")
-    with os.fdopen(fd, "w") as handle:
-        json.dump({"voices": voices, "default": default}, handle)
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, path)
+    """Write the voice list for the UI server."""
+    write_json_atomic(path, {"voices": voices, "default": default})
 
 
 def read_voices_file(path: Path) -> dict[str, Any]:
     """Return `{"voices": [...], "default": ...}`, or an empty list when the file is missing or unreadable."""
+    data = read_json(path)
     try:
-        data = json.loads(path.read_text())
         voices = [v for v in data["voices"] if isinstance(v, dict) and "id" in v and "name" in v]
         return {"voices": voices, "default": str(data.get("default", ""))}
-    except (OSError, ValueError, KeyError, TypeError):
+    except (KeyError, TypeError):
         return {"voices": [], "default": ""}
 
 

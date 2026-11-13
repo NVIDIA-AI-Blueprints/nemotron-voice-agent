@@ -16,14 +16,20 @@ from urllib.parse import parse_qs, urlsplit
 from livekit import api
 
 from .credentials import DEFAULT_STATE_DIR, apply_to_environ
+from .state import DEPLOYMENT_FILE, read_json
 from .voices import VOICES_FILE, choose_voice, read_voices_file
 
 PUBLIC = Path(__file__).with_name("ui")
 
 
+def state_path(name: str) -> Path:
+    """Return a file that the agent worker publishes into the state volume."""
+    return Path(os.environ.get("LIVEKIT_STATE_DIR", DEFAULT_STATE_DIR)) / name
+
+
 def voices_path() -> Path:
-    """Return the voice list that the agent worker publishes into the state volume."""
-    return Path(os.environ.get("LIVEKIT_STATE_DIR", DEFAULT_STATE_DIR)) / VOICES_FILE
+    """Return the voice list that the agent worker publishes."""
+    return state_path(VOICES_FILE)
 
 
 def send_json(handler: SimpleHTTPRequestHandler, payload: dict) -> None:
@@ -53,6 +59,8 @@ class Handler(SimpleHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == "/voices":
             return send_json(self, read_voices_file(voices_path()))
+        if url.path == "/deployment":
+            return send_json(self, read_json(state_path(DEPLOYMENT_FILE)) or {})
         if url.path != "/token":
             return super().do_GET()
         listed = read_voices_file(voices_path())

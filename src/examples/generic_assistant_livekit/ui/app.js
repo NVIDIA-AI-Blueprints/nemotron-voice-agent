@@ -104,7 +104,9 @@ function showModels(models) {
     const top = el('div', 'model-top');
     const kind = el('span', 'model-kind', model.kind);
     kind.title = STAGES[model.kind] || '';
-    top.append(kind, el('span', 'model-name', model.name));
+    const name = el('span', 'model-name', model.name);
+    if (model.id) name.title = model.id;
+    top.append(kind, name);
     const meta = el('div', 'model-meta');
     meta.append(el('span', 'pill pill-runtime', model.runs));
     card.append(top, meta);
@@ -199,6 +201,24 @@ function reset() {
   setStatus('Disconnected');
 }
 
+// The deployment mode and the models in use, published by the agent worker, so they show before you connect.
+async function loadDeployment() {
+  for (let attempt = 0; attempt < 45; attempt++) {  // the agent worker may still be starting
+    try {
+      const deployment = await (await fetch('/deployment')).json();
+      if (deployment.models) {
+        $('mode-badge').textContent = deployment.label;
+        $('mode-badge').classList.toggle('badge-local', deployment.recipe !== 'cloud');
+        showModels(deployment.models);
+        return;
+      }
+    } catch (e) { /* retry */ }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  $('mode-badge').textContent = 'Deployment unknown';
+}
+
+loadDeployment();
 loadVoices();
 $('connect').onclick = () => (room ? room.disconnect() : connect());
 $('mute').onclick = async () => {

@@ -20,6 +20,13 @@ from typing import Any
 import yaml
 
 RECIPES = ("cloud", "server", "single-gpu")
+MODE_LABELS = {"cloud": "Cloud", "server": "Server (NIM)", "single-gpu": "Single GPU"}
+# The runtime that serves each slot in each recipe, shown in the UI.
+RUNTIMES = {
+    "cloud": {"asr": "NVIDIA Cloud", "llm": "NVIDIA Cloud", "tts": "NVIDIA Cloud"},
+    "server": {"asr": "NVIDIA NIM", "llm": "NVIDIA NIM", "tts": "NVIDIA NIM"},
+    "single-gpu": {"asr": "NeMo-Speech.cpp", "llm": "vLLM", "tts": "NeMo-Speech.cpp"},
+}
 # Defaults match the `generic-assistant` example in examples_registry.yaml (first entry of each slot).
 DEFAULT_SERVICES = {
     "llm": "nemotron-lightning",
@@ -61,13 +68,17 @@ class AgentConfig:
         return self.recipe == "cloud"
 
     def models(self) -> list[dict[str, str]]:
-        """Return the model names for the UI, in pipeline order."""
-        where = "NVIDIA Cloud" if self.hosted else self.recipe
+        """Return the models in use for the UI, in pipeline order, with the runtime that serves each one."""
+        runtimes = RUNTIMES[self.recipe]
         return [
-            {"kind": "ASR", "name": self.asr_name, "runs": where},
-            {"kind": "LLM", "name": self.llm_name, "runs": where},
-            {"kind": "TTS", "name": self.tts_name, "runs": where},
+            {"kind": "ASR", "name": self.asr_name, "runs": runtimes["asr"], "id": self.asr_model},
+            {"kind": "LLM", "name": self.llm_name, "runs": runtimes["llm"], "id": self.llm_model},
+            {"kind": "TTS", "name": self.tts_name, "runs": runtimes["tts"], "id": self.tts_voice},
         ]
+
+    def deployment(self) -> dict[str, object]:
+        """Return the deployment mode and the models in use, for the UI."""
+        return {"recipe": self.recipe, "label": MODE_LABELS[self.recipe], "models": self.models()}
 
 
 def default_catalog_path() -> Path:
