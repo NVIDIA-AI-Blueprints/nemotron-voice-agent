@@ -36,8 +36,8 @@ The agent uses the first entry of each slot that the `generic-assistant` example
 | Profile | ASR | LLM | TTS |
 | --- | --- | --- | --- |
 | Cloud | Nemotron ASR Streaming English | Nemotron 3.5 Lightning 30B A3B | Magpie TTS Multilingual |
-| Server | Nemotron ASR Streaming English (NIM) | Nemotron 3.5 Lightning 30B A3B (NIM) | Magpie TTS Multilingual (NIM) |
 | Single GPU | Nemotron Speech Streaming (NeMo-Speech.cpp) | Nemotron 3.5 Lightning 30B A3B (vLLM) | Magpie TTS (NeMo-Speech.cpp) |
+| Server | Nemotron ASR Streaming English (NIM) | Nemotron 3.5 Lightning 30B A3B (NIM) | Magpie TTS Multilingual (NIM) |
 
 ## Recommended Hardware
 
@@ -46,8 +46,8 @@ Pick the profile for your hardware. The support follows the `generic-assistant` 
 | Hardware | Profile | Notes |
 | --- | --- | --- |
 | No local GPU | Cloud: `generic-assistant-livekit` | Models run on NVIDIA Cloud. You need `NVIDIA_API_KEY` and internet access. |
-| Workstation or server GPU | Server: `generic-assistant-livekit/server` | NVIDIA NIM containers. The Getting Started guide lists this profile for workstations only. It also ran on a DGX Spark in our testing, with a first start of 40 minutes or more, but that combination is not officially supported. |
 | Workstation, DGX Spark, or Jetson Thor | Single GPU: `generic-assistant-livekit/single-gpu` | vLLM for the LLM and NeMo-Speech.cpp for ASR and TTS. This is the profile for DGX Spark and Jetson Thor. |
+| Workstation or server GPU | Server: `generic-assistant-livekit/server` | NVIDIA NIM containers. The Getting Started guide lists this profile for workstations only. It also ran on a DGX Spark in our testing, with a first start of 40 minutes or more, but that combination is not officially supported. |
 
 For the Server and Single GPU profiles, use a machine that is not running other model servers:
 
@@ -89,20 +89,20 @@ Run all commands from the repository root, on the machine that hosts the deploym
    src/examples/generic_assistant_livekit/run.sh up cloud
    ```
 
-   **Option B: Server with NIM.** Use this option on a workstation or server GPU. It also worked on a DGX Spark in our testing, but only Single GPU is documented for DGX Spark and Jetson Thor.
-
-   ```bash
-   src/examples/generic_assistant_livekit/run.sh up server
-   ```
-
-   **Option C: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. It requires `HF_TOKEN` in `.env`, because vLLM downloads the LLM from Hugging Face. Create a [token](https://huggingface.co/settings/tokens) with read access. Download the speech weights once, and then start the profile:
+   **Option B: Single GPU.** Use this option on a workstation, DGX Spark, or Jetson Thor. It requires `HF_TOKEN` in `.env`, because vLLM downloads the LLM from Hugging Face. Create a [token](https://huggingface.co/settings/tokens) with read access. Download the speech weights once, and then start the profile:
 
    ```bash
    bash scripts/download-nemo-speech-models.sh
    src/examples/generic_assistant_livekit/run.sh up single-gpu
    ```
 
-   The first start of the Server and Single GPU profiles downloads and loads models, which can take a long time. The script prints progress every 15 seconds. `not ready yet` is normal while a large model loads. Worry only if a container restarts or its last log line stops changing. Press Ctrl+C to stop waiting. The containers keep running. Connect after the script prints `Ready to connect`.
+   **Option C: Server with NIM.** Use this option on a workstation or server GPU. It also worked on a DGX Spark in our testing, but only Single GPU is documented for DGX Spark and Jetson Thor.
+
+   ```bash
+   src/examples/generic_assistant_livekit/run.sh up server
+   ```
+
+   The first start of the Single GPU and Server profiles downloads and loads models, which can take a long time. The script prints progress every 15 seconds. `not ready yet` is normal while a large model loads. Worry only if a container restarts or its last log line stops changing. Press Ctrl+C to stop waiting. The containers keep running. Connect after the script prints `Ready to connect`.
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh wait single-gpu          # resume waiting (or: server)
@@ -121,8 +121,8 @@ Run all commands from the repository root, on the machine that hosts the deploym
    | Profile | App services | Sidecars |
    | --- | --- | --- |
    | `generic-assistant-livekit` | `livekit-server`, `livekit-agent`, `livekit-ui` | none (NVIDIA Cloud) |
-   | `generic-assistant-livekit/server` | `livekit-server`, `livekit-agent-server`, `livekit-ui` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
    | `generic-assistant-livekit/single-gpu` | `livekit-server`, `livekit-agent-single-gpu`, `livekit-ui` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech` |
+   | `generic-assistant-livekit/server` | `livekit-server`, `livekit-agent-server`, `livekit-ui` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
 
    The sidecars extend the service definitions in [`docker/`](../../../docker) and have network aliases that match the hostnames in `services.yaml`. The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up` command again so that the agent is recreated too.
 
