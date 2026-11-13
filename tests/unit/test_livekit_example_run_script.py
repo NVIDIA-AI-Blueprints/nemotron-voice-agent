@@ -4,6 +4,7 @@
 # ruff: noqa: D100, D103
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,6 +33,14 @@ def run(args, tmp_path, env_text="NVIDIA_API_KEY=nvapi-test\nHF_TOKEN=hf_test\n"
     env = clean_env()
     env.update({"DRY_RUN": "1", "ENV_FILE": str(env_file), **(extra_env or {})})
     return subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env=env, timeout=30)
+
+
+SIP_PROFILE = "generic-assistant-livekit/sip"
+
+
+def profiles_of(command):
+    """The --profile values of a docker compose command line."""
+    return re.findall(r"--profile (\S+)", command)
 
 
 def commands(result):
@@ -135,10 +144,23 @@ args="$*"
 counter="$FAKE_STATE/count"
 case "$args" in
   "compose version"*) echo "${FAKE_COMPOSE_VERSION:-2.30.0}" ;;
-  *"compose"*" logs "*) [ "${FAKE_REGISTERED:-1}" = 1 ] && echo '{"message": "registered worker"}' ;;
+  *"compose"*" logs "*)
+    [ -n "$FAKE_LOG_LINE" ] && echo "$FAKE_LOG_LINE"
+    [ "${FAKE_REGISTERED:-1}" = 1 ] && echo '{"message": "registered worker"}' ;;
   *"config --services"*) echo "${FAKE_SERVICES:-livekit-nvidia-llm-vllm}" | tr ' ' '\n' ;;
+  *"docker port "* | "port "*) echo "${FAKE_REDIS_PORT-127.0.0.1:6379}" ;;
+  *"config --images"*) echo "livekit/sip:v1.23.0" ;;
+  *"image inspect"*) echo arm64 ;;
+  *"ps -a --format"*) for svc in $FAKE_LEFT; do echo "$svc"; done ;;
+  *"up -d")
+    echo "env LIVEKIT_SIP=$LIVEKIT_SIP" >> "$FAKE_LOG" ;;
+  *"ps -a -q")
+    [ -n "$FAKE_STACK" ] && echo abc123 ;;
   *"ps -a -q "*)
     svc="${args##*ps -a -q }"
+    # The optional overlay containers exist only when $FAKE_OVERLAYS lists them.
+    case "$svc" in
+      livekit-sip | livekit-redis) case " $FAKE_OVERLAYS " in *" $svc "*) ;; *) exit 0 ;; esac ;; esac
     case " $FAKE_MISSING " in *" $svc "*) ;; *) echo "id-$svc" ;; esac ;;
   *"ps -q "*)
     for svc in $FAKE_RUNNING; do
@@ -170,13 +192,24 @@ esac
 exit 0
 """
 
-FAKE_SS = "#!/usr/bin/env bash\nexit 0\n"  # no local port is in use
+# No local port is in use, except those in $FAKE_LISTEN (space-separated).
+FAKE_SS = """#!/usr/bin/env bash
+for port in $FAKE_LISTEN; do
+  case "$*" in *":$port"*) echo "LISTEN 0 128 0.0.0.0:$port 0.0.0.0:*" ;; esac
+done
+exit 0
+"""
+
+# Reports Linux unless $FAKE_OS says otherwise, so the --sip tests behave the same on any machine.
+FAKE_UNAME = '#!/usr/bin/env bash\n[ "$1" = -s ] && echo "${FAKE_OS:-Linux}" || /usr/bin/uname "$@"\n'
+
+FAKE_CURL = "#!/usr/bin/env bash\nprintf '%s' \"$FAKE_TOKEN\"\n"
 
 
 def fake_env(tmp_path, env_text="NVIDIA_API_KEY=nvapi-test\nHF_TOKEN=hf_test\n", **extra):
     fake = tmp_path / "bin"
     fake.mkdir(exist_ok=True)
-    for name, body in (("docker", FAKE_DOCKER), ("ss", FAKE_SS)):
+    for name, body in (("docker", FAKE_DOCKER), ("ss", FAKE_SS), ("curl", FAKE_CURL), ("uname", FAKE_UNAME)):
         path = fake / name
         path.write_text(body)
         path.chmod(0o755)
@@ -198,8 +231,8 @@ def fake_env(tmp_path, env_text="NVIDIA_API_KEY=nvapi-test\nHF_TOKEN=hf_test\n",
     return env
 
 
-def run_real(tmp_path, args, running="", **extra):
-    env = fake_env(tmp_path, FAKE_RUNNING=running, **extra)
+def run_real(tmp_path, args, running="", env_text=None, **extra):
+    env = fake_env(tmp_path, **({"env_text": env_text} if env_text else {}), FAKE_RUNNING=running, **extra)
     result = subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env=env, timeout=60)
     log = tmp_path / "docker.log"
     return result, (log.read_text().splitlines() if log.exists() else [])
@@ -337,18 +370,21 @@ def test_up_without_env_file_explains_the_fix(tmp_path):
 def test_down_without_profile_stops_all_three(tmp_path):
     result = run(["down"], tmp_path)
     assert result.returncode == 0
-    assert [c.rsplit("--profile ", 1)[1] for c in commands(result)] == [
-        "generic-assistant-livekit down",
-        "generic-assistant-livekit/server down",
-        "generic-assistant-livekit/single-gpu down",
+    # Each command names its recipe plus both overlays, so a stopped stack leaves no SIP or Redis container.
+    assert [profiles_of(c)[0] for c in commands(result)] == [
+        "generic-assistant-livekit",
+        "generic-assistant-livekit/server",
+        "generic-assistant-livekit/single-gpu",
     ]
+    assert all(c.endswith(" down") and profiles_of(c)[1:] == [SIP_PROFILE] for c in commands(result))
 
 
 def test_clean_removes_volumes_but_keeps_the_image_by_default(tmp_path):
     result = run(["clean", "server", "-y"], tmp_path)
     assert result.returncode == 0
     (command,) = commands(result)
-    assert command.endswith("--profile generic-assistant-livekit/server down -v")
+    assert command.endswith(" down -v")
+    assert profiles_of(command) == ["generic-assistant-livekit/server", SIP_PROFILE]
     assert "docker image rm" not in result.stderr
 
 
@@ -356,7 +392,8 @@ def test_clean_image_flag_also_removes_the_image(tmp_path):
     result = run(["clean", "server", "-y", "--image"], tmp_path)
     assert result.returncode == 0
     lines = commands(result)
-    assert lines[0].endswith("--profile generic-assistant-livekit/server down -v")
+    assert lines[0].endswith(" down -v")
+    assert profiles_of(lines[0])[0] == "generic-assistant-livekit/server"
     assert lines[1] == "+ docker image rm generic-assistant-livekit:latest"
 
 
@@ -397,7 +434,8 @@ def test_logs_reject_services_the_cloud_profile_lacks(tmp_path):
 
 def test_ps_without_profile_lists_all_three(tmp_path):
     (command,) = commands(run(["ps"], tmp_path))
-    assert command.count("--profile ") == 3
+    recipes = ["generic-assistant-livekit", "generic-assistant-livekit/server", "generic-assistant-livekit/single-gpu"]
+    assert sorted(profiles_of(command)) == sorted([*recipes, SIP_PROFILE])
 
 
 def test_unknown_command_prints_usage(tmp_path):
@@ -417,7 +455,7 @@ def test_up_does_not_stop_other_profiles_because_of_the_shared_livekit_services(
 def test_up_stops_only_the_profile_whose_agent_is_running(tmp_path):
     result, calls = run_real(tmp_path, ["up", "cloud", "--no-wait"], running="livekit-agent-server")
     assert result.returncode == 0, result.stderr
-    assert [c.split("--profile ")[1] for c in downs(calls)] == ["generic-assistant-livekit/server down"]
+    assert [profiles_of(c)[0] for c in downs(calls)] == ["generic-assistant-livekit/server"]
     assert "Another profile (server) is running" in result.stderr
     assert calls.index(downs(calls)[0]) < next(
         i for i, c in enumerate(calls) if c.endswith("cloud up -d") or c.endswith("livekit up -d")
@@ -458,3 +496,163 @@ def test_the_ui_port_comes_from_the_env_file(tmp_path):
     assert "http://localhost:4000/" in result.stderr
     tunnel = run(["tunnel", "me@host"], tmp_path, env_text="LIVEKIT_UI_PORT=4000\n")
     assert "-L 3000:127.0.0.1:4000" in tunnel.stderr
+
+
+def up_command(calls):
+    return next(c for c in calls if c.endswith(" up -d"))
+
+
+def test_up_without_overlays_adds_no_overlay_profiles_and_clears_the_flags(tmp_path):
+    result, calls = run_real(tmp_path, ["up", "cloud", "--no-wait"], LIVEKIT_SIP="1", LIVEKIT_TURN="1")
+    assert result.returncode == 0, result.stderr
+    assert profiles_of(up_command(calls)) == ["generic-assistant-livekit"]
+    assert "env LIVEKIT_SIP=" in calls  # a value left in the shell must not enable an overlay
+
+
+def test_up_sip_adds_the_sip_profile_and_sets_the_flag(tmp_path):
+    result, calls = run_real(tmp_path, ["up", "cloud", "--sip", "--no-wait"])
+    assert result.returncode == 0, result.stderr
+    assert profiles_of(up_command(calls)) == ["generic-assistant-livekit", SIP_PROFILE]
+    assert "env LIVEKIT_SIP=1" in calls
+    assert "5060" in result.stderr  # the exposure reminder
+
+
+def test_up_sip_is_refused_without_linux_host_networking(tmp_path):
+    result, calls = run_real(tmp_path, ["up", "cloud", "--sip", "--no-wait"], FAKE_OS="Darwin")
+    assert result.returncode != 0
+    assert "only on Linux" in result.stderr
+    assert not any(" up -d" in c for c in calls)
+
+
+def test_up_rejects_an_unknown_option_and_lists_the_overlay_flags(tmp_path):
+    result = run(["up", "cloud", "--bogus"], tmp_path)
+    assert result.returncode != 0
+    assert "--sip, --no-wait" in result.stderr
+
+
+def test_sip_setup_requires_a_deployment_started_with_sip(tmp_path):
+    result, calls = run_real(tmp_path, ["sip-setup", "cloud", "--number", "+15551234567"])
+    assert result.returncode != 0
+    assert "up cloud --sip" in result.stderr
+    assert not any(" exec " in c for c in calls)
+
+
+def test_sip_setup_runs_in_the_agent_container(tmp_path):
+    result, calls = run_real(
+        tmp_path, ["sip-setup", "server", "--number", "+15551234567", "--scenario", "bank"], FAKE_OVERLAYS="livekit-sip"
+    )
+    assert result.returncode == 0, result.stderr
+    (call,) = [c for c in calls if " exec " in c]
+    assert "exec livekit-agent-server python -m examples.generic_assistant_livekit.sip_setup trunk" in call
+    assert call.endswith("--number +15551234567 --scenario bank")
+
+
+def test_sip_network_prints_guidance_in_a_throwaway_container(tmp_path):
+    result, calls = run_real(tmp_path, ["sip-network", "--lan-ip", "192.168.1.9", "--lan", "192.168.1.0/24"])
+    assert result.returncode == 0, result.stderr
+    (call,) = [c for c in calls if " run " in c]
+    assert "run --rm --no-deps livekit-init python -m examples.generic_assistant_livekit.sip_setup network" in call
+    assert call.endswith("--lan-ip 192.168.1.9 --lan 192.168.1.0/24")
+
+
+@pytest.mark.parametrize(("short", "service"), [("redis", "livekit-redis"), ("sip", "livekit-sip")])
+def test_logs_resolve_the_overlay_service_names(tmp_path, short, service):
+    result = run(["logs", "cloud", short], tmp_path)
+    assert commands(result)[0].endswith(f"logs -f --tail 50 {service}")
+
+
+OVERLAY_ALL = "livekit-redis livekit-sip"
+
+
+def run_check(tmp_path, args=("cloud",), **extra):
+    env = fake_env(tmp_path, FAKE_OVERLAYS=OVERLAY_ALL, **extra)
+    return subprocess.run(["bash", str(SCRIPT), "check", *args], capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_check_sip_passes_for_a_healthy_deployment(tmp_path):
+    result = run_check(tmp_path, FAKE_LISTEN="6379 5060", FAKE_HEALTH="healthy", FAKE_HEALTH_SERVICES="livekit-redis")
+    assert result.returncode == 0, result.stderr
+    assert "PASS  Redis is published on loopback only (127.0.0.1:6379)" in result.stderr
+    assert "PASS  SIP listens on port 5060" in result.stderr
+    assert "arm64" in result.stderr  # the image architecture is shown
+    assert "Not covered: a real call" in result.stderr
+
+
+def test_check_sip_fails_when_redis_is_published_on_every_address(tmp_path):
+    result = run_check(
+        tmp_path,
+        FAKE_LISTEN="6379 5060",
+        FAKE_HEALTH="healthy",
+        FAKE_HEALTH_SERVICES="livekit-redis",
+        FAKE_REDIS_PORT="0.0.0.0:6379",
+    )
+    assert result.returncode != 0
+    assert "FAIL  Redis is published on every address" in result.stderr
+
+
+def test_check_sip_fails_when_the_overlay_is_not_started(tmp_path):
+    env = fake_env(tmp_path, FAKE_LISTEN="")
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "check", "cloud"], capture_output=True, text=True, env=env, timeout=60
+    )
+    assert result.returncode != 0
+    assert "FAIL  livekit-sip is missing" in result.stderr
+
+
+def test_check_requires_exactly_one_known_profile(tmp_path):
+    for args in ((), ("cloud", "sip"), ("bogus",)):
+        assert run_check(tmp_path, args).returncode != 0
+    assert "usage: run.sh check" in run_check(tmp_path, ()).stderr
+
+
+def test_turn_is_no_longer_an_option(tmp_path):
+    result = run(["up", "cloud", "--turn"], tmp_path)
+    assert result.returncode != 0
+    assert "unknown option '--turn'" in result.stderr
+
+
+def test_changing_the_overlay_of_a_running_stack_restarts_it_first(tmp_path):
+    result, calls = run_real(tmp_path, ["up", "cloud", "--sip", "--no-wait"], FAKE_STACK="1")
+    assert result.returncode == 0, result.stderr
+    assert len(downs(calls)) == 1
+    assert calls.index(downs(calls)[0]) < calls.index(up_command(calls))
+    assert "overlays changed" in result.stderr
+
+
+def test_the_same_overlay_does_not_restart_a_running_stack(tmp_path):
+    result, calls = run_real(
+        tmp_path, ["up", "cloud", "--sip", "--no-wait"], FAKE_STACK="1", FAKE_OVERLAYS="livekit-sip"
+    )
+    assert result.returncode == 0, result.stderr
+    assert downs(calls) == []
+
+
+def test_down_reports_leftover_containers_and_confirms_a_clean_state(tmp_path):
+    clean, _ = run_real(tmp_path, ["down"])
+    assert "No containers of this example remain" in clean.stderr
+    left, _ = run_real(tmp_path, ["down"], FAKE_LEFT="livekit-sip livekit-redis")
+    assert "still present" in left.stderr
+    assert "livekit-sip" in left.stderr
+
+
+def test_clean_removes_the_overlay_containers_and_checks_nothing_is_left(tmp_path):
+    result, calls = run_real(tmp_path, ["clean", "-y"])
+    assert result.returncode == 0, result.stderr
+    cleans = [c for c in calls if c.endswith(" down -v")]
+    assert len(cleans) == 3
+    assert all(SIP_PROFILE in c for c in cleans)
+    assert "No containers of this example remain" in result.stderr
+
+
+def test_check_sip_fails_and_shows_the_log_when_the_sip_service_cannot_read_its_config(tmp_path):
+    # A crashing container used to pass the log check, because only a few words counted as errors.
+    result = run_check(
+        tmp_path,
+        FAKE_LISTEN="6379 5060",
+        FAKE_HEALTH="healthy",
+        FAKE_HEALTH_SERVICES="livekit-redis",
+        FAKE_LOG_LINE="open /sip/config.yaml: no such file or directory",
+    )
+    assert result.returncode != 0
+    assert "FAIL  the SIP log shows an error" in result.stderr
+    assert "open /sip/config.yaml: no such file or directory" in result.stderr  # the cause is printed

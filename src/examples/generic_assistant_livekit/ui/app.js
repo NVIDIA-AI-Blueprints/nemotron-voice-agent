@@ -6,10 +6,12 @@
 const { Room, RoomEvent, Track, ConnectionState } = LivekitClient;
 
 const $ = (id) => document.getElementById(id);
-const WS_URL = `ws://${location.hostname}:7880`;  // LiveKit signaling, on the same host as this page
+// LiveKit signaling, on the same host as this page. A page served over HTTPS must use wss://, so put a TLS proxy in
+// front of LiveKit then.
+const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:7880`;
 $('server-badge').textContent = WS_URL;
 
-// Media flows directly to LiveKit over UDP and TCP. Remote browsers need a TURN server (not included).
+// Media flows directly to LiveKit over UDP (port 7882), or TCP (7881) when UDP cannot get through. Refer to the README, Remote Browser Access.
 
 let room = null;
 const segments = new Map();  // segment id -> message element

@@ -1,6 +1,8 @@
 # Nemotron Voice Agent on LiveKit
 
-This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/), with automatic speech recognition (ASR), large language model (LLM), and text-to-speech (TTS) models. A small web UI shows live transcripts and tool calls, and lets you choose a [sample use case](#sample-use-cases) and a [voice](#voice-selection).
+This is a Nemotron voice agent built on the [LiveKit Agents](https://docs.livekit.io/agents/) framework. NVIDIA Nemotron models, by default, do the three steps of the pipeline: automatic speech recognition (ASR) turns your speech into text, a large language model (LLM) writes the reply and calls tools, and text-to-speech (TTS) speaks it. You can choose other models ([Configure Models](#configure-models)). LiveKit orchestrates the pipeline, with voice activity detection, interruption (barge-in), and tool calls, and its WebRTC server carries the audio between the client and the agent in real time.
+
+A small web UI shows live transcripts and tool calls, and lets you choose a [sample use case](#sample-use-cases) and a [voice](#voice-selection). The same agent can also answer phone calls: an optional [SIP](#phone-calls-sip) service connects a phone number, or a contact-center platform, to the agent, and each number can map to a different use case. Run the pipeline on NVIDIA Cloud, or on your own GPU, with one of the [deployment profiles](#deployment-profiles).
 
 ## How It Works
 
@@ -8,7 +10,7 @@ The assistant is a cascade: each stage hands its output to the next. The dotted 
 
 ```mermaid
 flowchart LR
-    MIC["Client<br/>(microphone)"] --> VAD["VAD<br/>detects speech"]
+    MIC["Client<br/>(browser or phone)"] --> VAD["VAD<br/>detects speech"]
     VAD --> ASR["ASR<br/>speech to text"]
     ASR --> LLM["LLM<br/>reply and tools"]
     LLM --> TTS["TTS<br/>text to speech"]
@@ -16,7 +18,7 @@ flowchart LR
     VAD -. "barge-in: the user speaks over the agent" .-> TTS
 ```
 
-1. **Client.** The browser sends your microphone to a LiveKit room over WebRTC, and plays the agent's audio.
+1. **Client.** The browser sends your microphone to a LiveKit room over WebRTC, and plays the agent's audio. With the optional [SIP service](#phone-calls-sip), a phone caller joins the same kind of room, and the rest of the cascade is the same.
 2. **VAD.** The Silero voice activity detection (VAD) model detects when you start and stop speaking.
 3. **ASR.** The ASR model turns your speech into text while you talk.
 4. **LLM.** The LLM writes the reply and calls the tools of the selected use case.
@@ -185,7 +187,7 @@ Unlike the Pipecat examples, this example has no **Services** tab, no per-exampl
 
 ## Remote Browser Access
 
-This example does not include a Traversal Using Relays around NAT (TURN) server. The UI and the LiveKit ports listen on `127.0.0.1`, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the Docker machine or reach it through a tunnel. Browsers also allow the microphone only on `localhost` or HTTPS.
+WebRTC is always on: the LiveKit server carries the audio, with UDP on port 7882 and TCP on 7881 as the fallback. By default the UI and the LiveKit ports listen on `127.0.0.1`, and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the Docker machine or reach it through a tunnel. Browsers also allow the microphone only on `localhost` or HTTPS.
 
 Run `run.sh tunnel` on the laptop and keep it open. It forwards the UI, signaling, and LiveKit TCP media ports, and it stops with an error if a local port is busy. Then open `http://localhost:3000/`. Without this folder on the laptop, run the plain command:
 
@@ -205,13 +207,20 @@ Host spark
   LocalForward 7881 127.0.0.1:7881
 ```
 
-SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or internet setup, set `LIVEKIT_NODE_IP` and `LIVEKIT_BIND` to the host address, serve the UI over HTTPS, and add a TURN server ([`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml), refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md)). The UI does not pass TURN credentials to LiveKit, so extend `ui/app.js` to use relay candidates.
+SSH cannot forward UDP, so media falls back to TCP port 7881. To use the example from another machine without a tunnel, set `LIVEKIT_NODE_IP` (the host's LAN address), `LIVEKIT_BIND=0.0.0.0`, and `LIVEKIT_UI_BIND=0.0.0.0` in `.env`, and open the UI at the host's address. Media then flows directly over UDP 7882, and you open the host firewall for 3000/tcp, 7880/tcp, 7881/tcp, and 7882/udp, to your network only. A browser exposes the microphone only on HTTPS or `localhost`, so a plain-HTTP address needs your browser's insecure-origin setting for that address (in Chrome, `chrome://flags/#unsafely-treat-insecure-origin-as-secure`). On macOS, the browser also needs access under System Settings, Privacy & Security, Local Network. To see which media path a call used, open `chrome://webrtc-internals` before you connect.
+
+This example does not include a Traversal Using Relays around NAT (TURN) relay. A client-server voice session has no peer-to-peer path to relay, and LiveKit already falls back to TCP. The Pipecat examples have a separate relay ([`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml), refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md)).
 
 The defaults keep the example private to the machine that runs it:
 
 - **The UI server mints join tokens without authentication,** and each session starts an agent that uses your model quota. Keep the UI on `127.0.0.1` (`LIVEKIT_UI_BIND`) unless the network is trusted.
 - **LiveKit ports 7880 to 7882 also bind to `127.0.0.1`.** `LIVEKIT_BIND=0.0.0.0` opens them. Join tokens still require the LiveKit secret.
+- **SIP is off by default.** It uses host networking and opens ports to your network. Follow the [SIP guide](SIP.md) before you expose it.
 - **Credentials reach only the containers that use them.** Only the cloud agent receives `NVIDIA_API_KEY`, and no application container receives `HF_TOKEN`.
+
+## Phone Calls (SIP)
+
+The example can also answer phone calls. `run.sh up <profile> --sip` adds Redis (published on `127.0.0.1` only) and the open-source [LiveKit SIP](https://docs.livekit.io/sip/) service, and `run.sh sip-setup` maps a phone number to a use case, so each number can be a different line. SIP needs a Linux host that your SIP provider can reach, and it exposes ports 5060 and 10000 to 10100 (UDP) on that host, so the network setup is manual and restricted to the provider's addresses. The provider-neutral [SIP guide](SIP.md) covers the network setup, IP allowlisting for your SIP trunk provider, testing, and troubleshooting, with a Twilio example.
 
 ## Cleanup
 
@@ -222,7 +231,7 @@ src/examples/generic_assistant_livekit/run.sh clean single-gpu   # stop and dele
 src/examples/generic_assistant_livekit/run.sh clean --image -y   # all profiles, also remove the image, no prompt
 ```
 
-`down` removes the containers and the network. `clean` also removes the volumes (`livekit_state`, `llm_cache`, `asr_cache`, `tts_cache`), so the next start generates new LiveKit credentials, and the Server profile downloads its NIM models again. `--image` also removes the example image, which the next start rebuilds. The plain commands are `docker compose ... --profile <profile> down [-v]` and `docker image rm generic-assistant-livekit:latest`.
+`down` removes the containers and the network, including the optional SIP and Redis containers. It then confirms that no container of the example remains. `clean` also removes the volumes (`livekit_state`, `llm_cache`, `asr_cache`, `tts_cache`), so the next start generates new LiveKit credentials, and the Server profile downloads its NIM models again. `--image` also removes the example image, which the next start rebuilds. The plain commands are `docker compose ... --profile <profile> down [-v]` and `docker image rm generic-assistant-livekit:latest`.
 
 Cleanup never removes the downloaded weights (`~/.cache/huggingface` and `models/nemo-speech`) or the pulled sidecar images, because other applications can share them. `run.sh up` stops a different running profile for you. With plain Compose, run `down` for the old profile first, or its containers keep their ports.
 

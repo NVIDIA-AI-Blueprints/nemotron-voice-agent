@@ -75,3 +75,51 @@ def test_the_vllm_sidecar_does_not_inherit_the_repository_env_file(services):
     vllm = services["livekit-nvidia-llm-vllm"]
     assert vllm["env_file"] == []
     assert set(environment(vllm)) == {"HF_TOKEN", "VLLM_VRAM_HEADROOM_MIB", "VLLM_GPU_MEMORY_UTILIZATION"}
+
+
+# optional overlay: SIP (with Redis)
+
+
+SIP_PROFILE = "generic-assistant-livekit/sip"
+
+
+def test_overlay_services_belong_only_to_their_own_profile(services):
+    assert services["livekit-redis"]["profiles"] == [SIP_PROFILE]
+    assert services["livekit-sip"]["profiles"] == [SIP_PROFILE]
+
+
+def test_overlays_are_not_part_of_any_recipe_profile(services):
+    recipes = {"generic-assistant-livekit", "generic-assistant-livekit/server", "generic-assistant-livekit/single-gpu"}
+    for name in ("livekit-redis", "livekit-sip"):
+        assert not recipes & set(services[name]["profiles"])
+
+
+def test_redis_is_published_on_loopback_only(services):
+    assert services["livekit-redis"]["ports"] == ["127.0.0.1:6379:6379"]
+
+
+def test_the_livekit_server_waits_for_redis_only_when_the_sip_profile_is_on(services):
+    redis = services["livekit-server"]["depends_on"]["livekit-redis"]
+    assert redis == {"condition": "service_healthy", "required": False}
+
+
+def test_sip_uses_host_networking_and_the_images_are_pinned(services):
+    assert services["livekit-sip"]["network_mode"] == "host"
+    assert services["livekit-sip"]["image"].startswith("livekit/sip:v")
+    assert services["livekit-redis"]["image"].startswith("redis:7.")
+
+
+def test_overlay_containers_read_their_config_from_the_state_volume_read_only(services):
+    assert "livekit_state:/sip:ro" in services["livekit-sip"]["volumes"]  # the image reads /sip/config.yaml
+    assert services["livekit-sip"]["environment"]["SIP_CONFIG_FILE"] == "/sip/config.yaml"
+
+
+def test_overlay_containers_get_no_model_credentials(services):
+    for name in ("livekit-sip", "livekit-redis"):
+        assert not {"NVIDIA_API_KEY", "HF_TOKEN"} & set(environment(services[name]))
+        assert "env_file" not in services[name]
+
+
+def test_the_init_service_receives_the_overlay_switch_and_there_is_no_relay_service(services):
+    assert "LIVEKIT_SIP" in environment(services["livekit-init"])
+    assert not [name for name in services if "turn" in name]

@@ -30,6 +30,7 @@ const makeEl = () => ({
   add(option) { this.options.push(option); }, append() {}, appendChild() {}, remove() {},
   querySelector: () => makeEl(), scrollTop: 0, scrollHeight: 0,
 });
+const location = { hostname: 'localhost', protocol: scenario === 'https' ? 'https:' : 'http:', search: '' };
 const document = { getElementById: (id) => (elements[id] ||= makeEl()), createElement: () => makeEl() };
 const log = [];
 let releaseToken = null;
@@ -42,7 +43,10 @@ class Room {
   }
   registerTextStreamHandler() {}
   on() {}
-  async connect() { if (scenario === 'connect-fails') throw new Error('no route'); }
+  async connect(url, token, options) {
+    log.push(['connect', options === undefined ? null : options, url]);
+    if (scenario === 'connect-fails') throw new Error('no route');
+  }
   async startAudio() {}
   async disconnect() { log.push(['disconnect']); }
 }
@@ -52,7 +56,7 @@ const responses = {
   '/scenarios': { scenarios: [{ id: 'generic', name: 'Generic', description: 'd', examples: ['e'] }] },
 };
 const context = {
-  document, location: { hostname: 'localhost' }, console, URLSearchParams, TextEncoder, TextDecoder, Promise, JSON, Map,
+  document, location, console, URLSearchParams, TextEncoder, TextDecoder, Promise, JSON, Map,
   setTimeout: () => 0,
   Option: function (text, value) { return { text, value }; },
   LivekitClient: { Room, RoomEvent: {}, Track: { Kind: { Audio: 'audio' } }, ConnectionState: {} },
@@ -65,7 +69,8 @@ const context = {
       return { ok: false, status: 500, json: async () => ({}) };
     }
     const path = url.split('?')[0];
-    return { ok: true, status: 200, json: async () => responses[path] || { token: 't', room: 'r' } };
+    const token = { token: 't', room: 'r' };
+    return { ok: true, status: 200, json: async () => responses[path] || token };
   },
 };
 vm.createContext(context);
@@ -153,3 +158,16 @@ def test_a_failed_connect_leaves_the_page_ready_for_another_try(tmp_path, scenar
     assert out["status"].startswith("Error:")
     if scenario == "connect-fails":
         assert ["disconnect"] in out["log"]  # the room is left, so the agent does not wait in it
+
+
+def test_the_browser_connects_without_extra_options(tmp_path):
+    out = run_page("connect-ok", tmp_path)
+    (options,) = [entry[1] for entry in out["log"] if entry[0] == "connect"]
+    assert options is None
+
+
+def test_the_signaling_address_follows_the_page_protocol(tmp_path):
+    out = run_page("https", tmp_path)
+    assert [entry[2] for entry in out["log"] if entry[0] == "connect"] == ["wss://localhost:7880"]
+    out = run_page("connect-ok", tmp_path)
+    assert [entry[2] for entry in out["log"] if entry[0] == "connect"] == ["ws://localhost:7880"]

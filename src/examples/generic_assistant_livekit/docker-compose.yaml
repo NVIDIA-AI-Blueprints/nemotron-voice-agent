@@ -13,7 +13,9 @@
 #   generic-assistant-livekit              NVIDIA Cloud models, no local GPU
 #   generic-assistant-livekit/server       NIM ASR + LLM + TTS on workstation / server GPUs
 #   generic-assistant-livekit/single-gpu   vLLM + NeMo-Speech.cpp on one GPU (workstation, DGX Spark, Jetson Thor)
-# TURN is not included. For remote browsers, refer to docker/docker-compose.coturn.yaml.
+#
+# Optional overlay (run.sh up <profile> --sip adds the profile and the variable below):
+#   generic-assistant-livekit/sip    phone calls: Redis + LiveKit SIP (host network, Linux only). Also set LIVEKIT_SIP=1
 # Do not run this example and a Pipecat recipe together: the sidecars publish the same host ports.
 
 x-livekit-app: &livekit-app
@@ -61,6 +63,7 @@ services:
       LIVEKIT_STATE_DIR: /state
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      LIVEKIT_SIP: ${LIVEKIT_SIP:-}
     volumes:
       - livekit_state:/state
     restart: "no"
@@ -75,9 +78,12 @@ services:
     depends_on:
       livekit-init:
         condition: service_completed_successfully
+      livekit-redis:  # only when the sip overlay is enabled
+        condition: service_healthy
+        required: false
     volumes:
       - livekit_state:/state:ro
-    # Published on the loopback address like the UI. Set LIVEKIT_BIND=0.0.0.0 only for a LAN deployment with TURN.
+    # Published on the loopback address like the UI. Set LIVEKIT_BIND=0.0.0.0 only for a LAN deployment (refer to the README, Remote Browser Access).
     ports:
       - "${LIVEKIT_BIND:-127.0.0.1}:7880:7880"
       - "${LIVEKIT_BIND:-127.0.0.1}:7881:7881"
@@ -158,6 +164,44 @@ services:
     environment:
       <<: *livekit-env
       SERVICE_RECIPE: single-gpu
+
+  # Optional overlays. Each belongs to its own profile, so nothing here runs unless you ask for it.
+  # Redis holds the SIP state that LiveKit and the SIP service share. It is published on the loopback address only, for
+  # the SIP container (host network), and it has no password: never publish it on another address.
+  livekit-redis:
+    image: redis:7.4.12-alpine
+    profiles:
+      - generic-assistant-livekit/sip
+    command: ["redis-server", "--bind", "0.0.0.0", "--protected-mode", "no", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Phone calls. Host networking, because SIP and RTP need real addresses and a port range. The ports it opens
+  # (5060 and 10000-10100/udp) are reachable from your network: allow only your SIP provider's ranges (see the guide).
+  livekit-sip:
+    image: livekit/sip:v1.23.0
+    network_mode: host
+    profiles:
+      - generic-assistant-livekit/sip
+    environment:
+      SIP_CONFIG_FILE: /sip/config.yaml
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+      livekit-server:
+        condition: service_started
+      livekit-redis:
+        condition: service_healthy
+    volumes:
+      # The image reads /sip/config.yaml, so the state volume (which holds that file) is mounted at /sip.
+      - livekit_state:/sip:ro
+    restart: unless-stopped
 
   # Model sidecars. Each extends a shared definition and gets a network alias, so the hostnames in services.yaml
   # (nvidia-llm, nemotron-asr-streaming-english, ...) resolve to it.

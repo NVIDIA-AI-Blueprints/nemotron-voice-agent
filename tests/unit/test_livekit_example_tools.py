@@ -71,3 +71,24 @@ def test_weather_unknown_place(monkeypatch):
     monkeypatch.setattr(tools, "_get_json", fake_get_json)
     with pytest.raises(ValueError, match="Could not find"):
         asyncio.run(tools.current_weather("Nowhereville"))
+
+
+def test_example_guides_link_each_other_and_every_relative_link_resolves():
+    import re
+    from pathlib import Path
+
+    folder = Path(__file__).resolve().parents[2] / "src/examples/generic_assistant_livekit"
+    readme = (folder / "README.md").read_text()
+    assert "(SIP.md)" in readme
+    for guide in ("README.md", "SIP.md"):
+        text = (folder / guide).read_text()
+        for target in re.findall(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", text):
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            assert (folder / target).resolve().exists(), f"{guide} links to a missing file: {target}"
+        headings = {
+            re.sub(r"[^a-z0-9 -]", "", h.lower()).strip().replace(" ", "-")
+            for h in re.findall(r"^#+ (.+)$", text, re.M)
+        }
+        for anchor in re.findall(r"\]\(#([^)]+)\)", text):
+            assert anchor in headings, f"{guide} links to a missing section: #{anchor}"
