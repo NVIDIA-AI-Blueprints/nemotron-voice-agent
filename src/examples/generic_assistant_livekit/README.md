@@ -72,8 +72,9 @@ Run all commands from the repository root, on the machine that hosts the deploym
 
 3. In `.env`, set the key that your profile needs:
 
-   - `NVIDIA_API_KEY` (Cloud and Server): get a key from [build.nvidia.com](https://build.nvidia.com/).
-   - `HF_TOKEN` (Single GPU): create a token with read access in your [Hugging Face settings](https://huggingface.co/settings/tokens).
+   - `NVIDIA_API_KEY` for Cloud: get a key from [build.nvidia.com](https://build.nvidia.com/).
+   - `NVIDIA_API_KEY` for Server: use an NGC personal API key with the NGC Catalog service enabled, because the NIM images and models come from NGC. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account). Step 4 logs in to the NGC registry with this key.
+   - `HF_TOKEN` for Single GPU: create a token with read access in your [Hugging Face settings](https://huggingface.co/settings/tokens).
 
 4. For the Server profile only, log in to the NVIDIA NGC container registry:
 
