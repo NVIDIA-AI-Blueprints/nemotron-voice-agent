@@ -93,6 +93,7 @@ services:
     command: ["python", "-m", "examples.generic_assistant_livekit.ui_server"]
     environment:
       LIVEKIT_STATE_DIR: /state
+      LIVEKIT_UI_HOST: 0.0.0.0  # inside the container, so that Docker can publish the port (on loopback by default)
     depends_on:
       livekit-init:
         condition: service_completed_successfully

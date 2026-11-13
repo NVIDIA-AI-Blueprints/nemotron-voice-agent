@@ -63,3 +63,8 @@ def test_every_profile_has_exactly_one_agent_and_the_sidecars_are_not_shared_wit
 def test_agents_share_the_livekit_server_network_for_media(services):
     for name in AGENTS:
         assert services[name]["network_mode"] == "service:livekit-server"
+
+
+def test_the_ui_container_binds_all_interfaces_so_docker_can_publish_the_port(services):
+    # The server itself defaults to loopback. Compose publishes the container port on 127.0.0.1 by default.
+    assert environment(services["livekit-ui"])["LIVEKIT_UI_HOST"] == "0.0.0.0"  # noqa: S104

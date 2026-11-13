@@ -82,11 +82,16 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    """Run the UI server. Compose publishes the port on loopback by default."""
+    """Run the UI server. It listens on loopback unless `LIVEKIT_UI_HOST` says otherwise.
+
+    The container sets `LIVEKIT_UI_HOST=0.0.0.0` so that Docker can publish the port, and Compose publishes it on
+    `127.0.0.1` by default. A host run therefore never exposes the unauthenticated token endpoint by accident.
+    """
     apply_to_environ()
+    host = os.environ.get("LIVEKIT_UI_HOST", "127.0.0.1")
     port = int(os.environ.get("LIVEKIT_UI_PORT", "3000"))
-    print(f"UI on http://0.0.0.0:{port}", flush=True)
-    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    print(f"UI on http://{host}:{port}", flush=True)
+    ThreadingHTTPServer((host, port), Handler).serve_forever()  # noqa: S104 - the container binds 0.0.0.0 by design
 
 
 if __name__ == "__main__":
