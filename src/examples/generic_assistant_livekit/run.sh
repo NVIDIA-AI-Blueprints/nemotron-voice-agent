@@ -11,11 +11,14 @@
 #   run.sh clean [profile] [--image] [-y]    Stop and delete volumes (credentials, NIM caches); --image also removes the image
 #   run.sh ps [profile]                      Show container status
 #   run.sh logs <profile> [service]          Follow logs. Services: agent, livekit, ui, init, llm, asr, tts, speech
+#   run.sh tunnel <user@host>                Run on your laptop: forward the UI and LiveKit ports from the host
 #   run.sh wait <profile> [seconds]          Wait until every container with a healthcheck is healthy (default 3600),
 #                                            printing progress every 15 seconds
 #
-# Environment: WAIT_INTERVAL sets the seconds between `wait` progress lines (default 15). ENV_FILE selects the .env file (default: the repository root .env three levels above this folder,
-# else a .env in this folder). DRY_RUN=1 prints the docker commands without running them or the docker-based checks.
+# Environment: WAIT_INTERVAL sets the seconds between `wait` progress lines (default 15). ENV_FILE selects the .env
+# file (default: the repository root .env three levels above this folder, else a .env in this folder). LOCAL_UI_PORT
+# sets the laptop port of `tunnel` (default 3000). DRY_RUN=1 prints the docker and ssh commands without running them or
+# the docker-based checks.
 
 set -euo pipefail
 
@@ -29,7 +32,7 @@ die() { echo "error: $*" >&2; exit 1; }
 warn() { echo "warning: $*" >&2; }
 info() { echo "$*" >&2; }
 
-usage() { sed -n '5,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+usage() { sed -n '5,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
 
 profile_name() {
   case "$1" in
@@ -174,6 +177,17 @@ check_ports() {
   [ -z "$busy" ] || die "host port(s)$busy already in use. Find the owner with: docker ps --format '{{.Names}} {{.Ports}}' | grep -E ':($(echo "$busy" | xargs | tr ' ' '|'))->'"
 }
 
+access_hint() { # printed last, so it is the output you see when the start finishes
+  local host
+  host="$(hostname -f 2>/dev/null || hostname)"
+  info ""
+  info "Open http://localhost:${LIVEKIT_UI_PORT:-3000}/ in a browser on this machine."
+  info "Browser on another computer? The UI is not reachable from there until you start a tunnel ON THAT COMPUTER:"
+  info "  src/examples/generic_assistant_livekit/run.sh tunnel <user>@${host}"
+  info "  (or: ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@${host})"
+  info "Keep it running, and open http://localhost:3000/ there. Replace <user>@${host} with the SSH name you use."
+}
+
 cmd_up() {
   [ $# -ge 1 ] || usage
   local name="$1" wait=1 p other arg
@@ -203,8 +217,7 @@ cmd_up() {
   info ""
   dc --profile "$p" ps
   info ""
-  info "Started the $name profile. Open http://localhost:3000/ in a browser on this machine."
-  info "From another computer, tunnel the ports: ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@<host>"
+  info "Started the $name profile."
   if [ "$wait" = 1 ]; then
     if [ "$name" != cloud ]; then
       info "The first start downloads and loads models and can take a long time. Ctrl+C stops only this wait: the"
@@ -213,6 +226,7 @@ cmd_up() {
     cmd_wait "$name"
   else
     info "Not waiting. Block until every healthcheck passes with: $0 wait $name"
+    access_hint
   fi
 }
 
@@ -257,6 +271,33 @@ cmd_clean() {
   fi
 }
 
+port_busy() { # port_busy <port>: succeed when something listens on the local port
+  if command -v lsof >/dev/null 2>&1; then
+    [ -n "$(lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null)" ]
+  elif command -v ss >/dev/null 2>&1; then
+    [ -n "$(ss -ltnH "sport = :$1" 2>/dev/null)" ]
+  else
+    return 1
+  fi
+}
+
+cmd_tunnel() { # run on your laptop: forward the UI, LiveKit signaling, and LiveKit TCP media to the host
+  [ $# -ge 1 ] || die "usage: run.sh tunnel <user@host>   (run it on the computer that has the browser)"
+  local host="$1" ui="${LOCAL_UI_PORT:-3000}" port
+  command -v ssh >/dev/null 2>&1 || die "ssh is not installed"
+  if [ "$DRY_RUN" != 1 ]; then
+    for port in "$ui" 7880 7881; do
+      port_busy "$port" && die "local port $port is already in use. Find the owner with: lsof -nP -iTCP:$port -sTCP:LISTEN (set LOCAL_UI_PORT to move the UI port)"
+    done
+  fi
+  local cmd=(ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30
+    -L "$ui:127.0.0.1:${LIVEKIT_UI_PORT:-3000}" -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 "$host")
+  info "+ ${cmd[*]}"
+  info "Tunnel to $host. Keep this window open, and open http://localhost:$ui/ in your browser. Ctrl+C stops it."
+  if [ "$DRY_RUN" = 1 ]; then return 0; fi
+  exec "${cmd[@]}"
+}
+
 cmd_ps() {
   require_docker
   if [ $# -ge 1 ]; then
@@ -285,7 +326,10 @@ cmd_wait() {
   p="$(profile_name "$name")"
   start="$(date +%s)"
   info "Waiting up to ${timeout}s for the $name profile to become healthy (progress every ${WAIT_INTERVAL:-15}s)..."
-  if [ "$DRY_RUN" = 1 ]; then return 0; fi
+  if [ "$DRY_RUN" = 1 ]; then
+    access_hint
+    return 0
+  fi
   while true; do
     ids="$(dc_quiet --profile "$p" ps -q)"
     pending=""
@@ -309,6 +353,7 @@ cmd_wait() {
     now="$(date +%s)"
     if [ -z "$pending" ]; then
       info "[$(( (now - start) / 60 ))m$(( (now - start) % 60 ))s] All healthy. Ready to connect."
+      access_hint
       return 0
     fi
     [ $((now - start)) -lt "$timeout" ] || die "timed out after ${timeout}s. Still starting:$pending"
@@ -333,6 +378,7 @@ main() {
     ps) cmd_ps "$@" ;;
     logs) cmd_logs "$@" ;;
     wait) cmd_wait "$@" ;;
+    tunnel) cmd_tunnel "$@" ;;
     -h | --help | help) usage 0 ;;
     *) usage ;;
   esac

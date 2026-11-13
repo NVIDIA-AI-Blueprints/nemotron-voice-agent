@@ -180,7 +180,16 @@ Run all commands from the repository root, on the machine that hosts the deploym
 
    The sidecars extend the service definitions in [`docker/`](../../../docker) and have network aliases that match the hostnames in `services.yaml`. The agent shares the LiveKit server's network namespace, because LiveKit advertises `LIVEKIT_NODE_IP` for media. If you recreate `livekit-server`, run the same `up` command again so that the agent is recreated too.
 
-6. Open `http://localhost:3000/`. The header shows the deployment mode and the models in use, with the runtime that serves each one. Select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
+6. Open the UI.
+
+   - **Browser on the same machine as Docker:** open `http://localhost:3000/`.
+   - **Browser on another computer, such as your laptop:** the UI listens only on the host's loopback, so start an SSH tunnel first. The script does not start it, because it must run on the computer that has the browser. Run this command in a terminal on that computer, keep it open, and then open `http://localhost:3000/`:
+
+     ```bash
+     src/examples/generic_assistant_livekit/run.sh tunnel <user>@<host>
+     ```
+
+   The header shows the deployment mode and the models in use, with the runtime that serves each one. Select **Connect**, and speak. Try "What is the weather in Paris?". The transcript panel shows each tool call and result.
 
 7. When you are done, stop the profile. Omit the profile to stop all of them:
 
@@ -235,10 +244,22 @@ The **Voice** list shows the voices that the TTS server offers. Choose a voice b
 
 This example does not include a Traversal Using Relays around NAT (TURN) server. The UI is published on `127.0.0.1` and LiveKit advertises `LIVEKIT_NODE_IP` (default `127.0.0.1`), so the browser must run on the same machine as Docker. Browsers also allow the microphone only on `localhost` or HTTPS.
 
-To use a browser on your laptop, forward the UI, signaling, and LiveKit TCP media ports. Run this command on your laptop and keep it open. Then open `http://localhost:3000/`:
+To use a browser on your laptop, run `run.sh tunnel` on the laptop and keep it open. It forwards the UI, signaling, and LiveKit TCP media ports, and it stops with an error if a local port is busy instead of leaving a half-working tunnel. If you do not have this folder on the laptop, run the plain command. Then open `http://localhost:3000/`:
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@<host>
+src/examples/generic_assistant_livekit/run.sh tunnel <user>@<host>
+# or: ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 <user>@<host>
+```
+
+To start the tunnel with a plain `ssh -N <host>`, add the forwards to your SSH config on the laptop:
+
+```text
+Host spark
+  HostName <host>
+  User <user>
+  LocalForward 3000 127.0.0.1:3000
+  LocalForward 7880 127.0.0.1:7880
+  LocalForward 7881 127.0.0.1:7881
 ```
 
 SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or internet setup, set `LIVEKIT_NODE_IP` to the host address, serve the UI over HTTPS, and add a TURN server. The repository provides one in [`docker/docker-compose.coturn.yaml`](../../../docker/docker-compose.coturn.yaml) (refer to [Enable the TURN Server](../../../docs/how-to/enable-turn-server.md)). The UI does not pass TURN credentials to LiveKit, so extend `ui/app.js` to use relay candidates.
@@ -255,7 +276,7 @@ SSH cannot forward UDP, so media falls back to TCP port 7881. For a LAN or inter
 | `voices.py` | Lists the voices a speech server offers, and validates voice-change requests |
 | `credentials.py` | Generates the LiveKit key and secret and the server config |
 | `ui_server.py`, `ui/` | Web UI and its endpoints for the join token, use cases, voices, and deployment |
-| `run.sh` | Helper script to start, wait for, stop, and clean up a profile |
+| `run.sh` | Helper script to start, wait for, stop, and clean up a profile, and to open the SSH tunnel from a laptop |
 | `docker-compose.yaml`, `Dockerfile`, `.env.example` | Services, image, and environment template |
 | `pyproject.toml`, `uv.lock` | Example-only dependencies |
 

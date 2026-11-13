@@ -71,6 +71,38 @@ def test_up_accepts_the_explicit_wait_flag(tmp_path):
     assert "Waiting up to 3600s" in result.stderr
 
 
+def test_up_ends_with_the_tunnel_instructions(tmp_path):
+    for args in (["up", "cloud"], ["up", "single-gpu"], ["up", "server", "--no-wait"], ["wait", "single-gpu"]):
+        result = run(args, tmp_path)
+        assert result.returncode == 0, result.stderr
+        lines = [line for line in result.stderr.splitlines() if line.strip()]
+        assert "run.sh tunnel <user>@" in " ".join(lines[-4:]), args
+        assert lines[-1].startswith("Keep it running"), args
+        assert "ssh -N -L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881" in result.stderr
+
+
+def test_tunnel_forwards_the_ui_and_livekit_ports(tmp_path):
+    result = run(["tunnel", "lanaz@spark"], tmp_path)
+    assert result.returncode == 0, result.stderr
+    command = next(line for line in result.stderr.splitlines() if line.startswith("+ ssh"))
+    assert "-L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 lanaz@spark" in command
+    assert "ExitOnForwardFailure=yes" in command
+    assert "http://localhost:3000/" in result.stderr
+    assert not any(line.startswith("+ docker") for line in result.stderr.splitlines())  # a laptop needs no docker
+
+
+def test_tunnel_local_ui_port_can_move(tmp_path):
+    result = run(["tunnel", "lanaz@spark"], tmp_path, extra_env={"LOCAL_UI_PORT": "3001"})
+    assert "-L 3001:127.0.0.1:3000" in result.stderr
+    assert "http://localhost:3001/" in result.stderr
+
+
+def test_tunnel_needs_a_host(tmp_path):
+    result = run(["tunnel"], tmp_path)
+    assert result.returncode != 0
+    assert "usage: run.sh tunnel <user@host>" in result.stderr
+
+
 def test_up_rejects_unknown_options(tmp_path):
     result = run(["up", "cloud", "--nope"], tmp_path)
     assert result.returncode != 0
@@ -136,6 +168,7 @@ def test_wait_reports_progress_until_healthy(tmp_path):
     assert result.stderr.count("still starting:") == 2
     assert "livekit-nvidia-llm-vllm: starting | last log: Loading weights took 12.3 seconds" in result.stderr
     assert "All healthy. Ready to connect." in result.stderr
+    assert result.stderr.index("Ready to connect") < result.stderr.index("run.sh tunnel <user>@")
 
 
 def test_wait_labels_an_unhealthy_container_as_not_ready(tmp_path):
