@@ -1,0 +1,230 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# LiveKit generic assistant: LiveKit server, agent worker, web UI, and model sidecars. Self-contained: the sidecars
+# extend the shared service definitions in docker/ (read-only), so nothing outside this folder lists this example.
+#
+# Run from the repository root, passing the root .env for variable interpolation (Compose otherwise reads .env from
+# this folder):
+#   docker compose --env-file .env -f src/examples/generic_assistant_livekit/docker-compose.yaml \
+#     --profile <recipe> up -d
+#
+# Recipes (select exactly one):
+#   generic-assistant-livekit              NVIDIA Cloud models, no local GPU
+#   generic-assistant-livekit/server       NIM ASR + LLM + TTS on workstation / server GPUs
+#   generic-assistant-livekit/single-gpu   vLLM + NeMo-Speech.cpp on one GPU (workstation, DGX Spark, Jetson Thor)
+# TURN is not included. For remote browsers, refer to docker/docker-compose.coturn.yaml.
+# Do not run this example and a Pipecat recipe together: the sidecars publish the same host ports.
+
+x-livekit-app: &livekit-app
+  build:
+    context: ../../..
+    dockerfile: src/examples/generic_assistant_livekit/Dockerfile
+  image: generic-assistant-livekit:latest
+  pull_policy: build
+  volumes:
+    - ../../../services.yaml:/app/services.yaml:ro
+    - ./:/app/src/examples/generic_assistant_livekit:ro
+  restart: unless-stopped
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+# The agents share the LiveKit server's network namespace (network_mode below). The server advertises its node IP
+# (127.0.0.1 by default, for a browser on the same machine or behind an SSH tunnel) in ICE candidates, and inside a
+# separate container that address would point at the agent itself. Sharing the namespace makes it reach the server.
+# The agents get only the variables they use, not the whole .env. NVIDIA_API_KEY goes to the cloud agent alone, and
+# HF_TOKEN goes to no app container.
+x-livekit-env: &livekit-env
+  LIVEKIT_URL: ws://127.0.0.1:7880
+  LIVEKIT_STATE_DIR: /state
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+  LLM_SERVICE: ${LLM_SERVICE:-}
+  ASR_SERVICE: ${ASR_SERVICE:-}
+  TTS_SERVICE: ${TTS_SERVICE:-}
+
+services:
+  # Writes the LiveKit key and secret and the server config to the livekit_state volume, then exits. It keeps
+  # credentials from an earlier run, so `docker compose down` does not rotate them (`down -v` does). Set
+  # LIVEKIT_API_KEY and LIVEKIT_API_SECRET in .env to use your own values.
+  livekit-init:
+    <<: *livekit-app
+    profiles:
+      - generic-assistant-livekit
+      - generic-assistant-livekit/server
+      - generic-assistant-livekit/single-gpu
+    command: ["python", "-m", "examples.generic_assistant_livekit.credentials"]
+    environment:
+      LIVEKIT_STATE_DIR: /state
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+    volumes:
+      - livekit_state:/state
+    restart: "no"
+
+  livekit-server:
+    image: livekit/livekit-server:v1.13.11
+    profiles:
+      - generic-assistant-livekit
+      - generic-assistant-livekit/server
+      - generic-assistant-livekit/single-gpu
+    command: ["--config", "/state/livekit.yaml", "--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - livekit_state:/state:ro
+    # Published on the loopback address like the UI. Set LIVEKIT_BIND=0.0.0.0 only for a LAN deployment with TURN.
+    ports:
+      - "${LIVEKIT_BIND:-127.0.0.1}:7880:7880"
+      - "${LIVEKIT_BIND:-127.0.0.1}:7881:7881"
+      - "${LIVEKIT_BIND:-127.0.0.1}:7882:7882/udp"
+    restart: unless-stopped
+
+  livekit-ui:
+    <<: *livekit-app
+    profiles:
+      - generic-assistant-livekit
+      - generic-assistant-livekit/server
+      - generic-assistant-livekit/single-gpu
+    command: ["python", "-m", "examples.generic_assistant_livekit.ui_server"]
+    environment:
+      LIVEKIT_STATE_DIR: /state
+      LIVEKIT_UI_HOST: 0.0.0.0  # inside the container, so that Docker can publish the port (on loopback by default)
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state:ro
+    ports:
+      - "${LIVEKIT_UI_BIND:-127.0.0.1}:${LIVEKIT_UI_PORT:-3000}:3000"
+
+  livekit-agent:
+    <<: *livekit-app
+    network_mode: "service:livekit-server"
+    profiles:
+      - generic-assistant-livekit
+    depends_on:
+      livekit-server:
+        condition: service_started
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state
+    environment:
+      <<: *livekit-env
+      SERVICE_RECIPE: cloud
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+
+  livekit-agent-server:
+    <<: *livekit-app
+    network_mode: "service:livekit-server"
+    profiles:
+      - generic-assistant-livekit/server
+    depends_on:
+      livekit-server:
+        condition: service_started
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state
+    environment:
+      <<: *livekit-env
+      SERVICE_RECIPE: server
+
+  livekit-agent-single-gpu:
+    <<: *livekit-app
+    network_mode: "service:livekit-server"
+    profiles:
+      - generic-assistant-livekit/single-gpu
+    depends_on:
+      livekit-server:
+        condition: service_started
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../../services.yaml:/app/services.yaml:ro
+      - ./:/app/src/examples/generic_assistant_livekit:ro
+      - livekit_state:/state
+    environment:
+      <<: *livekit-env
+      SERVICE_RECIPE: single-gpu
+
+  # Model sidecars. Each extends a shared definition and gets a network alias, so the hostnames in services.yaml
+  # (nvidia-llm, nemotron-asr-streaming-english, ...) resolve to it.
+  livekit-nvidia-llm:
+    extends:
+      file: ../../../docker/docker-compose.nemotron35-lightning-nim.yaml
+      service: nvidia-llm
+    profiles: !override
+      - generic-assistant-livekit/server
+    networks:
+      default:
+        aliases:
+          - nvidia-llm
+
+  livekit-nemotron-asr:
+    extends:
+      file: ../../../docker/docker-compose.nemotron-asr.yaml
+      service: nemotron-asr-streaming-english
+    profiles: !override
+      - generic-assistant-livekit/server
+    networks:
+      default:
+        aliases:
+          - nemotron-asr-streaming-english
+
+  livekit-magpie-tts:
+    extends:
+      file: ../../../docker/docker-compose.magpie-tts.yaml
+      service: magpie-multilingual-tts-service
+    profiles: !override
+      - generic-assistant-livekit/server
+    networks:
+      default:
+        aliases:
+          - magpie-multilingual-tts-service
+
+  livekit-nvidia-llm-vllm:
+    extends:
+      file: ../../../docker/docker-compose.nemotron35-lightning.yaml
+      service: nvidia-llm-vllm-lightning
+    profiles: !override
+      - generic-assistant-livekit/single-gpu
+    # The shared recipe reads the repository-root .env with env_file. Drop that, so the sidecar follows the .env that
+    # run.sh selected, and pass only what vLLM uses: the Hugging Face token and the optional memory settings.
+    env_file: !reset []
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_VRAM_HEADROOM_MIB: ${VLLM_VRAM_HEADROOM_MIB:-}
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-}
+    networks:
+      default:
+        aliases:
+          - nvidia-llm-vllm
+
+  livekit-nemo-speech:
+    extends:
+      file: ../../../docker/docker-compose.nemo-speech-cpp.yaml
+      service: nemo-speech
+    profiles: !override
+      - generic-assistant-livekit/single-gpu
+    networks:
+      default:
+        aliases:
+          - nemo-speech
+
+volumes:
+  livekit_state:
+  llm_cache:
+  asr_cache:
+  tts_cache:
