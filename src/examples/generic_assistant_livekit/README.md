@@ -1,8 +1,6 @@
-# Generic Assistant on LiveKit
+# Nemotron Voice Agent on LiveKit
 
-This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/), with automatic speech recognition (ASR), large language model (LLM), and text-to-speech (TTS) models. A small web UI shows live transcripts and tool calls, and lets you choose a [use case](#use-cases) and a [voice](#voice-selection).
-
-The example is self-contained. It has its own Python environment, image, and Compose file, and nothing outside this folder refers to it. It reuses the model recipes in [`docker/`](../../../docker) and the catalog in [`services.yaml`](../../../services.yaml), and it does not use the Pipecat server, the React client, or [`examples_registry.yaml`](../../../examples_registry.yaml). To move it to another repository, replace the `extends` entries in `docker-compose.yaml` with copies of those service definitions.
+This example is a cascaded voice assistant built on [LiveKit Agents](https://docs.livekit.io/agents/), with automatic speech recognition (ASR), large language model (LLM), and text-to-speech (TTS) models. A small web UI shows live transcripts and tool calls, and lets you choose a [sample use case](#sample-use-cases) and a [voice](#voice-selection).
 
 ## How It Works
 
@@ -64,7 +62,7 @@ This example needs Docker Compose 2.24 or newer. Run all commands from the repos
    test -f .env || cp src/examples/generic_assistant_livekit/.env.example .env
    ```
 
-3. In `.env`, set `NVIDIA_API_KEY` (Cloud and Server) or `HF_TOKEN` (Single GPU). You do not need LiveKit credentials: the `livekit-init` service generates them on the first run. To use your own, set `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
+3. In `.env`, set `NVIDIA_API_KEY` (Cloud and Server) or `HF_TOKEN` (Single GPU).
 
 4. For the Server profile only, log in to the NVIDIA NGC container registry:
 
@@ -75,20 +73,20 @@ This example needs Docker Compose 2.24 or newer. Run all commands from the repos
 
 5. Deploy one profile. **Run only one of the following options.** The helper script [`run.sh`](run.sh) checks your `.env`, stops a different running profile, warns about busy ports and low memory, and waits until the sidecars are healthy and the agent has registered with LiveKit.
 
-   **Option A: Cloud.**
+   **Option A: Cloud.** Uses [NVIDIA-hosted managed APIs](https://build.nvidia.com/), so you need no GPU.
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh up cloud
    ```
 
-   **Option B: Single GPU.** Download the speech weights once, and then start the profile:
+   **Option B: Single GPU.** Runs customized containers built on open runtimes, such as the [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) library for ASR and TTS and [vLLM](https://docs.vllm.ai/) for the LLM. It suits prototyping and testing. Download the speech weights once, and then start the profile:
 
    ```bash
    bash scripts/download-nemo-speech-models.sh
    src/examples/generic_assistant_livekit/run.sh up single-gpu
    ```
 
-   **Option C: Server with NIM.**
+   **Option C: Server with NIM.** Runs the official [NVIDIA NIM](https://docs.nvidia.com/nim/) microservices.
 
    ```bash
    src/examples/generic_assistant_livekit/run.sh up server
@@ -124,7 +122,7 @@ This example needs Docker Compose 2.24 or newer. Run all commands from the repos
    src/examples/generic_assistant_livekit/run.sh down single-gpu     # or: cloud, server
    ```
 
-## Use Cases
+## Sample Use Cases
 
 The **Use case** list selects the agent's prompt and tools. Choose one before you connect. It stays fixed for the session, and the generic assistant is the default.
 
@@ -224,30 +222,3 @@ Check the agent log first: `src/examples/generic_assistant_livekit/run.sh logs <
 - **`LLM was busy. Retrying.` in the transcript panel:** a call failed for a moment, such as with HTTP 429, and the library retried it. The conversation continues.
 - **The Voice list is empty or shows `Default voice (list unavailable)`:** the TTS server has not answered yet. A hosted endpoint can take up to 30 seconds when cold, and a local sidecar answers after it loads its models.
 - **`port is already allocated`:** another container holds a host port. Refer to [Deployment Profiles](#deployment-profiles) and [Cleanup](#cleanup).
-
-## Customization
-
-| Path | Role |
-| --- | --- |
-| `agent.py`, `config.py` | The agent worker, and endpoint resolution from `services.yaml` for each profile |
-| `prompts.yaml`, `scenarios.py` | The use cases: prompts and UI text, and tools with fictional demo data |
-| `tools.py`, `tool_wrapper.py` | Weather and date logic, and the wrapper that reports tool calls to the UI |
-| `voices.py`, `session.py`, `errors.py`, `state.py` | Voice discovery and validation, token attributes, error summaries, and the files the worker shares with the UI server |
-| `credentials.py` | Generates the LiveKit key, secret, and server config |
-| `ui_server.py`, `ui/` | The web UI and its endpoints for the join token, use cases, voices, and deployment |
-| `run.sh` | Helper script to start, wait for, stop, and clean up a profile, and to open the tunnel |
-| `docker-compose.yaml`, `Dockerfile`, `.env.example` | Services, image, and environment template |
-| `pyproject.toml`, `uv.lock` | Example-only dependencies |
-
-## Dependencies
-
-The example keeps its dependencies separate from the Pipecat environment, because the root `pyproject.toml` forces `nvidia-riva-client>=2.27.0,<3`. Do not merge the two environments.
-
-> **Temporary pin:** the NVIDIA speech changes from [livekit/agents#6706](https://github.com/livekit/agents/pull/6706) merged on November 12, but no `livekit-plugins-nvidia` release contains them yet (1.8.11 predates the merge). `pyproject.toml` pins that plugin to the merge commit `b7c9e2d0`. `livekit-agents` and `livekit-plugins-silero` come from PyPI through `override-dependencies`, because the silero model is a Git LFS file that a git install does not include. When the next release ships, use `livekit-plugins-nvidia>=1.8.12` and remove the git source and both overrides.
-
-To run the unit tests and install the example environment without Docker:
-
-```bash
-uv run pytest tests/unit/test_livekit_example_*.py -v
-uv sync --project src/examples/generic_assistant_livekit
-```
