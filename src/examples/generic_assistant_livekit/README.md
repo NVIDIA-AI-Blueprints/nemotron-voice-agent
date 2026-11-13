@@ -45,9 +45,17 @@ The default models are the first entries that the `generic-assistant` example of
 - **Ports:** these host ports must be free: 7880 to 7882 (LiveKit), 3000 (UI), 9000, 9001, 50151, 50152, and 18000 (Server), or 50051 and 18000 (Single GPU).
 - **Pipecat:** do not run a Pipecat recipe on the same machine at the same time.
 
+## Prerequisites
+
+- **Docker with Docker Compose 2.24.4 or newer.** Check the version with `docker compose version`. The Cloud profile needs no GPU.
+- **Git**, to clone the repository.
+- **An NVIDIA GPU and Docker GPU support** for the Single GPU and Server profiles. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), and verify that `nvidia-smi` works inside a container. The Single GPU profile also needs NVIDIA driver 580.x or newer for NeMo-Speech.cpp.
+- **[`uv`](https://docs.astral.sh/uv/) and `curl` (or `wget`)** for the Single GPU profile, which uses them in its weights download script.
+- **A key or token for your profile.** Step 3 of the next section shows where to get it.
+
 ## Running the Example
 
-This example needs Docker Compose 2.24.4 or newer. Run all commands from the repository root, on the machine that hosts the deployment. Docker builds and runs the containers there, and the model weights download there.
+Run all commands from the repository root, on the machine that hosts the deployment. Docker builds and runs the containers there, and the model weights download there.
 
 1. Clone the repository. Skip this step if you already have a clone:
 
@@ -62,7 +70,10 @@ This example needs Docker Compose 2.24.4 or newer. Run all commands from the rep
    test -f .env || cp src/examples/generic_assistant_livekit/.env.example .env
    ```
 
-3. In `.env`, set `NVIDIA_API_KEY` (Cloud and Server) or `HF_TOKEN` (Single GPU).
+3. In `.env`, set the key that your profile needs:
+
+   - `NVIDIA_API_KEY` (Cloud and Server): get a key from [build.nvidia.com](https://build.nvidia.com/).
+   - `HF_TOKEN` (Single GPU): create a token with read access in your [Hugging Face settings](https://huggingface.co/settings/tokens).
 
 4. For the Server profile only, log in to the NVIDIA NGC container registry:
 
