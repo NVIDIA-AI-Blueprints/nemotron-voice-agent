@@ -39,6 +39,22 @@ The agent uses the first entry of each slot that the `generic-assistant` example
 | Single GPU | Nemotron Speech Streaming (NeMo-Speech.cpp) | Nemotron 3.5 Lightning 30B A3B (vLLM) | Magpie TTS (NeMo-Speech.cpp) |
 | Server | Nemotron ASR Streaming English (NIM) | Nemotron 3.5 Lightning 30B A3B (NIM) | Magpie TTS Multilingual (NIM) |
 
+## Deployment Profiles
+
+The profiles match the three modes of the repository's Pipecat examples. They differ in where the models run and which runtime serves them.
+
+| Profile | ASR and TTS | LLM | Model files |
+| --- | --- | --- | --- |
+| Cloud | NVIDIA Cloud endpoints | NVIDIA Cloud endpoint | None. Nothing runs locally. |
+| Single GPU | NeMo-Speech.cpp: one sidecar serves ASR and TTS | vLLM serves the NVFP4 checkpoint | Hugging Face. The speech GGUF files are under 1 GB each, downloaded by `download-nemo-speech-models.sh`. The LLM is about 21.6 GB, downloaded by vLLM at first start. |
+| Server | Official NVIDIA NIM containers, one each for ASR and TTS | An official NVIDIA NIM container | NGC. Each NIM downloads its own models at first start. |
+
+- **Single GPU:** open runtimes that fit one GPU. NeMo-Speech.cpp is a C++ runtime that loads small GGUF files, which are compact (quantized) single-file weights. In our testing, this speech sidecar started faster than the NIM speech containers. The LLM download dominates the first start.
+- **Server:** NVIDIA NIM microservices are prebuilt, supported containers that include an optimized runtime and fetch their models from NGC. They suit scaling and production on workstation or server GPUs. The Getting Started guide notes that the first run can take 30 to 60 minutes.
+- **Cloud:** the same models served by NVIDIA, so you need no GPU. It is the quickest way to try the example.
+
+For the hardware and credentials that each profile needs, refer to the [Getting Started guide](../../../docs/01-getting-started.md).
+
 ## Recommended Hardware
 
 Pick the profile for your hardware. The support follows the `generic-assistant` example in the [Getting Started guide](../../../docs/01-getting-started.md), with the DGX Spark exception noted in the table.
