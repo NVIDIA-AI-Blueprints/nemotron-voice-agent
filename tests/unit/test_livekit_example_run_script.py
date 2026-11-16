@@ -598,16 +598,17 @@ def test_check_sip_passes_for_a_healthy_deployment(tmp_path):
     assert "Not covered: a real call" in result.stderr
 
 
-def test_check_sip_fails_when_redis_is_published_on_every_address(tmp_path):
+@pytest.mark.parametrize("published", ["0.0.0.0:6379", "192.168.1.20:6379", "127.0.0.1:6379\n0.0.0.0:6379"])
+def test_check_sip_fails_when_redis_is_published_beyond_loopback(tmp_path, published):
     result = run_check(
         tmp_path,
         FAKE_LISTEN="6379 5060",
         FAKE_HEALTH="healthy",
         FAKE_HEALTH_SERVICES="livekit-redis",
-        FAKE_REDIS_PORT="0.0.0.0:6379",
+        FAKE_REDIS_PORT=published,
     )
     assert result.returncode != 0
-    assert "FAIL  Redis is published on every address" in result.stderr
+    assert "FAIL  Redis is published beyond loopback" in result.stderr
 
 
 def test_check_sip_fails_when_the_overlay_is_not_started(tmp_path):

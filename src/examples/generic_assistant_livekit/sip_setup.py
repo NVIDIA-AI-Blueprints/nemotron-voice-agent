@@ -57,6 +57,14 @@ def find_rule(rules, name: str, trunk_id: str):
     return next((r for r in rules if r.name == name or trunk_id in r.trunk_ids), None)
 
 
+def shared_with_others(rule, trunk_id: str) -> bool:
+    """Return True when the rule also serves other trunks, or every trunk (an empty list).
+
+    Such a rule is never replaced, because that would change what the other trunks do.
+    """
+    return not rule.trunk_ids or any(t != trunk_id for t in rule.trunk_ids)
+
+
 async def run_trunk(args: argparse.Namespace) -> None:
     """Create the trunk and the dispatch rule, or update them when they already exist."""
     from livekit import api
@@ -74,6 +82,14 @@ async def run_trunk(args: argparse.Namespace) -> None:
     try:
         trunks = (await lk.sip.list_inbound_trunk(api.ListSIPInboundTrunkRequest())).items
         existing = next((t for t in trunks if t.name == trunk.name), None)
+        rules = (await lk.sip.list_dispatch_rule(api.ListSIPDispatchRuleRequest())).items
+        current = find_rule(rules, rule.name, existing.sip_trunk_id if existing else "")
+        if current and shared_with_others(current, existing.sip_trunk_id if existing else ""):
+            # Replacing it would change what the other trunks do. Nothing has been changed yet.
+            raise ValueError(
+                f"dispatch rule {current.sip_dispatch_rule_id} ({current.name}) also serves other trunks, so it is "
+                "left unchanged. Delete it in LiveKit, or give this number its own rule, and run the command again"
+            )
         if existing:
             trunk_id = existing.sip_trunk_id
             await lk.sip.update_inbound_trunk(trunk_id, trunk)
@@ -82,9 +98,7 @@ async def run_trunk(args: argparse.Namespace) -> None:
             created = await lk.sip.create_inbound_trunk(api.CreateSIPInboundTrunkRequest(trunk=trunk))
             trunk_id = created.sip_trunk_id
             print(f"created inbound trunk: {trunk_id} ({args.number})")
-        rules = (await lk.sip.list_dispatch_rule(api.ListSIPDispatchRuleRequest())).items
         rule.trunk_ids.append(trunk_id)
-        current = find_rule(rules, rule.name, trunk_id)
         if current:
             await lk.sip.update_dispatch_rule(current.sip_dispatch_rule_id, rule)
             print(f"updated dispatch rule: {current.sip_dispatch_rule_id} -> {attributes}")
@@ -100,9 +114,10 @@ def run_network(args: argparse.Namespace) -> None:
     signaling = parse_cidrs(args.signaling, "signaling")
     media = parse_cidrs(args.media or args.signaling, "media")
     lan = parse_cidrs([args.lan], "LAN")[0]
+    ssh_from = parse_cidrs(args.ssh_from, "SSH")
     print(network_checklist(args.lan_ip, args.ui_port))
     print("ufw commands (review them, then run them yourself):")
-    for command in firewall_commands(signaling, media, lan):
+    for command in firewall_commands(signaling, media, lan, ssh_from):
         print(f"  {command}")
 
 
@@ -126,6 +141,13 @@ def build_parser() -> argparse.ArgumentParser:
     net.add_argument("--lan", required=True, metavar="CIDR", help="your LAN range, e.g. 192.168.1.0/24")
     net.add_argument("--signaling", action="append", required=True, metavar="CIDR", help="provider signaling range")
     net.add_argument("--media", action="append", metavar="CIDR", help="provider media range (default: signaling)")
+    net.add_argument(
+        "--ssh-from",
+        action="append",
+        default=[],
+        metavar="CIDR",
+        help="another network that you SSH in from (a VPN, for example). Repeat. Other SSH sources are blocked",
+    )
     net.add_argument("--ui-port", type=int, default=3000)
     return parser
 

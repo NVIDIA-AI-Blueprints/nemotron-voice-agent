@@ -24,17 +24,19 @@ def server(monkeypatch, tmp_path):
     for name in ("LIVEKIT_UI_USERNAME", "LIVEKIT_UI_PASSWORD", "LIVEKIT_PUBLIC_WS_URL", "LIVEKIT_SIP"):
         monkeypatch.delenv(name, raising=False)  # a developer's own settings must not leak into the tests
     monkeypatch.setattr(ui_server, "FAILED_LOGIN_DELAY", 0)
-    ui_server._failures.clear()
+    ui_server._attempts.clear()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
 
 
-def request(base, path, body=None, cookie=None):
+def request(base, path, body=None, cookie=None, headers=None):
     req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode())
     if cookie:
         req.add_header("Cookie", cookie)
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
     try:
         with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310 - a loopback test server
             return response.status, dict(response.headers), response.read()
@@ -82,7 +84,9 @@ def test_forged_and_expired_cookies_are_refused(server, monkeypatch):
 
 def test_repeated_wrong_passwords_are_limited(server, monkeypatch):
     monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
-    codes = [request(server, "/login", {"password": "x"})[0] for _ in range(ui_server.MAX_FAILURES_PER_MINUTE + 1)]
+    codes = [
+        request(server, "/login", {"password": "x"})[0] for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE + 1)
+    ]
     assert codes[-1] == 429
     assert request(server, "/login", {"password": "correct horse"})[0] == 429  # even the right one waits
 
@@ -138,3 +142,56 @@ def test_a_public_livekit_address_must_use_a_websocket_scheme(server, monkeypatc
     assert json.loads(request(server, "/client-config")[2]) == {"ws_url": ""}
     monkeypatch.setenv("LIVEKIT_PUBLIC_WS_URL", "https://voice.example.org")
     assert json.loads(request(server, "/client-config")[2]) == {"ws_url": ""}
+
+
+def test_one_client_cannot_lock_out_the_others(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    attacker = {"X-Forwarded-For": "203.0.113.7"}  # the proxy on this host appends the real client address
+    for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE):
+        request(server, "/login", {"password": "x"}, headers=attacker)
+    assert request(server, "/login", {"password": "x"}, headers=attacker)[0] == 429
+    friend = {"X-Forwarded-For": "198.51.100.9"}
+    assert request(server, "/login", {"password": "correct horse"}, headers=friend)[0] == 200
+
+
+def test_the_forwarded_header_is_trusted_only_from_a_local_proxy():
+    assert ui_server.client_key("127.0.0.1", "10.0.0.1, 203.0.113.7") == "203.0.113.7"  # the proxy's own entry
+    assert ui_server.client_key("127.0.0.1", None) == "127.0.0.1"
+    assert ui_server.client_key("192.168.1.50", "203.0.113.7") == "192.168.1.50"  # spoofable, so ignored
+
+
+def test_concurrent_attempts_cannot_pass_the_limit():
+    ui_server._attempts.clear()
+    results = []
+    gate = threading.Barrier(40)
+
+    def attempt():
+        gate.wait()
+        results.append(ui_server.reserve_attempt("client", now=1000.0))
+
+    threads = [threading.Thread(target=attempt) for _ in range(40)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert results.count(True) == ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE
+
+
+def test_a_right_password_does_not_use_up_attempts(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE + 5):
+        assert request(server, "/login", {"password": "correct horse"})[0] == 200
+
+
+def test_an_invalid_or_oversized_content_length_is_rejected(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    assert request(server, "/login", {"password": "x" * 2000})[0] == 413
+    for bad in ("abc", "-5"):
+        req = urllib.request.Request(server + "/login", data=b"{}", method="POST")
+        req.add_header("Content-Length", bad)
+        try:
+            urllib.request.urlopen(req, timeout=5)  # noqa: S310 - a loopback test server
+            code = 200
+        except urllib.error.HTTPError as error:
+            code = error.code
+        except OSError:  # the client library refuses to send some invalid lengths at all
+            code = 400
+        assert code == 400, bad

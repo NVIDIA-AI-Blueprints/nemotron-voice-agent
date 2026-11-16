@@ -184,3 +184,35 @@ def test_phone_info_survives_an_unreachable_server(monkeypatch):
     monkeypatch.setattr(ui_server, "_list_sip_records", fail)
     monkeypatch.setitem(ui_server._phone_cache, "at", 0.0)
     assert ui_server.phone_info() == {"enabled": True, "numbers": []}
+
+
+def test_firewall_commands_keep_ssh_from_other_networks_that_the_user_lists():
+    commands = telephony.firewall_commands(["203.0.113.0/24"], ["198.51.100.0/24"], "192.168.1.0/24", ["10.8.0.0/16"])
+    assert "sudo ufw allow from 10.8.0.0/16 to any port 22 proto tcp   # SSH from another network" in commands
+    enable = commands.index("sudo ufw enable")
+    assert (
+        commands.index("sudo ufw allow from 10.8.0.0/16 to any port 22 proto tcp   # SSH from another network") < enable
+    )
+    assert not [
+        c for c in telephony.firewall_commands(["203.0.113.0/24"], [], "192.168.1.0/24") if "another network" in c
+    ]
+
+
+def test_the_checklist_warns_about_ssh_and_the_restart_after_an_address_change():
+    text = telephony.network_checklist("192.168.1.9")
+    assert "--ssh-from" in text
+    assert "restart livekit-sip" in text
+    assert "transport=udp" in text
+
+
+def test_a_dispatch_rule_shared_with_other_trunks_is_never_replaced():
+    livekit_api()
+    from livekit import api
+
+    mine = api.SIPDispatchRuleInfo(trunk_ids=["ST_1"])
+    shared = api.SIPDispatchRuleInfo(trunk_ids=["ST_1", "ST_2"])
+    for_everyone = api.SIPDispatchRuleInfo()  # no trunk ids: it serves every trunk
+    assert not sip_setup.shared_with_others(mine, "ST_1")
+    assert sip_setup.shared_with_others(shared, "ST_1")
+    assert sip_setup.shared_with_others(for_everyone, "ST_1")
+    assert sip_setup.shared_with_others(mine, "ST_9")  # a rule that belongs to some other trunk

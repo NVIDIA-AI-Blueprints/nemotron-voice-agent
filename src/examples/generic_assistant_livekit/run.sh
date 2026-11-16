@@ -16,7 +16,7 @@
 #                                            Create the inbound SIP trunk and dispatch rule for one number
 #   run.sh sip-address                       Run on the Linux host: print its LAN address and network, the router and the
 #                                            public address, and whether the public address can receive calls
-#   run.sh sip-network --lan-ip IP --lan CIDR --signaling CIDR [--media CIDR]
+#   run.sh sip-network --lan-ip IP --lan CIDR --signaling CIDR [--media CIDR] [--ssh-from CIDR]
 #                                            Print the router and firewall steps (changes nothing)
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
 #   run.sh clean [profile] [--image] [-y]    Stop and delete volumes (credentials, SIP records, NIM caches); --image also removes the image
@@ -579,11 +579,14 @@ check_sip() { # check_sip <flags>
   id="$(dc_quiet $flags ps -a -q livekit-redis 2>/dev/null | head -n 1)"
   if [ -n "$id" ]; then
     published="$(docker port "$id" 6379 2>/dev/null || true)"
-    case "$published" in
-      "") fail "Redis publishes no port, so the SIP service cannot reach it" ;;
-      *0.0.0.0* | *"[::]"*) fail "Redis is published on every address ($published). It must be 127.0.0.1 only" ;;
-      *) pass "Redis is published on loopback only ($published)" ;;
-    esac
+    if [ -z "$published" ]; then
+      fail "Redis publishes no port, so the SIP service cannot reach it"
+    elif printf '%s\n' "$published" | grep -qv -E '^(127\.0\.0\.1|\[::1\]):'; then
+      # Any address other than loopback, including a single LAN address, exposes Redis, which has no password.
+      fail "Redis is published beyond loopback ($(printf '%s' "$published" | tr '\n' ' ')). It must be 127.0.0.1 only"
+    else
+      pass "Redis is published on loopback only ($published)"
+    fi
   fi
   logs="$(dc_quiet $flags logs --tail 100 livekit-sip 2>&1 || true)"
   # Per-call lines (statistics, timestamps) are not service errors: their counters include words such as "packets_failed".

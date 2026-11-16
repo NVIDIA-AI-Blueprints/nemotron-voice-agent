@@ -100,7 +100,7 @@ It prints the server's LAN address and network, the router's address, and the pu
 
 If you use a router, compare the printed public address with the **WAN** or **Internet** address on the router's status page. If they differ, another NAT sits in front of the router, and you need a cloud server or a public address from your ISP.
 
-Home addresses often change. When yours does, calls stop arriving. Update the origination URI below and restart `livekit-sip`, or use a dynamic DNS name in the URI.
+Home addresses often change. When yours does, calls stop arriving. Update the origination URI below and restart `livekit-sip`, which reads its public address only at startup. A dynamic DNS name in the URI keeps Twilio pointed at you, but you still restart `livekit-sip` after every change.
 
 ### 1.2 Create the Trunk and the Number
 
@@ -159,7 +159,7 @@ src/examples/generic_assistant_livekit/run.sh sip-network \
   --media 168.86.128.0/18
 ```
 
-`sip-address` printed the LAN values. The command changes nothing, refuses open ranges such as `0.0.0.0/0`, and prints TCP 5060 rules that you can skip for a UDP-only trunk. Afterwards, `sudo ufw status numbered` must show a provider range, never `Anywhere`, for 5060 and 10000:10100. `livekit-sip` uses the host network, so the rules apply to it.
+`sip-address` printed the LAN values. The firewall blocks SSH from every network it does not list, so if you connect from outside the LAN (a VPN, for example), add `--ssh-from <CIDR>` for that network. The command changes nothing, refuses open ranges such as `0.0.0.0/0`, and prints TCP 5060 rules that you can skip for a UDP-only trunk. Afterwards, `sudo ufw status numbered` must show a provider range, never `Anywhere`, for 5060 and 10000:10100. `livekit-sip` uses the host network, so the rules apply to it.
 
 For production, or inside a company or cloud environment, ask your network or cloud administrator to apply the same rules with your environment's own tools. Also have them review TLS and SRTP, redundancy, and monitoring, which this guide does not cover.
 

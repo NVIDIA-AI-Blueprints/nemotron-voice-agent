@@ -61,7 +61,9 @@ def parse_cidrs(values: Iterable[str], what: str) -> list[str]:
     return result
 
 
-def firewall_commands(signaling: list[str], media: list[str], lan_cidr: str) -> list[str]:
+def firewall_commands(
+    signaling: list[str], media: list[str], lan_cidr: str, ssh_from: list[str] | None = None
+) -> list[str]:
     """Return ufw commands to review and run by hand. Always restricted by source address; never executed here."""
     rtp = f"{RTP_MIN}:{RTP_MAX}"
     commands = [
@@ -70,6 +72,8 @@ def firewall_commands(signaling: list[str], media: list[str], lan_cidr: str) -> 
         f"sudo ufw allow from {lan_cidr} to any port 22 proto tcp   # SSH from your LAN only",
         f"sudo ufw allow from {lan_cidr}   # your LAN: UI and LiveKit",
     ]
+    for cidr in ssh_from or []:
+        commands.append(f"sudo ufw allow from {cidr} to any port 22 proto tcp   # SSH from another network")
     for cidr in signaling:
         commands += [
             f"sudo ufw allow from {cidr} to any port {SIP_PORT} proto udp",
@@ -85,7 +89,8 @@ def network_checklist(lan_ip: str, ui_port: int = 3000) -> str:
 Phone (SIP) network setup. These steps are manual: this tool does not touch your router or firewall.
 
 1. Public address. You need a real public IPv4 address (not CGNAT: a router WAN address from 100.64.x.x to
-   100.127.x.x means CGNAT). If it changes, use a dynamic DNS name in the provider's origination URI.
+   100.127.x.x means CGNAT). If it changes, update the provider's origination URI and restart livekit-sip, which
+   reads its public address at startup. A dynamic DNS name keeps the provider pointed at you, but the restart stays.
 2. Router. Give the host a fixed LAN address (now {lan_ip}), turn OFF "SIP ALG" and UPnP, and forward ONLY:
      {SIP_PORT}  UDP+TCP  -> {lan_ip}   (SIP signaling)
      {RTP_MIN}-{RTP_MAX}  UDP  -> {lan_ip}   (RTP audio)
@@ -93,8 +98,10 @@ Phone (SIP) network setup. These steps are manual: this tool does not touch your
 3. Host firewall. Router forwards cannot filter by source address, so allow only the provider on the host. Take
    the provider's current signaling and media ranges and print the exact ufw commands (review, then run them):
      run.sh sip-network --lan-ip {lan_ip} --lan <LAN CIDR> --signaling <CIDR> [--signaling <CIDR> ...] --media <CIDR>
+   The firewall blocks SSH from every network it does not list. If you SSH in from outside the LAN (a VPN, for
+   example), add --ssh-from <CIDR> for it, and keep a second SSH session open while you apply the rules.
 4. SIP provider (for example a Twilio Elastic SIP Trunk). Attach your number and add an origination URI
-   sip:<your-public-ip-or-ddns-name>:{SIP_PORT};transport=tcp .
+   sip:<your-public-ip-or-ddns-name>:{SIP_PORT};transport=udp .
 5. LiveKit. With the deployment running (run.sh up <profile> --sip):
      run.sh sip-setup <profile> --number +15551234567 --scenario bank --allowed-address <SIGNALING CIDR>
 6. Check from OUTSIDE your network (a phone hotspot) that {SIP_PORT} is not reachable except from the provider,
