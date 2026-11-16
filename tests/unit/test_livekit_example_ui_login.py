@@ -1,0 +1,231 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# ruff: noqa: D100, D103
+
+import json
+import socket
+import threading
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
+
+import pytest
+
+pytest.importorskip("livekit.api")  # the SDK belongs to the example's own environment
+
+from examples.generic_assistant_livekit import ui_server  # noqa: E402
+
+
+@pytest.fixture
+def server(monkeypatch, tmp_path):
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "secret-for-tests-0123456789abcdef")
+    monkeypatch.setenv("LIVEKIT_STATE_DIR", str(tmp_path))
+    for name in ("LIVEKIT_UI_USERNAME", "LIVEKIT_UI_PASSWORD", "LIVEKIT_PUBLIC_WS_URL", "LIVEKIT_SIP"):
+        monkeypatch.delenv(name, raising=False)  # a developer's own settings must not leak into the tests
+    monkeypatch.setattr(ui_server, "FAILED_LOGIN_DELAY", 0)
+    ui_server._attempts.clear()
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    httpd.shutdown()
+
+
+def request(base, path, body=None, cookie=None, headers=None):
+    req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode())
+    if cookie:
+        req.add_header("Cookie", cookie)
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310 - a loopback test server
+            return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, dict(error.headers), error.read()
+
+
+def test_without_credentials_everything_stays_open(server, monkeypatch):
+    monkeypatch.delenv("LIVEKIT_UI_PASSWORD", raising=False)
+    monkeypatch.delenv("LIVEKIT_UI_USERNAME", raising=False)
+    assert request(server, "/scenarios")[0] == 200
+    status = json.loads(request(server, "/auth/status")[2])
+    assert status == {"required": False, "username": False, "authenticated": True}
+
+
+def test_with_a_password_the_data_endpoints_need_a_login(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    for path in ("/scenarios", "/voices", "/deployment", "/phone", "/token"):
+        assert request(server, path)[0] == 401, path
+    assert request(server, "/")[0] == 200  # the page itself loads, so the login form can show
+    status = json.loads(request(server, "/auth/status")[2])
+    assert status == {"required": True, "username": False, "authenticated": False}
+
+
+def test_a_wrong_password_is_refused_and_a_right_one_sets_a_cookie(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    assert request(server, "/login", {"password": "nope"})[0] == 401
+    assert request(server, "/login", {})[0] == 401
+    status, headers, _ = request(server, "/login", {"password": "correct horse"})
+    assert status == 200
+    cookie = headers["Set-Cookie"]
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+    assert "correct horse" not in cookie  # the cookie never carries the password
+    assert request(server, "/scenarios", cookie=cookie.split(";")[0])[0] == 200
+    assert request(server, "/token", cookie=cookie.split(";")[0])[0] == 200
+
+
+def test_forged_and_expired_cookies_are_refused(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    assert request(server, "/scenarios", cookie="lk_ui=9999999999.deadbeef")[0] == 401
+    old = ui_server.make_session(now=0)  # expired long ago
+    assert not ui_server.valid_session(old)
+    assert request(server, "/scenarios", cookie=f"lk_ui={old}")[0] == 401
+
+
+def test_repeated_wrong_passwords_are_limited(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    codes = [
+        request(server, "/login", {"password": "x"})[0] for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE + 1)
+    ]
+    assert codes[-1] == 429
+    assert request(server, "/login", {"password": "correct horse"})[0] == 429  # even the right one waits
+
+
+def test_password_ok_compares_without_errors():
+    assert ui_server.password_ok("a", "a")
+    assert not ui_server.password_ok("a", "b")
+    assert not ui_server.password_ok(None, "a")
+    assert not ui_server.password_ok("", "")  # no password configured means no login
+
+
+def test_with_a_username_both_values_must_match(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_USERNAME", "alice")
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    assert json.loads(request(server, "/auth/status")[2])["username"] is True
+    assert request(server, "/login", {"password": "correct horse"})[0] == 401  # no username
+    assert request(server, "/login", {"username": "other", "password": "correct horse"})[0] == 401
+    assert request(server, "/login", {"username": "alice", "password": "wrong"})[0] == 401
+    assert request(server, "/login", {"username": "alice", "password": "correct horse"})[0] == 200
+
+
+def test_a_username_without_a_password_locks_everyone_out(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_USERNAME", "alice")
+    monkeypatch.delenv("LIVEKIT_UI_PASSWORD", raising=False)
+    assert request(server, "/scenarios")[0] == 401  # a half-set pair never opens the page
+    assert request(server, "/login", {"username": "alice", "password": ""})[0] == 401
+
+
+def test_the_public_livekit_address_is_served_without_a_login(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    monkeypatch.setenv("LIVEKIT_PUBLIC_WS_URL", "wss://example.org/livekit")
+    assert json.loads(request(server, "/client-config")[2]) == {"ws_url": "wss://example.org/livekit"}
+    monkeypatch.delenv("LIVEKIT_PUBLIC_WS_URL")
+    assert json.loads(request(server, "/client-config")[2]) == {"ws_url": ""}
+
+
+def test_the_cookie_is_secure_only_behind_an_https_proxy(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+
+    def login(headers):
+        req = urllib.request.Request(server + "/login", data=json.dumps({"password": "correct horse"}).encode())
+        for name, value in headers.items():
+            req.add_header(name, value)
+        with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310 - a loopback test server
+            return response.headers["Set-Cookie"]
+
+    assert "Secure" not in login({})
+    assert "Secure" in login({"X-Forwarded-Proto": "https"})
+
+
+def test_a_public_livekit_address_must_use_a_websocket_scheme(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_PUBLIC_WS_URL", "voice.example.org")  # no scheme
+    assert json.loads(request(server, "/client-config")[2]) == {"ws_url": ""}
+    monkeypatch.setenv("LIVEKIT_PUBLIC_WS_URL", "https://voice.example.org")
+    assert json.loads(request(server, "/client-config")[2]) == {"ws_url": ""}
+
+
+def test_one_client_cannot_lock_out_the_others(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    attacker = {"X-Forwarded-For": "203.0.113.7"}  # the proxy on this host appends the real client address
+    for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE):
+        request(server, "/login", {"password": "x"}, headers=attacker)
+    assert request(server, "/login", {"password": "x"}, headers=attacker)[0] == 429
+    friend = {"X-Forwarded-For": "198.51.100.9"}
+    assert request(server, "/login", {"password": "correct horse"}, headers=friend)[0] == 200
+
+
+def test_the_forwarded_header_is_trusted_only_from_a_local_proxy():
+    assert ui_server.client_key("127.0.0.1", "10.0.0.1, 203.0.113.7") == "203.0.113.7"  # the proxy's own entry
+    assert ui_server.client_key("127.0.0.1", None) == "127.0.0.1"
+    assert ui_server.client_key("192.168.1.50", "203.0.113.7") == "192.168.1.50"  # spoofable, so ignored
+
+
+def test_concurrent_attempts_cannot_pass_the_limit():
+    ui_server._attempts.clear()
+    results = []
+    gate = threading.Barrier(40)
+
+    def attempt():
+        gate.wait()
+        results.append(ui_server.reserve_attempt("client", now=1000.0))
+
+    threads = [threading.Thread(target=attempt) for _ in range(40)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len([r for r in results if r is not None]) == ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE
+    assert (
+        len({r for r in results if r is not None}) == ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE
+    )  # every ticket is unique
+
+
+def test_a_right_password_does_not_use_up_attempts(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE + 5):
+        assert request(server, "/login", {"password": "correct horse"})[0] == 200
+
+
+def raw_status(base, content_length):
+    """Send a POST with a hand-written Content-Length and return the status code of the server's reply.
+
+    urllib refuses to send an invalid length, so this uses a socket. A refused or dropped connection raises instead of
+    counting as a reply.
+    """
+    host, port = base.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as conn:
+        conn.sendall(f"POST /login HTTP/1.1\r\nHost: {host}\r\nContent-Length: {content_length}\r\n\r\n{{}}".encode())
+        reply = conn.recv(4096).decode()
+    return int(reply.split(" ", 2)[1])  # "HTTP/1.0 400 Bad Request"
+
+
+def test_an_invalid_or_oversized_content_length_is_rejected(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    assert request(server, "/login", {"password": "x" * 2000})[0] == 413
+    assert raw_status(server, "abc") == 400
+    assert raw_status(server, "-5") == 400
+    assert raw_status(server, "99999") == 413
+
+
+def test_a_request_that_stalls_before_its_body_is_dropped(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    monkeypatch.setattr(ui_server.Handler, "timeout", 0.5)
+    host, port = server.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as conn:
+        conn.sendall(b"POST /login HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{}")  # 98 bytes never arrive
+        assert conn.recv(4096) == b""  # the server closed the connection instead of waiting forever
+    assert not ui_server._attempts.get("127.0.0.1")  # the stalled attempt was given back
+    assert request(server, "/login", {"password": "correct horse"})[0] == 200  # and it still serves others
+
+
+def test_releasing_a_timed_out_attempt_keeps_the_failures_that_other_requests_recorded():
+    ui_server._attempts.clear()
+    stalled = ui_server.reserve_attempt("client", now=0.0)  # request A, which later times out
+    for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE - 1):
+        assert ui_server.reserve_attempt("client", now=10.0) is not None  # nine wrong passwords
+    assert ui_server.reserve_attempt("client", now=12.0) is None  # the limit is reached
+    ui_server.release_attempt("client", stalled)  # A times out at t=15 and gives back only its own attempt
+    # A's slot is free again, but the nine real failures still count
+    assert ui_server.reserve_attempt("client", now=15.0) is not None
+    assert ui_server.reserve_attempt("client", now=16.0) is None
+    # after A's original minute passes, the nine failures are still inside theirs: no extra attempts are allowed
+    assert ui_server.reserve_attempt("client", now=60.5) is None
