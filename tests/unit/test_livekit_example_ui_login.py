@@ -173,7 +173,10 @@ def test_concurrent_attempts_cannot_pass_the_limit():
     threads = [threading.Thread(target=attempt) for _ in range(40)]
     [t.start() for t in threads]
     [t.join() for t in threads]
-    assert results.count(True) == ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE
+    assert len([r for r in results if r is not None]) == ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE
+    assert (
+        len({r for r in results if r is not None}) == ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE
+    )  # every ticket is unique
 
 
 def test_a_right_password_does_not_use_up_attempts(server, monkeypatch):
@@ -212,3 +215,17 @@ def test_a_request_that_stalls_before_its_body_is_dropped(server, monkeypatch):
         assert conn.recv(4096) == b""  # the server closed the connection instead of waiting forever
     assert not ui_server._attempts.get("127.0.0.1")  # the stalled attempt was given back
     assert request(server, "/login", {"password": "correct horse"})[0] == 200  # and it still serves others
+
+
+def test_releasing_a_timed_out_attempt_keeps_the_failures_that_other_requests_recorded():
+    ui_server._attempts.clear()
+    stalled = ui_server.reserve_attempt("client", now=0.0)  # request A, which later times out
+    for _ in range(ui_server.MAX_LOGIN_ATTEMPTS_PER_MINUTE - 1):
+        assert ui_server.reserve_attempt("client", now=10.0) is not None  # nine wrong passwords
+    assert ui_server.reserve_attempt("client", now=12.0) is None  # the limit is reached
+    ui_server.release_attempt("client", stalled)  # A times out at t=15 and gives back only its own attempt
+    # A's slot is free again, but the nine real failures still count
+    assert ui_server.reserve_attempt("client", now=15.0) is not None
+    assert ui_server.reserve_attempt("client", now=16.0) is None
+    # after A's original minute passes, the nine failures are still inside theirs: no extra attempts are allowed
+    assert ui_server.reserve_attempt("client", now=60.5) is None

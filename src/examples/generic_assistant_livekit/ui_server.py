@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import itertools
 import json
 import os
 import threading
@@ -39,8 +40,9 @@ SESSION_SECONDS = 8 * 3600
 FAILED_LOGIN_DELAY = 1.0  # seconds a wrong password waits, which makes guessing slow
 MAX_LOGIN_ATTEMPTS_PER_MINUTE = 10  # per client
 MAX_LOGIN_BODY = 1024  # bytes
-_attempts: dict[str, list[float]] = {}
+_attempts: dict[str, list[tuple[float, int]]] = {}  # client -> (time, ticket) of each attempt in the last minute
 _attempts_lock = threading.Lock()
+_tickets = itertools.count()
 
 
 def ui_password() -> str:
@@ -114,29 +116,30 @@ def client_key(peer: str, forwarded: str | None) -> str:
     return peer
 
 
-def reserve_attempt(key: str, now: float | None = None) -> bool:
-    """Count a login attempt before the password is checked, and return False when the client is over the limit.
+def reserve_attempt(key: str, now: float | None = None) -> int | None:
+    """Count a login attempt before the password is checked, and return its ticket.
 
-    The check and the count happen under one lock, so concurrent requests cannot all pass the limit.
+    Return None when the client is over the limit. The check and the count happen under one lock, so concurrent
+    requests cannot all pass the limit. Give the ticket to `release_attempt` to hand back exactly this attempt.
     """
     now = time.monotonic() if now is None else now
     with _attempts_lock:
-        recent = [t for t in _attempts.get(key, []) if now - t < 60]
+        recent = [(t, ticket) for t, ticket in _attempts.get(key, []) if now - t < 60]
         if len(recent) >= MAX_LOGIN_ATTEMPTS_PER_MINUTE:
             _attempts[key] = recent
-            return False
-        _attempts[key] = [*recent, now]
+            return None
+        ticket = next(_tickets)
+        _attempts[key] = [*recent, (now, ticket)]
         if len(_attempts) > 1024:  # forget idle clients, so the table cannot grow without bound
-            for idle in [k for k, times in _attempts.items() if not [t for t in times if now - t < 60]]:
+            for idle in [k for k, held in _attempts.items() if not [1 for t, _ in held if now - t < 60]]:
                 del _attempts[idle]
-        return True
+        return ticket
 
 
-def release_attempt(key: str) -> None:
-    """Give back the attempt of a login that succeeded, so right passwords never count against the client."""
+def release_attempt(key: str, ticket: int) -> None:
+    """Give back one attempt, found by its ticket, so a failure that another request recorded stays counted."""
     with _attempts_lock:
-        if _attempts.get(key):
-            _attempts[key].pop()
+        _attempts[key] = [(t, held) for t, held in _attempts.get(key, []) if held != ticket]
 
 
 PHONE_CACHE_SECONDS = 10
@@ -250,13 +253,14 @@ class Handler(SimpleHTTPRequestHandler):
         if length > MAX_LOGIN_BODY:
             return send_json(self, {"error": "request too large"}, 413)
         key = client_key(self.client_address[0], self.headers.get("X-Forwarded-For"))
-        if not reserve_attempt(key):
+        ticket = reserve_attempt(key)
+        if ticket is None:
             return send_json(self, {"error": "too many attempts, wait a minute"}, 429)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
             username, password = body.get("username"), body.get("password")
         except TimeoutError:  # the client promised a body and never sent it. Give the attempt back and hang up
-            release_attempt(key)
+            release_attempt(key, ticket)
             self.close_connection = True
             return
         except (ValueError, AttributeError):
@@ -264,7 +268,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not credentials_ok(username, password):
             time.sleep(FAILED_LOGIN_DELAY)
             return send_json(self, {"error": "wrong username or password"}, 401)
-        release_attempt(key)
+        release_attempt(key, ticket)
         cookie = f"{SESSION_COOKIE}={make_session()}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_SECONDS}"
         if (
             self.headers.get("X-Forwarded-Proto", "").lower() == "https"
