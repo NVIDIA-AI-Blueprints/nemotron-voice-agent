@@ -100,6 +100,11 @@ services:
     environment:
       LIVEKIT_STATE_DIR: /state
       LIVEKIT_UI_HOST: 0.0.0.0  # inside the container, so that Docker can publish the port (on loopback by default)
+      LIVEKIT_UI_USERNAME: ${LIVEKIT_UI_USERNAME:-}  # optional login for the UI. Only this container gets it
+      LIVEKIT_UI_PASSWORD: ${LIVEKIT_UI_PASSWORD:-}
+      LIVEKIT_PUBLIC_WS_URL: ${LIVEKIT_PUBLIC_WS_URL:-}  # public address of LiveKit signaling for browsers (see the README)
+      LIVEKIT_SIP: ${LIVEKIT_SIP:-}  # with --sip, the page lists the numbers that reach the agent
+      LIVEKIT_URL: ws://livekit-server:7880  # to read the SIP records; the UI is not in the server's network namespace
     depends_on:
       livekit-init:
         condition: service_completed_successfully

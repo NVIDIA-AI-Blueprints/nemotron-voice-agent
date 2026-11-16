@@ -8,7 +8,7 @@ const { Room, RoomEvent, Track, ConnectionState } = LivekitClient;
 const $ = (id) => document.getElementById(id);
 // LiveKit signaling, on the same host as this page. A page served over HTTPS must use wss://, so put a TLS proxy in
 // front of LiveKit then.
-const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:7880`;
+let WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:7880`;
 $('server-badge').textContent = WS_URL;
 
 // Media flows directly to LiveKit over UDP (port 7882), or TCP (7881) when UDP cannot get through. Refer to the README, Remote Browser Access.
@@ -134,6 +134,7 @@ async function connect() {
     const params = new URLSearchParams({ scenario: $('scenario').value });
     if (voicesLoaded) params.set('voice', $('voice').value);
     const response = await fetch(`/token?${params}`);
+    if (response.status === 401) { showLogin(!$('login-username').classList.contains('hidden')); throw new Error('Sign in to connect'); }
     if (!response.ok) throw new Error(`token request failed (${response.status})`);
     const { token } = await response.json();
     room = new Room({ adaptiveStream: true, dynacast: true });
@@ -247,6 +248,25 @@ async function loadDeployment() {
   $('mode-badge').textContent = 'Deployment unknown';
 }
 
+// With --sip, the phone numbers that reach the agent. Hidden when SIP is off or no number is mapped yet.
+async function loadPhone() {
+  try {
+    const { numbers } = await (await fetch('/phone')).json();
+    if (!numbers || !numbers.length) return;
+    const box = $('phone-numbers');
+    box.innerHTML = '';
+    for (const item of numbers) {
+      const row = el('div', 'phone-row');
+      const link = el('a', 'phone-number', item.number);
+      link.href = `tel:${item.number}`;
+      row.append(link);
+      if (item.name) row.append(el('span', 'hint', ` answers as ${item.name}`));
+      box.append(row);
+    }
+    $('phone').classList.remove('hidden');
+  } catch (e) { /* the phone card is optional */ }
+}
+
 // The use cases (prompt and tools) that the agent offers. The choice is sent with the join token and is fixed for the session.
 let scenarios = [];
 function showScenario() {
@@ -272,9 +292,53 @@ async function loadScenarios() {
 }
 $('scenario').onchange = showScenario;
 
-loadScenarios();
-loadDeployment();
-loadVoices();
+// With LIVEKIT_UI_PASSWORD set, the data endpoints answer 401 until the user signs in. The password is checked on the
+// server and never sent to this page.
+function startPage() {
+  loadScenarios();
+  loadPhone();
+  loadDeployment();
+  loadVoices();
+}
+
+function showLogin(askUsername) {
+  $('login-username').classList.toggle('hidden', !askUsername);
+  $('login').classList.remove('hidden');
+  (askUsername ? $('login-username') : $('login-password')).focus?.();
+}
+
+$('login-form').onsubmit = async (event) => {
+  event.preventDefault();
+  $('login-error').textContent = '';
+  const response = await fetch('/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: $('login-username').value, password: $('login-password').value }),
+  });
+  if (response.ok) {
+    $('login-password').value = '';
+    $('login').classList.add('hidden');
+    startPage();
+  } else {
+    $('login-error').textContent = response.status === 429 ? 'Too many attempts. Wait a minute.' : 'Wrong username or password.';
+  }
+};
+
+(async () => {
+  try {  // an optional public LiveKit address, for when the page is served through an HTTPS proxy
+    const { ws_url: configured } = await (await fetch('/client-config')).json();
+    // Only on the public host. A page opened as localhost (through the SSH tunnel) keeps its own LiveKit address.
+    if (configured && new URL(configured).hostname === location.hostname) {
+      WS_URL = configured;
+      $('server-badge').textContent = WS_URL;
+    }
+  } catch (e) { /* keep the default */ }
+  try {
+    const status = await (await fetch('/auth/status')).json();
+    if (status.required && !status.authenticated) return showLogin(status.username);
+  } catch (e) { /* no login endpoint: carry on */ }
+  startPage();
+})();
 $('connect').onclick = () => (room ? room.disconnect() : connect());
 $('mute').onclick = async () => {
   const on = room.localParticipant.isMicrophoneEnabled;

@@ -61,10 +61,28 @@ def test_build_requests_makes_an_idempotent_named_trunk_and_rule():
     assert trunk.name == "inbound-+15551234567"
     assert list(trunk.numbers) == ["+15551234567"]
     assert list(trunk.allowed_addresses) == ["203.0.113.0/24"]
-    assert rule.name == "call-bank-+15551234567"
+    assert rule.name == "call-+15551234567"
     assert rule.rule.dispatch_rule_individual.room_prefix == "call-"
     assert attributes == {"scenario": "bank"}
     assert dict(rule.attributes) == attributes
+
+
+def test_changing_the_use_case_reuses_the_rule_of_the_number():
+    livekit_api()
+    _, bank, _ = sip_setup.build_requests("+15551234567", "bank", None, [])
+    _, generic, _ = sip_setup.build_requests("+15551234567", "generic", None, [])
+    assert bank.name == generic.name
+
+
+def test_find_rule_matches_by_name_or_by_trunk_so_old_rule_names_are_replaced():
+    livekit_api()
+    from livekit import api
+
+    old = api.SIPDispatchRuleInfo(sip_dispatch_rule_id="SDR_old", name="call-bank-+15551234567", trunk_ids=["ST_1"])
+    other = api.SIPDispatchRuleInfo(sip_dispatch_rule_id="SDR_other", name="call-+15559999999", trunk_ids=["ST_2"])
+    assert sip_setup.find_rule([other, old], "call-+15551234567", "ST_1").sip_dispatch_rule_id == "SDR_old"
+    assert sip_setup.find_rule([other], "call-+15551234567", "ST_1") is None
+    assert sip_setup.find_rule([other], "call-+15559999999", "ST_9").sip_dispatch_rule_id == "SDR_other"
 
 
 def test_build_requests_carries_the_voice():
@@ -132,3 +150,37 @@ def test_the_credentials_are_private_and_the_sip_config_is_readable_by_its_conta
     mode = lambda name: stat.S_IMODE((tmp_path / name).stat().st_mode)  # noqa: E731
     assert mode(credentials.CREDENTIALS_FILE) == 0o600
     assert mode(telephony.SIP_CONFIG_FILE) == 0o644  # the SIP image may not run as root
+
+
+def test_phone_numbers_list_only_numbers_that_a_rule_maps():
+    livekit_api()
+    from livekit import api
+
+    from examples.generic_assistant_livekit import ui_server
+
+    mapped = api.SIPInboundTrunkInfo(sip_trunk_id="ST_1", numbers=["+15551234567"])
+    unmapped = api.SIPInboundTrunkInfo(sip_trunk_id="ST_2", numbers=["+15559999999"])
+    rule = api.SIPDispatchRuleInfo(trunk_ids=["ST_1"], attributes={"scenario": "bank"})
+    found = ui_server.phone_numbers([mapped, unmapped], [rule], {"bank": "Bank assistant"})
+    assert found == [{"number": "+15551234567", "scenario": "bank", "name": "Bank assistant"}]
+
+
+def test_phone_info_is_empty_without_sip(monkeypatch):
+    livekit_api()
+    from examples.generic_assistant_livekit import ui_server
+
+    monkeypatch.delenv("LIVEKIT_SIP", raising=False)
+    assert ui_server.phone_info() == {"enabled": False, "numbers": []}
+
+
+def test_phone_info_survives_an_unreachable_server(monkeypatch):
+    livekit_api()
+    from examples.generic_assistant_livekit import ui_server
+
+    async def fail():
+        raise OSError("no route")
+
+    monkeypatch.setenv("LIVEKIT_SIP", "1")
+    monkeypatch.setattr(ui_server, "_list_sip_records", fail)
+    monkeypatch.setitem(ui_server._phone_cache, "at", 0.0)
+    assert ui_server.phone_info() == {"enabled": True, "numbers": []}

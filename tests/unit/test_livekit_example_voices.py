@@ -9,6 +9,7 @@ from examples.generic_assistant_livekit.voices import (
     choose_voice,
     parse_set_voice,
     parse_voices,
+    preferred_voice,
     read_voices_file,
     with_current,
     write_voices_file,
@@ -128,3 +129,17 @@ def test_reading_a_missing_or_broken_voices_file_returns_an_empty_list(tmp_path)
     assert read_voices_file(bad) == empty
     bad.write_text(json.dumps({"voices": [{"id": "x"}, {"id": "Aria", "name": "Aria"}, 7], "default": "Aria"}))
     assert read_voices_file(bad)["voices"] == [{"id": "Aria", "name": "Aria"}]
+
+
+def test_sofia_is_the_default_when_the_server_lists_her():
+    voices = [
+        {"id": "Magpie-Multilingual.EN-US.Aria", "name": "Aria"},
+        {"id": "Magpie-Multilingual.EN-US.Sofia", "name": "Sofia"},
+    ]
+    assert preferred_voice(voices, "Magpie-Multilingual.EN-US.Aria") == "Magpie-Multilingual.EN-US.Sofia"
+
+
+def test_the_catalog_default_stays_when_sofia_is_not_listed():
+    voices = [{"id": "Magpie-Multilingual.EN-US.Aria", "name": "Aria"}]
+    assert preferred_voice(voices, "Magpie-Multilingual.EN-US.Aria") == "Magpie-Multilingual.EN-US.Aria"
+    assert preferred_voice([], "John") == "John"

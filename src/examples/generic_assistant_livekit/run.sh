@@ -14,6 +14,8 @@
 #                                            exposure, the SIP log. Prints PASS or FAIL per check
 #   run.sh sip-setup <profile> --number +1555... [--scenario bank] [--allowed-address CIDR]
 #                                            Create the inbound SIP trunk and dispatch rule for one number
+#   run.sh sip-address                       Run on the Linux host: print its LAN address and network, the router and the
+#                                            public address, and whether the public address can receive calls
 #   run.sh sip-network --lan-ip IP --lan CIDR --signaling CIDR [--media CIDR]
 #                                            Print the router and firewall steps (changes nothing)
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
@@ -584,6 +586,8 @@ check_sip() { # check_sip <flags>
     esac
   fi
   logs="$(dc_quiet $flags logs --tail 100 livekit-sip 2>&1 || true)"
+  # Per-call lines (statistics, timestamps) are not service errors: their counters include words such as "packets_failed".
+  logs="$(printf '%s\n' "$logs" | grep -v -e 'call statistics' -e 'signaling timestamps' -e 'SIP call ended' || true)"
   if printf '%s' "$logs" | grep -qiE 'panic|fatal|permission denied|connection refused|no such file|failed|cannot'; then
     fail "the SIP log shows an error. Last lines:"
     printf '%s\n' "$logs" | tail -n 3 | sed 's/^/          /' >&2
@@ -621,6 +625,53 @@ cmd_sip_setup() { # run inside the agent container, which shares the LiveKit ser
   dc $(pflags "$name" sip) exec "$(agent_service "$name")" python -m examples.generic_assistant_livekit.sip_setup trunk "$@"
 }
 
+cmd_sip_address() { # read-only: reports the host's addresses for the SIP setup; run it on the Linux host
+  [ "$(uname -s)" = "Linux" ] || die "run sip-address on the Linux host that will receive the calls (it reads that host's network)"
+  command -v ip >/dev/null 2>&1 || die "the 'ip' command is required"
+  local route router dev lan_ip cidr network public verdict=0
+  route="$(ip -4 route get 1.1.1.1 2>/dev/null | head -n 1)"
+  lan_ip="$(sed -n 's/.* src \([0-9.]*\).*/\1/p' <<<"$route")"
+  [ -n "$lan_ip" ] || die "no default network route found. Is the host online?"
+  router="$(sed -n 's/.* via \([0-9.]*\).*/\1/p' <<<"$route")"
+  dev="$(sed -n 's/.* dev \([^ ]*\).*/\1/p' <<<"$route")"
+  cidr="$(ip -4 -o addr show dev "$dev" 2>/dev/null | sed -n 's/.* inet \([0-9.]*\/[0-9]*\).*/\1/p' | grep "^$lan_ip/" | head -n 1 || true)"
+  network="$cidr"
+  if [ -n "$cidr" ] && command -v python3 >/dev/null 2>&1; then
+    network="$(python3 -c 'import ipaddress, sys; print(ipaddress.ip_interface(sys.argv[1]).network)' "$cidr" 2>/dev/null || echo "$cidr")"
+  fi
+  public="$(curl -fsS --max-time 8 https://ifconfig.me 2>/dev/null || true)"
+  printf 'LAN address:    %s  (interface %s)\n' "$lan_ip" "${dev:-unknown}"
+  printf 'LAN network:    %s\n' "${network:-unknown}"
+  printf 'Router address: %s\n' "${router:-unknown}"
+  printf 'Public address: %s\n\n' "${public:-unknown}"
+  case "$public" in
+    "")
+      echo "FAIL: could not read the public address (is outbound internet access allowed?)"
+      verdict=1
+      ;;
+    10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 127.* | 169.254.*)
+      echo "FAIL: $public is a private address, so a proxy or another router is in front. Phone calls cannot reach this host."
+      verdict=1
+      ;;
+    100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*)
+      echo "FAIL: $public is in the carrier-grade NAT range (100.64.0.0/10). Your ISP shares one address among many customers,"
+      echo "      so inbound calls cannot reach this host. Use a cloud VM, or ask your ISP for a public address."
+      verdict=1
+      ;;
+    *) echo "OK: $public looks like a public address." ;;
+  esac
+  cat <<EOF
+
+Next, by hand:
+  1. Open the router's page${router:+ (http://$router)} and compare its WAN or Internet IP address with the public address above.
+     They must be the same. If they differ, the router is behind another NAT, and calls cannot reach this host.
+  2. Use the LAN address and network above in step 2:
+       $0 sip-network --lan-ip ${lan_ip} --lan ${network:-<LAN CIDR>} --signaling <CIDR> --media <CIDR>
+  3. Use the public address in the provider's origination URI: sip:<public address>:5060;transport=tcp
+EOF
+  return "$verdict"
+}
+
 cmd_sip_network() { # prints guidance only; runs in a throwaway container of the example image, so no stack is needed
   require_docker
   require_env_file
@@ -643,6 +694,7 @@ main() {
     check) cmd_check "$@" ;;
     sip-setup) cmd_sip_setup "$@" ;;
     sip-network) cmd_sip_network "$@" ;;
+    sip-address) cmd_sip_address "$@" ;;
     -h | --help | help) usage 0 ;;
     *) usage ;;
   esac

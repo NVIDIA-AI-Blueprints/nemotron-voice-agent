@@ -14,6 +14,15 @@
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.3/dist/livekit-client.umd.min.js"></script>
 </head>
 <body>
+<div class="login hidden" id="login">
+  <form class="login-box" id="login-form">
+    <div class="script-title">🔒 Sign in</div>
+    <input class="select hidden" id="login-username" type="text" placeholder="Username" autocomplete="username" />
+    <input class="select" id="login-password" type="password" placeholder="Password" autocomplete="current-password" required />
+    <button class="btn primary" type="submit">Sign in</button>
+    <div class="hint" id="login-error"></div>
+  </form>
+</div>
 <div class="livekit">
   <div class="header">
     <div class="title">🎙️ Nemotron Voice Agent with LiveKit</div>
@@ -45,6 +54,15 @@
         <button class="btn hidden" id="mute">Mute mic</button>
         <div class="meter hidden" id="meter"><div id="meter-fill"></div></div>
         <div class="status" id="status">Disconnected</div>
+        <div class="phone hidden" id="phone">
+          <div class="script-title">📞 Or call the agent</div>
+          <div class="hint">Dial the number from any phone to reach the same agent.</div>
+          <div id="phone-numbers"></div>
+          <details class="phone-help">
+            <summary>Add or change a number</summary>
+            <div class="hint">Each number answers with one use case, which is set from the command line, not here. To add a number or map it to a different use case, run <code>run.sh sip-setup</code> with <code>--number</code> and <code>--scenario</code>. Refer to SIP.md in the example folder.</div>
+          </details>
+        </div>
         <div id="audio-sink"></div>
       </div>
       <div class="transcription-panel">

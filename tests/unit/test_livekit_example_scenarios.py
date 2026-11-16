@@ -67,6 +67,14 @@ def test_instructions_are_single_prompts_without_stray_whitespace():
         assert scenario.greeting and scenario.greeting == scenario.greeting.strip()
 
 
+def test_only_the_generic_use_case_has_an_exact_greeting():
+    generic = sc.SCENARIOS["generic"].greeting_text
+    assert generic and generic == generic.strip()
+    for text in ("NVIDIA Nemotron", "LiveKit", "weather", "time"):
+        assert text in generic
+    assert all(s.greeting_text is None for k, s in sc.SCENARIOS.items() if k != "generic")
+
+
 def test_insurance_flow():
     t = tools_by_name("insurance")
     assert t["lookup_policy"]("aut-1001")["holder"] == "Jordan Lee"

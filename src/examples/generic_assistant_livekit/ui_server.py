@@ -5,10 +5,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
 import os
+import time
 import uuid
 from datetime import timedelta
+from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +28,137 @@ from .voices import VOICES_FILE, read_voices_file
 
 PUBLIC = Path(__file__).with_name("ui")
 
+# Optional login. Set LIVEKIT_UI_USERNAME and LIVEKIT_UI_PASSWORD (in .env) and the data endpoints need a signed session
+# cookie. With neither set there is no login. The values stay on the server: the page posts what the user types to
+# /login and never receives the expected ones.
+USERNAME_ENV = "LIVEKIT_UI_USERNAME"
+PASSWORD_ENV = "LIVEKIT_UI_PASSWORD"
+SESSION_COOKIE = "lk_ui"
+SESSION_SECONDS = 8 * 3600
+FAILED_LOGIN_DELAY = 1.0  # seconds a wrong password waits, which makes guessing slow
+MAX_FAILURES_PER_MINUTE = 10
+_failures: list[float] = []
+
+
+def ui_password() -> str:
+    """Return the configured UI password, or an empty string."""
+    return os.environ.get(PASSWORD_ENV, "")
+
+
+def ui_username() -> str:
+    """Return the configured UI username, or an empty string when any username is accepted."""
+    return os.environ.get(USERNAME_ENV, "")
+
+
+def login_required() -> bool:
+    """Return True when a username or a password is set. A username without a password locks everyone out, on purpose.
+
+    Setting only half of the pair is a mistake, and failing closed is safer than serving the page without a login.
+    """
+    return bool(ui_username() or ui_password())
+
+
+def credentials_ok(username: object, password: object) -> bool:
+    """Check the typed username (when one is configured) and password. Both are always compared."""
+    user_good = password_ok(username, ui_username()) if ui_username() else True
+    return password_ok(password, ui_password()) and user_good
+
+
+def public_ws_url() -> str:
+    """Return the LiveKit address that browsers should use, or an empty string for the page's own host on port 7880."""
+    value = os.environ.get("LIVEKIT_PUBLIC_WS_URL", "").strip()
+    return value if value.startswith(("ws://", "wss://")) else ""  # anything else would only break the page
+
+
+def password_ok(given: object, expected: str) -> bool:
+    """Compare in constant time. Both sides are hashed first, so the lengths do not leak."""
+    if not expected or not isinstance(given, str):
+        return False
+    return hmac.compare_digest(hashlib.sha256(given.encode()).digest(), hashlib.sha256(expected.encode()).digest())
+
+
+def _signing_key() -> bytes:
+    """Return the cookie signing key, derived from the LiveKit secret so that no extra secret is needed."""
+    return hashlib.sha256(b"ui-session:" + os.environ.get("LIVEKIT_API_SECRET", "").encode()).digest()
+
+
+def make_session(now: float | None = None) -> str:
+    """Return a signed cookie value that carries its own expiry, so the server stores no sessions."""
+    expires = str(int((time.time() if now is None else now) + SESSION_SECONDS))
+    return f"{expires}.{hmac.new(_signing_key(), expires.encode(), hashlib.sha256).hexdigest()}"
+
+
+def valid_session(value: str | None, now: float | None = None) -> bool:
+    """Return True for an untampered, unexpired session cookie value."""
+    try:
+        expires, signature = (value or "").split(".", 1)
+        good = hmac.compare_digest(signature, hmac.new(_signing_key(), expires.encode(), hashlib.sha256).hexdigest())
+        return good and float(expires) > (time.time() if now is None else now)
+    except ValueError:
+        return False
+
+
+def too_many_failures(now: float | None = None) -> bool:
+    """Record nothing; report whether recent wrong passwords hit the per-minute limit."""
+    now = time.monotonic() if now is None else now
+    _failures[:] = [t for t in _failures if now - t < 60]
+    return len(_failures) >= MAX_FAILURES_PER_MINUTE
+
+
+PHONE_CACHE_SECONDS = 10
+_phone_cache: dict = {"at": 0.0, "value": {"enabled": False, "numbers": []}}
+
+
+def phone_numbers(trunks, rules, scenario_names: dict[str, str]) -> list[dict]:
+    """Return the phone numbers that a dispatch rule maps to a use case, as {number, scenario, name}. Pure."""
+    by_trunk = {trunk.sip_trunk_id: trunk for trunk in trunks}
+    found: dict[str, dict] = {}
+    for rule in rules:
+        scenario = dict(rule.attributes).get("scenario", "")
+        for trunk_id in rule.trunk_ids:
+            for number in getattr(by_trunk.get(trunk_id), "numbers", []):
+                found[number] = {"number": number, "scenario": scenario, "name": scenario_names.get(scenario, "")}
+    return sorted(found.values(), key=lambda item: item["number"])
+
+
+async def _list_sip_records() -> tuple[list, list]:
+    """Read the inbound trunks and dispatch rules from the LiveKit server."""
+    lk = api.LiveKitAPI(
+        url=os.environ.get("LIVEKIT_URL", "ws://livekit-server:7880"),
+        api_key=os.environ["LIVEKIT_API_KEY"],
+        api_secret=os.environ["LIVEKIT_API_SECRET"],
+    )
+    try:
+        trunks = (await lk.sip.list_inbound_trunk(api.ListSIPInboundTrunkRequest())).items
+        rules = (await lk.sip.list_dispatch_rule(api.ListSIPDispatchRuleRequest())).items
+        return list(trunks), list(rules)
+    finally:
+        await lk.aclose()
+
+
+def phone_info() -> dict:
+    """Return {enabled, numbers} for the page. Empty unless the deployment runs with `--sip`.
+
+    The numbers come from the live LiveKit records, so a number shows only while a dispatch rule maps it. The result is
+    cached for a few seconds, and an unreachable server yields no numbers instead of an error.
+    """
+    if not os.environ.get("LIVEKIT_SIP"):
+        return {"enabled": False, "numbers": []}
+    now = time.monotonic()
+    if now - _phone_cache["at"] < PHONE_CACHE_SECONDS:
+        return _phone_cache["value"]
+    try:
+        trunks, rules = asyncio.run(asyncio.wait_for(_list_sip_records(), timeout=3))
+        names = {item["id"]: item["name"] for item in scenario_catalog()}
+        value = {"enabled": True, "numbers": phone_numbers(trunks, rules, names)}
+    except Exception:  # noqa: BLE001 - the page must still load when LiveKit is slow or restarting
+        value = {"enabled": True, "numbers": []}
+    _phone_cache.update(at=now, value=value)
+    return value
+
+
+PROTECTED = {"/voices", "/scenarios", "/deployment", "/phone", "/token"}  # the page itself and its scripts stay public
+
 
 def state_path(name: str) -> Path:
     """Return a file that the agent worker publishes into the state volume."""
@@ -34,12 +170,14 @@ def voices_path() -> Path:
     return state_path(VOICES_FILE)
 
 
-def send_json(handler: SimpleHTTPRequestHandler, payload: dict) -> None:
+def send_json(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 200, headers: dict | None = None) -> None:
     """Send a JSON response."""
     body = json.dumps(payload).encode()
-    handler.send_response(200)
+    handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
+    for name, value in (headers or {}).items():
+        handler.send_header(name, value)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -56,13 +194,58 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def authenticated(self) -> bool:
+        """Return True when no password is set, or the request carries a valid session cookie."""
+        if not login_required():
+            return True
+        jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        return SESSION_COOKIE in jar and valid_session(jar[SESSION_COOKIE].value)
+
+    def do_POST(self):
+        """Handle /login. A right username and password set the session cookie."""
+        if urlsplit(self.path).path != "/login":
+            return self.send_error(404)
+        if too_many_failures():
+            return send_json(self, {"error": "too many attempts, wait a minute"}, 429)
+        try:
+            length = min(int(self.headers.get("Content-Length", "0")), 1024)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            username, password = body.get("username"), body.get("password")
+        except (ValueError, AttributeError):
+            username = password = None
+        if not credentials_ok(username, password):
+            _failures.append(time.monotonic())
+            time.sleep(FAILED_LOGIN_DELAY)
+            return send_json(self, {"error": "wrong username or password"}, 401)
+        cookie = f"{SESSION_COOKIE}={make_session()}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_SECONDS}"
+        if (
+            self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        ):  # behind an HTTPS proxy, keep it off plain HTTP
+            cookie += "; Secure"
+        send_json(self, {"ok": True}, headers={"Set-Cookie": cookie})
+
     def do_GET(self):
-        """Serve /voices and /token, and static files for everything else."""
+        """Serve /voices, /phone and /token, and static files for everything else."""
         url = urlsplit(self.path)
+        if url.path == "/auth/status":
+            return send_json(
+                self,
+                {
+                    "required": login_required(),
+                    "username": bool(ui_username()),
+                    "authenticated": self.authenticated(),
+                },
+            )
+        if url.path == "/client-config":  # public: the page needs it before it can sign in or connect
+            return send_json(self, {"ws_url": public_ws_url()})
+        if url.path in PROTECTED and not self.authenticated():
+            return send_json(self, {"error": "login required"}, 401)
         if url.path == "/voices":
             return send_json(self, read_voices_file(voices_path()))
         if url.path == "/scenarios":
             return send_json(self, {"scenarios": scenario_catalog()})
+        if url.path == "/phone":
+            return send_json(self, phone_info())
         if url.path == "/deployment":
             return send_json(self, read_json(state_path(DEPLOYMENT_FILE)) or {})
         if url.path != "/token":

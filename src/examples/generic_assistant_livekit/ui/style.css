@@ -307,3 +307,13 @@ body { margin: 0; background: #0f0f16; color: #e0e0e0; }
   .models > summary { display: block; }
   .models[open] > summary { margin-bottom: .4rem; }
 }
+
+.phone { background: rgba(118,185,0,.08); border: 1px solid rgba(118,185,0,.45); border-radius: 12px; padding: .8rem 1rem; display: flex; flex-direction: column; gap: .5rem; }
+.phone.hidden { display: none; }  /* must follow .phone, which sets display: flex */
+.phone-number { color: #76b900; font-size: 1.15rem; font-weight: 600; text-decoration: none; }
+.phone-number:hover { text-decoration: underline; }
+.phone-help summary { cursor: pointer; font-size: .78rem; color: #888; }
+.phone-help code { color: #bbb; }
+.login { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(10,10,18,.92); }
+.login.hidden { display: none; }
+.login-box { width: min(22rem, 90vw); background: #1a1a26; border: 1px solid #2a2a3a; border-radius: 16px; padding: 1.4rem; display: flex; flex-direction: column; gap: .8rem; }

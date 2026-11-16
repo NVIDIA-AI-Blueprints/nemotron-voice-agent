@@ -324,6 +324,7 @@ class Scenario:
     description: str
     instructions: str
     greeting: str  # instruction for the opening line
+    greeting_text: str | None  # optional exact opening line; spoken as written, so the model is not called
     examples: tuple[str, ...]
     make_tools: Callable[[], list[Callable]] = field(repr=False)
 
@@ -353,6 +354,7 @@ def load_scenarios(prompts_file: Path = PROMPTS_FILE) -> dict[str, Scenario]:
             description=entry["description"].strip(),
             instructions=instructions,
             greeting=entry["greeting"].strip(),
+            greeting_text=(entry.get("greeting_text") or "").strip() or None,
             examples=tuple(entry["examples"]),
             make_tools=make_tools,
         )

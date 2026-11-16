@@ -53,10 +53,13 @@ class Room {
 const responses = {
   '/voices': { voices: [{ id: 'A', name: 'A' }, { id: 'B', name: 'B' }], default: 'A' },
   '/deployment': { recipe: 'cloud', label: 'Cloud', models: [{ kind: 'ASR', name: 'x', runs: 'y' }] },
+  '/client-config': { ws_url: '' },
+  '/auth/status': { required: false, authenticated: true },
+  '/phone': { enabled: true, numbers: [{ number: '+15551234567', scenario: 'generic', name: 'Generic' }] },
   '/scenarios': { scenarios: [{ id: 'generic', name: 'Generic', description: 'd', examples: ['e'] }] },
 };
 const context = {
-  document, location, console, URLSearchParams, TextEncoder, TextDecoder, Promise, JSON, Map,
+  document, location, console, URL, URLSearchParams, TextEncoder, TextDecoder, Promise, JSON, Map,
   setTimeout: () => 0,
   Option: function (text, value) { return { text, value }; },
   LivekitClient: { Room, RoomEvent: {}, Track: { Kind: { Audio: 'audio' } }, ConnectionState: {} },
@@ -127,6 +130,8 @@ def test_the_page_script_loads_and_wires_every_control(tmp_path):
     assert ["fetch", "/voices"] in out["log"]
     assert ["fetch", "/deployment"] in out["log"]
     assert ["fetch", "/scenarios"] in out["log"]
+    assert ["fetch", "/phone"] in out["log"]
+    assert ["fetch", "/auth/status"] in out["log"]
     assert out["badge"] == "Cloud"
     assert "Loading voices" not in out["voiceOptions"]  # the list was loaded and replaced the placeholder
 
@@ -171,3 +176,51 @@ def test_the_signaling_address_follows_the_page_protocol(tmp_path):
     assert [entry[2] for entry in out["log"] if entry[0] == "connect"] == ["wss://localhost:7880"]
     out = run_page("connect-ok", tmp_path)
     assert [entry[2] for entry in out["log"] if entry[0] == "connect"] == ["ws://localhost:7880"]
+
+
+def test_a_login_is_requested_before_any_data_when_the_server_requires_one(tmp_path):
+    harness = tmp_path / "harness.js"
+    script = HARNESS.replace(
+        "'/auth/status': { required: false, authenticated: true }",
+        "'/auth/status': { required: true, authenticated: false }",
+    )
+    # With nothing loaded, the elements that the normal run reads were never touched, so give the harness defaults.
+    script = script.replace("elements.voice.innerHTML", "(elements.voice || {}).innerHTML").replace(
+        "elements['mode-badge'].textContent", "(elements['mode-badge'] || {}).textContent"
+    )
+    harness.write_text(script)
+    result = subprocess.run(
+        ["node", str(harness), str(APP_JS), "load"], capture_output=True, text=True, timeout=60, cwd=tmp_path
+    )
+    out = json.loads(result.stdout.strip().splitlines()[-1])
+    fetched = [entry[1] for entry in out["log"] if entry[0] == "fetch"]
+    assert fetched == ["/client-config", "/auth/status"]  # no data is requested until the user signs in
+
+
+def test_a_public_livekit_address_from_the_server_replaces_the_default(tmp_path):
+    harness = tmp_path / "harness.js"
+    harness.write_text(
+        HARNESS.replace("'/client-config': { ws_url: '' }", "'/client-config': { ws_url: 'wss://localhost/livekit' }")
+    )
+    result = subprocess.run(
+        ["node", str(harness), str(APP_JS), "connect-ok"], capture_output=True, text=True, timeout=60, cwd=tmp_path
+    )
+    out = json.loads(result.stdout.strip().splitlines()[-1])
+    assert ["connect", None, "wss://localhost/livekit"] in out["log"]
+
+
+def test_the_default_livekit_address_is_the_page_host_on_7880(tmp_path):
+    out = run_page("connect-ok", tmp_path)
+    assert ["connect", None, "ws://localhost:7880"] in out["log"]
+
+
+def test_the_public_livekit_address_is_ignored_on_another_host(tmp_path):
+    harness = tmp_path / "harness.js"
+    harness.write_text(
+        HARNESS.replace("'/client-config': { ws_url: '' }", "'/client-config': { ws_url: 'wss://example.org' }")
+    )
+    result = subprocess.run(
+        ["node", str(harness), str(APP_JS), "connect-ok"], capture_output=True, text=True, timeout=60, cwd=tmp_path
+    )
+    out = json.loads(result.stdout.strip().splitlines()[-1])
+    assert ["connect", None, "ws://localhost:7880"] in out["log"]  # the page is on localhost, not on example.org

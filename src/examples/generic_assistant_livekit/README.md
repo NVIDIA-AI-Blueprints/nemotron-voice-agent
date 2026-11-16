@@ -154,7 +154,7 @@ The insurance, clinic, and bank data is fictional and held in memory for one ses
 The **Voice** list shows the voices that the TTS server offers. Choose a voice before you connect, or change it during the session: the agent uses the new voice from its next reply and says a short sample.
 
 - **Discovery:** the agent worker asks the TTS server for its voices when it starts and retries until the server answers. The UI shows `Loading voices…` until then.
-- **Language and default:** the list shows voices for the catalog entry's language (`en-US` by default). The default voice is `voice_id` in `services.yaml` (refer to [Configure TTS](../../../docs/how-to/configure-tts.md#voices--emotions)).
+- **Language and default:** the list shows voices for the catalog entry's language (`en-US` by default). The default voice is Sofia when the TTS server lists her, and otherwise the `voice_id` in `services.yaml` (refer to [Configure TTS](../../../docs/how-to/configure-tts.md#voices--emotions)). The Pipecat examples keep using `voice_id`.
 - **Validation:** the UI server and the agent ignore any voice that the server did not list.
 
 ## Configure Models
@@ -220,7 +220,7 @@ The defaults keep the example private to the machine that runs it:
 
 ## Phone Calls (SIP)
 
-The example can also answer phone calls. `run.sh up <profile> --sip` adds Redis (published on `127.0.0.1` only) and the open-source [LiveKit SIP](https://docs.livekit.io/sip/) service, and `run.sh sip-setup` maps a phone number to a use case, so each number can be a different line. SIP needs a Linux host that your SIP provider can reach, and it exposes ports 5060 and 10000 to 10100 (UDP) on that host, so the network setup is manual and restricted to the provider's addresses. The provider-neutral [SIP guide](SIP.md) covers the network setup, IP allowlisting for your SIP trunk provider, testing, and troubleshooting, with a Twilio example.
+The example can also answer phone calls. `run.sh up <profile> --sip` adds Redis (published on `127.0.0.1` only) and the open-source [LiveKit SIP](https://docs.livekit.io/sip/) service, and `run.sh sip-setup` maps a phone number to a use case, so each number can be a different line. The web UI then shows the number under **Or call the agent**. SIP needs a Linux host that your SIP provider can reach, and it exposes ports 5060 and 10000 to 10100 (UDP) on that host, so the network setup is manual and restricted to the provider's addresses. The provider-neutral [SIP guide](SIP.md) covers the network setup, IP allowlisting for your SIP trunk provider, testing, and troubleshooting, with a Twilio example.
 
 ## Cleanup
 

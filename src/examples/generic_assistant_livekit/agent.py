@@ -29,6 +29,7 @@ from .voices import (
     fetch_synthesis_params,
     parse_set_voice,
     parse_voices,
+    preferred_voice,
     read_voices_file,
     with_current,
     write_voices_file,
@@ -139,7 +140,7 @@ def publish_voices(cfg: AgentConfig, state_dir: Path, retry_s: float = 10, refre
         voices = discover_voices(cfg, quiet=True)
         if voices:
             try:
-                write_voices_file(path, with_current(voices, cfg.tts_voice), cfg.tts_voice)
+                write_voices_file(path, with_current(voices, cfg.tts_voice), preferred_voice(voices, cfg.tts_voice))
                 delay = refresh_s
             except OSError as exc:  # a volume hiccup must not end the thread: try again later
                 log.warning("cannot publish the voice list to %s: %s", state_dir, exc)
@@ -166,10 +167,11 @@ async def entrypoint(ctx: JobContext):
     # The use case and voice chosen in the UI arrive as participant attributes. Unknown values fall back to defaults.
     scenario = get_scenario(participant.attributes.get("scenario"))
     # The voice list comes from the file that the worker publishes, so a session never waits on the TTS server.
-    listed = read_voices_file(state_dir / VOICES_FILE)["voices"]
-    voices = with_current(listed, cfg.tts_voice)
+    published = read_voices_file(state_dir / VOICES_FILE)
+    voices = with_current(published["voices"], cfg.tts_voice)
     names = {voice["id"]: voice["name"] for voice in voices}
-    chosen = choose_voice(participant.attributes.get("voice"), names, cfg.tts_voice)
+    default_voice = published["default"] if published["default"] in names else cfg.tts_voice  # Sofia when listed
+    chosen = choose_voice(participant.attributes.get("voice"), names, default_voice)
     tts = build_tts(cfg, chosen)
     session = AgentSession(vad=silero.VAD.load(), stt=build_stt(cfg), llm=build_llm(cfg), tts=tts)
 
@@ -215,7 +217,10 @@ async def entrypoint(ctx: JobContext):
     emit("session", recipe=cfg.recipe, models=cfg.models(), scenario=scenario.name)
     emit("voices", voices=voices, current=tts._opts.voice)
 
-    await session.generate_reply(instructions=scenario.greeting)
+    if scenario.greeting_text:
+        session.say(scenario.greeting_text)  # exact wording, and no model round trip before the first word
+    else:
+        await session.generate_reply(instructions=scenario.greeting)
 
 
 if __name__ == "__main__":

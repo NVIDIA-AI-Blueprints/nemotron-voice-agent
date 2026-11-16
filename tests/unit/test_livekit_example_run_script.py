@@ -102,17 +102,17 @@ def test_up_ends_with_the_tunnel_instructions(tmp_path):
 
 
 def test_tunnel_forwards_the_ui_and_livekit_ports(tmp_path):
-    result = run(["tunnel", "lanaz@spark"], tmp_path)
+    result = run(["tunnel", "user@spark"], tmp_path)
     assert result.returncode == 0, result.stderr
     command = next(line for line in result.stderr.splitlines() if line.startswith("+ ssh"))
-    assert "-L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 lanaz@spark" in command
+    assert "-L 3000:127.0.0.1:3000 -L 7880:127.0.0.1:7880 -L 7881:127.0.0.1:7881 user@spark" in command
     assert "ExitOnForwardFailure=yes" in command
     assert "http://localhost:3000/" in result.stderr
     assert not any(line.startswith("+ docker") for line in result.stderr.splitlines())  # a laptop needs no docker
 
 
 def test_tunnel_local_ui_port_can_move(tmp_path):
-    result = run(["tunnel", "lanaz@spark"], tmp_path, extra_env={"LOCAL_UI_PORT": "3001"})
+    result = run(["tunnel", "user@spark"], tmp_path, extra_env={"LOCAL_UI_PORT": "3001"})
     assert "-L 3001:127.0.0.1:3000" in result.stderr
     assert "http://localhost:3001/" in result.stderr
 
@@ -203,13 +203,33 @@ exit 0
 # Reports Linux unless $FAKE_OS says otherwise, so the --sip tests behave the same on any machine.
 FAKE_UNAME = '#!/usr/bin/env bash\n[ "$1" = -s ] && echo "${FAKE_OS:-Linux}" || /usr/bin/uname "$@"\n'
 
-FAKE_CURL = "#!/usr/bin/env bash\nprintf '%s' \"$FAKE_TOKEN\"\n"
+# Answers the public-address lookup with $FAKE_PUBLIC_IP (a failure when it is unset), and the rest with $FAKE_TOKEN.
+FAKE_CURL = """#!/usr/bin/env bash
+case "$*" in
+  *ifconfig.me*) [ -n "${FAKE_PUBLIC_IP:-}" ] && printf '%s' "$FAKE_PUBLIC_IP" || exit 22 ;;
+  *) printf '%s' "$FAKE_TOKEN" ;;
+esac
+"""
+
+# A host with the LAN address 192.168.1.20/24 on eth0 behind the router 192.168.1.1.
+FAKE_IP = """#!/usr/bin/env bash
+case "$*" in
+  *"route get"*) echo "1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.20 uid 1000" ;;
+  *"addr show"*) echo "2: eth0    inet 192.168.1.20/24 brd 192.168.1.255 scope global dynamic eth0" ;;
+esac
+"""
 
 
 def fake_env(tmp_path, env_text="NVIDIA_API_KEY=nvapi-test\nHF_TOKEN=hf_test\n", **extra):
     fake = tmp_path / "bin"
     fake.mkdir(exist_ok=True)
-    for name, body in (("docker", FAKE_DOCKER), ("ss", FAKE_SS), ("curl", FAKE_CURL), ("uname", FAKE_UNAME)):
+    for name, body in (
+        ("docker", FAKE_DOCKER),
+        ("ss", FAKE_SS),
+        ("curl", FAKE_CURL),
+        ("uname", FAKE_UNAME),
+        ("ip", FAKE_IP),
+    ):
         path = fake / name
         path.write_text(body)
         path.chmod(0o755)
@@ -656,3 +676,67 @@ def test_check_sip_fails_and_shows_the_log_when_the_sip_service_cannot_read_its_
     assert result.returncode != 0
     assert "FAIL  the SIP log shows an error" in result.stderr
     assert "open /sip/config.yaml: no such file or directory" in result.stderr  # the cause is printed
+
+
+def test_check_sip_ignores_per_call_log_lines_with_failure_counters(tmp_path):
+    # A rejected call logs statistics such as "packets_failed": 0, which is not a service error.
+    line = (
+        'INFO sip/media.go:183 call statistics {"result": "client_error", "reason": "no-dispatch", "packets_failed": 0}'
+    )
+    result = run_check(
+        tmp_path,
+        FAKE_LISTEN="6379 5060",
+        FAKE_HEALTH="healthy",
+        FAKE_HEALTH_SERVICES="livekit-redis",
+        FAKE_LOG_LINE=line,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PASS  no error in the recent SIP log" in result.stderr
+
+
+def run_address(tmp_path, public="", **extra):
+    env = fake_env(tmp_path, FAKE_PUBLIC_IP=public, **extra)
+    return subprocess.run(["bash", str(SCRIPT), "sip-address"], capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_sip_address_reports_the_addresses_and_a_usable_public_address(tmp_path):
+    result = run_address(tmp_path, public="203.0.113.9")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LAN address:    192.168.1.20  (interface eth0)" in result.stdout
+    assert "LAN network:    192.168.1.0/24" in result.stdout
+    assert "Router address: 192.168.1.1" in result.stdout
+    assert "Public address: 203.0.113.9" in result.stdout
+    assert "OK: 203.0.113.9 looks like a public address." in result.stdout
+    assert "--lan-ip 192.168.1.20 --lan 192.168.1.0/24" in result.stdout
+    assert "http://192.168.1.1" in result.stdout
+
+
+@pytest.mark.parametrize("public", ["100.64.1.2", "100.100.0.9", "100.127.255.1"])
+def test_sip_address_fails_for_carrier_grade_nat(tmp_path, public):
+    result = run_address(tmp_path, public=public)
+    assert result.returncode == 1
+    assert "carrier-grade NAT" in result.stdout
+
+
+@pytest.mark.parametrize("public", ["192.168.1.5", "10.1.2.3", "172.16.0.4", "172.31.9.9"])
+def test_sip_address_fails_for_a_private_public_address(tmp_path, public):
+    result = run_address(tmp_path, public=public)
+    assert result.returncode == 1
+    assert "private address" in result.stdout
+
+
+@pytest.mark.parametrize("public", ["100.63.0.1", "100.128.0.1", "172.15.0.1", "172.32.0.1"])
+def test_sip_address_accepts_addresses_just_outside_the_reserved_ranges(tmp_path, public):
+    assert run_address(tmp_path, public=public).returncode == 0
+
+
+def test_sip_address_fails_when_the_public_address_cannot_be_read(tmp_path):
+    result = run_address(tmp_path, public="")
+    assert result.returncode == 1
+    assert "could not read the public address" in result.stdout
+
+
+def test_sip_address_refuses_a_non_linux_host(tmp_path):
+    result = run_address(tmp_path, public="203.0.113.9", FAKE_OS="Darwin")
+    assert result.returncode != 0
+    assert "Linux host" in result.stderr

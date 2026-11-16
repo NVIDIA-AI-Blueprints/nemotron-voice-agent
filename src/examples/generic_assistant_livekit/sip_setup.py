@@ -4,8 +4,10 @@
 """Provision the optional phone (SIP) integration. Run through `run.sh sip-setup` and `run.sh sip-network`.
 
 `trunk` creates the LiveKit inbound SIP trunk and dispatch rule for one phone number while the deployment is up with
-`--sip`. It is safe to re-run: objects with the same name are reused. The dispatch rule opens a new room per call, which
-the agent joins like a browser session. `scenario` and `voice` become participant attributes that the agent reads.
+`--sip`. It is safe to re-run: the trunk and the dispatch rule of a number are updated in place, so changing the use
+case or the allowed addresses only needs the same command with new values. The dispatch rule opens a new room per
+call, which the agent joins like a browser session. `scenario` and `voice` become participant attributes that the
+agent reads.
 `network` prints the manual router and firewall steps. It never changes your network.
 """
 
@@ -40,15 +42,23 @@ def build_requests(number: str, scenario: str, voice: str | None, allowed: list[
         allowed_addresses=allowed,  # an empty list accepts any source; pass the provider's ranges in production
     )
     rule = api.SIPDispatchRuleInfo(
-        name=f"call-{scenario_id}-{number}",
+        name=f"call-{number}",  # one rule per number, so a new use case replaces the old one
         rule=api.SIPDispatchRule(dispatch_rule_individual=api.SIPDispatchRuleIndividual(room_prefix="call-")),
         attributes=attributes,
     )
     return trunk, rule, attributes
 
 
+def find_rule(rules, name: str, trunk_id: str):
+    """Return the dispatch rule to update: the one with this name, or any rule already attached to this trunk.
+
+    LiveKit allows one rule per trunk and number, and older versions of this script put the use case in the rule name.
+    """
+    return next((r for r in rules if r.name == name or trunk_id in r.trunk_ids), None)
+
+
 async def run_trunk(args: argparse.Namespace) -> None:
-    """Create the trunk and the dispatch rule unless they already exist."""
+    """Create the trunk and the dispatch rule, or update them when they already exist."""
     from livekit import api
 
     allowed = parse_cidrs(args.allowed_address, "SIP provider")
@@ -66,16 +76,19 @@ async def run_trunk(args: argparse.Namespace) -> None:
         existing = next((t for t in trunks if t.name == trunk.name), None)
         if existing:
             trunk_id = existing.sip_trunk_id
-            print(f"inbound trunk already exists: {trunk_id}")
+            await lk.sip.update_inbound_trunk(trunk_id, trunk)
+            print(f"updated inbound trunk: {trunk_id} ({args.number})")
         else:
             created = await lk.sip.create_inbound_trunk(api.CreateSIPInboundTrunkRequest(trunk=trunk))
             trunk_id = created.sip_trunk_id
             print(f"created inbound trunk: {trunk_id} ({args.number})")
         rules = (await lk.sip.list_dispatch_rule(api.ListSIPDispatchRuleRequest())).items
-        if any(r.name == rule.name for r in rules):
-            print(f"dispatch rule already exists: {rule.name}")
+        rule.trunk_ids.append(trunk_id)
+        current = find_rule(rules, rule.name, trunk_id)
+        if current:
+            await lk.sip.update_dispatch_rule(current.sip_dispatch_rule_id, rule)
+            print(f"updated dispatch rule: {current.sip_dispatch_rule_id} -> {attributes}")
         else:
-            rule.trunk_ids.append(trunk_id)
             created_rule = await lk.sip.create_dispatch_rule(api.CreateSIPDispatchRuleRequest(dispatch_rule=rule))
             print(f"created dispatch rule: {created_rule.sip_dispatch_rule_id} -> {attributes}")
     finally:

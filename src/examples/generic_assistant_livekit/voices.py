@@ -90,6 +90,17 @@ def parse_voices(model_params: Iterable[Mapping[str, str]], language: str) -> li
     return voices
 
 
+PREFERRED_VOICE = "Sofia"  # this example's default voice, used when the TTS server lists it
+
+
+def preferred_voice(voices: list[dict[str, str]], fallback: str, name: str = PREFERRED_VOICE) -> str:
+    """Return the id of the voice called `name` when the server lists it, otherwise `fallback` (the catalog default).
+
+    The catalog default is shared with the other examples, so this example picks its own default here instead.
+    """
+    return next((v["id"] for v in voices if v["name"].lower() == name.lower()), fallback)
+
+
 def with_current(voices: list[dict[str, str]], current: str) -> list[dict[str, str]]:
     """Return the list with the configured voice included, so the selector can always show the active one."""
     if any(voice["id"] == current for voice in voices):
