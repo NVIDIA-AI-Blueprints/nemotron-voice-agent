@@ -177,7 +177,9 @@ services:
     image: redis:7.4.12-alpine
     profiles:
       - generic-assistant-livekit/sip
-    command: ["redis-server", "--bind", "0.0.0.0", "--protected-mode", "no", "--save", "", "--appendonly", "no"]
+    command: ["redis-server", "--bind", "0.0.0.0", "--protected-mode", "no", "--appendonly", "yes"]
+    volumes:
+      - livekit_redis:/data  # the trunks and dispatch rules survive a restart; `run.sh clean` removes them
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
@@ -274,6 +276,7 @@ services:
 
 volumes:
   livekit_state:
+  livekit_redis:
   llm_cache:
   asr_cache:
   tts_cache:

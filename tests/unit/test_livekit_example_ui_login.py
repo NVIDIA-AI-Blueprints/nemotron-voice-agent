@@ -21,6 +21,8 @@ def server(monkeypatch, tmp_path):
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "secret-for-tests-0123456789abcdef")
     monkeypatch.setenv("LIVEKIT_STATE_DIR", str(tmp_path))
+    for name in ("LIVEKIT_UI_USERNAME", "LIVEKIT_UI_PASSWORD", "LIVEKIT_PUBLIC_WS_URL", "LIVEKIT_SIP"):
+        monkeypatch.delenv(name, raising=False)  # a developer's own settings must not leak into the tests
     monkeypatch.setattr(ui_server, "FAILED_LOGIN_DELAY", 0)
     ui_server._failures.clear()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.Handler)

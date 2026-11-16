@@ -19,7 +19,7 @@
 #   run.sh sip-network --lan-ip IP --lan CIDR --signaling CIDR [--media CIDR]
 #                                            Print the router and firewall steps (changes nothing)
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
-#   run.sh clean [profile] [--image] [-y]    Stop and delete volumes (credentials, NIM caches); --image also removes the image
+#   run.sh clean [profile] [--image] [-y]    Stop and delete volumes (credentials, SIP records, NIM caches); --image also removes the image
 #   run.sh ps [profile]                      Show container status
 #   run.sh logs <profile> [service]          Follow logs. Services: agent, livekit, ui, init, llm, asr, tts, speech,
 #                                            redis, sip

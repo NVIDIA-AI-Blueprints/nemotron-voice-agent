@@ -94,6 +94,12 @@ def test_overlays_are_not_part_of_any_recipe_profile(services):
         assert not recipes & set(services[name]["profiles"])
 
 
+def test_redis_keeps_the_sip_records_in_a_volume(services):
+    redis = services["livekit-redis"]
+    assert "livekit_redis:/data" in redis["volumes"]
+    assert "--appendonly" in redis["command"] and redis["command"][redis["command"].index("--appendonly") + 1] == "yes"
+
+
 def test_redis_is_published_on_loopback_only(services):
     assert services["livekit-redis"]["ports"] == ["127.0.0.1:6379:6379"]
 

@@ -227,7 +227,7 @@ A timeout means TCP 5060 is closed. UDP cannot be tested this way, so check `ufw
 src/examples/generic_assistant_livekit/run.sh down cloud
 ```
 
-Then remove the router's port forwards, delete the firewall rules you added, and detach or release the number and delete the trunk in Twilio, so the origination URI does not keep sending calls to an address that is no longer yours.
+To delete the trunk and dispatch rule records, which now survive restarts in a Docker volume, run `run.sh clean <profile>` instead (it also removes the stored credentials, so the next start generates new ones). Then remove the router's port forwards, delete the firewall rules you added, and detach or release the number and delete the trunk in Twilio, so the origination URI does not keep sending calls to an address that is no longer yours.
 
 ## IP Allowlisting
 
@@ -280,8 +280,8 @@ The network setup from [step 2](#2-set-up-the-network-and-firewall-optional) als
    }
    ```
 
-2. **Forward these ports** from the router (or open them in the cloud security group) to the server: 443 and 80 for the proxy, and 7882/UDP and 7881/TCP for the browser's audio.
-3. **Set these in `.env`,** then restart with `run.sh up <profile>`:
+2. **Forward these ports** from the router (or open them in the cloud security group) to the server: 443 and 80 for the proxy, and 7882/UDP and 7881/TCP for the browser's audio. Also allow them in the server firewall. With the `ufw` rules from step 2, which deny incoming traffic by default, that means `sudo ufw allow 80/tcp` and `sudo ufw allow 443/tcp` for the proxy. Docker publishes 7881 and 7882 around `ufw`, but if your firewall filters them, allow them too.
+3. **Set these in `.env`,** then restart with the same options you started with, for example `run.sh up <profile> --sip`. Without `--sip`, `up` removes the SIP service:
 
    ```bash
    LIVEKIT_UI_USERNAME=<username>                    # basic login, for testing
@@ -299,7 +299,7 @@ The steps apply to any peer that can send calls to a SIP endpoint: trunk provide
 
 - **Provider setup.** Create a trunk or external SIP connection on the platform that points at your server's address and port (5060, or 5061 for TLS).
 - **Allow the platform's addresses** in every layer of [IP allowlisting](#ip-allowlisting).
-- **Match the called number.** Pass the number or extension the platform sends as `--number`. It need not be a real phone number.
+- **Match the called number.** Pass the number that the platform sends as `--number`, in E.164 form. `sip-setup` does not accept a bare PBX extension such as `1001`, so have the platform send a full number.
 - **Encryption.** Enterprise platforms often require TLS for signaling and SRTP for media. This example configures neither.
 - **Network.** A cloud platform needs a server reachable from the internet. An on-premises platform on the same network needs only a private route, with nothing forwarded on a router.
 - **Handing off to a person.** LiveKit supports SIP call transfer, but this example's agent has no handoff tool.
