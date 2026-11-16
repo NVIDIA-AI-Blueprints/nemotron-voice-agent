@@ -62,25 +62,30 @@ def parse_cidrs(values: Iterable[str], what: str) -> list[str]:
 
 
 def firewall_commands(
-    signaling: list[str], media: list[str], lan_cidr: str, ssh_from: list[str] | None = None
+    signaling: list[str], media: list[str], lan_cidr: str, ssh_from: list[str] | None = None, ssh_port: int = 22
 ) -> list[str]:
     """Return ufw commands to review and run by hand. Always restricted by source address; never executed here."""
     rtp = f"{RTP_MIN}:{RTP_MAX}"
     commands = [
         "sudo ufw default deny incoming",
         "sudo ufw default allow outgoing",
-        f"sudo ufw allow from {lan_cidr} to any port 22 proto tcp   # SSH from your LAN only",
+        f"sudo ufw allow from {lan_cidr} to any port {ssh_port} proto tcp   # SSH from your LAN only",
         f"sudo ufw allow from {lan_cidr}   # your LAN: UI and LiveKit",
     ]
     for cidr in ssh_from or []:
-        commands.append(f"sudo ufw allow from {cidr} to any port 22 proto tcp   # SSH from another network")
+        commands.append(f"sudo ufw allow from {cidr} to any port {ssh_port} proto tcp   # SSH from another network")
     for cidr in signaling:
         commands += [
             f"sudo ufw allow from {cidr} to any port {SIP_PORT} proto udp",
             f"sudo ufw allow from {cidr} to any port {SIP_PORT} proto tcp",
         ]
     commands += [f"sudo ufw allow from {cidr} to any port {rtp} proto udp" for cidr in media]
-    return [*commands, "sudo ufw enable", "sudo ufw status numbered"]
+    return [
+        *commands,
+        "# Before you enable: an SSH rule above must cover the network you connect from, or ufw locks you out",
+        "sudo ufw enable",
+        "sudo ufw status numbered",
+    ]
 
 
 def network_checklist(lan_ip: str, ui_port: int = 3000) -> str:
@@ -98,8 +103,9 @@ Phone (SIP) network setup. These steps are manual: this tool does not touch your
 3. Host firewall. Router forwards cannot filter by source address, so allow only the provider on the host. Take
    the provider's current signaling and media ranges and print the exact ufw commands (review, then run them):
      run.sh sip-network --lan-ip {lan_ip} --lan <LAN CIDR> --signaling <CIDR> [--signaling <CIDR> ...] --media <CIDR>
-   The firewall blocks SSH from every network it does not list. If you SSH in from outside the LAN (a VPN, for
-   example), add --ssh-from <CIDR> for it, and keep a second SSH session open while you apply the rules.
+   The firewall blocks SSH from every network it does not list, and enabling it can drop connections that are open.
+   If you SSH in from outside the LAN (a cloud server, or a VPN), add --ssh-from <CIDR> for that network. If sshd
+   does not use port 22, add --ssh-port <PORT>.
 4. SIP provider (for example a Twilio Elastic SIP Trunk). Attach your number and add an origination URI
    sip:<your-public-ip-or-ddns-name>:{SIP_PORT};transport=udp .
 5. LiveKit. With the deployment running (run.sh up <profile> --sip):

@@ -16,7 +16,7 @@
 #                                            Create the inbound SIP trunk and dispatch rule for one number
 #   run.sh sip-address                       Run on the Linux host: print its LAN address and network, the router and the
 #                                            public address, and whether the public address can receive calls
-#   run.sh sip-network --lan-ip IP --lan CIDR --signaling CIDR [--media CIDR] [--ssh-from CIDR]
+#   run.sh sip-network --lan-ip IP --lan CIDR --signaling CIDR [--media CIDR] [--ssh-from CIDR] [--ssh-port N]
 #                                            Print the router and firewall steps (changes nothing)
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
 #   run.sh clean [profile] [--image] [-y]    Stop and delete volumes (credentials, SIP records, NIM caches); --image also removes the image

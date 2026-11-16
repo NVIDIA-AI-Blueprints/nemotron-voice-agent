@@ -219,6 +219,8 @@ def send_json(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 20
 class Handler(SimpleHTTPRequestHandler):
     """Static files from ui/, plus the token endpoint."""
 
+    timeout = 15  # seconds a connection may stay idle, so a stalled request cannot hold a thread forever
+
     def __init__(self, *args, **kwargs):
         """Serve static files from the ui directory."""
         super().__init__(*args, directory=str(PUBLIC), **kwargs)
@@ -253,6 +255,10 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
             username, password = body.get("username"), body.get("password")
+        except TimeoutError:  # the client promised a body and never sent it. Give the attempt back and hang up
+            release_attempt(key)
+            self.close_connection = True
+            return
         except (ValueError, AttributeError):
             username = password = None
         if not credentials_ok(username, password):

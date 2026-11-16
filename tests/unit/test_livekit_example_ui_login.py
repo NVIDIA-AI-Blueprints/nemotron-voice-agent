@@ -4,6 +4,7 @@
 # ruff: noqa: D100, D103
 
 import json
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -181,17 +182,33 @@ def test_a_right_password_does_not_use_up_attempts(server, monkeypatch):
         assert request(server, "/login", {"password": "correct horse"})[0] == 200
 
 
+def raw_status(base, content_length):
+    """Send a POST with a hand-written Content-Length and return the status code of the server's reply.
+
+    urllib refuses to send an invalid length, so this uses a socket. A refused or dropped connection raises instead of
+    counting as a reply.
+    """
+    host, port = base.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as conn:
+        conn.sendall(f"POST /login HTTP/1.1\r\nHost: {host}\r\nContent-Length: {content_length}\r\n\r\n{{}}".encode())
+        reply = conn.recv(4096).decode()
+    return int(reply.split(" ", 2)[1])  # "HTTP/1.0 400 Bad Request"
+
+
 def test_an_invalid_or_oversized_content_length_is_rejected(server, monkeypatch):
     monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
     assert request(server, "/login", {"password": "x" * 2000})[0] == 413
-    for bad in ("abc", "-5"):
-        req = urllib.request.Request(server + "/login", data=b"{}", method="POST")
-        req.add_header("Content-Length", bad)
-        try:
-            urllib.request.urlopen(req, timeout=5)  # noqa: S310 - a loopback test server
-            code = 200
-        except urllib.error.HTTPError as error:
-            code = error.code
-        except OSError:  # the client library refuses to send some invalid lengths at all
-            code = 400
-        assert code == 400, bad
+    assert raw_status(server, "abc") == 400
+    assert raw_status(server, "-5") == 400
+    assert raw_status(server, "99999") == 413
+
+
+def test_a_request_that_stalls_before_its_body_is_dropped(server, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_UI_PASSWORD", "correct horse")
+    monkeypatch.setattr(ui_server.Handler, "timeout", 0.5)
+    host, port = server.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as conn:
+        conn.sendall(b"POST /login HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{}")  # 98 bytes never arrive
+        assert conn.recv(4096) == b""  # the server closed the connection instead of waiting forever
+    assert not ui_server._attempts.get("127.0.0.1")  # the stalled attempt was given back
+    assert request(server, "/login", {"password": "correct horse"})[0] == 200  # and it still serves others

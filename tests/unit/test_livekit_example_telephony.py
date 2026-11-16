@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# ruff: noqa: D100, D103
+# ruff: noqa: D100, D102, D103, D107
 
 import stat
 
@@ -216,3 +216,89 @@ def test_a_dispatch_rule_shared_with_other_trunks_is_never_replaced():
     assert sip_setup.shared_with_others(shared, "ST_1")
     assert sip_setup.shared_with_others(for_everyone, "ST_1")
     assert sip_setup.shared_with_others(mine, "ST_9")  # a rule that belongs to some other trunk
+
+
+class FakeSip:
+    """Records the calls that sip-setup makes against a LiveKit server that already has these trunks and rules."""
+
+    def __init__(self, trunks, rules):
+        self.trunks, self.rules, self.calls = trunks, rules, []
+
+    async def list_inbound_trunk(self, _request):
+        return type("Reply", (), {"items": self.trunks})()
+
+    async def list_dispatch_rule(self, _request):
+        return type("Reply", (), {"items": self.rules})()
+
+    async def update_inbound_trunk(self, trunk_id, _trunk):
+        self.calls.append(("update_trunk", trunk_id))
+
+    async def create_inbound_trunk(self, _request):
+        self.calls.append(("create_trunk",))
+        return type("Reply", (), {"sip_trunk_id": "ST_new"})()
+
+    async def update_dispatch_rule(self, rule_id, rule):
+        self.calls.append(("update_rule", rule_id, list(rule.trunk_ids)))
+
+    async def create_dispatch_rule(self, _request):
+        self.calls.append(("create_rule",))
+        return type("Reply", (), {"sip_dispatch_rule_id": "SDR_new"})()
+
+
+def provision(monkeypatch, tmp_path, trunks, rules):
+    """Run `sip-setup trunk` for +15551234567 against a fake server and return the fake, or the error it raised."""
+    import argparse
+    import asyncio
+
+    from livekit import api
+
+    fake = FakeSip(trunks, rules)
+    lk = type("FakeLiveKit", (), {"sip": fake, "aclose": staticmethod(lambda: asyncio.sleep(0))})
+    monkeypatch.setattr(api, "LiveKitAPI", lambda **_kwargs: lk)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "secret")
+    args = argparse.Namespace(number="+15551234567", scenario="generic", voice=None, allowed_address=["203.0.113.0/24"])
+    try:
+        asyncio.run(sip_setup.run_trunk(args))
+    except ValueError as error:
+        return fake, error
+    return fake, None
+
+
+def test_provisioning_leaves_a_rule_that_other_trunks_share_untouched(monkeypatch, tmp_path):
+    livekit_api()
+    from livekit import api
+
+    trunks = [api.SIPInboundTrunkInfo(sip_trunk_id="ST_1", name="inbound-+15551234567")]
+    shared = api.SIPDispatchRuleInfo(sip_dispatch_rule_id="SDR_1", name="call-+15551234567", trunk_ids=["ST_1", "ST_2"])
+    fake, error = provision(monkeypatch, tmp_path, trunks, [shared])
+    assert error is not None and "also serves other trunks" in str(error)
+    assert fake.calls == []  # nothing was changed, so ST_2 keeps its mapping
+
+
+def test_provisioning_updates_the_rule_that_belongs_to_the_number(monkeypatch, tmp_path):
+    livekit_api()
+    from livekit import api
+
+    trunks = [api.SIPInboundTrunkInfo(sip_trunk_id="ST_1", name="inbound-+15551234567")]
+    own = api.SIPDispatchRuleInfo(sip_dispatch_rule_id="SDR_1", name="call-bank-+15551234567", trunk_ids=["ST_1"])
+    fake, error = provision(monkeypatch, tmp_path, trunks, [own])
+    assert error is None
+    assert fake.calls == [("update_trunk", "ST_1"), ("update_rule", "SDR_1", ["ST_1"])]
+
+
+def test_firewall_commands_use_the_ssh_port_and_warn_before_the_firewall_is_enabled():
+    commands = telephony.firewall_commands(["203.0.113.0/24"], [], "192.168.1.0/24", ["10.8.0.0/16"], ssh_port=2222)
+    ssh_rules = [c for c in commands if "proto tcp   # SSH" in c]
+    assert len(ssh_rules) == 2 and all("port 2222 " in c for c in ssh_rules)
+    assert not [c for c in commands if "port 22 " in c]
+    enable = commands.index("sudo ufw enable")
+    assert commands[enable - 1].startswith("# Before you enable")
+
+
+def test_sip_network_rejects_an_invalid_ssh_port(capsys):
+    args = ["network", "--lan-ip", "192.168.1.9", "--lan", "192.168.1.0/24", "--signaling", "203.0.113.0/24"]
+    with pytest.raises(SystemExit):
+        sip_setup.main([*args, "--ssh-port", "70000"])
+    sip_setup.main([*args, "--ssh-port", "2222", "--ssh-from", "10.8.0.0/16"])
+    assert "port 2222 proto tcp" in capsys.readouterr().out

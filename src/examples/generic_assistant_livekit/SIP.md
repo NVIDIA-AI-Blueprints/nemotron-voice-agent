@@ -147,7 +147,7 @@ Environments differ, so this is the strategy:
    The UI, LiveKit, and Redis listen on `127.0.0.1`, so they need no rule. To open the web UI, use the SSH tunnel in the [README](README.md#remote-browser-access).
 3. **Forward the same two ports from the internet to the server.** On a router, add port forwards to the server's LAN address, and turn off its SIP ALG and UPnP if it has them. In a cloud, open them in the security group. A forward cannot filter by source, which is why the server firewall does that. Forward nothing else.
 
-On a server that uses `ufw` (Ubuntu-based systems, including DGX OS), print the commands for your addresses and run them one at a time. Keep a second SSH session open, so that `sudo ufw disable` is available if a rule locks you out:
+On a server that uses `ufw` (Ubuntu-based systems, including DGX OS), print the commands for your addresses and run them one at a time. Check that an SSH rule covers where you connect from before you enable the firewall. A second SSH session helps only if it survives, so keep console access to the server as well:
 
 ```bash
 src/examples/generic_assistant_livekit/run.sh sip-network \
@@ -159,7 +159,7 @@ src/examples/generic_assistant_livekit/run.sh sip-network \
   --media 168.86.128.0/18
 ```
 
-`sip-address` printed the LAN values. The firewall blocks SSH from every network it does not list, so if you connect from outside the LAN (a VPN, for example), add `--ssh-from <CIDR>` for that network. The command changes nothing, refuses open ranges such as `0.0.0.0/0`, and prints TCP 5060 rules that you can skip for a UDP-only trunk. Afterwards, `sudo ufw status numbered` must show a provider range, never `Anywhere`, for 5060 and 10000:10100. `livekit-sip` uses the host network, so the rules apply to it.
+`sip-address` printed the LAN values. The firewall blocks SSH from every network it does not list, and enabling it can drop connections that are already open. If you connect from outside the LAN (a cloud server, or a VPN), add `--ssh-from <CIDR>` for that network, and add `--ssh-port <PORT>` if `sshd` does not use port 22. The command changes nothing, refuses open ranges such as `0.0.0.0/0`, and prints TCP 5060 rules that you can skip for a UDP-only trunk. Afterwards, `sudo ufw status numbered` must show a provider range, never `Anywhere`, for 5060 and 10000:10100. `livekit-sip` uses the host network, so the rules apply to it.
 
 For production, or inside a company or cloud environment, ask your network or cloud administrator to apply the same rules with your environment's own tools. Also have them review TLS and SRTP, redundancy, and monitoring, which this guide does not cover.
 
@@ -268,7 +268,7 @@ A SIP port that accepts any source is scanned and abused within minutes. Restric
 
 ## Serve the Web UI over the Internet (Optional, for Testing)
 
-The network setup from [step 2](#2-set-up-the-network-and-firewall-optional) also lets browsers on the internet use the web UI, which is handy for demos. This is for testing, not for production.
+The same kind of network setup as [step 2](#2-set-up-the-network-and-firewall-optional) lets browsers on the internet use the web UI, which is handy for demos. It needs more ports than step 2 opens, and if you applied the step 2 firewall, it blocks them until you add the rules below. This is for testing, not for production.
 
 1. **Point a domain at the server,** and run an HTTPS reverse proxy on it that sends `/rtc` to LiveKit and everything else to the UI. With [Caddy](https://caddyserver.com/):
 
@@ -280,7 +280,18 @@ The network setup from [step 2](#2-set-up-the-network-and-firewall-optional) als
    }
    ```
 
-2. **Forward these ports** from the router (or open them in the cloud security group) to the server: 443 and 80 for the proxy, and 7882/UDP and 7881/TCP for the browser's audio. Also allow them in the server firewall. With the `ufw` rules from step 2, which deny incoming traffic by default, that means `sudo ufw allow 80/tcp` and `sudo ufw allow 443/tcp` for the proxy. Docker publishes 7881 and 7882 around `ufw`, but if your firewall filters them, allow them too.
+2. **Forward these ports** from the router (or open them in the cloud security group) to the server: 443 and 80 for the proxy, and 7882/UDP and 7881/TCP for the browser's audio.
+
+   If you applied the step 2 firewall, which denies incoming traffic by default, also allow these ports from any source. Browsers connect from anywhere, so this is the one place where the rules are not limited to a provider. Run these commands, and then `sudo ufw status numbered`:
+
+   ```bash
+   sudo ufw allow 80/tcp
+   sudo ufw allow 443/tcp
+   sudo ufw allow 7881/tcp
+   sudo ufw allow 7882/udp
+   ```
+
+   Docker can publish container ports around `ufw`, so the last two rules might have no effect on your host. They are harmless, and they keep the setup working if your firewall does filter them.
 3. **Set these in `.env`,** then restart with the same options you started with, for example `run.sh up <profile> --sip`. Without `--sip`, `up` removes the SIP service:
 
    ```bash

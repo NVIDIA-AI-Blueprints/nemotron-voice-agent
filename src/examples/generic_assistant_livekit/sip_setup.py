@@ -115,9 +115,11 @@ def run_network(args: argparse.Namespace) -> None:
     media = parse_cidrs(args.media or args.signaling, "media")
     lan = parse_cidrs([args.lan], "LAN")[0]
     ssh_from = parse_cidrs(args.ssh_from, "SSH")
+    if not 1 <= args.ssh_port <= 65535:
+        raise ValueError(f"{args.ssh_port} is not a valid SSH port")
     print(network_checklist(args.lan_ip, args.ui_port))
     print("ufw commands (review them, then run them yourself):")
-    for command in firewall_commands(signaling, media, lan, ssh_from):
+    for command in firewall_commands(signaling, media, lan, ssh_from, args.ssh_port):
         print(f"  {command}")
 
 
@@ -148,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="CIDR",
         help="another network that you SSH in from (a VPN, for example). Repeat. Other SSH sources are blocked",
     )
+    net.add_argument("--ssh-port", type=int, default=22, help="the port that sshd listens on (default 22)")
     net.add_argument("--ui-port", type=int, default=3000)
     return parser
 
