@@ -2,7 +2,8 @@
 
 ## Product Scope
 
-Nemotron Voice Agent is an end-to-end voice-agent blueprint built on Pipecat.
+Nemotron Voice Agent is an end-to-end voice-agent blueprint built on Pipecat,
+with a LiveKit example.
 It combines NVIDIA NIM services for automatic speech recognition (ASR), large
 language model (LLM) inference, and text-to-speech (TTS) synthesis. Preserve
 the repository's supported cloud, workstation, DGX Spark, and Jetson Thor
@@ -10,8 +11,9 @@ deployment profiles when changing shared behavior.
 
 ## Sources of Truth
 
-- Use `pyproject.toml` and `uv.lock` for Python versions and dependencies.
-- Use `client/package.json` and `client/package-lock.json` for client
+- Use the root `pyproject.toml` and `uv.lock` for Python versions and dependencies. Each framework has its own
+  dependency group (`pipecat`, `livekit`), and the `nva-pipecat` and `nva-livekit` entry points start them.
+- Use `clients/pipecat/package.json` and `clients/pipecat/package-lock.json` for client
   dependencies and scripts.
 - Use `examples_registry.yaml` for registered examples, transports, the
   services each example offers per slot, and per-example service overrides
@@ -19,17 +21,25 @@ deployment profiles when changing shared behavior.
 - Use `services.yaml` for built-in LLM, ASR, and TTS entries (`server` and
   `single-gpu` sections, `nvcf` for NVIDIA Cloud) and `settings.yaml` for
   editable service settings.
-- Use each `src/examples/<example>/pipeline.py` and `prompts.yaml` for example
-  behavior and configuration. Shared runtime behavior lives in `src/examples/shared/`,
-  `src/server.py`, and the other root modules in `src/`.
+- The Python package is `src/nemotron_voice_agent/`. Each framework folder (`pipecat/`, `livekit/`) has
+  `runtime/` for the server, gateways, and deployment helpers, and `examples/`. A framework adds `shared/` for
+  code that several of its examples use, as `pipecat/` does. `core/` holds code that both frameworks use,
+  such as the paths and loaders of `services.yaml` and `examples_registry.yaml`. `sidecars/` holds code that
+  runs inside the model containers, such as the vLLM Realtime server. A runtime never imports an example, one framework never imports another,
+  and `core/` and `sidecars/` import no framework. `tests/unit/core/test_layout_rules.py` checks these rules.
+- Use each `src/nemotron_voice_agent/pipecat/examples/<example>/pipeline.py` and `prompts.yaml` for example
+  behavior and configuration. Shared runtime behavior lives in `src/nemotron_voice_agent/pipecat/shared/` and
+  `src/nemotron_voice_agent/pipecat/runtime/`, which holds `server.py`.
+- Use `src/nemotron_voice_agent/livekit/examples/generic_assistant/` for the LiveKit example.
 - For the Frontend/Backend Live example, also use the `config` block of its
   `examples_registry.yaml` entry, its `factory.py`, its `frontend.py`, which
   builds the pipeline for the UI bot and live sessions, the Live gateway in
-  `src/gateways/live/`, and the delegation core in
-  `src/examples/frontend_backend_live/delegation_core/`.
-- Use `docker-compose.yml` and the files in `docker/` for Compose profiles,
-  service names, container images, ports, and hardware-specific deployment
-  behavior.
+  `src/nemotron_voice_agent/pipecat/runtime/gateways/live/`, and the delegation core in
+  `src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/delegation_core/`.
+- Use `docker-compose.yml` for Compose profiles. It includes
+  `docker/pipecat/docker-compose.yaml` and `docker/livekit/docker-compose.yaml`, and their model
+  services extend the files in `docker/sidecars/`. These files define service names, container
+  images, ports, and hardware-specific deployment behavior.
 - Use `README.md`, the example READMEs, and `docs/` for user-facing behavior.
   When prose and implementation disagree, verify the implementation and update
   the affected documentation in the same change.
@@ -58,18 +68,20 @@ these commands:
 ```bash
 uvx ruff@0.15.6 check .
 uvx ruff@0.15.6 format --check .
-uv sync --dev --group harness
-uv run pytest tests/ -v
-npm --prefix client ci
-npm --prefix client run lint
-npm --prefix client run build
+uv sync --locked
+uv run pytest tests/unit/core tests/unit/sidecars tests/unit/pipecat tests/test_docs_review_receipt.py -v
+uv run pytest tests/unit/livekit -v
+uv run --group eval python tests/evals/pipecat/ci/smoke.py
+npm --prefix clients/pipecat ci
+npm --prefix clients/pipecat run lint
+npm --prefix clients/pipecat run build
 ```
 
 For documentation-only changes, run the configured pre-commit hooks on the
 changed files:
 
 ```bash
-uv run --project . --group dev pre-commit run --files <changed-files>
+uv run pre-commit run --files <changed-files>
 ```
 
 Inspect relative links and referenced paths. This repository does not configure

@@ -12,7 +12,8 @@ name: nemotron-voice-agent
 #   multilingual-assistant       Cascaded Multilingual ASR + LLM + TTS Pipeline (Multilingual Assistant)
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
-#   frontend-backend-live                Cascaded Frontend/Backend Live Pipeline (Bluebird Cafe)
+#   frontend-backend-live        Cascaded Frontend/Backend Live Pipeline (Bluebird Cafe)
+#   generic-assistant-livekit    Generic Assistant on LiveKit Agents
 #
 # Hardware targets:
 #   server                    NIM ASR + LLM + TTS. Recommended for scaling
@@ -28,6 +29,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant up
 #   docker compose --profile omni-assistant-subagents up
 #   docker compose --profile frontend-backend-live up
+#   docker compose --profile generic-assistant-livekit up
 #
 # On-prem recipes:
 #   docker compose --profile generic-assistant/server up
@@ -43,232 +45,20 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-live/server up
 #   docker compose --profile frontend-backend-live/single-gpu up
+#   docker compose --profile generic-assistant-livekit/server up
+#   docker compose --profile generic-assistant-livekit/single-gpu up
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
 #   docker compose --profile <recipe> --profile turn up      # coturn TURN
+#
+# Run one recipe at a time: the sidecars of different recipes publish the same host ports.
+#
+# Files:
+#   docker/pipecat/   Pipecat app services
+#   docker/livekit/   LiveKit server, agent, web UI, and SIP services
+#   docker/sidecars/  ASR, LLM, TTS, TURN, and tracing services shared by every framework
 
 include:
-  - path: docker/docker-compose.nemotron35-lightning-nim.yaml
-  - path: docker/docker-compose.nemotron35-lightning.yaml
-  - path: docker/docker-compose.dynamo-lightning.yaml
-  - path: docker/docker-compose.nemotron35-super-vl.yaml
-  - path: docker/docker-compose.nemotron35-bolt.yaml
-  - path: docker/docker-compose.nemotron35-bolt-e4b.yaml
-  - path: docker/docker-compose.nemotron3-omni-nim.yaml
-  - path: docker/docker-compose.nemotron-asr.yaml
-  - path: docker/docker-compose.nemotron-transcribe.yaml
-  - path: docker/docker-compose.parakeet-asr.yaml
-  - path: docker/docker-compose.magpie-tts.yaml
-  - path: docker/docker-compose.chatterbox-tts.yaml
-  - path: docker/docker-compose.magpie-zeroshot-tts.yaml
-  - path: docker/docker-compose.nemotron3-omni.yaml
-  - path: docker/docker-compose.nemo-speech-cpp.yaml
-  - path: docker/docker-compose.coturn.yaml
-  - path: docker/docker-compose.phoenix.yaml
-
-x-app: &app-base
-  build:
-    context: .
-    dockerfile: docker/Dockerfile
-  image: nemotron-voice-agent:latest
-  pull_policy: build
-  command: ["uv", "run", "python", "src/server.py", "--host", "0.0.0.0"]
-  ports:
-    - "${PIPELINE_APP_PORT:-7860}:7860"
-  env_file:
-    - .env
-  volumes:
-    - ./src:/app/src:ro
-    - ./examples_registry.yaml:/app/examples_registry.yaml:ro
-    - ./services.yaml:/app/services.yaml:ro
-    - ./settings.yaml:/app/settings.yaml:ro
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
-  healthcheck:
-    test: ["CMD-SHELL", "curl -fk $$(test \"$$(printf %s \"$${PIPELINE_TLS:-true}\" | tr '[:upper:]' '[:lower:]')\" = true && echo https || echo http)://localhost:7860/health || exit 1"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-    start_period: 30s
-  restart: unless-stopped
-  logging:
-    driver: "json-file"
-    options:
-      max-size: "50m"
-      max-file: "5"
-
-x-app-env: &app-env
-  APP_RUNTIME: container
-  TRANSPORT_SELECTION: ${TRANSPORT_SELECTION:-}
-  PIPELINE_TLS: ${PIPELINE_TLS:-true}
-
-services:
-  generic-assistant:
-    <<: *app-base
-    profiles:
-      - generic-assistant
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
-      SERVICE_RECIPE: cloud
-
-  generic-assistant-server:
-    <<: *app-base
-    profiles:
-      - generic-assistant/server
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
-
-  # No SERVICE_RECIPE: the Dynamo LLM lives in the server catalog next to the
-  # Lightning NIM, which this recipe does not run, so reachability selects it.
-  generic-assistant-dynamo:
-    <<: *app-base
-    profiles:
-      - generic-assistant/dynamo
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
-
-  generic-assistant-single-gpu:
-    <<: *app-base
-    profiles:
-      - generic-assistant/single-gpu
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: single-gpu
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
-
-  generic-assistant-server-perf:
-    <<: *app-base
-    profiles:
-      - generic-assistant/server-perf
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: generic-assistant
-      UVICORN_WORKERS: "200"
-      PROMPT_FILE_PATH: ${PROMPT_FILE_PATH:-}
-      PROMPT_SELECTOR: ${PROMPT_SELECTOR:-}
-      USE_SILERO_VAD_TURN_DETECTION: "true"
-      SILERO_VAD_STOP_SECS: "0.5"
-      AUDIO_OUT_10MS_CHUNKS: "40"
-      ENABLE_WELCOME_MESSAGE: "false"
-
-  multilingual-assistant:
-    <<: *app-base
-    profiles:
-      - multilingual-assistant
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
-      SERVICE_RECIPE: cloud
-
-  multilingual-assistant-server:
-    <<: *app-base
-    profiles:
-      - multilingual-assistant/server
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
-
-  multilingual-assistant-single-gpu:
-    <<: *app-base
-    profiles:
-      - multilingual-assistant/single-gpu
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: single-gpu
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
-
-  multilingual-assistant-dynamo:
-    <<: *app-base
-    profiles:
-      - multilingual-assistant/dynamo
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
-
-  omni-assistant:
-    <<: *app-base
-    profiles:
-      - omni-assistant
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
-      SERVICE_RECIPE: cloud
-
-  omni-assistant-server:
-    <<: *app-base
-    profiles:
-      - omni-assistant/server
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
-
-  omni-assistant-single-gpu:
-    <<: *app-base
-    profiles:
-      - omni-assistant/single-gpu
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: single-gpu
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
-
-  omni-assistant-subagents:
-    <<: *app-base
-    profiles:
-      - omni-assistant-subagents
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
-      SERVICE_RECIPE: cloud
-
-  omni-assistant-subagents-server:
-    <<: *app-base
-    profiles:
-      - omni-assistant-subagents/server
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
-
-  omni-assistant-subagents-single-gpu:
-    <<: *app-base
-    profiles:
-      - omni-assistant-subagents/single-gpu
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: single-gpu
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
-
-  frontend-backend-live:
-    <<: *app-base
-    profiles:
-      - frontend-backend-live
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
-      SERVICE_RECIPE: cloud
-
-  frontend-backend-live-server:
-    <<: *app-base
-    profiles:
-      - frontend-backend-live/server
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: server
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
-
-  frontend-backend-live-single-gpu:
-    <<: *app-base
-    profiles:
-      - frontend-backend-live/single-gpu
-    environment:
-      <<: *app-env
-      SERVICE_RECIPE: single-gpu
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
+  - path: docker/pipecat/docker-compose.yaml
+  - path: docker/livekit/docker-compose.yaml

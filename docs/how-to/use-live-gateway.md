@@ -2,7 +2,7 @@
 
 ## Goals
 
-`/v1/live` lets live session clients, such as Pipecat apps or your own app, talk to the [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply. The gateway serves the live session protocol of OpenAI's GPT-Live API on the example's cascade. It is not a drop-in replacement for the hosted API. The gateway imports no Pipecat: it reaches the example's frontend adapter and delegation core only through the ports in [`ports.py`](../../src/gateways/live/ports.py).
+`/v1/live` lets live session clients, such as Pipecat apps or your own app, talk to the [Frontend/Backend Live example](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply. The gateway serves the live session protocol of OpenAI's GPT-Live API on the example's cascade. It is not a drop-in replacement for the hosted API. The gateway imports no Pipecat: it reaches the example's frontend adapter and delegation core only through the ports in [`ports.py`](../../src/nemotron_voice_agent/pipecat/runtime/gateways/live/ports.py).
 
 ## How This Differs from GPT-Live
 
@@ -70,9 +70,9 @@ Use `ws://` when `PIPELINE_TLS=false`; otherwise `wss://`.
 
 ## Delegation Modes
 
-A live session client sends its `instructions`, which are the talker's prompt, and a `delegation` block, whose `type` selects the delegation mode for the whole session. A session that sets no instructions, or blank ones, gets the `generic` talker prompt of the example's [`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml), which names no domain. The modes work as follows:
+A live session client sends its `instructions`, which are the talker's prompt, and a `delegation` block, whose `type` selects the delegation mode for the whole session. A session that sets no instructions, or blank ones, gets the `generic` talker prompt of the example's [`prompts.yaml`](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/prompts.yaml), which names no domain. The modes work as follows:
 
-- **Responses mode** (`delegation.type: responses`). The [server delegation](#server-delegation) passes each delegation to the [delegation core](../../src/examples/frontend_backend_live/delegation_core/README.md). The core runs the backend work with the settings in `delegation.responses`: the backend `model`, which is required, and optional `instructions` and function `tools`. The backend's function calls stream to the client as `response.event`. The client returns each result as a `function_call_output` item with `response.item.create`, and then sends `response.create` to continue. The results must arrive within the core's `delegation.client_tool_timeout_seconds` (60 seconds), counted from the end of the response with their calls, or the core stops the work. A backend task can repeat its newest call with the same function and arguments after the client answered it. The core then answers the repeat instead of sending it again, unless a request was admitted since or the work has taken more than one request. It answers with that output and a note (`texts.repeated_call_output` in `agent_prompts.Core`).
+- **Responses mode** (`delegation.type: responses`). The [server delegation](#server-delegation) passes each delegation to the [delegation core](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/delegation_core/README.md). The core runs the backend work with the settings in `delegation.responses`: the backend `model`, which is required, and optional `instructions` and function `tools`. The backend's function calls stream to the client as `response.event`. The client returns each result as a `function_call_output` item with `response.item.create`, and then sends `response.create` to continue. The results must arrive within the core's `delegation.client_tool_timeout_seconds` (60 seconds), counted from the end of the response with their calls, or the core stops the work. A backend task can repeat its newest call with the same function and arguments after the client answered it. The core then answers the repeat instead of sending it again, unless a request was admitted since or the work has taken more than one request. It answers with that output and a note (`texts.repeated_call_output` in `agent_prompts.Core`).
 - **Client mode** (`delegation.type: client`, or no `delegation` block). The server runs no backend and announces each delegation with `session.delegation.created`. The client app does the work, answers with appends that name the delegation, and sends the result back as a `session.commentary.append`. The session refuses `response.item.create` and `response.create`.
 
 When the talker delegates a turn, the lead-in that it words in the same decision is the delegation's spoken acknowledgement. The voice says it after the session's `delegation.acknowledgement_delay_ms`, unless a result, the delegation's end, the caller starting to speak again, or commentary or thinking comes first. The delay is at most `800`, and `0`, the default, says it at once.
@@ -84,11 +84,11 @@ For each session, the server delegation opens a conversation in the core and sen
 - It holds the client's call results and typed messages from `response.item.create`, at most 512 results and 16 messages, and sends them at `response.create`. When the core refuses a request as invalid, such as one with two results for one call, the client gets `invalid_value`, and the server delegation drops what that request carried.
 - It checks the `delegation.responses` settings in the background with `POST /v1/responses/input_tokens`, and reports a setting that the backend refuses as a nonfatal `responses_validation_failed` error. The session keeps the setting, so a model that the backend does not serve fails each delegation, except on the harness, which runs its agent's own model.
 
-The core places each request by its backend adapter's rule, as [Choose a Backend Adapter](../../src/examples/frontend_backend_live/README.md#choose-a-backend-adapter) describes.
+The core places each request by its backend adapter's rule, as [Choose a Backend Adapter](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#choose-a-backend-adapter) describes.
 
 ### How a Delegation Ends
 
-In Responses mode, the client sees each delegation's events in `response.event`, and the voice reads each ending from those events, never from their text. The following table lists the endings. The voice's lines are `agent_prompts.Lines` entries, and the `texts.*` lines are `agent_prompts.Core` entries, of the example's [`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml):
+In Responses mode, the client sees each delegation's events in `response.event`, and the voice reads each ending from those events, never from their text. The following table lists the endings. The voice's lines are `agent_prompts.Lines` entries, and the `texts.*` lines are `agent_prompts.Core` entries, of the example's [`prompts.yaml`](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/prompts.yaml):
 
 | Ending | Events | What the voice says |
 | --- | --- | --- |
@@ -162,7 +162,7 @@ The `live.settings` block of the `frontend-backend-live` entry in [`examples_reg
 
 An unknown key or an invalid value stops the server at startup. The server also reads `LIVE_ENABLED`, `LIVE_API_TOKEN`, and `UVICORN_WORKERS` when it starts, as [When the Routes Are Served](#when-the-routes-are-served) and [Authentication](#authentication) describe.
 
-The example's own settings, such as its backend adapter, are the `config` block of the same entry, as [Configuration](../../src/examples/frontend_backend_live/README.md#configuration) in the example's README describes.
+The example's own settings, such as its backend adapter, are the `config` block of the same entry, as [Configuration](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) in the example's README describes.
 
 ## Errors and Limits
 

@@ -48,7 +48,7 @@ server:
 
 ## How the active recipe selects entries
 
-Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The experimental `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run python src/server.py`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
+Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The experimental `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run nva-pipecat`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |
@@ -140,7 +140,7 @@ frontend-backend-live:
 
 ## Adding a self-hosted service
 
-To configure a specific local model, check its Docker Compose file under [`docker/`](../../docker/) for the **service name**, **port**, and the **profile** that launches it, then point a catalog entry at that endpoint. For example, Nemotron ASR Streaming (English) is defined in [`docker/docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml):
+To configure a specific local model, check its Docker Compose file under [`docker/`](../../docker/) for the **service name**, **port**, and the **profile** that launches it, then point a catalog entry at that endpoint. For example, Nemotron ASR Streaming (English) is defined in [`docker/sidecars/docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml):
 
 ```yaml
 services:
@@ -157,7 +157,7 @@ services:
 
 The matching entry under `server` points at that Compose service name and **container** port (`50052`). For host-native runs, the backend rewrites it to the published host port automatically. Here `nemotron-asr-streaming-english:50052` becomes `localhost:50152`.
 
-Every speech sidecar publishes its own host ports, so alternatives can run side by side and the Services tab switches between them. A gRPC speech sidecar needs unused host ports in its Compose file and a matching row in `LOCAL_SPEECH_PORTS` in [`src/utils.py`](../../src/utils.py), which drives both the host rewrite and the readiness check. HTTP-only speech sidecars use `_HOST_RUNTIME_PORT_OVERRIDES` for the host port and `health_path` on their catalog entry for readiness, as LLMs do.
+Every speech sidecar publishes its own host ports, so alternatives can run side by side and the Services tab switches between them. A gRPC speech sidecar needs unused host ports in its Compose file and a matching row in `LOCAL_SPEECH_PORTS` in [`src/nemotron_voice_agent/pipecat/runtime/utils.py`](../../src/nemotron_voice_agent/pipecat/runtime/utils.py), which drives both the host rewrite and the readiness check. HTTP-only speech sidecars use `_HOST_RUNTIME_PORT_OVERRIDES` for the host port and `health_path` on their catalog entry for readiness, as LLMs do.
 
 | Sidecar | gRPC host port | HTTP host port |
 | --- | --- | --- |
@@ -210,4 +210,4 @@ ASR entries can set `speaker_diarization_supported: true` to show the **Diarizat
 
 `streaming_url` is an optional self-hosted LLM field that points at an OpenAI Realtime text session WebSocket. The Services tab shows a **Streaming Input** toggle for it when the example lists `streaming_input` under `capabilities`. For details, refer to [Configure LLM](configure-llm.md).
 
-`api` is an optional LLM field that names the API that the Frontend/Backend Live delegation core uses to call the model: `chat-completions`, the default, or `openai-responses`. A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant, unless the `nvcf` block sets `api: chat-completions`. An `api` in the `nvcf` block applies to the NVIDIA Cloud variant only. For the servers that support `openai-responses`, refer to [Configuration](../../src/examples/frontend_backend_live/README.md#configuration) in the Frontend/Backend Live README.
+`api` is an optional LLM field that names the API that the Frontend/Backend Live delegation core uses to call the model: `chat-completions`, the default, or `openai-responses`. A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant, unless the `nvcf` block sets `api: chat-completions`. An `api` in the `nvcf` block applies to the NVIDIA Cloud variant only. For the servers that support `openai-responses`, refer to [Configuration](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) in the Frontend/Backend Live README.

@@ -1,0 +1,323 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Nemotron Omni cascaded pipeline using the upstream-style Omni service.
+
+This is the current experimental pipeline for the clean
+``NvidiaOmniLLMService`` shape:
+
+* ``transport.input`` + VAD/user-turn processing feed audio into Omni.
+* Omni replaces ASR + LLM and emits standard Pipecat frames.
+* NVIDIA TTS speaks the emitted ``LLMTextFrame`` response.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from dotenv import load_dotenv
+from loguru import logger
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import (
+    TTSUpdateSettingsFrame,
+)
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
+from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
+from pipecat.runner.types import RunnerArguments
+from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService, NvidiaOmniLLMSettings
+from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
+from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_turn_processor import UserTurnProcessor
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.workers.runner import WorkerRunner
+
+import nemotron_voice_agent.pipecat.runtime.examples_registry as examples_registry
+from nemotron_voice_agent.pipecat.runtime.tracing import IS_TRACING_ENABLED
+from nemotron_voice_agent.pipecat.runtime.utils import (
+    is_nvcf,
+    load_ipa_dictionary,
+    load_service_entry,
+    normalize_lang_code,
+    nvidia_api_key,
+    parse_env_float,
+    parse_env_int,
+    parse_json_dict,
+    resolve_prompt,
+)
+from nemotron_voice_agent.pipecat.shared.audio_recorder import create_audio_recorder
+from nemotron_voice_agent.pipecat.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
+from nemotron_voice_agent.pipecat.shared.pipeline_utils import (
+    build_pipeline_params,
+    build_smart_turn_stop_strategies,
+    build_user_mute_strategies,
+    create_transport,
+    latency_metric_group,
+    register_session_start_handlers,
+    turn_taking_latency_secs,
+    with_realtime_observers,
+)
+
+load_dotenv(override=True)
+
+
+def _build_user_turn_strategies() -> UserTurnStrategies:
+    """Build VAD-start + Smart Turn-stop strategies for Omni audio turns."""
+    return UserTurnStrategies(
+        start=[VADUserTurnStartStrategy()],
+        stop=build_smart_turn_stop_strategies(wait_for_transcript=False),
+    )
+
+
+def _build_user_turn_processor() -> UserTurnProcessor:
+    """Build an external turn processor for subagent branches that need one."""
+    return UserTurnProcessor(user_turn_strategies=_build_user_turn_strategies())
+
+
+async def _queue_finalized_user_turn(task, message) -> None:
+    """Send the finalized user message after it has been written to context."""
+    await task.queue_frame(
+        RTVIServerMessageFrame(
+            data={
+                "type": "user-turn-finalized",
+                "timestamp": getattr(message, "timestamp", None),
+                "transcript": getattr(message, "content", None),
+                "user_id": getattr(message, "user_id", None),
+            }
+        )
+    )
+
+
+async def bot(runner_args: RunnerArguments) -> None:
+    """Build and run the Nemotron Omni cascaded pipeline for one session."""
+    transport = await create_transport(runner_args)
+    body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+
+    prompt_key, base_system_content = resolve_prompt(
+        __file__,
+        body.get("prompt_content", ""),
+        body.get("prompt_key", ""),
+    )
+    logger.info(f"Starting Nemotron Omni cascaded pipeline (prompt={prompt_key})")
+
+    default_llm = load_service_entry("llm", "")
+    default_tts = load_service_entry("tts", "")
+
+    model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
+    base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
+    system_prompt_override = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
+    extra_params = parse_json_dict(
+        body.get("extra_params", "") or default_llm.get("extra_params", ""),
+        "extra_params",
+    )
+
+    system_content = base_system_content
+    if system_prompt_override:
+        system_content = f"{base_system_content}\n\n{system_prompt_override}".strip()
+    context = LLMContext()
+
+    omni = NvidiaOmniLLMService(
+        name="NemotronOmniLLM",
+        api_key=nvidia_api_key(),
+        base_url=base_url,
+        context=context,
+        settings=NvidiaOmniLLMSettings(
+            model=model_id,
+            system_instruction=system_content,
+            max_tokens=parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
+            temperature=parse_env_float("OMNI_TEMPERATURE", 0.6, min_value=0.0),
+            top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
+            extra=extra_params,
+            min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
+        ),
+    )
+
+    tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
+    tts_ssl = is_nvcf(tts_server)
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
+    )
+    tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
+    custom_dictionary = load_ipa_dictionary()
+
+    tts_settings_kwargs: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
+    tts_kwargs: dict = {
+        "api_key": nvidia_api_key(),
+        "server": tts_server,
+        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "use_ssl": tts_ssl,
+        "text_transforms": [("*", nemotron_speech_text_transform)],
+        "custom_dictionary": custom_dictionary,
+        "stop_frame_timeout_s": parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 30.0, min_value=5.0),
+    }
+    if tts_function_id or tts_model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": tts_function_id,
+            "model_name": tts_model,
+        }
+    if tts_zero_shot_audio_prompt_file:
+        tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
+    tts = NvidiaTTSService(**tts_kwargs)
+    logger.info(
+        f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}"
+    )
+
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(params=VADParams()),
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
+            user_turn_strategies=_build_user_turn_strategies(),
+        ),
+    )
+
+    audio_recorder = create_audio_recorder()
+
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            user_aggregator,
+            omni,
+            tts,
+            transport.output(),
+            *([audio_recorder] if audio_recorder else []),
+            assistant_aggregator,
+        ]
+    )
+
+    latency_observer = UserBotLatencyObserver()
+    latency_turn = 1
+    latest_latency: float | None = None
+
+    @latency_observer.event_handler("on_first_bot_speech_latency")
+    async def on_first_bot_speech(observer, latency):
+        logger.info(f"First bot speech latency: {latency:.3f}s")
+        await task.queue_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "user-bot-latency",
+                    "latency": round(latency, 3),
+                    "first": True,
+                }
+            )
+        )
+
+    @latency_observer.event_handler("on_latency_measured")
+    async def on_latency(observer, latency):
+        nonlocal latest_latency
+        latest_latency = latency
+        logger.info(f"User->Bot latency: {latency:.3f}s")
+        await task.queue_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "user-bot-latency",
+                    "latency": round(latency, 3),
+                    "first": False,
+                }
+            )
+        )
+
+    @latency_observer.event_handler("on_latency_breakdown")
+    async def on_latency_breakdown(observer, breakdown):
+        nonlocal latency_turn, latest_latency
+        if latest_latency is None:
+            return
+        group = latency_metric_group(latency_turn, latest_latency, breakdown)
+        await task.queue_frame(RTVIServerMessageFrame(data=group))
+        latency_turn += 1
+        latest_latency = None
+        events = breakdown.turn_contribution_lines()
+        await task.queue_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "latency-breakdown",
+                    "turn_taking_latency": round(turn_taking_latency, 3)
+                    if (turn_taking_latency := turn_taking_latency_secs(breakdown)) is not None
+                    else None,
+                    "events": events,
+                }
+            )
+        )
+        if events:
+            logger.info(f"Latency breakdown: {' | '.join(events)}")
+
+    task = PipelineWorker(
+        pipeline,
+        params=build_pipeline_params(
+            enable_metrics=True,
+            enable_usage_metrics=True,
+        ),
+        idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        observers=with_realtime_observers(latency_observer, transport=transport),
+        enable_tracing=IS_TRACING_ENABLED,
+        processor_unusable_policy=ProcessorUnusablePolicy.END,
+        setup_timeout_secs=120.0,
+    )
+
+    @user_aggregator.event_handler("on_user_turn_message_added")
+    async def on_user_turn_message_added(aggregator, message):
+        await _queue_finalized_user_turn(task, message)
+
+    async def _on_session_start() -> None:
+        if audio_recorder:
+            await audio_recorder.start_recording()
+
+    register_session_start_handlers(
+        transport=transport,
+        task=task,
+        context=context,
+        runner_args=runner_args,
+        intro_prompt="Please introduce yourself to the user.",
+        on_start=_on_session_start,
+        welcome_enabled=welcome_enabled,
+    )
+
+    @transport.event_handler("on_client_disconnected")
+    async def on_client_disconnected(transport, client):
+        logger.info("Client disconnected")
+        await task.cancel()
+
+    async def _apply_set_voice(payload: dict) -> None:
+        voice_id = payload.get("voice_id", "")
+        language = payload.get("language", "")
+        if not voice_id:
+            return
+        settings_kwargs: dict[str, Any] = {"voice": voice_id}
+        if language:
+            settings_kwargs["language"] = normalize_lang_code(language)
+        await task.queue_frame(
+            TTSUpdateSettingsFrame(
+                delta=NvidiaTTSSettings(**settings_kwargs),
+                service=tts,
+            )
+        )
+        logger.info(f"Voice switched -> {voice_id}, language={settings_kwargs.get('language', '(unchanged)')}")
+
+    @task.rtvi.event_handler("on_client_message")
+    async def on_client_message(rtvi, message):
+        payload = message.data if isinstance(message.data, dict) else {}
+        if message.type == "set-voice":
+            await _apply_set_voice(payload)
+
+    runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
+    await runner.add_workers(task)
+    await runner.run()

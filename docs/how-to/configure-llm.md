@@ -14,11 +14,11 @@ Five models back the examples. Each is served by the self-hosted Compose service
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
-| **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM), [`docker-compose.dynamo-lightning.yaml`](../../docker/docker-compose.dynamo-lightning.yaml) (NVIDIA Dynamo, experimental) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
-| **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
-| **Nemotron 3.5 Bolt 74B A9B**: higher-capability alternative, available self-hosted on single-GPU hosts only | [`docker-compose.nemotron35-bolt.yaml`](../../docker/docker-compose.nemotron35-bolt.yaml) (`nemotron-35-bolt-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB) |
-| **Nemotron 3.5 Bolt E4B**: compact conversational and tool-calling small language model (SLM) with a low time to first token (TTFT), 8B total and 4B effective | [`docker-compose.nemotron35-bolt-e4b.yaml`](../../docker/docker-compose.nemotron35-bolt-e4b.yaml) (`nemotron-35-bolt-e4b` NIM, `nemotron-35-bolt-e4b-vllm` vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b) |
-| **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni-nim.yaml`](../../docker/docker-compose.nemotron3-omni-nim.yaml) (NIM), [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
+| **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/sidecars/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/sidecars/docker-compose.nemotron35-lightning.yaml) (vLLM), [`docker-compose.dynamo-lightning.yaml`](../../docker/sidecars/docker-compose.dynamo-lightning.yaml) (NVIDIA Dynamo, experimental) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
+| **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/sidecars/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
+| **Nemotron 3.5 Bolt 74B A9B**: higher-capability alternative, available self-hosted on single-GPU hosts only | [`docker-compose.nemotron35-bolt.yaml`](../../docker/sidecars/docker-compose.nemotron35-bolt.yaml) (`nemotron-35-bolt-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB) |
+| **Nemotron 3.5 Bolt E4B**: compact conversational and tool-calling small language model (SLM) with a low time to first token (TTFT), 8B total and 4B effective | [`docker-compose.nemotron35-bolt-e4b.yaml`](../../docker/sidecars/docker-compose.nemotron35-bolt-e4b.yaml) (`nemotron-35-bolt-e4b` NIM, `nemotron-35-bolt-e4b-vllm` vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b) |
+| **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni-nim.yaml`](../../docker/sidecars/docker-compose.nemotron3-omni-nim.yaml) (NIM), [`docker-compose.nemotron3-omni.yaml`](../../docker/sidecars/docker-compose.nemotron3-omni.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 
 Each model is exposed as one or more **catalog keys** in `services.yaml`:
 
@@ -169,7 +169,7 @@ docker compose --profile multilingual-assistant/dynamo up -d
 
 Each worker runs with `--endpoint-types chat,realtime`, so one engine serves chat completions at `http://dynamo-frontend:8000/v1` and OpenAI Realtime text sessions at `ws://dynamo-frontend:8000/v1/realtime`. The `nemotron-lightning-dynamo` entry declares them as its `base_url` and `streaming_url`. With **Streaming Input** off, the pipeline sends chat completions. With it on, `NvidiaStreamingLLMService` streams ASR updates into the session as prefill, as it does for the [vLLM services](#deployment-tuning-parameters). The Multilingual Assistant has no **Streaming Input**, so it always sends chat completions.
 
-- **Image.** `docker/dynamo/Dockerfile` installs a pinned `ai-dynamo` nightly on top of `vllm/vllm-openai`. Realtime text sessions with function tools are not in a Dynamo release yet. Change `DYNAMO_VERSION` and the image tag in `docker/docker-compose.dynamo-lightning.yaml` together.
+- **Image.** `docker/sidecars/dynamo/Dockerfile` installs a pinned `ai-dynamo` nightly on top of `vllm/vllm-openai`. Realtime text sessions with function tools are not in a Dynamo release yet. Change `DYNAMO_VERSION` and the image tag in `docker/sidecars/docker-compose.dynamo-lightning.yaml` together.
 - **Supported GPUs.** The worker runs on Ada (compute capability 8.9), Hopper, and Blackwell GPUs. On other GPUs, it exits with `Unsupported GPU compute capability for the Dynamo recipe`.
 - **GPU memory.** The ASR and TTS NIMs share GPU `0`, so the worker takes a `0.45` share of GPU memory. The LLM needs about 28 GB, so the default share needs a GPU with at least 64 GB. Change `GPU_MEMORY_UTILIZATION` in the worker's `environment` to change the share.
 - **Routing.** The frontend spreads requests across the workers in turn (`--router-mode round-robin`). Each realtime session stays on the worker that it starts on. Dynamo supports only `round-robin` and `random` for realtime sessions so far ([ai-dynamo/dynamo#10320](https://github.com/ai-dynamo/dynamo/issues/10320)). When a worker stops, `--migration-limit 2` moves its in-flight chat completions to another worker.
@@ -184,7 +184,7 @@ Each worker is one container on its own GPUs. To add one, create `docker-compose
 services:
   dynamo-lightning-worker-1:
     extends:
-      file: docker/docker-compose.dynamo-lightning.yaml
+      file: docker/sidecars/docker-compose.dynamo-lightning.yaml
       service: dynamo-lightning-worker
     environment:
       GPU_MEMORY_UTILIZATION: "0.9"
@@ -275,7 +275,7 @@ For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency befo
 
 ### Reasoning Parser & Tool Calling (Self-Hosted)
 
-Cloud (NVCF) endpoints enable the parsers server-side. **Self-hosted NIM and vLLM do not enable them by default**, so the repo's `docker/docker-compose.nemotron3*.yaml` files set them for you. The parser names depend on the model:
+Cloud (NVCF) endpoints enable the parsers server-side. **Self-hosted NIM and vLLM do not enable them by default**, so the repo's `docker/sidecars/docker-compose.nemotron3*.yaml` files set them for you. The parser names depend on the model:
 
 | Capability | Flag | Why |
 |------------|------|-----|

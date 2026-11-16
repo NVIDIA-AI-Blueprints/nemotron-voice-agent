@@ -21,11 +21,11 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
 | Example | Description | Supported profiles |
 |---------|-------------|--------------------|
-| [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `generic-assistant/dynamo` (workstation, experimental) |
-| [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `multilingual-assistant/dynamo` (workstation, experimental) |
-| [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
-| [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
-| [`frontend-backend-live`](../src/examples/frontend_backend_live/README.md) | Routing talker with the `/v1/live` session API and three backend adapters: the backend LLM, an LLM agent, or an agent runtime harness (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`generic-assistant`](../src/nemotron_voice_agent/pipecat/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `generic-assistant/dynamo` (workstation, experimental) |
+| [`multilingual-assistant`](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `multilingual-assistant/dynamo` (workstation, experimental) |
+| [`omni-assistant`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`omni-assistant-subagents`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
+| [`frontend-backend-live`](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) | Routing talker with the `/v1/live` session API and three backend adapters: the backend LLM, an LLM agent, or an agent runtime harness (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
 
@@ -89,7 +89,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile frontend-backend-live/server up -d     # Frontend/Backend Live Cafe Assistant
     ```
 
-    The `frontend-backend-live/server` recipe runs its talker on the Nemotron 3.5 Lightning NIM on GPU `0` and its backend on the Nemotron 3.5 Super VL NIM with reasoning enabled, which it starts on GPUs `1` and `2`, so it needs three GPUs. When the Super VL NIM is not running, the backend runs on the Lightning NIM. Refer to the example's [Default Models](../src/examples/frontend_backend_live/README.md#default-models).
+    The `frontend-backend-live/server` recipe runs its talker on the Nemotron 3.5 Lightning NIM on GPU `0` and its backend on the Nemotron 3.5 Super VL NIM with reasoning enabled, which it starts on GPUs `1` and `2`, so it needs three GPUs. When the Super VL NIM is not running, the backend runs on the Lightning NIM. Refer to the example's [Default Models](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#default-models).
 
     **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve those weights as W4A16 through Marlin. Blackwell workstations enable DFlash speculative decoding automatically. DGX Spark does not load a DSpark draft model due to a known issue with vLLM streaming prefill. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
 
@@ -122,7 +122,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     >
     > **Note:** The `frontend-backend-live` profiles serve the Live session routes (`/v1/live`) when you set `LIVE_API_TOKEN` in `.env` and keep the profile's `EXAMPLE_SELECTION`, and every route then requires that token. With `EXAMPLE_SELECTION=all`, no Live route is served. To serve the routes without a token, for example on a trusted network, set `LIVE_ENABLED=true` instead. Anyone who can reach the server by an IP address, `localhost`, or a host name in `allowed_hosts` can then use them. For details, refer to [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
     >
-    > **Note:** The `frontend-backend-live` profiles connect the backend LLM directly by default. To use another backend adapter, set `core.backend.adapter` in the `config` block of the `frontend-backend-live` entry in `examples_registry.yaml`, for example to `llm-agent` for the backend LLM agent, together with `core.delegation.result_format: speak_display`, and restart the app service. For the adapters, refer to [Choose a Backend Adapter](../src/examples/frontend_backend_live/README.md#choose-a-backend-adapter), and for connecting an agent such as Hermes, refer to [Connect an Agent Harness](how-to/connect-an-agent-harness.md).
+    > **Note:** The `frontend-backend-live` profiles connect the backend LLM directly by default. To use another backend adapter, set `core.backend.adapter` in the `config` block of the `frontend-backend-live` entry in `examples_registry.yaml`, for example to `llm-agent` for the backend LLM agent, together with `core.delegation.result_format: speak_display`, and restart the app service. For the adapters, refer to [Choose a Backend Adapter](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#choose-a-backend-adapter), and for connecting an agent such as Hermes, refer to [Connect an Agent Harness](how-to/connect-an-agent-harness.md).
     >
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 
@@ -145,14 +145,14 @@ For development and debugging, you can run the server directly:
 2. Install dependencies and build the client:
 
     ```bash
-    uv sync --group dev
-    cd client && npm install && npm run build && cd ..
+    uv sync
+    cd clients/pipecat && npm install && npm run build && cd ../..
     ```
 
 3. Install local commit hooks:
 
     ```bash
-    uv run --project . --group dev pre-commit install
+    uv run pre-commit install
     ```
 
     The hooks run formatting and linting checks on staged files during `git commit`.
@@ -168,13 +168,13 @@ For development and debugging, you can run the server directly:
 5. Start the server:
 
     ```bash
-    uv run python src/server.py --host 0.0.0.0 --port 7860
+    uv run nva-pipecat --host 0.0.0.0 --port 7860
     ```
 
     To serve plain HTTP instead of HTTPS, set `PIPELINE_TLS=false` in `.env` or prefix the command:
 
     ```bash
-    PIPELINE_TLS=false uv run python src/server.py --host 0.0.0.0 --port 7860
+    PIPELINE_TLS=false uv run nva-pipecat --host 0.0.0.0 --port 7860
     ```
 
     Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `selection` field to choose what the UI exposes, then start the server normally. The server has no example-selection CLI flag. Pipeline options such as `--prompt-file` remain available.

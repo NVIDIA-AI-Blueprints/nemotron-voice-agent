@@ -5,11 +5,11 @@
       "id": "nemotron-voice-agent-upgrade-pipecat-explicit-range",
       "prompt": "Upgrade pipecat-ai from 1.7.0 to 1.9.0 in this repository.",
       "expected_skill": "nemotron-voice-agent-upgrade-pipecat",
-      "expected_output": "Reads the pipecat-ai release notes for every release in the 1.7.0..1.9.0 range (and each pipecat* subpackage's notes), scans pyproject.toml/uv.lock and client/package.json, implements the migration per example, and runs the gap-analysis loop until clean.",
+      "expected_output": "Reads the pipecat-ai release notes for every release in the 1.7.0..1.9.0 range (and each pipecat* subpackage's notes), scans pyproject.toml/uv.lock and clients/pipecat/package.json, implements the migration per example, and runs the gap-analysis loop until clean.",
       "assertions": [
         "Loaded nemotron-voice-agent-upgrade-pipecat/SKILL.md and ran the phases in order.",
         "Read release notes for every release in the 1.7.0..1.9.0 range before editing.",
-        "Scanned both the Python (pyproject.toml/uv.lock) and client (client/package.json) dependency surfaces.",
+        "Scanned both the Python (pyproject.toml/uv.lock) and client (clients/pipecat/package.json) dependency surfaces.",
         "Iterated the gap-analysis loop until zero gaps and gated on uv sync, ruff, and pytest."
       ]
     },
@@ -28,10 +28,10 @@
       "id": "nemotron-voice-agent-upgrade-pipecat-server-client-lockstep",
       "prompt": "Bump Pipecat and its JavaScript client packages together and keep the RTVI contract intact.",
       "expected_skill": "nemotron-voice-agent-upgrade-pipecat",
-      "expected_output": "Upgrades the Python pipecat-ai and the @pipecat-ai/* client packages in lockstep, migrates client/src RTVI usage, and gates on npm lint+build alongside the Python validation.",
+      "expected_output": "Upgrades the Python pipecat-ai and the @pipecat-ai/* client packages in lockstep, migrates clients/pipecat/src RTVI usage, and gates on npm lint+build alongside the Python validation.",
       "assertions": [
         "Upgraded the Python server and @pipecat-ai/* client packages in lockstep for the RTVI contract.",
-        "Discovered the client packages from client/package.json rather than assuming which exist.",
+        "Discovered the client packages from clients/pipecat/package.json rather than assuming which exist.",
         "Gated on npm lint+build in addition to the Python checks."
       ]
     },

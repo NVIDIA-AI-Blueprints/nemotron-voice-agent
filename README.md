@@ -89,13 +89,48 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 
 | Example | Description | When to use | Supported Deployment Profiles |
 |---------|-------------|-------------|--------------------|
-| [Generic Assistant](src/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron streaming ASR by default, optional whole-turn Transcribe ASR (server recipe only), Nemotron LLM, and Magpie TTS. Optional speaker labels isolate the first speaker or label a multi-speaker conversation. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
-| [Multilingual Assistant](src/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. Optional Transcribe ASR (server recipe only). | Use for non-English and multi-language voice agents. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
-| [Nemotron Omni Assistant](src/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
-| [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
-| [Frontend/Backend Live](src/examples/frontend_backend_live/README.md) | A talker decides on every turn whether to speak, delegate, or wait (the Bluebird Cafe ordering assistant as the reference). Delegated work runs on the backend that you select: the backend LLM, an LLM agent, or an external agent such as Hermes. Clients can also connect through live sessions at `/v1/live`. | Put a routing talker in front of any tool-using backend or agent runtime, and swap either side without changing the pipeline. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Generic Assistant](src/nemotron_voice_agent/pipecat/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron streaming ASR by default, optional whole-turn Transcribe ASR (server recipe only), Nemotron LLM, and Magpie TTS. Optional speaker labels isolate the first speaker or label a multi-speaker conversation. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
+| [Multilingual Assistant](src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. Optional Transcribe ASR (server recipe only). | Use for non-English and multi-language voice agents. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
+| [Nemotron Omni Assistant](src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Nemotron Omni Assistant Subagents](src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
+| [Frontend/Backend Live](src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) | A talker decides on every turn whether to speak, delegate, or wait (the Bluebird Cafe ordering assistant as the reference). Delegated work runs on the backend that you select: the backend LLM, an LLM agent, or an external agent such as Hermes. Clients can also connect through live sessions at `/v1/live`. | Put a routing talker in front of any tool-using backend or agent runtime, and swap either side without changing the pipeline. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 
 > **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. Each linked example README lists its default models by profile. The examples can be extended with other hardware configurations or models. Those configurations are not included by default.
+
+---
+
+## 🗂️ Repository Layout
+
+Each framework has its own folder in the code, the clients, the Docker files, and the tests.
+
+```text
+nemotron-voice-agent/
+├── pyproject.toml, uv.lock          one Python project, with a dependency group per framework
+├── docker-compose.yml               every Compose profile of every framework
+├── .env.example                     one environment file, with a section per framework
+├── services.yaml, settings.yaml     model catalog and service settings, shared by all frameworks
+├── examples_registry.yaml           the examples of each framework
+├── src/nemotron_voice_agent/
+│   ├── core/                        code that every framework uses, such as the service catalog loader
+│   ├── sidecars/                    code that runs inside the model containers, such as the vLLM Realtime server
+│   ├── pipecat/
+│   │   ├── runtime/                 server, gateways, and tracing (`nva-pipecat`)
+│   │   ├── shared/                  code that several Pipecat examples use
+│   │   └── examples/                one folder per Pipecat example
+│   └── livekit/
+│       ├── runtime/                 LiveKit server credentials and phone (SIP) config
+│       └── examples/                one folder per LiveKit example (`nva-livekit`)
+├── clients/{pipecat,livekit}/       browser clients
+├── docker/
+│   ├── pipecat/, livekit/           Dockerfile and Compose file of each framework
+│   └── sidecars/                    model services that every framework reuses
+└── tests/
+    ├── unit/{core,sidecars,pipecat,livekit}/
+    ├── integration/pipecat/
+    └── evals/pipecat/
+```
+
+To work on the code, run `uv sync` once from the repository root. It installs both frameworks into one `.venv`. Then start the Pipecat server with `uv run nva-pipecat`. The LiveKit example runs with Docker Compose, as its [README](src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md) describes.
 
 ---
 

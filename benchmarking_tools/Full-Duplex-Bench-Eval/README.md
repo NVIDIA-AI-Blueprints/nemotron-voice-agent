@@ -5,7 +5,7 @@ Batch client for [Full-Duplex-Bench](https://github.com/DanielLin94144/Full-Dupl
 ## Install
 
 This tool reuses the repo's root environment — no separate venv required.
-Dependencies live in the `benchmark` group of the root `pyproject.toml`.
+Dependencies live in the `benchmark` group of `pyproject.toml`.
 From the **repository root**:
 
 ```bash
@@ -17,7 +17,7 @@ uv sync --group benchmark
 From the repo root (see [Configuration Guide](../../docs/02-configuration-guide.md) for `.env` and example-local service catalogs):
 
 ```bash
-PIPELINE_TLS=false uv run python src/server.py
+PIPELINE_TLS=false uv run nva-pipecat
 ```
 
 Defaults to `http://localhost:7860`. Set `PIPELINE_TLS=true` or unset it to use HTTPS on the same port.

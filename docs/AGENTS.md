@@ -108,7 +108,7 @@ Style Guide above.
   READMEs aligned with checked-in benchmark procedures and published evidence.
 - Use `docs/05-best-practices.md` for production guidance and
   `docs/06-troubleshooting.md` for symptoms, causes, and verified resolutions.
-- Keep each `src/examples/<example>/README.md` aligned with that example's
+- Keep each `src/nemotron_voice_agent/pipecat/examples/<example>/README.md` aligned with that example's
   pipeline, prompts, service catalogs, supported transports, and deployment
   profiles.
 
@@ -116,15 +116,15 @@ Style Guide above.
 
 - Verify the example list, identifiers, transports, and defaults in
   `examples_registry.yaml`.
-- Verify pipeline behavior in `src/examples/<example>/pipeline.py` and shared
-  behavior in `src/examples/shared/` and `src/server.py`.
+- Verify pipeline behavior in `src/nemotron_voice_agent/pipecat/examples/<example>/pipeline.py` and shared
+  behavior in `src/nemotron_voice_agent/pipecat/shared/` and `src/nemotron_voice_agent/pipecat/runtime/server.py`.
 - Verify prompt configuration in the example-local `prompts.yaml` and service
   configuration in the root `services.yaml` and `settings.yaml`.
 - Verify Compose profiles, service names, ports, image tags, environment
   variables, and hardware placement in `docker-compose.yml`, `docker/`, and
   `.env.example`.
 - Verify Python and client dependencies in `pyproject.toml`, `uv.lock`,
-  `client/package.json`, and `client/package-lock.json`.
+  `clients/pipecat/package.json`, and `clients/pipecat/package-lock.json`.
 - Preserve the relative-link style used by the existing Markdown files. When
   adding or renaming a page, update `README.md`,
   `docs/02-configuration-guide.md`, and other indexes that should expose it.
@@ -137,7 +137,7 @@ This repository does not configure a dedicated documentation renderer or
 Markdown link checker. For documentation-only changes:
 
 1. Run
-   `uv run --project . --group dev pre-commit run --files <changed-files>` on
+   `uv run pre-commit run --files <changed-files>` on
    every changed file.
 2. Inspect changed relative links, anchors, commands, and referenced paths.
 3. Run `git diff --check`.

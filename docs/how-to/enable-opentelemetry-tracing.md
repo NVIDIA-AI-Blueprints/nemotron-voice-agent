@@ -18,7 +18,7 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
     docker compose --profile generic-assistant/server --profile tracing up -d
     ```
 
-    If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker/docker-compose.phoenix.yaml` and included by the root compose file) exposes:
+    If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker/sidecars/docker-compose.phoenix.yaml` and included by the root compose file) exposes:
     - **Port 6006**: Phoenix UI
     - **Port 4317**: OTLP gRPC collector
 

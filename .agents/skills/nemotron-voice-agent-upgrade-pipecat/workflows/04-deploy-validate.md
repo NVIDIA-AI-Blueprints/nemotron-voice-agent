@@ -14,9 +14,9 @@ cost: `generic-assistant` (fast) → `omni-assistant`, `omni-assistant-subagents
 
 ```bash
 test -f .env || cp .env.example .env   # NVIDIA_API_KEY
-uv sync --dev --group harness
+uv sync --locked
 uv run <entrypoint>                     # discover via EXAMPLE_SELECTION; confirm pipeline builds + binds
-cd client && npm ci && npm run build    # client must compile against the bumped @pipecat-ai/* + RTVI APIs
+cd clients/pipecat && npm ci && npm run build    # client must compile against the bumped @pipecat-ai/* + RTVI APIs
 ```
 
 Watch for server import/transport/runner/RTVI-setup errors and client `tsc`/build errors on renamed RTVI APIs.
@@ -34,7 +34,7 @@ Add `--profile tracing` for spans. Validate a websocket/on-prem path too if tran
 
 ## Step 4: Live session loop
 
-Per example (browser `client/` or benchmarking harness):
+Per example (browser `clients/pipecat/` or benchmarking harness):
 
 - **Connect**: start a WebRTC session and confirm the transport handshake (most version-sensitive: SmallWebRTC /
   serializer / runner).

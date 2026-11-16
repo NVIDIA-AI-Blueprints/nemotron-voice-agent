@@ -12,7 +12,7 @@ on:
       manifest:
         description: "Pipecat eval manifest to run"
         required: true
-        default: "tests/pipecat_evals/service/cloud_tts_manifest.yaml"
+        default: "tests/evals/pipecat/service/cloud_tts_manifest.yaml"
       scenario:
         description: "Optional single scenario name"
         required: false
@@ -43,9 +43,6 @@ jobs:
     runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 180
-
-    env:
-      PYTHONPATH: src
 
     steps:
       - name: Checkout repository
@@ -124,7 +121,7 @@ jobs:
 
       - name: Run Pipecat service evals
         env:
-          SERVICE_EVAL_MANIFEST: ${{ github.event.inputs.manifest || 'tests/pipecat_evals/service/cloud_tts_manifest.yaml' }}
+          SERVICE_EVAL_MANIFEST: ${{ github.event.inputs.manifest || 'tests/evals/pipecat/service/cloud_tts_manifest.yaml' }}
           SERVICE_EVAL_SCENARIO: ${{ github.event.inputs.scenario || '' }}
           SERVICE_EVAL_TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds || '360' }}
           SERVICE_EVAL_RETRIES: ${{ github.event.inputs.retries || '2' }}
@@ -142,7 +139,7 @@ jobs:
             args+=(--scenario "$SERVICE_EVAL_SCENARIO")
           fi
 
-          uv run --group eval python tests/pipecat_evals/service/run_cloud_tts_evals.py "${args[@]}"
+          uv run --group eval python tests/evals/pipecat/service/run_cloud_tts_evals.py "${args[@]}"
 
       - name: Collect local Omni NIM logs
         if: always() && (github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_'))

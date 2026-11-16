@@ -24,12 +24,12 @@ For Docker Compose runs, recreate the app service so that it reads the new `.env
 docker compose --profile <recipe> up -d <app-service>
 ```
 
-The shipped examples already create and wire the shared recorder, so the `.env` settings are enough to enable capture for those examples. To add the recorder to a **new custom example**, mirror [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
+The shipped examples already create and wire the shared recorder, so the `.env` settings are enough to enable capture for those examples. To add the recorder to a **new custom example**, mirror [`src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py`](../../src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
 
 1. Import the helper:
 
     ```python
-    from examples.shared.audio_recorder import create_audio_recorder
+    from nemotron_voice_agent.pipecat.shared.audio_recorder import create_audio_recorder
     ```
 
 2. Create the recorder and add it to the pipeline. `create_audio_recorder()` returns `None` when both ASR and TTS dump flags are off, so it stays a no-op until enabled:
