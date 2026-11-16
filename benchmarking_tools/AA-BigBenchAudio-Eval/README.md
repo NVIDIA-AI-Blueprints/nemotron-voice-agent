@@ -7,7 +7,7 @@ Tools for **[Big Bench Audio](https://huggingface.co/datasets/ArtificialAnalysis
 - **Python 3.12+** recommended, **ffmpeg** (MP3→WAV in `speech-inference.py`).
 
 This tool reuses the repo's root environment — no separate venv required.
-Dependencies live in the `benchmark` group of the root `pyproject.toml`.
+Dependencies live in the `benchmark` group of `pyproject.toml`.
 From the **repository root**:
 
 ```bash
@@ -35,7 +35,7 @@ Complete [Download](#download) first so `./datasets/bigbench_audio` (or your cho
 Configure the voice agent ([`.env`](../../.env.example) and the root `services.yaml`), then start the API from the **nemotron-voice-agent repo root**:
 
 ```bash
-PIPELINE_TLS=false uv run python src/server.py
+PIPELINE_TLS=false uv run nva-pipecat
 ```
 
 Listens on `http://localhost:7860`. Set `PIPELINE_TLS=true` or unset it to use HTTPS on the same port.

@@ -21,7 +21,7 @@ and cite the `source_url`.
 > B. Per symbol, check the import path, class/constructor/`*Settings` names and types, frame names and payload
 > fields in `process_frame`/`push_frame`, `FrameProcessor` lifecycle and direction, turn/VAD/smart-turn params,
 > `Pipeline`/`PipelineWorker`/`PipelineParams` args, and transport/serializer/runner arg types.
-> C. Frame & RTVI consumption chains: producer and consumer agree on the new shape, and RTVI matches `client/`.
+> C. Frame & RTVI consumption chains: producer and consumer agree on the new shape, and RTVI matches `clients/pipecat/`.
 > D. Example-specific: `omni_assistant` (smart-turn, user-mute, multimodal), `omni_assistant_subagents` (its
 > companion-package symbols resolve to their new home per the change inventory, either the companion API or
 > in-core `pipecat.*`),
@@ -33,15 +33,15 @@ and cite the `source_url`.
 > `adapter/serializer.py`, and `LivePeer` and its `CONNECTION_MEMBERS` in `adapter/connection.py`), and dead code.
 > E. Report `✅ PASS: {what}` or `❌ GAP: {what} — repo has X, new uses Y — File:Symbol`.
 
-**Cross-cutting** (one agent): shared plumbing (`src/examples/shared/`), `src/server.py` wiring,
+**Cross-cutting** (one agent): shared plumbing (`src/nemotron_voice_agent/pipecat/shared/`), `src/nemotron_voice_agent/pipecat/runtime/server.py` wiring,
 `Nvidia{LLM,STT,TTS}Service`+`*Settings`, `turns.*`+`audio.turn.smart_turn.*`, all `frames.frames` imports,
 extras + every dependency change (bump/rename/removed-if-folded-in) in `pyproject.toml`/`uv.lock`, dead imports
 (`ruff` F401/F811). Explicitly validate `NvidiaWordTTSService` and the custom Omni multimodal service against
 their upgraded parent classes, including overridden lifecycle methods, settings, emitted frames, and private
 compatibility contracts. Report PASS/GAP.
 
-**Client** (one agent): every `@pipecat-ai/*` import in `client/src/**` resolves, RTVI usage (events, messages,
-providers/hooks, transport setup) matches the renamed client APIs from the notes, and `client/package.json` versions
+**Client** (one agent): every `@pipecat-ai/*` import in `clients/pipecat/src/**` resolves, RTVI usage (events, messages,
+providers/hooks, transport setup) matches the renamed client APIs from the notes, and `clients/pipecat/package.json` versions
 are RTVI-compatible with the target server. Report PASS/GAP.
 
 ## Step 2: Triage
@@ -58,17 +58,17 @@ Deduplicate, classify BREAKING (import/runtime error, wrong behavior) vs NON-BRE
 
 ```bash
 # Import smoke (real paths)
-uv run python -c "import src.server"
-uv run python -c "from src.examples.generic import pipeline; from src.examples.multilingual import pipeline"
-uv run python -c "from src.examples.omni_assistant import pipeline"
-uv run python -c "from src.examples.omni_assistant_subagents import pipeline"
-PYTHONPATH=src uv run python -c "from examples.frontend_backend_live import pipeline"
+uv run python -c "import nemotron_voice_agent.pipecat.runtime.server"
+uv run python -c "from nemotron_voice_agent.pipecat.examples.generic import pipeline; from nemotron_voice_agent.pipecat.examples.multilingual import pipeline"
+uv run python -c "from nemotron_voice_agent.pipecat.examples.omni_assistant import pipeline"
+uv run python -c "from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents import pipeline"
+uv run python -c "from nemotron_voice_agent.pipecat.examples.frontend_backend_live import pipeline"
 # Lint (CI parity)
 uv run ruff format --check . && uv run ruff check .
 # Tests
-set +e; uv run pytest tests/unit -x -q > /tmp/pytest.log 2>&1; status=$?; head -100 /tmp/pytest.log; exit $status
+set +e; uv run pytest tests/unit/pipecat -x -q > /tmp/pytest.log 2>&1; status=$?; head -100 /tmp/pytest.log; exit $status
 # Client (CI parity) — tsc catches RTVI API renames, eslint catches the rest
-cd client && npm ci && npm run lint && npm run build
+cd clients/pipecat && npm ci && npm run lint && npm run build
 ```
 
 `ImportError`/`AttributeError` or a client `tsc`/`eslint` error = missed gap → feed back into the loop. Test

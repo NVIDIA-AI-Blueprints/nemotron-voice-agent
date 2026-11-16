@@ -14,7 +14,7 @@ Autonomously migrate this repo to a new `pipecat-ai` version. Repo root is the w
 
 ## When to Use This Skill
 
-Use this skill to migrate this repository to a new `pipecat-ai` version. It reads the release notes for every release in range, diffs old vs new across the Python (`pyproject.toml`/`uv.lock`) and client (`client/package.json`) surfaces, updates every example pipeline and Pipecat call site in lockstep, and runs the gap-analysis loop until validation is clean.
+Use this skill to migrate this repository to a new `pipecat-ai` version. It reads the release notes for every release in range, diffs old vs new across the Python (`pyproject.toml`/`uv.lock`) and client (`clients/pipecat/package.json`) surfaces, updates every example pipeline and Pipecat call site in lockstep, and runs the gap-analysis loop until validation is clean.
 
 Do not use this skill to deploy the stack or change `.env`, catalogs, or prompts (use `nemotron-voice-agent-deploy`), or to bump non-Pipecat dependencies.
 
@@ -35,7 +35,7 @@ package and reads each one's own release notes:
 
 - **Server (Python)** in `pyproject.toml`/`uv.lock`: every `pipecat*` dependency (for example, `pipecat-ai-subagents`,
   `pipecat-ai-flows`, …).
-- **Client (npm)** in `client/package.json`: every `@pipecat-ai/*` dependency (for example, `client-js`, `client-react`,
+- **Client (npm)** in `clients/pipecat/package.json`: every `@pipecat-ai/*` dependency (for example, `client-js`, `client-react`,
   `*-transport`, …).
 
 Extras and every dependency change are derived from these notes and the lockfiles. Nothing about specific
@@ -71,15 +71,15 @@ signatures, trust the actual installed or new source. Use the MCP for intent and
 - **Generic**: works for any transition. Discover changes and hardcode nothing.
 - **Examples are the unit of work**: 5 examples (`generic`, `multilingual`, `omni_assistant`,
   `omni_assistant_subagents`, `frontend_backend_live`), each with its own `pipeline.py`. One
-  agent per example + one cross-cutting agent for `src/examples/shared/` and `src/server.py`.
+  agent per example + one cross-cutting agent for `src/nemotron_voice_agent/pipecat/shared/` and `src/nemotron_voice_agent/pipecat/runtime/server.py`.
 - **Custom service subclasses require parent-API review**: explicitly inspect
-  `src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and `SubagentsSpeakerOmniService` in
-  `src/examples/omni_assistant_subagents/subagents/speaker/agent.py`, which subclasses Pipecat's
+  `src/nemotron_voice_agent/pipecat/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and `SubagentsSpeakerOmniService` in
+  `src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/subagents/speaker/agent.py`, which subclasses Pipecat's
   `NvidiaOmniLLMService`. Diff their upstream parent services before validating overrides, lifecycle methods,
   settings, frames, and private compatibility contracts.
 - **Server + client move together (RTVI contract)**: the RTVI wire protocol couples the Python server to the
-  `@pipecat-ai/*` client packages, so they must be upgraded in lockstep. Bump `client/package.json` to versions
-  compatible with the target `pipecat-ai`, migrate `client/src/` RTVI usage (renamed events/messages), and gate
+  `@pipecat-ai/*` client packages, so they must be upgraded in lockstep. Bump `clients/pipecat/package.json` to versions
+  compatible with the target `pipecat-ai`, migrate `clients/pipecat/src/` RTVI usage (renamed events/messages), and gate
   on `npm` lint+build. Discover the client packages and do not assume which exist.
 - **Iterative convergence**: gap analysis loops until a pass finds zero gaps.
 - **Validation gates**: `uv sync`, import smoke tests, `ruff`, `pytest`, Compose deploy. Human input only for

@@ -4,7 +4,7 @@ Use only for `*/single-gpu`. Skip for cloud and `*/server`.
 
 Auth is in `../SKILL.md`. Use `HF_TOKEN` only. Do not require `NVIDIA_API_KEY` or `docker login nvcr.io`.
 
-Generic, Multilingual, Omni, and Frontend/Backend cover compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, deploy `omni-assistant-subagents` (cloud). Orin-class Jetson is unsupported. The Lightning compose file (`docker/docker-compose.nemotron35-lightning.yaml`) and Omni compose file (`docker/docker-compose.nemotron3-omni.yaml`) detect product and compute capability. Speech sidecars live in `docker/docker-compose.nemo-speech-cpp.yaml`.
+Generic, Multilingual, Omni, and Frontend/Backend cover compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, deploy `omni-assistant-subagents` (cloud). Orin-class Jetson is unsupported. The Lightning compose file (`docker/sidecars/docker-compose.nemotron35-lightning.yaml`) and Omni compose file (`docker/sidecars/docker-compose.nemotron3-omni.yaml`) detect product and compute capability. Speech sidecars live in `docker/sidecars/docker-compose.nemo-speech-cpp.yaml`.
 
 ## Speech GGUFs
 
@@ -58,7 +58,7 @@ gpu_memory_utilization =
 
 ### 4. Compare the Budget with the Recipe
 
-Compare that budget with the vLLM recipe: `docker/docker-compose.nemotron35-lightning.yaml` for cascaded examples, `docker/docker-compose.nemotron3-omni.yaml` for Omni. For Bolt E4B, use `docker/docker-compose.nemotron35-bolt-e4b.yaml`, which needs at least 24 GiB usable after `VLLM_VRAM_HEADROOM_MIB`. If the automatic plan leaves the wrong reserve for this host, set only the supported `.env` controls: `VLLM_VRAM_HEADROOM_MIB` or, when an explicit fraction is required, `VLLM_GPU_MEMORY_UTILIZATION`. If the model does not fit with safe headroom, use cloud.
+Compare that budget with the vLLM recipe: `docker/sidecars/docker-compose.nemotron35-lightning.yaml` for cascaded examples, `docker/sidecars/docker-compose.nemotron3-omni.yaml` for Omni. For Bolt E4B, use `docker/sidecars/docker-compose.nemotron35-bolt-e4b.yaml`, which needs at least 24 GiB usable after `VLLM_VRAM_HEADROOM_MIB`. If the automatic plan leaves the wrong reserve for this host, set only the supported `.env` controls: `VLLM_VRAM_HEADROOM_MIB` or, when an explicit fraction is required, `VLLM_GPU_MEMORY_UTILIZATION`. If the model does not fit with safe headroom, use cloud.
 
 ### 5. Verify the Warm Stack
 
@@ -78,7 +78,7 @@ Lightning vLLM health: `curl -f http://localhost:18000/health`. The same server 
 
 The Bolt E4B command scales Lightning to zero, so port `18000` does not answer. Bolt E4B vLLM health: `curl -f http://localhost:18004/health`.
 
-Omni examples use the hardware selection in `docker/docker-compose.nemotron3-omni.yaml`. Omni vLLM health: `curl -f http://localhost:8002/health`.
+Omni examples use the hardware selection in `docker/sidecars/docker-compose.nemotron3-omni.yaml`. Omni vLLM health: `curl -f http://localhost:8002/health`.
 
 ## Failures
 

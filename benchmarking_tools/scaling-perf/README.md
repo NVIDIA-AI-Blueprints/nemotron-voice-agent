@@ -51,7 +51,7 @@ root `benchmark` dependency group (shared by every tool under
    Docker Compose, because `benchmark.py` and `simulate_concurrency.sh` run
    on the host, not inside the app container.
 
-2. Start the voice-agent server ([Docker compose](../../docs/01-getting-started.md) or `uv run python src/server.py`).
+2. Start the voice-agent server ([Docker compose](../../docs/01-getting-started.md) or `uv run nva-pipecat`).
 3. Add WAV files into `dataset/`. The benchmark cycles through them as the simulated user's utterances each turn. Prepare each file so the benchmark can time turns correctly:
 
    - **Record the query or reuse existing audio**, using generic queries or ones that match your specific use case.
@@ -62,7 +62,7 @@ root `benchmark` dependency group (shared by every tool under
    If you do not trim the trailing silence, the client-side end-to-end latency is lower because the client keeps waiting through that silence before it starts measuring. The client-side E2E numbers are then wrong, but the **RTVI-based, server-reported metrics stay reliable** (`server_e2e`, `asr_ttfb`, `tts_ttfb`, `llm_ttfat`, and `llm_processing_time`) because they use server-side pipeline events rather than the end of the file. Refer to [What it measures](#what-it-measures).
 
 `simulate_concurrency.sh` auto-dispatches `benchmark.py` through `uv run`
-when the root `pyproject.toml` is detected, so the commands below work
+when `pyproject.toml` is detected, so the commands below work
 straight from a fresh `uv sync --group benchmark`.
 
 ### Realtime Endpoint

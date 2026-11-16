@@ -187,4 +187,4 @@ top-level event type or duplicate these values in `session.nvidia`.
 - Pipeline barge-in (`InterruptionFrame`) cancels the active Realtime response even when `TTSStopped` never arrives.
 - Non-empty `response.create.response` overrides return `unsupported_response_override`; omit the field or send `{}`.
 
-Run `RUN_REALTIME_COMPAT=1 uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v` for a live check. Refer to [`tests/integration/README.md`](../../tests/integration/README.md) for setup.
+Run `RUN_REALTIME_COMPAT=1 uv run pytest tests/integration/pipecat/test_realtime_openai_sdk_compat.py -v` for a live check. Refer to [`tests/integration/pipecat/README.md`](../../tests/integration/pipecat/README.md) for setup.

@@ -5,32 +5,39 @@ description = "End-to-end voice agent blueprint powered by NVIDIA Nemotron ASR, 
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.15.0",
     "python-dotenv>=1.2.2",
     "loguru>=0.7.3",
     "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+nva-pipecat = "nemotron_voice_agent.pipecat.runtime.server:main"
+nva-livekit = "nemotron_voice_agent.livekit.examples.generic_assistant.agent:main"
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nemotron_voice_agent"]
+
+[dependency-groups]
+pipecat = [
+    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.15.0",
     "opentelemetry-exporter-otlp-proto-http>=1.40.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.40.0",
     "langchain-nvidia-ai-endpoints>=1.2.1",
     "imageio-ffmpeg>=0.5.1",
 ]
-
-# Force patched versions for known CVEs
-[tool.uv]
-override-dependencies = [
-    "cryptography>=50.0.0",
-    "idna>=3.15",
-    "starlette>=1.0.1",
-    "protobuf>=6.33.6",
-    "langchain-core>=1.4.1",
-    "uuid-utils>=0.16.0",
-    "pillow>=12.3.0",
-    "nvidia-riva-client>=2.27.0,<3",
-    "multidict>=6.9.1,<7",
-    "urllib3>=2.8.0",
+livekit = [
+    "livekit-agents>=1.8.11,<2",
+    "livekit-plugins-silero>=1.8.11,<2",
+    "livekit-plugins-openai>=1.8.11,<2",
+    # TEMPORARY git pin: the NVIDIA Speech STT/TTS changes of livekit/agents#6706 are merged on main (Nov 12, 2026)
+    # but not yet in a PyPI release (livekit-plugins-nvidia 1.8.11 predates them). Replace this with
+    # "livekit-plugins-nvidia>=1.8.12" and remove [tool.uv.sources] when the next release ships.
+    "livekit-plugins-nvidia",
 ]
-
-[dependency-groups]
 dev = [
     "ruff>=0.15.6",
     "pre-commit>=4.0.0",
@@ -54,20 +61,47 @@ benchmark = [
     "huggingface-hub>=0.23.0",
 ]
 # The protocol packages of the Frontend/Backend Live harness backend adapter (`core.backend.adapter: harness`): Hermes
-# over ACP, tools over MCP. Imported only by src/examples/frontend_backend_live/delegation_core/backend/harness, and
-# installed in the app image. Install with:
-#   uv sync --group harness
+# over ACP, tools over MCP. Imported only by
+# src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/delegation_core/backend/harness.
 harness = [
     "agent-client-protocol==0.9.0",
     "mcp>=2.2.0",
 ]
 
+[tool.uv]
+default-groups = ["pipecat", "livekit", "harness", "dev"]
+# Force patched versions for known CVEs. The livekit-agents and silero overrides keep both on PyPI: uv applies the
+# livekit/agents workspace sources to the git NVIDIA plugin's own dependencies, which would pull them from git too, and
+# the silero model (silero_vad.onnx) is a Git LFS file there, so a git install gets a text pointer and the agent
+# crashes. Remove those two overrides together with the git source when livekit-plugins-nvidia 1.8.12 ships.
+override-dependencies = [
+    "cryptography>=50.0.0",
+    "idna>=3.15",
+    "starlette>=1.0.1",
+    "protobuf>=6.33.6",
+    "langchain-core>=1.4.1",
+    "uuid-utils>=0.16.0",
+    "pillow>=12.3.0",
+    "nvidia-riva-client>=2.27.0,<3",
+    "multidict>=6.9.1,<7",
+    "urllib3>=2.8.0",
+    "livekit-agents>=1.8.11,<2",
+    "livekit-plugins-silero>=1.8.11,<2",
+]
+
+[tool.uv.sources]
+livekit-plugins-nvidia = { git = "https://github.com/livekit/agents", subdirectory = "livekit-plugins/livekit-plugins-nvidia", rev = "b7c9e2d0872b2df10ae3f903d091ca331de8b3b7" }
+
 [tool.pytest.ini_options]
-# "." lets tests import shared doubles as tests.unit.<module>, also when run as `uv run pytest` (as CI does)
-pythonpath = ["src", "."]
+testpaths = ["tests"]
+# "." lets tests import shared doubles as tests.unit.<framework>.<module>
+pythonpath = ["."]
+# The frameworks reuse test file names, so pytest imports each test file by its path
+addopts = ["--import-mode=importlib"]
 
 [tool.ruff]
 line-length = 120
+src = ["src", "."]
 
 ###############################################################################
 # Linting Rules

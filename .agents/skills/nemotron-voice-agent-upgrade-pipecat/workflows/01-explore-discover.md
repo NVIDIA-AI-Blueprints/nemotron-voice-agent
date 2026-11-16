@@ -9,8 +9,8 @@ OLD (always inspectable):
   - pyproject.toml pinned spec: pipecat-ai[<extras>]==X.Y.Z
   - discover EVERY pipecat dependency on BOTH surfaces — don't assume which exist:
       grep -nE '^\s*"?pipecat[-_a-z0-9]*' pyproject.toml          # server: pipecat-ai + every pipecat-* subpackage
-      grep -nE '"@pipecat-ai/' client/package.json                # client: every @pipecat-ai/* npm package
-      then read server versions from uv.lock and client versions from client/package-lock.json (or node_modules)
+      grep -nE '"@pipecat-ai/' clients/pipecat/package.json                # client: every @pipecat-ai/* npm package
+      then read server versions from uv.lock and client versions from clients/pipecat/package-lock.json (or node_modules)
   - installed source = ground truth: .venv/lib/python3.12/site-packages/ (pipecat + every pipecat_* package)
 NEW (target pipecat-ai):
   - latest version + notes ALWAYS from https://github.com/pipecat-ai/pipecat/releases
@@ -48,7 +48,7 @@ For each package found in Step 1:
 - **Client `@pipecat-ai/*`** (e.g. `client-js`, `client-react`, `*-transport`): read each package's notes from
   its npm page (`npm view <pkg> versions`) and its GitHub repo (the JS client/transports live under
   `pipecat-ai/*` repos). The `pipecat-ai` server notes call out RTVI client-API renames explicitly (e.g.
-  event/message/provider renames). These are the client changes that must land in `client/src/`. Pick client
+  event/message/provider renames). These are the client changes that must land in `clients/pipecat/src/`. Pick client
   versions that match the RTVI protocol of the target server version.
 
 ### Extract per release (core + each subpackage)
@@ -58,7 +58,7 @@ transport/serializer handshake, RTVI shapes), extras changes, and **dependency c
 subpackage being renamed, removed, or folded into `pipecat-ai` core (if so, note the new in-core modules its
 functionality moved to).
 
-Then map each note to the repo (grep `src/` for the affected symbol) into the candidate table:
+Then map each note to the repo (grep `src/nemotron_voice_agent/pipecat/` for the affected symbol) into the candidate table:
 
 | Release | Note | Affected symbol | Used in repo? | Action |
 |---------|------|-----------------|---------------|--------|
@@ -133,14 +133,14 @@ Source of truth for all later phases.
 
 ### 4a: Structure (one Explore agent)
 
-Server: `src/examples/shared/` plumbing (`pipeline_utils.py`, `prewarm.py`, `audio_recorder.py`, text filters),
-`src/server.py` (runner/transport/serializer), each `src/examples/*/pipeline.py`, `pyproject.toml`/`uv.lock`
+Server: `src/nemotron_voice_agent/pipecat/shared/` plumbing (`pipeline_utils.py`, `prewarm.py`, `audio_recorder.py`, text filters),
+`src/nemotron_voice_agent/pipecat/runtime/server.py` (runner/transport/serializer), each `src/nemotron_voice_agent/pipecat/examples/*/pipeline.py`, `pyproject.toml`/`uv.lock`
 pins and extras, every `from pipecat*` import, and custom subclasses of
 `FrameProcessor`/`BaseUserMuteStrategy`/`BaseTextFilter`/`PipelineWorker`/`BaseWorker`.
 Always inspect custom service subclasses against their new parent implementations, especially
-`src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and
-`SubagentsSpeakerOmniService` in `src/examples/omni_assistant_subagents/subagents/speaker/agent.py`.
-Client: `client/package.json` `@pipecat-ai/*` deps, every `@pipecat-ai/*` import in `client/src/**`, and where
+`src/nemotron_voice_agent/pipecat/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and
+`SubagentsSpeakerOmniService` in `src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/subagents/speaker/agent.py`.
+Client: `clients/pipecat/package.json` `@pipecat-ai/*` deps, every `@pipecat-ai/*` import in `clients/pipecat/src/**`, and where
 RTVI is used (client init/transport setup, RTVI event/message handlers, providers/hooks). Note files for the
 change matrix.
 
