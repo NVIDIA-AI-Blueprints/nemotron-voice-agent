@@ -21,7 +21,7 @@ from benchmark_core import (
     ProtocolConnectionClosed,
     RunLogger,
 )
-from rtvi_transport import RTVIAudioFrame, RTVITransport, RTVITransportClosed
+from rtvi_transport import RTVIAudioFrame, RTVIStartupError, RTVITransport, RTVITransportClosed
 
 
 def categorize_processor(processor: str) -> str:
@@ -96,6 +96,15 @@ class RTVIClient(ProtocolClient):
             await self.transport.__aenter__()
         except RTVITransportClosed as exc:
             raise ProtocolConnectionClosed from exc
+        except RTVIStartupError as exc:
+            if self.diagnostics is not None:
+                self.diagnostics.add_error(
+                    str(exc),
+                    source="handshake",
+                    component=exc.detail.get("component", "unknown"),
+                    code=exc.detail.get("code"),
+                )
+            raise
         await self.logger.log(f"{self.stream_id} websocket connected")
         await self.logger.log(f"{self.stream_id} sent RTVI client-ready")
         return self
@@ -126,6 +135,8 @@ class RTVIClient(ProtocolClient):
     async def process_server_message(self, message: dict) -> None:
         if not isinstance(message, dict):
             return
+        if self.diagnostics is not None:
+            self.diagnostics.ingest(message)
         message_type = str(message.get("type", "unknown"))
         self.rtvi_messages.append({"timestamp": dt.datetime.now().isoformat(), "type": message_type, "data": message})
         await self.logger.log(f"{self.stream_id} RTVI message: {json.dumps(message, sort_keys=True)}")

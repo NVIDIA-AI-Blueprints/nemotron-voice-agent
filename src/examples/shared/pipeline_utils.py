@@ -87,7 +87,7 @@ def runner_protocol(runner_args: RunnerArguments) -> str:
 
 
 def with_realtime_observers(*observers, transport=None) -> list:
-    """Append the Realtime lifecycle observer when the transport speaks Realtime.
+    """Append optional performance diagnostics and Realtime lifecycle observers.
 
     Example::
 
@@ -96,6 +96,10 @@ def with_realtime_observers(*observers, transport=None) -> list:
     out = list(observers)
     if transport is None:
         return out
+    if parse_env_bool("SCALING_PERF_DIAGNOSTICS", False):
+        from examples.shared.perf_diagnostics import make_perf_diagnostics_observer
+
+        out.append(make_perf_diagnostics_observer(transport))
     from gateways.realtime.transport import realtime_lifecycle_observer
 
     realtime_obs = realtime_lifecycle_observer(transport)

@@ -20,7 +20,7 @@ import json
 import os
 import ssl
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import websockets
@@ -166,6 +166,7 @@ class RealtimeTransport:
         input_sample_rate: int = 16_000,
         output_sample_rate: int = DEFAULT_OUTPUT_RATE,
         verify_tls: bool = True,
+        on_event: Callable[[dict], None] | None = None,
     ):
         self.url = url
         self.api_key = api_key
@@ -174,6 +175,7 @@ class RealtimeTransport:
         self.input_sample_rate = int(input_sample_rate)
         self.output_sample_rate = int(output_sample_rate)
         self.verify_tls = verify_tls
+        self.on_event = on_event
         self.ws: Any = None
         self.events: list[dict[str, Any]] = []
         self._send_lock = asyncio.Lock()
@@ -223,6 +225,8 @@ class RealtimeTransport:
                 raise RealtimeProtocolError(f"expected a JSON object event, got {type(decoded).__name__}")
             event = decoded
 
+        if self.on_event is not None:
+            self.on_event(event)
         kind = str(event.get("type") or "")
         summary: dict[str, Any] = {"type": kind, "received_at": time.monotonic()}
         if kind == "response.output_audio.delta":

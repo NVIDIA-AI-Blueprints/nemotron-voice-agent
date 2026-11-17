@@ -16,7 +16,8 @@ from typing import Any
 import websockets
 from pipecat.frames.protobufs import frames_pb2
 from pipecat.processors.frameworks.rtvi import models as RTVI
-from websockets.exceptions import ConnectionClosed
+from pipecat.utils.security.redaction import redact_secrets
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,15 @@ class RTVIAudioFrame:
     audio: bytes
     sample_rate: int
     num_channels: int
+
+
+class RTVIStartupError(RuntimeError):
+    """Structured admission failure returned before the WebSocket handshake."""
+
+    def __init__(self, detail: dict):
+        """Preserve a sanitized provider readiness reason for the client report."""
+        self.detail = detail
+        super().__init__(redact_secrets(str(detail.get("message") or "WebSocket admission failed")))
 
 
 class RTVITransportClosed(Exception):
@@ -74,6 +84,15 @@ class RTVITransport:
             message = frames_pb2.MessageFrame(data=json.dumps(ready_payload))
             await self.websocket.send(frames_pb2.Frame(message=message).SerializeToString())
             return self
+        except InvalidStatus as exc:
+            await self.close()
+            try:
+                detail = json.loads(exc.response.body).get("error")
+            except (ValueError, AttributeError, TypeError):
+                detail = None
+            if isinstance(detail, dict):
+                raise RTVIStartupError(detail) from None
+            raise
         except Exception as exc:
             await self.close()
             if isinstance(exc, ConnectionClosed):
