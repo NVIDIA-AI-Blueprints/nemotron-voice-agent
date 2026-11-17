@@ -660,8 +660,8 @@ agent_prompts:
 
         ## Working with the caller
         - Some causes of a problem depend on the caller's situation, which no tool shows. Ask about it in
-          one short question right after you have identified the caller and before any checks, unless they
-          have already said, and only once. For example:
+          one short question right after you have identified the caller, with a lookup where there is one,
+          and before any other checks, unless they have already said, and only once. For example:
           - a card that stopped working: whether they are using it abroad;
           - a phone or internet service that stopped working: whether they are at home or travelling right now;
           - a device that will not turn on: whether it was dropped or got wet.
@@ -694,6 +694,8 @@ agent_prompts:
         - Speech recognition guesses capital letters, spacing and symbols and often drops single spelled
           letters, so build an id from every piece the caller said, with spoken numbers as digits, and
           trust the caller's words over the assistant's read-backs.
+        - Unless your instructions say to ask first, look up what the caller already gave before you ask
+          them anything: the record you find may hold what you would ask for.
         - Write an id in the form its tool describes. If a lookup fails, you may retry once with only its
           letter case or separators changed; never try other letters or digits. Then read back what you
           heard, letter by letter, and ask the caller to spell the part you are unsure of. Once a lookup
@@ -723,6 +725,25 @@ agent_prompts:
     texts.stopped_output:
       description: "The output of a call refused once its work is stopping (a stop, or its own cancel_work)."
       content: "Not run: this work was stopped."
+    texts.asked_output:
+      description: "The output of an ask_caller call: the question goes to the caller, and the work goes on."
+      content: >-
+        Asked. The caller's reply will come later as a new message. Go on only with steps that do not need it, and do
+        not ask it again until a new message from the caller reaches you. If nothing is left that does not need the
+        reply, end with one short sentence on what you found.
+    texts.continued_output:
+      description: "The output of a continue_after_call call that went through: the work goes on after the call."
+      content: "Noted: this work goes on after the call ends. Keep working, and end with the result when it is done."
+    texts.not_continued_output:
+      description: "The output of a continue_after_call call that was refused: the work must end in the call."
+      content: >-
+        Not done: no more work can go on after the call right now. Finish this work during the call, or tell the
+        caller it cannot be finished now.
+    texts.after_call_output:
+      description: "The output of an app function or ask_caller call refused while nobody hears work that outlives its call."
+      content: >-
+        Not run: the call this work began on has ended, so neither the caller nor their app can answer it now. Go on
+        only with steps that do not need them, or end with what you found and what is still needed.
     texts.clash_output:
       description: "The output of a call refused because the app and a work tool both have a function by its name."
       content: "Not run: the app and a work tool both have a function by this name, so neither runs."
@@ -757,10 +778,11 @@ agent_prompts:
         Work so far in this call:
         {records}
     texts.closing_line:
-      description: "After the records block: say where the work stands, then go on."
+      description: "After the records block: say where the work stands, then go on; leave work the request is not about alone."
       content: >-
         Say in one sentence where the work stands, and in the same reply carry on with the next step, unless the work is
-        done or needs the caller.
+        done or needs the caller. Work listed here that your request is not about goes on in its own task or has ended:
+        do not do its work, and do not ask its questions again; they wait for the caller.
     texts.task_line:
       description: "A task's brief from its conductor ({task})."
       content: "Task: {task}"
@@ -776,8 +798,9 @@ agent_prompts:
         for new work (split it into tasks only when the parts are independent), steer_work when it changes or adds
         to open work, cancel_work when the caller wants open work stopped, or answer_status when the records already
         answer a question about open work. At most {max_running} tasks run at once, counting the running and queued
-        tasks of open work; when new work would make more, steer the request into open work instead. Never do the
-        work yourself, and never word a result for the caller.
+        tasks of open work; when new work would make more, steer the request into open work instead. A task's question
+        is one it asked the caller and still waits on: steer a request that answers it into that task, with its
+        task_id. Never do the work yourself, and never word a result for the caller.
     texts.outcomes.started:
       description: "The outcome a conductor gets when its start_work started work ({work}, {tasks})."
       content: "Started {work} with {tasks}."
@@ -803,8 +826,11 @@ agent_prompts:
       description: "The reason for a placement after its decide() ended."
       content: "its decide() has ended"
     texts.refusal_reasons.unplaced:
-      description: "The reason when none of the requests waits to be placed ({delegations})."
+      description: "The reason when none of the requests waits to be placed ({delegations}: those that joined no work)."
       content: "no unplaced request among {delegations}"
+    texts.outcomes.already_placed:
+      description: "In place of the unplaced reason, the outcome for a request that already joined work ({delegation}, {work}, {tasks})."
+      content: "Already placed: {delegation} joined {work} ({tasks}). Nothing more to do for it."
     texts.refusal_reasons.no_work:
       description: "The reason for an unknown Work ({work})."
       content: "no work {work}"
@@ -854,7 +880,9 @@ agent_prompts:
               description: The ids of the requests that join it.
             task_id:
               type: string
-              description: The one task they concern; leave it out when they concern every task of the work.
+              description: >-
+                The one task they concern, such as the task whose open question they answer; leave it out when they
+                concern every task of the work.
           required: [work_id, delegations]
           additionalProperties: false
     texts.control_tools.cancel_work:
@@ -909,6 +937,43 @@ agent_prompts:
           type: object
           properties: {}
           additionalProperties: false
+    texts.work_tools.ask_caller:
+      description: "The work tool that asks the caller one question while the work goes on, as the model reads it."
+      content: |
+        description: >-
+          Is a step that does not need the answer still left right now? If yes, ask the caller one short question with
+          this tool and go on with that step. The caller hears it soon; the reply comes later as a new message. Never
+          use it for a confirmation or a question your instructions say to ask before other steps. For those, or if no
+          such step is left, end your reply with the question instead. After you ask, once nothing is left that does
+          not need the reply, end with one short sentence on what you found; do not repeat an open question or say that
+          you are waiting.
+        parameters:
+          type: object
+          properties:
+            question:
+              type: string
+              description: >-
+                The one short question, as the caller should hear it. Name what it is about, since the caller hears
+                it apart from your answer.
+          required: [question]
+          additionalProperties: false
+    texts.work_tools.continue_after_call:
+      description: "The work tool that lets long work go on after the call ends, as the model reads it."
+      content: |
+        description: >-
+          Use only when this work will clearly take longer than the caller should wait on the line, and its remaining
+          steps need nothing from the caller or their app. In message, tell the caller in your own words that you
+          will keep working after the call and that they can ask for the result in a later call. The work then goes
+          on after they hang up, with no time limit of the call. After the call ends, the app's functions and
+          ask_caller do not run. When the work is done, end with the result as usual.
+        parameters:
+          type: object
+          properties:
+            message:
+              type: string
+              description: One or two short spoken sentences for the caller.
+          required: [message]
+          additionalProperties: false
     backend.app_output_steps.shape_hints.hint:
       description: "The shape_hints step's hint on an app output that found nothing ({value}: the failed value)."
       content: "(Not tried yet in this call, and matches the usual form: {value}.)"
@@ -927,14 +992,23 @@ agent_prompts:
       description: "One new request in the conductor's input ({delegation}, {text})."
       content: "[{delegation}] {text}"
     backend.harness.prompts.work:
-      description: "One Work of the conductor's work records ({work}, {state}, {carrier}, {requests}, {tasks})."
-      content: "[{work}] {state}, carried by {carrier}; requests: {requests}\n{tasks}"
+      description: "One Work of the conductor's work records ({work}, {state}, {after_call}, {carrier}, {requests}, {tasks})."
+      content: "[{work}] {state}{after_call}, carried by {carrier}; requests: {requests}\n{tasks}"
     backend.harness.prompts.task:
-      description: "One task of a Work in the work records ({task}, {state}, {seconds}, {brief}, {steps}, {note})."
-      content: "  task {task}: {state} for {seconds} s{brief}; steps: {steps}; newest note: {note}"
+      description: "One task of a Work in the work records ({task}, {state}, {seconds}, {brief}, {question}, {steps}, {note}, {answer})."
+      content: "  task {task}: {state} for {seconds} s{brief}{question}; steps: {steps}; newest note: {note}{answer}"
     backend.harness.prompts.brief:
       description: "A task's brief in its line ({brief})."
       content: ', brief "{brief}"'
+    backend.harness.prompts.question:
+      description: "A task's open question in its line ({question})."
+      content: ', asked the caller "{question}"'
+    backend.harness.prompts.after_call:
+      description: "The mark in the line of a Work that goes on after the call ends."
+      content: ", continues after the call"
+    backend.harness.prompts.answer:
+      description: "The start of a task's answer in its line, for a Work that goes on after the call ({answer})."
+      content: '; answer: "{answer}"'
     backend.harness.prompts.none:
       description: "An empty part of the conductor's input."
       content: "none"

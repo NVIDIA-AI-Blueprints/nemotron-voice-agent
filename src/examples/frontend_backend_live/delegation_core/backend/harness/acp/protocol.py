@@ -53,4 +53,10 @@ class AcpProtocol:
     ) -> AcpClient:
         """Return a client for one runtime process; it connects nothing until ``open()``."""
         transport = self.transport.for_launch(launch, stop_grace_seconds=stop_grace_seconds)
-        return AcpClient(transport, self.agent, permission=permission, start_timeout_seconds=start_timeout_seconds)
+        return AcpClient(
+            transport,
+            self.agent,
+            permission=permission,
+            start_timeout_seconds=start_timeout_seconds,
+            stop_grace_seconds=stop_grace_seconds,
+        )

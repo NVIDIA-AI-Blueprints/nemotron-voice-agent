@@ -31,11 +31,12 @@ from tests.unit.delegation_core.harness.doubles import (
     PROMPTS,
     FakeBridge,
     FakeRuntime,
+    FakeTaskContext,
     scratch,
     until,
     vocabulary,
 )
-from tests.unit.delegation_core.helpers import CORE_SETTINGS, FakeTaskContext
+from tests.unit.delegation_core.helpers import CORE_SETTINGS
 
 EXTRA = "{}\n.*Extra inputs are not permitted"
 ENDPOINT = ModelEndpoint(model="scripted/model", base_url="http://127.0.0.1:1/v1", api_key="secret-key-value")
@@ -210,14 +211,18 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class Opener:
-    """Fake runtime processes as the adapter's ``opener`` opens real ones: one per role, or a new one at every open."""
+    """Fake runtime processes as the adapter's ``opener`` opens real ones: one per role, or a new one at every open.
 
-    def __init__(self, new_each_open: bool):
-        self.new_each_open, self.opened, self.runtimes = new_each_open, [], {}
+    ``closes``: their agent closes each session it retires.
+    """
+
+    def __init__(self, new_each_open: bool, closes: bool = False):
+        self.new_each_open, self.closes, self.opened, self.runtimes = new_each_open, closes, [], {}
 
     async def open(self, role):
         if self.new_each_open or role.name not in self.runtimes:
             self.opened.append(FakeRuntime())
+            self.opened[-1].client.closes = self.closes
             self.runtimes[role.name] = self.opened[-1]
         return self.runtimes[role.name]
 
@@ -225,12 +230,17 @@ class Opener:
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
     """An adapter of the source of ``block``: its opener opens its runtime processes, and a fake bridge its doors."""
 
-    async def make(self, block, *, new_each_open=True):
+    async def make(self, block, *, new_each_open=True, closes=False):
         source = build(block)
         self.adapter = source.new()
-        self.adapter.opener, self.adapter.bridge = Opener(new_each_open), FakeBridge()
+        self.adapter.opener, self.adapter.bridge = Opener(new_each_open, closes), FakeBridge()
         self.addAsyncCleanup(source.aclose)
         self.addAsyncCleanup(self.adapter.close)
+
+    def warm_door(self):
+        """Return the warm-up session's door, while the bridge serves it."""
+        (door,) = [door for door in self.adapter.bridge.doors.values() if door.name == "w1"]
+        return door
 
     async def test_the_warm_up_session_serves_nothing_and_retires(self):
         # The workers' process pays its cold first session/new at the session's start, not in the first task.
@@ -238,7 +248,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.adapter.conductor()
         workers = await self.adapter.shared(self.adapter.workers)
         (session,) = workers.client.sessions
-        (door,) = [door for door, _ in self.adapter.bridge.closed if door.name == "w1"]
+        door = self.warm_door()
         self.assertTrue(session.retired)
         self.assertEqual((workers.client.servers[0].name, door.tools()), ("w1", []))
         self.assertEqual([path.name for path in workers.client.folders[0].iterdir()], [".git"])
@@ -247,6 +257,27 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await until(lambda: "conductor" in runtimes and runtimes["conductor"].client.sessions)
         await asyncio.sleep(0.05)
         self.assertEqual(len(runtimes["conductor"].client.sessions), 1)
+
+    async def test_the_warm_up_sessions_door_is_served_until_the_adapter_closes(self):
+        # An agent that advertises no close, as Hermes, keeps the session's MCP server and pings it: a refused ping
+        # makes it reconnect, then pause that server. The caller leaving closes only the idle sessions' doors.
+        await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False)
+        self.adapter.conductor()
+        await self.adapter.shared(self.adapter.workers)
+        door = self.warm_door()
+        self.adapter.release_idle()
+        self.assertEqual((door.token in self.adapter.bridge.doors, door.retired), (True, False))
+        await self.adapter.close()
+        self.assertEqual((door.token in self.adapter.bridge.doors, door.retired), (False, True))
+
+    async def test_a_warm_up_session_its_agent_closes_has_its_door_closed_at_once(self):
+        await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False, closes=True)
+        self.adapter.conductor()
+        workers = await self.adapter.shared(self.adapter.workers)
+        (session,) = workers.client.sessions
+        self.assertTrue(session.retired)
+        (door,) = [door for door, _ in self.adapter.bridge.closed if door.name == "w1"]
+        self.assertEqual((door.token in self.adapter.bridge.doors, door.retired), (False, True))
 
     async def test_a_warm_up_session_that_fails_leaves_the_process_usable(self):
         await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False)
@@ -317,8 +348,40 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         session.say("m1", "Do", "ne.")
         session.end(1, usage={"totalTokens": 100})
         [event async for event in events]
-        self.assertEqual((self.adapter.kept.session, process.places, session.retired), (session, 0, False))
+        [kept] = self.adapter.pool.idle
+        self.assertEqual((kept.session, process.places, session.retired), (session, 0, False))
         await self.adapter.close()
-        self.assertIsNone(self.adapter.kept)
+        self.assertEqual(self.adapter.pool.idle, [])
         self.assertTrue(session.retired)
         self.assertIn(door, [closed for closed, _ in self.adapter.bridge.closed])
+
+    async def test_release_idle_retires_the_idle_sessions_and_pools_none_until_a_task_starts(self):
+        # The caller left: no task of the call is left to take a session. A later call's first task opens the pool.
+        await self.make({"command": ["/nonexistent/runtime"], "agent": "hermes"})
+        totals = iter(range(100, 1000, 100))
+
+        async def answer(run, events):
+            """Have the run's session answer, and return it."""
+            session = run.session
+            session.say("m1", "Do", "ne.")
+            session.end(session.last_prompt(), usage={"totalTokens": next(totals)})
+            [event async for event in events]
+            return session
+
+        tasks = [FakeTaskContext(declared=(), work_id=f"W{n}", task_id=f"W{n}.1") for n in (1, 2, 3)]
+        runs = [self.adapter.start(task) for task in tasks[:2]]
+        events = [run.events() for run in runs]
+        for each in events:
+            await anext(each)
+        idle = await answer(runs[0], events[0])
+        [kept] = self.adapter.pool.idle
+        self.adapter.release_idle()
+        self.assertEqual((idle.retired, self.adapter.pool.idle), (True, []))
+        late = await answer(runs[1], events[1])
+        [traced] = tasks[1].traced("harness.session_retired")
+        self.assertEqual((late.retired, self.adapter.pool.idle, traced["why"]), (True, [], "the pool closed"))
+        run = self.adapter.start(tasks[2])
+        events = run.events()
+        await anext(events)
+        later = await answer(run, events)
+        self.assertEqual([kept.session for kept in self.adapter.pool.idle], [later])

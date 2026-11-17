@@ -10,12 +10,24 @@ from collections.abc import Mapping
 from copy import deepcopy
 
 from examples.frontend_backend_live.delegation_core.im.input import is_user_message
+from examples.frontend_backend_live.delegation_core.items import input_item, is_message
 from examples.shared.ids import approx_tokens
 
 
 def starts_a_request(item: dict) -> bool:
     """Return whether an item opens a request: a user message, as every input and every brief begins with one."""
     return is_user_message(item)
+
+
+def with_ids(items: list[dict], key: str) -> list[dict]:
+    """Return a copy of ``items`` whose messages carry ids: ``key``, then ``key.2``, ``key.3`` ... in order.
+
+    Every task's view of the conversation knows an item by its id, or a call and its output by the call's id.
+    """
+    items = deepcopy(items)
+    for number, item in enumerate((item for item in items if is_message(item)), 1):
+        item["id"] = key if number == 1 else f"{key}.{number}"
+    return items
 
 
 def cut_output(item: dict, limit: int, marker: str) -> dict:
@@ -28,8 +40,8 @@ def cut_output(item: dict, limit: int, marker: str) -> dict:
 
 
 def item_size(item: dict) -> int:
-    """Return an item's estimated size in tokens, as the budget counts it."""
-    return approx_tokens(json.dumps(item))
+    """Return an item's estimated size in tokens, as the budget counts it: the input item a request sends of it."""
+    return approx_tokens(json.dumps(input_item(item)))
 
 
 def window_start(items: list[dict], sizes: list[int], budget: int) -> int:

@@ -8,12 +8,13 @@ from __future__ import annotations
 import copy
 import json
 import uuid
+from collections.abc import Collection
 from typing import Any
 
 from loguru import logger
 
 from gateways.realtime.audio import validate_session_audio_config
-from utils import _SLOT_AGNOSTIC_KEYS, _SLOT_CONFIG_KEYS, SESSION_CONFIG_KEYS
+from utils import _CATALOG_HYDRATION, _SLOT_AGNOSTIC_KEYS, _SLOT_CONFIG_KEYS, SESSION_CONFIG_KEYS
 
 DEFAULT_PIPELINE_MODE = "generic-assistant"
 DEFAULT_PROMPT_KEY = "generic_assistant_without_tools"
@@ -325,6 +326,15 @@ def map_session_update_to_flat_config(
 def nvidia_public_view(nvidia: dict[str, Any]) -> dict[str, Any]:
     """Return a client-safe ``session.nvidia`` object (no internal service endpoints)."""
     return {key: value for key, value in nvidia.items() if key in _NVIDIA_PUBLIC_KEYS}
+
+
+def unnamed_slot_ids(services: Collection[str]) -> dict[str, str]:
+    """Return each slot of ``services`` whose id key ``session.nvidia`` does not take, mapped to that id key."""
+    return {
+        slot: id_field
+        for id_field, slot, *_ in _CATALOG_HYDRATION
+        if slot in services and id_field not in _NVIDIA_SESSION_KEYS
+    }
 
 
 class RealtimeSession:

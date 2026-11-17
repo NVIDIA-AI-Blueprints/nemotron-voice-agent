@@ -50,7 +50,7 @@ class LlmConductor:
         self.memory = ConductorMemory(settings.memory_tokens)
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
-        """Place the new requests that the model's calls name; the IM's steer rule places any left.
+        """Place the new requests that the model's calls name; the IM's fallback rule places any left.
 
         A round that fails, times out or whose ``place`` raises is logged as ``conductor.failed``; only a cancel raises.
         """
@@ -85,8 +85,9 @@ class LlmConductor:
             "tools": self.vocabulary.conductor_tools(),
             "tool_choice": TOOL_CHOICE,
             "parallel_tool_calls": PARALLEL_TOOL_CALLS,
-            "max_output_tokens": self.settings.max_output_tokens_per_request * len(given.arrivals),
         }
+        if self.settings.max_output_tokens_per_request is not None:
+            payload["max_output_tokens"] = self.settings.max_output_tokens_per_request * len(given.arrivals)
         if self.settings.reasoning_effort is not None:
             payload["reasoning"] = {"effort": self.settings.reasoning_effort}
         return payload

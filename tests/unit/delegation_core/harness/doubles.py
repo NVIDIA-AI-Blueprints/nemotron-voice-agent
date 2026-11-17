@@ -29,7 +29,9 @@ from examples.frontend_backend_live.delegation_core.backend.harness.protocol imp
     ThoughtChunk,
 )
 from examples.frontend_backend_live.delegation_core.backend.harness.render import Renderer
+from examples.frontend_backend_live.delegation_core.backend.harness.sessions import SessionPool
 from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessSettings
+from tests.unit.delegation_core import helpers
 from tests.unit.delegation_core.helpers import CORE_SETTINGS, TEXTS
 
 # The shipped prompts and agent blocks: the prompts have no default, and neither has Hermes's command guard.
@@ -79,15 +81,37 @@ async def until(condition, timeout: float = 2.0) -> None:
             await asyncio.sleep(0.005)
 
 
+class FakeTaskContext(helpers.FakeTaskContext):
+    """The core's task double, with what the harness also reads: the thread its Work continues, its after-call mark.
+
+    Its history's messages carry ids, as the IM's do: by default one request, D1.
+    """
+
+    def __init__(
+        self, *, continues: str | None = None, after_call: bool = False, history: list | None = None, **kwargs: Any
+    ):
+        request = {"id": "D1", "type": "message", "role": "user", "content": "Do the task."}
+        super().__init__(history=history or [request], **kwargs)
+        self.continues, self.after_call = continues, after_call
+
+    def traced(self, kind: str) -> list[dict]:
+        """Return the fields of each trace of ``kind``, in order."""
+        return [fields for each, fields in self.traces if each == kind]
+
+
 class FakeSession:
     """A ``HarnessSession``: what the run sends is recorded; the test ends prompts and puts events in the mailbox."""
 
-    def __init__(self, mailbox: asyncio.Queue, number: int = 1):
+    def __init__(self, mailbox: asyncio.Queue, number: int = 1, closes: bool = False):
         self.id = f"session-{number}"
         self.mailbox = mailbox
         self.sent: list[tuple[int, str, str]] = []
         self.cancels = 0
         self.retired = False
+        # Whether retiring it sends a close: its agent advertises one.
+        self.closes = closes
+        # Set by a test: the agent ended the session while its process runs on.
+        self.lost = False
         self._numbers = itertools.count(1)
         self._outstanding: set[int] = set()
         self._ended: dict[int, asyncio.Event] = {}
@@ -95,6 +119,10 @@ class FakeSession:
     @property
     def outstanding(self) -> frozenset[int]:
         return frozenset(self._outstanding)
+
+    @property
+    def alive(self) -> bool:
+        return not (self.retired or self.lost)
 
     def prompt(self, text: str) -> int:
         return self._send("prompt", text)
@@ -124,8 +152,10 @@ class FakeSession:
         while self._outstanding:
             await asyncio.sleep(0.01)
 
-    def retire(self) -> None:
+    def retire(self) -> bool:
+        """Retire it; a close goes out only where its agent advertises one (``closes``)."""
         self.retired = True
+        return self.closes
 
     def end(self, prompt: int, stop: str | None = "end_turn", usage: dict | None = None, error: str | None = None):
         self._outstanding.discard(prompt)
@@ -160,9 +190,11 @@ class FakeClient:
         self.servers: list[McpServer] = []
         self.folders: list[Path] = []
         self.alive = True
+        # Whether its agent closes each session it retires.
+        self.closes = False
 
     async def new_session(self, cwd: Path, server: McpServer, mailbox: asyncio.Queue) -> FakeSession:
-        self.sessions.append(FakeSession(mailbox, len(self.sessions) + 1))
+        self.sessions.append(FakeSession(mailbox, len(self.sessions) + 1, self.closes))
         self.servers.append(server)
         self.folders.append(cwd)
         return self.sessions[-1]
@@ -232,9 +264,11 @@ class FakeHost:
         self.conductor_role = Role("conductor", "c")
         self.runtime = FakeRuntime()
         self.closed = False
-        self.kept = None
+        self.pool = SessionPool(self.max_running)
 
     async def shared(self, role: Role) -> FakeRuntime:
+        if self.closed:
+            raise RuntimeError("The harness session is closing")
         self.runtime.places += 1
         return self.runtime
 
@@ -245,6 +279,11 @@ class FakeHost:
         runtime.places += 1
         return True
 
-    # The adapter's own methods, so that a session is kept and taken as the adapter does.
+    def idle(self) -> list[FakeSession]:
+        """Return the pooled sessions, idle longest first."""
+        return [kept.session for kept in self.pool.idle]
+
+    # The adapter's own methods, so that a session is pooled, tried and taken as the adapter does.
+    candidates = HarnessAdapter.candidates
     take_kept = HarnessAdapter.take_kept
     keep = HarnessAdapter.keep

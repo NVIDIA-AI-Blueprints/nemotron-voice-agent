@@ -178,6 +178,18 @@ class RequestTests(unittest.TestCase):
         other = OpenAIResponsesBackend(endpoint(), NO_RETRY, client=object()).request(payload())
         self.assertNotEqual(other["prompt_cache_key"], first["prompt_cache_key"])
 
+    def test_the_responses_provider_sends_input_messages_without_their_ids(self):
+        provider = OpenAIResponsesBackend(endpoint(), NO_RETRY, client=object())
+        said = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking."}]}
+        notes = [{"type": "message", "role": role, "content": "Be brief."} for role in ("system", "developer")]
+        for item in (text_of("Teas?"), *notes, said):
+            with self.subTest(role=item["role"]):
+                self.assertEqual(provider.request(payload(input=[{**item, "id": "D1.2"}]))["input"], [item])
+        # An output message, a call and reasoning keep their ids.
+        kept = [{**said, "id": "msg_1", "status": "completed"}, {**HISTORY[1], "id": "fc_call_1"}]
+        kept.append({"type": "reasoning", "id": "rs_1", "summary": []})
+        self.assertEqual(provider.request(payload(input=kept))["input"], kept)
+
     def test_the_responses_provider_maps_the_round_settings(self):
         defaults = endpoint(
             temperature=0.2, max_tokens=300, extra_body={"x": 1}, stream_options={"include_usage": True}

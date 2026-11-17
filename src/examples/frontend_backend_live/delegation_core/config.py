@@ -31,6 +31,7 @@ OUTCOME_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "cancel_requested": ("work", "tasks"),
         "ended": ("work",),
         "answered": ("delegation",),
+        "already_placed": ("delegation", "work", "tasks"),
         "refused": ("reason",),
     }
 )
@@ -60,7 +61,7 @@ TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "conductor_prompt": ("max_running",),
     }
 )
-WORK_TOOL_KEYS = ("show", "cancel_work")
+WORK_TOOL_KEYS = ("show", "cancel_work", "ask_caller", "continue_after_call")
 TEXTS_SOURCE = "agent_prompts.Core in the example's prompts.yaml"
 
 Count = Annotated[int, Field(strict=True, ge=0)]
@@ -98,6 +99,12 @@ class DelegationSettings(Settings):
     close_grace_seconds: Seconds | None = 5.0
     # The backstop on one Work, through the stop door; None: off.
     work_timeout_seconds: Seconds | None = 600.0
+    # How long a conversation whose work continues after its call is kept after its last call's end, and again after
+    # that work ends; when that time runs out, it closes, and work still running stops.
+    after_call_seconds: Seconds = 172_800.0
+    # The most conversations whose work still runs after their call, at once; a further continue_after_call is refused.
+    # A kept conversation whose work has ended does not count: it holds only memory until its keep time ends.
+    max_after_call_conversations: WholeNumber = 8
     # A name in texts.result_formats: plain, or speak_display (a show item, then the answer to speak).
     result_format: Text = "plain"
     # The server label of the show item; the root hands it to the frontend too.
@@ -126,6 +133,10 @@ class Texts(Settings):
     owed_output: Text
     not_run_output: Text
     stopped_output: Text
+    asked_output: Text
+    continued_output: Text
+    not_continued_output: Text
+    after_call_output: Text
     clash_output: Text
     unlisted_output: Text
     unknown_tool_output: Text
