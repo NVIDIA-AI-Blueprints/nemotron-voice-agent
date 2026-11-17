@@ -28,6 +28,7 @@ events instead of RTVI protobuf frames.
 | `benchmark.py` | Provides the stable command-line interface and dispatches single-client and aggregation modes. |
 | `benchmark_core.py` | Runs the shared turn loop and handles result schema, audio timing, metric windows, and glitch detection. |
 | `benchmark_aggregation.py` | Aggregates client runs and writes the TXT, TSV, and JSON reports. |
+| `benchmark_diagnostics.py` | Collects session evidence, classifies captured buffer deficits after the test, and writes session quality and error reports. |
 | `rtvi_transport.py` | Provides the low-level RTVI WebSocket, readiness handshake, and protobuf framing. |
 | `rtvi_client.py` | Adapts RTVI audio, messages, and server metrics to the shared core. |
 | `realtime_transport.py` | Provides the low-level Realtime WebSocket, authorization, JSON events, and base64 PCM operations. |
@@ -163,7 +164,7 @@ scaling configuration:
   `magpie-multilingual-tts-service`
 - app env: `UVICORN_WORKERS=200`,
   `USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`,
-  `AUDIO_OUT_10MS_CHUNKS=40`
+  `AUDIO_OUT_10MS_CHUNKS=40`, `SCALING_PERF_DIAGNOSTICS=true` by default
 
 > **Hardware-specific profile:** `vllm-nvfp4-tp2-pp1-18.0` was selected from
 > `list-model-profiles` and benchmarked on two NVIDIA RTX PRO 6000 Blackwell
@@ -266,6 +267,10 @@ results_<timestamp>/
 ├── results.txt                  # one-row summary table (human-readable)
 ├── results.tsv                  # one-row summary table (tab-separated)
 ├── results.json                 # one-row summary object list
+├── glitch_events.{json,csv}      # one row per captured buffer deficit, all phases
+├── glitch_summary.txt            # classified measurement-window counts and durations
+├── session_errors.{json,csv}     # reported errors, including completed sessions
+├── session_quality.{json,csv}    # one row per client with status and evidence coverage
 └── client_<i>_<unix_ms>/        # i = 1..N, unix_ms makes the dir unique
     ├── benchmark_<id>.log       # turn-by-turn log
     ├── result_<id>.json         # per-client metrics, parsed back by aggregation
@@ -281,8 +286,98 @@ perf_suite_<timestamp>/
 ├── results.json                 # one object per concurrency level
 └── run_<N>_clients/             # one of these per --clients value
     ├── benchmark_summary.json
+    ├── glitch_events.{json,csv}
+    ├── glitch_summary.txt
+    ├── session_errors.{json,csv}
+    ├── session_quality.{json,csv}
     └── client_<i>_<unix_ms>/...
 ```
+
+## Session Diagnostics
+
+Enable server frame metadata when you need to investigate individual buffer deficits, tool-followup waits, or reported errors. The server uses Pipecat's native frame observer through the shared pipeline helper. It does not patch TTS providers or transport methods.
+
+### Enable or Disable Capture
+
+The `generic-assistant/server-perf` Compose recipe enables `SCALING_PERF_DIAGNOSTICS=true` by default. Other recipes default to `false`. You can override the value explicitly for a comparison:
+
+```bash
+# Disable server markers while keeping the same performance recipe.
+SCALING_PERF_DIAGNOSTICS=false \
+docker compose --profile generic-assistant/server-perf up -d
+
+# Enable server markers again.
+SCALING_PERF_DIAGNOSTICS=true \
+docker compose --profile generic-assistant/server-perf up -d
+```
+
+For a host-native server, set the environment variable on the server process:
+
+```bash
+SCALING_PERF_DIAGNOSTICS=true uv run python src/server.py
+```
+
+The benchmark always records received audio timing and available protocol errors. Server markers are optional. The repository's RTVI endpoint and Realtime gateway can deliver them; other endpoints can lack this extension. Inspect coverage before interpreting a classification.
+
+Diagnostic batches use type `nva.perf.diagnostics` and schema version `1`. They carry session identifiers, event sequence numbers, timestamps, audio sequence numbers, and cumulative PCM offsets. Lifecycle markers cover LLM and tool activity, audio epochs, sentence boundaries, interruptions, and errors. They omit spoken text, tool arguments, tool results, and audio payloads. Structured diagnostic error records use Pipecat's credential redaction. Existing raw protocol/transcript logging and optional WAV capture remain separate from these metadata markers.
+
+Capture uses bounded event collections and batched delivery. Dropped events and sequence gaps are reported. The observer adds metadata, CPU work, and transport traffic; compare enabled and disabled runs with the same workload when evaluating overhead.
+
+### Inspect Errors and Completion Separately
+
+Run aggregation writes the following artifacts beside `benchmark_summary.json`. In a sweep, inspect each `run_<N>_clients/` directory.
+
+| Artifact | Purpose |
+|---|---|
+| `session_quality.json` and `.csv` | One row per client: status, valid and failed turns, reported error count, raw glitch flag, captured event count, and diagnostic coverage |
+| `session_errors.json` and `.csv` | Errors associated with each client, including errors from sessions that later return valid responses |
+| `glitch_events.json` and `.csv` | Each captured deficit with client, phase, audio cursor, classification, confidence, and supporting evidence |
+| `glitch_summary.txt` | Measurement-window event counts, summed deficits, and event/duration shares by classification |
+
+Per-client result JSON retains the underlying `diagnostics` and `session_errors` collections. Error records distinguish the reporting source and component where available. Component labels use processor or protocol evidence; they do not establish the underlying cause. Records retain fatal/nonfatal information when supplied. Session errors include warmup and reply-drain errors, with the phase preserved.
+
+With diagnostics enabled, the RTVI server can return an HTTP 503 admission response containing `code: service_not_ready`, a component, and a redacted reason. This requires ASGI WebSocket denial-response support. Otherwise, the server retains its close-based rejection. The RTVI client records a structured admission reason as `source: handshake` when available, so it can be distinguished from an error after admission.
+
+The completion categories have these meanings:
+
+| Status | Meaning |
+|---|---|
+| `successful` | Valid response without recorded session errors, failed turns, or a session deadline; this is error-free completion, not a clean-audio guarantee |
+| `degraded` | Valid response with recorded errors, failed turns, or a hard deadline |
+| `failed` | A qualifying runtime error, even if earlier responses completed |
+| `no_response` | No valid response and no qualifying runtime failure |
+
+`Successful` and `Degraded` are separate columns in `results.txt`; their sum counts completed clients with valid responses. The JSON field `completed_clients` retains that combined count. `Errors` counts reported error records, while `Glitches` retains the legacy client flag count. A nonfatal provider error can therefore reduce `Successful` and increase `Degraded` without ending the client session.
+
+Glitch evidence is orthogonal to completion status. A client can be `successful` and still have buffer deficits. Any recorded session error, including one outside the measurement window, can make completion degraded. A direct client command or aggregation command returning zero is not a strict quality pass; inspect session errors and gap coverage alongside latency.
+
+### Interpret Post-Test Gap Classifications
+
+The detector estimates how much received PCM remains for playback. A deficit greater than 20 ms records an event; it is not a listening-confirmed audio defect. Classification runs after the test so delayed markers can be considered. It uses output audio offsets and lifecycle evidence rather than guessing sentence boundaries from arrival-time pauses. Offsets describe queued PCM and sentence units, not forced word-to-audio alignment.
+
+| Classification | Evidence Used |
+|---|---|
+| `within_sentence` | The playback cursor falls inside an aligned sentence unit |
+| `between_sentences` | An aligned sentence boundary matches the playback cursor, with preceding aligned sentence evidence |
+| `tool_wait` | First audio of a tool-driven follow-up epoch; this does not measure tool execution time |
+| `interruption` | An interruption marker is adjacent to the playback boundary |
+| `unknown` | Capture, audio epoch, or sentence-alignment evidence is missing or incomplete |
+
+Each event retains `confidence` and `evidence`. `audio_offset` confidence indicates aligned sentence/audio offset evidence. `frame_evidence` indicates lifecycle evidence. `unavailable` means the classifier cannot support a more specific label. These values are evidence categories, not calibrated probabilities.
+
+Coverage reports server marker availability, dropped server/client events, and sequence gaps. Capture loss forces conservative `unknown` classification. The classifier also requires client/server audio-epoch duration and packet counts to agree; mismatches remain `unknown`. Initial audio alone does not establish a gap between two sentences. Token-streaming providers can lack reliable sentence-to-audio alignment; those gaps also remain `unknown`. A boundary label describes context, not whether TTS generation, CPU scheduling, network delivery, or intentional application behavior caused the wait.
+
+Events retain `warmup`, `measurement`, `reply_drain`, or `unknown` phase. The JSON/CSV reports preserve all phases; `glitch_summary.txt` compares measurement-window events by both count and summed deficit duration. Neither zero captured events nor an `unknown` label establishes glitch-free playback when capture is unavailable. A raw-flagged client without captured gap events is counted in `flagged_clients_without_event_evidence`; the text summary states that its event count and duration are unavailable.
+
+Older results remain useful for recorded protocol errors, but missing markers or a Boolean glitch flag cannot reconstruct a per-event sentence classification. Legacy error extraction preserves `recorded_timestamp` when available, leaves `received_unix_s` as `null`, and uses `phase: unknown`. It does not invent a new historical occurrence time. Keep those coverage limits visible when comparing runs.
+
+To regenerate run-level reports from saved client results, run this command from this directory:
+
+```bash
+uv run python3 benchmark.py --aggregate-run-dir /path/to/results --num-clients 4
+```
+
+Use the original configured client count. Aggregation cannot recover missing diagnostic events or client files.
 
 ## What it measures
 

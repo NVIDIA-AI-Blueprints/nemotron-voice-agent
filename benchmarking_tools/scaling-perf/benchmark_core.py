@@ -14,9 +14,11 @@ import sys
 import time
 import wave
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from benchmark_diagnostics import SessionDiagnostics
 
 CHUNK_DURATION_MS = 32
 BOT_INTRO_TIMEOUT = 5
@@ -112,6 +114,8 @@ class ClientResult:
     realtime_turn_metrics: list[dict[str, Any]]
     timestamp: str
     error: str | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    session_errors: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -145,6 +149,7 @@ class ProtocolClient(ABC):
     server_metric_samples: dict[str, list[float]]
     connect_timeout: float
     requires_response_done = False
+    diagnostics: SessionDiagnostics | None = None
 
     @abstractmethod
     async def __aenter__(self) -> ProtocolClient: ...
@@ -217,11 +222,15 @@ class PerfClient:
     ):
         self.stream_id = stream_id
         self.protocol_client = protocol_client
+        self.diagnostics = SessionDiagnostics()
+        protocol_client.diagnostics = self.diagnostics
         self.audio_files = audio_files
         self.start_delay = start_delay
         self.metrics_start_time = metrics_start_time
         self.session_end_time = session_end_time
         self.test_duration = test_duration
+        self.diagnostics.start = metrics_start_time
+        self.diagnostics.duration = test_duration
         self.reverse_barge_in_threshold = reverse_barge_in_threshold
         self.turn_response_timeout = turn_response_timeout
         self.audio_output_path = audio_output_path
@@ -325,9 +334,23 @@ class PerfClient:
         while True:
             wf, sample_rate, channels, audio_data = self._write_audio_to_wav(frame, wf, create_new_file=(wf is None))
             if audio_data and sample_rate and channels:
-                current_time = time.time()
+                current_time = time.monotonic()
                 chunk_count += 1
                 chunk_duration = (len(audio_data) // (channels * 2)) / sample_rate
+                deficit_ms = None
+                if detect_glitches and last_update_time is not None:
+                    deficit_ms = (current_time - last_update_time - playback_buffer_duration) * 1000
+                self.diagnostics.start = self.metrics_start_time
+                self.diagnostics.duration = self.test_duration
+                self.diagnostics.audio(
+                    nbytes=len(audio_data),
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    monotonic_ns=time.monotonic_ns(),
+                    unix_s=time.time(),
+                    deficit_ms=deficit_ms,
+                    detect=detect_glitches,
+                )
                 if detect_glitches:
                     if last_update_time is not None:
                         playback_buffer_duration -= current_time - last_update_time
@@ -386,6 +409,9 @@ class PerfClient:
             except TimeoutError:
                 if self.collecting_metrics:
                     self.failed_turns += 1
+                    self.diagnostics.add_error(
+                        "No bot response before turn timeout", source="client", component="client", code="turn_timeout"
+                    )
                     await self.logger.log(
                         f"{self.stream_id} turn timed out: no bot response within "
                         f"{self.turn_response_timeout:.1f}s after input audio finished"
@@ -400,6 +426,7 @@ class PerfClient:
     async def _record_failed_turn(self, audio_file: Path, marker: Any, error: str) -> None:
         if self.collecting_metrics:
             self.failed_turns += 1
+        self.diagnostics.add_error(error, source="client", component="client", code="turn_failed")
         await self.logger.log(f"{self.stream_id} turn failed: {error}")
         await self.protocol_client.record_turn_observation(
             audio_file,
@@ -527,6 +554,8 @@ class PerfClient:
             self.metrics_start_time = time.time()
             if self.session_end_time is None:
                 self.session_end_time = self.metrics_start_time + self.test_duration
+        self.diagnostics.start = self.metrics_start_time
+        self.diagnostics.duration = self.test_duration
         self.silence_event = asyncio.Event()
         self.silence_event.set()
         silence_task = asyncio.create_task(self._silence_sender_loop())
@@ -585,9 +614,11 @@ class PerfClient:
             error = str(exc) or exc.__class__.__name__
 
         if error:
+            self.diagnostics.add_error(error, source="client", component="client", code="session_error")
             await self.logger.log(f"{self.stream_id} finished with error: {error}")
         elif not self.valid_latency_values:
             error = "No valid benchmark turns completed"
+            self.diagnostics.add_error(error, source="client", component="client", code="no_valid_turns")
             await self.logger.log(f"{self.stream_id} finished with error: {error}")
         else:
             await self.logger.log(f"{self.stream_id} finished successfully")
@@ -615,6 +646,8 @@ class PerfClient:
             realtime_turn_metrics=artifacts.get("realtime_turn_metrics", []),
             timestamp=dt.datetime.now().isoformat(),
             error=error,
+            diagnostics=self.diagnostics.finish(),
+            session_errors=self.diagnostics.errors,
         )
         await self.logger.log_table(
             f"{self.stream_id} latency breakdown summary",

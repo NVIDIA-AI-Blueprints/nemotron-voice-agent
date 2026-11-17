@@ -155,6 +155,7 @@ class RealtimeClient(ProtocolClient):
             input_sample_rate=REALTIME_INPUT_RATE,
             output_sample_rate=DEFAULT_OUTPUT_RATE,
             verify_tls=self.verify_tls,
+            on_event=self.diagnostics.ingest if self.diagnostics is not None else None,
         )
         try:
             await self.realtime.connect()
