@@ -6,6 +6,7 @@
 import asyncio
 from dataclasses import dataclass
 
+from nemotron_voice_agent.core.settings import load_settings_profiles
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.pipeline import _extra_params_for, subagent_registry
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.media_analyzer.agent import (
     _SYSTEM_PROMPT,
@@ -15,7 +16,6 @@ from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.me
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.thinker.agent import ThinkerWorker
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from nemotron_voice_agent.pipecat.runtime.attachment_store import Attachment
-from nemotron_voice_agent.pipecat.runtime.utils import _load_settings_profiles
 
 
 @dataclass
@@ -99,7 +99,7 @@ def test_audio_upload_recorded_in_a_video_container_still_goes_as_audio():
 
 
 def _subagent_extra_body(profile: str, key: str) -> dict:
-    entry = {"settings": _load_settings_profiles()[profile]}
+    entry = {"settings": load_settings_profiles()[profile]}
     extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
     return _extra_params_for(extra, entry, subagent_registry(), key)["extra_body"]
 
@@ -121,5 +121,5 @@ def test_subagent_without_a_budget_keeps_extra_params():
     registry = subagent_registry()
 
     assert _extra_params_for(extra, {"settings": {}}, registry, MediaAnalyzerWorker.AGENT_NAME) is extra
-    vllm = {"settings": _load_settings_profiles()["nemotron-omni-vllm"]}
+    vllm = {"settings": load_settings_profiles()["nemotron-omni-vllm"]}
     assert _extra_params_for(extra, vllm, registry, WebcamAgent.AGENT_NAME) is extra

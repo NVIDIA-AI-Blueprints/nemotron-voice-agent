@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 
 from nemotron_voice_agent.core.catalog import NVCF_LLM_BASE_URL
 from nemotron_voice_agent.core.paths import REPO_ROOT
+from nemotron_voice_agent.core.service_status import ServiceStatus, probe_http, probe_tcp
 from nemotron_voice_agent.pipecat.runtime.utils import parse_env_bool, parse_env_int
 
 load_dotenv(override=True)
@@ -70,11 +71,8 @@ from nemotron_voice_agent.pipecat.runtime.attachment_store import consume_captur
 from nemotron_voice_agent.pipecat.runtime.utils import (
     _CONNECT_HEALTH_TIMEOUT_SECS,
     SELF_HOSTED_SOURCE,
-    ServiceStatus,
     _llm_health_url,
     _local_speech_ready_url,
-    _probe_http,
-    _probe_tcp,
     _run_blocking,
     build_services_api_response,
     default_prompt_key,
@@ -411,7 +409,7 @@ def _should_skip_tts_prewarm(example: dict) -> bool:
 
 
 def _check_service_port(label: str, server: str) -> None:
-    _raise_unless_ready(label, server, _remembered_status(server, _probe_tcp(server, _CONNECT_HEALTH_TIMEOUT_SECS)))
+    _raise_unless_ready(label, server, _remembered_status(server, probe_tcp(server, _CONNECT_HEALTH_TIMEOUT_SECS)))
 
 
 def _service_starting_message(label: str) -> str:
@@ -443,7 +441,7 @@ def _raise_unless_ready(label: str, target: str, status: ServiceStatus) -> None:
 
 
 def _check_http_health(label: str, target: str, health_url: str, expects_ready_json: bool = False) -> None:
-    status = _remembered_status(health_url, _probe_http(health_url, expects_ready_json, _CONNECT_HEALTH_TIMEOUT_SECS))
+    status = _remembered_status(health_url, probe_http(health_url, expects_ready_json, _CONNECT_HEALTH_TIMEOUT_SECS))
     if status != "ready":
         logger.warning(f"{label} health check for {target} via {health_url}: {status}")
     _raise_unless_ready(label, target, status)
@@ -464,7 +462,7 @@ def _status_probe(slot: str, entry: dict) -> tuple[str, bool] | None:
 
 def _probe_status(address: str, expects_ready_json: bool) -> ServiceStatus:
     timeout = _STATUS_PROBE_TIMEOUT_SECS
-    status = _probe_http(address, expects_ready_json, timeout) if "://" in address else _probe_tcp(address, timeout)
+    status = probe_http(address, expects_ready_json, timeout) if "://" in address else probe_tcp(address, timeout)
     return _remembered_status(address, status)
 
 

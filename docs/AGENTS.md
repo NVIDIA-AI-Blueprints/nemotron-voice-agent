@@ -126,8 +126,8 @@ Style Guide above.
   variables, and hardware placement in `docker-compose.yml`, `docker/`, and
   `.env.example`.
 - Verify Python and client dependencies in `pyproject.toml`, `uv.lock`,
-  `clients/pipecat/package.json`, and `clients/pipecat/package-lock.json`. The
-  LiveKit browser files in `clients/livekit/` have no package manifest.
+  `clients/pipecat/package.json`, `clients/pipecat/package-lock.json`,
+  `clients/livekit/package.json`, and `clients/livekit/package-lock.json`.
 - Preserve the relative-link style used by the existing Markdown files. When
   adding or renaming a page, update `README.md`,
   `docs/02-configuration-guide.md`, and other indexes that should expose it.

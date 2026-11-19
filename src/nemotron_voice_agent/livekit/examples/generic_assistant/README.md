@@ -2,7 +2,7 @@
 
 The Generic Assistant on LiveKit is a Nemotron voice agent built on the [LiveKit Agents](https://docs.livekit.io/agents/) framework. By default, NVIDIA models run the three steps of the pipeline. Nemotron automatic speech recognition (ASR) turns your speech into text, a Nemotron large language model (LLM) writes the reply and calls tools, and Magpie text-to-speech (TTS) speaks it. You can choose other models, as [Configure Models](#configure-models) describes. LiveKit orchestrates the pipeline with voice activity detection, interruption (barge-in), and tool calls. Its WebRTC server carries the audio between the client and the agent in real time.
 
-A small web UI shows live transcripts and tool calls, and lets you choose a [sample use case](#sample-use-cases) and a [voice](#voice-selection). The same agent can also answer phone calls. An optional [Session Initiation Protocol (SIP)](#phone-calls-sip) service connects a phone number, or a contact-center platform, to the agent, and each number can map to a different use case. Run the pipeline on NVIDIA Cloud (NVCF), or on your own GPU, with one of the [deployment profiles](#deployment-profiles).
+A web UI shows live transcripts and tool calls. Its **SERVICES** tab chooses the LLM, ASR, and TTS [services](#services-tab) for a session. Its **PROMPTS** tab holds the [sample use cases](#sample-use-cases) and your custom prompts. Its **TOOLS** tab shows the tools of the chosen use case. You can also choose a [voice](#voice-selection). The same agent can also answer phone calls. An optional [Session Initiation Protocol (SIP)](#phone-calls-sip) service connects a phone number, or a contact-center platform, to the agent, and each number can map to a different use case. Run the pipeline on NVIDIA Cloud (NVCF), or on your own GPU, with one of the [deployment profiles](#deployment-profiles).
 
 ## How It Works
 
@@ -119,7 +119,7 @@ Run every command from the repository root.
    src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up single-gpu --no-wait     # start without waiting
    ```
 
-4. Open the UI at `http://localhost:3000/` on the machine that runs Docker. For a browser on another computer, refer to [Remote Browser Access](#remote-browser-access). The header shows the deployment mode and the models in use. Choose a use case and a voice, select **Connect**, and speak.
+4. Open the UI at `http://localhost:3000/` on the machine that runs Docker. For a browser on another computer, refer to [Remote Browser Access](#remote-browser-access). The **DEFAULT PIPELINE** panel shows the models in use. Optionally, choose services in the **SERVICES** tab, and choose a prompt and a voice in the left panel. Then select **Connect**, and speak.
 
 5. Clean up when you are done by tearing down with the same profile you started with:
 
@@ -145,9 +145,12 @@ The following table lists the main files in this example.
 | `tool_wrapper.py` | Turns plain functions into LiveKit tools that report their calls to the web UI |
 | `voices.py` | Discovers the TTS voices that a speech server offers, for the voice selector |
 | `session.py` | Validates the session choices that the UI sends with the join token |
-| `ui_server.py` | Serves the web UI and mints a LiveKit join token at `/token` |
+| `service_state.py` | Holds the services, their health, and the voices that the agent worker publishes for the UI server |
+| `ui_server.py` | Serves the built web UI, the `/services`, `/prompts`, `/tools`, and `/voices` data, and a LiveKit join token at `POST /token` |
 | `run.sh` | Starts, checks, and cleans up the profiles, and sets up SIP |
 | `sip_setup.py` | Provisions the optional phone (SIP) integration through `run.sh sip-setup` and `run.sh sip-network` |
+
+The web UI is a React client in [`clients/livekit/`](../../../../../clients/livekit/). The image builds it, so run the `up` command of your profile again after you change it. To work on it with hot reload against a running UI server, run `cd clients/livekit && npm ci && npm run dev`. The Vite server sends the data endpoints to `LIVEKIT_UI_SERVER`, which defaults to `http://127.0.0.1:3000`. Check a change with `npm run lint`, `npm test` (Node.js 22.18 or newer), and `npm run build`.
 
 To change the prompts or add a use case, refer to [Sample Use Cases](#sample-use-cases).
 
@@ -181,11 +184,20 @@ The profiles accept these entries:
 - **New models:** Add an entry to `services.yaml`, and then select it.
 - **Not supported:** ASR entries that use the Transcribe HTTP API, such as `nemotron-transcribe`, do not work. The LiveKit NVIDIA plugin speaks Riva gRPC.
 
-Unlike the Pipecat examples, this example has no **Services** tab and no `settings.yaml` controls. You choose models at deploy time, and one profile serves all three slots. Only the entry's `extra_params.extra_body` applies, and reasoning is off unless the entry turns it on.
+### Services Tab
+
+The variables in [Configure Models](#configure-models) set the default of each slot. The **SERVICES** tab changes the services for a session, and it is locked while a session runs. It works as follows:
+
+- **Choose:** The **LLM Services**, **ASR Services**, and **TTS Services** lists show the entries that the profile offers. Select a card to use it for the next session.
+- **Settings:** The catalog LLM cards and the Single GPU ASR card show **Parameters** when you expand them. The LLM cards offer settings from [`settings.yaml`](../../../../../settings.yaml), such as **Temperature**, **Top P**, **Max Tokens**, and **Reasoning**. The Single GPU ASR card offers one setting, **Punctuation**. The TTS cards have no **Parameters**, because this example applies no TTS settings.
+- **Custom endpoint:** Custom endpoints are off by default, because the agent connects to any address that a user of the page enters, including addresses inside your network. To turn them on, set `LIVEKIT_UI_CUSTOM_ENDPOINTS=1` in `.env`, and then recreate the UI and agent services. Turn them on only when trusted users alone can reach the UI. Then select **+** to add one. An LLM needs an `http://` or `https://` **Server URL** and a **Model ID**, and it accepts a JSON object in **Extra params JSON (optional)**. An ASR or TTS service needs a gRPC `host:port` address without a scheme. Neither address can contain a user name or password. Only an `https://` URL on NVIDIA's API host, or an NVIDIA gRPC host with a **Function ID**, receives `NVIDIA_API_KEY`. The browser keeps custom endpoints in `localStorage`, except **Extra params JSON**, which lasts until the page reloads. The UI server rejects an unusable endpoint when you connect, and the UI shows the reason.
+- **Health:** The agent worker checks each self-hosted service every 10 seconds, and the card shows **Ready**, **Starting…**, or **Not running**. NVIDIA Cloud entries are not checked. A self-hosted entry that is not running is hidden, unless no entry of its slot runs.
+
+If the agent cannot use a choice, it uses the deployment defaults, and the conversation shows an error. If a chosen service is no longer offered when you connect, the session uses the default of that slot without an error.
 
 ## Sample Use Cases
 
-The **Use case** list selects the agent's prompt and tools. Choose one before you connect. It stays fixed for the session, and the generic assistant is the default. The following table lists the use cases.
+The **PROMPT** list in the left panel selects the agent's prompt and tools. Choose one before you connect. It stays fixed for the session, and the generic assistant is the default. The **PROMPTS** tab shows the use cases under **Default Prompts**, and the **TOOLS** tab marks the tools of the chosen use case as **Enabled**. The following table lists the use cases.
 
 | Use case | What it does | Try saying |
 | --- | --- | --- |
@@ -196,11 +208,13 @@ The **Use case** list selects the agent's prompt and tools. Choose one before yo
 
 The insurance, clinic, and bank data is fictional and held in memory for one session. Only the weather lookup calls an outside service (Open-Meteo, which needs no key). Each tool call shows in the transcript panel. To add a use case, add an entry to `prompts.yaml`, write its tool functions in `scenarios.py`, and register it in `USE_CASES`. LiveKit builds each tool schema from the type hints and the docstring `Args:` section.
 
+To write your own prompt, select **+** in the **PROMPTS** tab, and enter a key and the prompt content, up to 8000 characters. The browser keeps the prompt in `localStorage`, and the **PROMPT** list offers it under its key. A custom prompt runs without tools. It also has no fixed opening line, so the LLM writes a short greeting that follows your prompt.
+
 ## Voice Selection
 
 The **Voice** list shows the voices that the TTS server offers. Choose a voice before you connect, or change it during the session. The agent uses the new voice from its next reply and says a short sample. The list works as follows:
 
-- **Discovery:** The agent worker asks the TTS server for its voices when it starts, and retries until the server answers. The UI shows `Loading voices…` until then.
+- **Discovery:** The agent worker asks each running TTS server for its voices. It asks a server that has not answered every 10 seconds, and asks every server again every five minutes. The list shows the voices of the TTS entry that the **SERVICES** tab selects. A custom TTS endpoint has no list, and the UI shows its **Voice ID** or `Server default`.
 - **Language and default:** The list shows voices for the catalog entry's language (`en-US` by default). The default voice is Sofia when the TTS server lists her. Otherwise, it is the `voice_id` in `services.yaml`. For more information, refer to [Configure TTS](../../../../../docs/how-to/configure-tts.md#voices--emotions). The Pipecat examples keep using `voice_id`.
 - **Validation:** The UI server and the agent ignore any voice that the server did not list.
 
@@ -248,7 +262,7 @@ LIVEKIT_NODE_IP=<the server's public IP address>  # the address LiveKit gives br
 LIVEKIT_PUBLIC_WS_URL=wss://<your-domain>         # where the page finds LiveKit signaling
 ```
 
-This setup is for testing only. The login is basic authentication, and it is not production authentication. If the public address changes, update `LIVEKIT_NODE_IP` and restart.
+This setup is for testing only. The login is basic authentication, and it is not production authentication. Set both login variables, because a username without a password locks everyone out. If the public address changes, update `LIVEKIT_NODE_IP` and restart.
 
 This example does not include a Traversal Using Relays around NAT (TURN) relay. A client-server voice session has no peer-to-peer path to relay, and LiveKit falls back to TCP on port 7881 when UDP is blocked. A network that also blocks that port needs a relay over TLS on port 443. LiveKit's built-in TURN server provides one, but this example does not enable it. For more information, refer to the [LiveKit ports and firewall documentation](https://docs.livekit.io/home/self-hosting/ports-firewall/). The Pipecat examples have a separate relay, defined in [`docker/sidecars/docker-compose.coturn.yaml`](../../../../../docker/sidecars/docker-compose.coturn.yaml). For details, refer to [Enable the TURN Server](../../../../../docs/how-to/enable-turn-server.md).
 
@@ -261,7 +275,7 @@ The defaults keep the example private to the machine that runs it:
 
 ## Phone Calls (SIP)
 
-The example can also answer phone calls. `run.sh up <profile> --sip` adds Redis and the open source [LiveKit SIP](https://docs.livekit.io/sip/) service. Redis is published on `127.0.0.1` only, and it keeps the number mappings in a volume that survives restarts. `run.sh sip-setup` maps a phone number to a use case, so each number can be a different line. The web UI then shows the number under **Or call the agent**. SIP needs a Linux host that your SIP provider can reach. It listens on port 5060 and on UDP ports 10000 to 10100 of that host, so the network setup is manual and restricted to the provider's addresses. The provider-neutral [SIP guide](SIP.md) covers the network setup, IP allowlisting for your SIP trunk provider, testing, and troubleshooting, with a Twilio example.
+The example can also answer phone calls. `run.sh up <profile> --sip` adds Redis and the open source [LiveKit SIP](https://docs.livekit.io/sip/) service. Redis is published on `127.0.0.1` only, and it keeps the number mappings in a volume that survives restarts. `run.sh sip-setup` maps a phone number to a use case, so each number can be a different line. The web UI then shows the number in the **PHONE** panel. SIP needs a Linux host that your SIP provider can reach. It listens on port 5060 and on UDP ports 10000 to 10100 of that host, so the network setup is manual and restricted to the provider's addresses. The provider-neutral [SIP guide](SIP.md) covers the network setup, IP allowlisting for your SIP trunk provider, testing, and troubleshooting, with a Twilio example.
 
 ## Cleanup
 
@@ -292,7 +306,7 @@ Check the agent log first with `src/nemotron_voice_agent/livekit/examples/generi
 
 - **Transcripts appear but the agent does not answer (Cloud):** The hosted LLM is probably rate limited. The log shows `429 Too Many Requests`, and the UI shows a warning. Wait a minute, or choose another model, for example `LLM_SERVICE=nemotron-bolt-4b`.
 - **`LLM was busy. Retrying.` in the transcript panel:** A call failed briefly, and LiveKit retried it. The conversation continues. A rate-limited call shows `(rate limited, HTTP 429)` in the note, and an ASR or TTS failure shows `STT` or `TTS` instead of `LLM`.
-- **The Voice list is empty or shows `Default voice (list unavailable)`:** The TTS server has not answered yet. A hosted endpoint can take up to 30 seconds when cold, and a local sidecar answers after it loads its models.
+- **The UI shows `No voices available for this TTS server`:** The TTS server has not answered yet. A hosted endpoint can take up to 30 seconds when cold, and a local sidecar answers after it loads its models.
 - **`port is already allocated`:** Another container holds a host port. Refer to [Prerequisites](#prerequisites) and [Cleanup](#cleanup).
 
 For phone calls, refer to [Troubleshooting](SIP.md#troubleshooting) in the SIP guide. For general failure modes, refer to the [Troubleshooting guide](../../../../../docs/06-troubleshooting.md).

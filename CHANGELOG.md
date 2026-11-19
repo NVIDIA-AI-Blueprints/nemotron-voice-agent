@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Generic Assistant on LiveKit.** A new example on LiveKit Agents runs with the `generic-assistant-livekit` Cloud, Server, and Single GPU profiles. The optional `generic-assistant-livekit/sip` profile answers phone calls.
+- **Generic Assistant on LiveKit.** A new example on LiveKit Agents runs with the `generic-assistant-livekit` Cloud, Server, and Single GPU profiles. The optional `generic-assistant-livekit/sip` profile answers phone calls. Its web UI chooses the services, their settings, and the prompt for each session.
 - **Nemotron 3.5 Transcribe ASR for the Generic and Multilingual Assistants.** Use the opt-in `transcribe-asr` profile for self-hosted speech recognition. The Generic Assistant also accepts optional transcription prompts.
 - **Experimental NVIDIA Dynamo recipes for the Generic and Multilingual Assistants.** The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` profiles serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the Server ASR and TTS NIMs, including **Streaming Input** in the Generic Assistant. You can add Dynamo workers on other GPUs.
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.

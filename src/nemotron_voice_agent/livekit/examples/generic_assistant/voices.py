@@ -18,12 +18,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from pathlib import Path
 from typing import Any
 
-from .state import read_json, write_json_atomic
-
-VOICES_FILE = "voices.json"  # written by the agent worker into the state volume, read by the UI server
 PLAIN_PREFIXES = {
     "magpietts",
     "magpie",
@@ -111,21 +107,6 @@ def with_current(voices: list[dict[str, str]], current: str) -> list[dict[str, s
 def choose_voice(requested: object, available: Iterable[str], default: str) -> str:
     """Return the requested voice when the server listed it, otherwise the default voice."""
     return requested if isinstance(requested, str) and requested in set(available) else default
-
-
-def write_voices_file(path: Path, voices: list[dict[str, str]], default: str) -> None:
-    """Write the voice list for the UI server."""
-    write_json_atomic(path, {"voices": voices, "default": default})
-
-
-def read_voices_file(path: Path) -> dict[str, Any]:
-    """Return `{"voices": [...], "default": ...}`, or an empty list when the file is missing or unreadable."""
-    data = read_json(path)
-    try:
-        voices = [v for v in data["voices"] if isinstance(v, dict) and "id" in v and "name" in v]
-        return {"voices": voices, "default": str(data.get("default", ""))}
-    except (KeyError, TypeError):
-        return {"voices": [], "default": ""}
 
 
 def parse_set_voice(data: bytes, allowed: Iterable[str]) -> str | None:

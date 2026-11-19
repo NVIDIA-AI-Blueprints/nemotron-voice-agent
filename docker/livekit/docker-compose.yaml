@@ -25,9 +25,9 @@ x-livekit-app: &livekit-app
   pull_policy: build
   volumes:
     - ../../services.yaml:/app/services.yaml:ro
+    - ../../settings.yaml:/app/settings.yaml:ro
     - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
     - ../../src:/app/src:ro
-    - ../../clients/livekit:/app/clients/livekit:ro
   restart: unless-stopped
   logging:
     driver: "json-file"
@@ -48,6 +48,7 @@ x-livekit-env: &livekit-env
   LLM_SERVICE: ${LLM_SERVICE:-}
   ASR_SERVICE: ${ASR_SERVICE:-}
   TTS_SERVICE: ${TTS_SERVICE:-}
+  LIVEKIT_UI_CUSTOM_ENDPOINTS: ${LIVEKIT_UI_CUSTOM_ENDPOINTS:-}
 
 services:
   # Writes the LiveKit key and secret and the server config to the livekit_state volume, then exits. It keeps
@@ -103,6 +104,7 @@ services:
       LIVEKIT_UI_HOST: 0.0.0.0  # inside the container, so that Docker can publish the port (on loopback by default)
       LIVEKIT_UI_USERNAME: ${LIVEKIT_UI_USERNAME:-}  # optional login for the UI. Only this container gets it
       LIVEKIT_UI_PASSWORD: ${LIVEKIT_UI_PASSWORD:-}
+      LIVEKIT_UI_CUSTOM_ENDPOINTS: ${LIVEKIT_UI_CUSTOM_ENDPOINTS:-}
       LIVEKIT_PUBLIC_WS_URL: ${LIVEKIT_PUBLIC_WS_URL:-}  # public address of LiveKit signaling for browsers (see the README)
       LIVEKIT_SIP: ${LIVEKIT_SIP:-}  # with --sip, the page lists the numbers that reach the agent
       LIVEKIT_URL: ws://livekit-server:7880  # to read the SIP records; the UI is not in the server's network namespace
@@ -111,9 +113,9 @@ services:
         condition: service_completed_successfully
     volumes:
       - ../../services.yaml:/app/services.yaml:ro
+      - ../../settings.yaml:/app/settings.yaml:ro
       - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
       - ../../src:/app/src:ro
-      - ../../clients/livekit:/app/clients/livekit:ro
       - livekit_state:/state:ro
     ports:
       - "${LIVEKIT_UI_BIND:-127.0.0.1}:${LIVEKIT_UI_PORT:-3000}:3000"
@@ -130,9 +132,9 @@ services:
         condition: service_completed_successfully
     volumes:
       - ../../services.yaml:/app/services.yaml:ro
+      - ../../settings.yaml:/app/settings.yaml:ro
       - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
       - ../../src:/app/src:ro
-      - ../../clients/livekit:/app/clients/livekit:ro
       - livekit_state:/state
     environment:
       <<: *livekit-env
@@ -151,9 +153,9 @@ services:
         condition: service_completed_successfully
     volumes:
       - ../../services.yaml:/app/services.yaml:ro
+      - ../../settings.yaml:/app/settings.yaml:ro
       - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
       - ../../src:/app/src:ro
-      - ../../clients/livekit:/app/clients/livekit:ro
       - livekit_state:/state
     environment:
       <<: *livekit-env
@@ -171,9 +173,9 @@ services:
         condition: service_completed_successfully
     volumes:
       - ../../services.yaml:/app/services.yaml:ro
+      - ../../settings.yaml:/app/settings.yaml:ro
       - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
       - ../../src:/app/src:ro
-      - ../../clients/livekit:/app/clients/livekit:ro
       - livekit_state:/state
     environment:
       <<: *livekit-env

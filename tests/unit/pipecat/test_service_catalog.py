@@ -17,6 +17,7 @@ import nemotron_voice_agent.pipecat.runtime.examples_registry as examples_regist
 import nemotron_voice_agent.pipecat.runtime.utils as utils
 from nemotron_voice_agent.core.catalog import NVCF_GRPC_SERVER, NVCF_LLM_BASE_URL, load_yaml_file, nvcf_entry
 from nemotron_voice_agent.core.paths import REPO_ROOT
+from nemotron_voice_agent.core.settings import load_settings_profiles
 from nemotron_voice_agent.pipecat.runtime.utils import (
     build_services_api_response,
     clear_service_context,
@@ -293,44 +294,6 @@ class ServiceSettingsTests(_CatalogTestCase):
 
         self.assertNotIn("reasoning_budget", extra["extra_body"])
 
-    def test_reasoning_budget_stays_under_max_tokens(self) -> None:
-        schema = {
-            "max_tokens": {"type": "int", "min": 1, "max": 16384, "path": "max_tokens"},
-            "enable_thinking": {"type": "bool", "default": False, "path": "enable_thinking"},
-            "reasoning_budget": {
-                "type": "int",
-                "default": 16384,
-                "min": 128,
-                "max": 32768,
-                "path": "budget",
-                "requires": "enable_thinking",
-                "below": "max_tokens",
-                "reserve": 64,
-            },
-        }
-        cases = [
-            ({"enable_thinking": True}, 16384),
-            ({"enable_thinking": True, "max_tokens": 4096, "reasoning_budget": 1024}, 1024),
-            ({"enable_thinking": True, "max_tokens": 1024}, 960),
-            ({"enable_thinking": True, "max_tokens": 192}, 128),
-        ]
-        for values, budget in cases:
-            with self.subTest(values=values):
-                applied = utils.apply_service_settings({}, schema, values)
-                self.assertEqual(applied["budget"], budget)
-                self.assertIs(applied["enable_thinking"], True)
-        for max_tokens in (64, 191):
-            with self.subTest(max_tokens=max_tokens):
-                applied = utils.apply_service_settings({}, schema, {"enable_thinking": True, "max_tokens": max_tokens})
-                self.assertIs(applied["enable_thinking"], False)
-                self.assertNotIn("budget", applied)
-        unconditional = {
-            **schema,
-            "reasoning_budget": {k: v for k, v in schema["reasoning_budget"].items() if k != "requires"},
-        }
-        self.assertNotIn("budget", utils.apply_service_settings({}, unconditional, {"max_tokens": 64}))
-        self.assertEqual(utils.apply_service_settings({}, unconditional, {"max_tokens": 1024})["budget"], 960)
-
     def test_below_and_reserve_are_validated(self) -> None:
         settings_path = Path(os.environ["SERVICES_PATH"]).with_name("settings.yaml")
         for spec, error in (
@@ -345,7 +308,7 @@ class ServiceSettingsTests(_CatalogTestCase):
                 others = "  b:\n    type: int\n  ratio:\n    type: float\n  flag:\n    type: bool\n"
                 settings_path.write_text(f"p:\n  a:\n    type: int\n    {spec}\n{others}", encoding="utf-8")
                 with self.assertRaisesRegex(RuntimeError, error):
-                    utils._load_settings_profiles()
+                    load_settings_profiles()
 
     def test_invalid_and_unknown_settings_fall_back_to_defaults(self) -> None:
         extra = self._extra(llm_settings={"enable_thinking": "yes", "top_p": 0.1})
@@ -854,7 +817,7 @@ class RepositoryCatalogTests(unittest.TestCase):
         )
 
     def test_every_llm_with_reasoning_keeps_its_budget_under_max_tokens(self) -> None:
-        profiles = utils._load_settings_profiles()
+        profiles = load_settings_profiles()
         catalog = load_yaml_file(REPO_ROOT / "services.yaml")
         for recipe, sections in catalog.items():
             for key, entry in (sections.get("llm") or {}).items():

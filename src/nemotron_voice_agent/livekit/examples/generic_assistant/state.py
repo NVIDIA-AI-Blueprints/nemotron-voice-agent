@@ -15,13 +15,17 @@ DEPLOYMENT_FILE = "deployment.json"  # the deployment mode and the models in use
 
 
 def write_json_atomic(path: Path, payload: Any) -> None:
-    """Write `payload` as JSON. The write is atomic, so a reader never sees a partial file."""
+    """Write `payload` as JSON, atomically, so a reader never sees a partial file. A failed write leaves no file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".state-")
-    with os.fdopen(fd, "w") as handle:
-        json.dump(payload, handle)
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(payload, handle)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def read_json(path: Path) -> Any:

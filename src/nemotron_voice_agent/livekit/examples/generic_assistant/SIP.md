@@ -157,7 +157,7 @@ Test the setup with these steps:
    ```
 
 3. Call the number from your phone (a verified phone on a trial account).
-   After a number is mapped, the web UI also lists it under **Or call the agent**, so people who open the UI know that they can call in.
+   After a number is mapped, the web UI also lists it in the **PHONE** panel, so people who open the UI know that they can call in.
 4. Expect an incoming call in the SIP log, a room named `call-...` in the LiveKit log, and then the greeting. Phone audio is 8 kHz, so recognition and voice quality are lower than in the browser. That is normal.
 
 If a call fails, open the Twilio Console's **Monitor** logs for it. A SIP response code there shows whether the call reached your server.

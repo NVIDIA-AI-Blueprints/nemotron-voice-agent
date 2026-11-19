@@ -4,7 +4,6 @@
 # ruff: noqa: D100, D101, D102
 
 import asyncio
-import http.client
 import os
 import socket
 import unittest
@@ -24,32 +23,6 @@ class ServiceStatusTest(unittest.TestCase):
     def setUp(self) -> None:
         server._seen_service_targets.clear()
         server._failed_service_targets.clear()
-
-    def test_unresolvable_host_is_offline_and_refused_port_is_starting(self) -> None:
-        with patch("socket.create_connection", side_effect=socket.gaierror):
-            self.assertEqual(server._probe_tcp("nemo-speech:50051", 1), "offline")
-        with patch("socket.create_connection", side_effect=ConnectionRefusedError):
-            self.assertEqual(server._probe_tcp("nemo-speech:50051", 1), "starting")
-        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError(socket.gaierror())):
-            self.assertEqual(server._probe_http("http://llm:8000/health", False, 1), "offline")
-        with patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("u", 503, "", None, None)):
-            self.assertEqual(server._probe_http("http://llm:8000/health", False, 1), "starting")
-
-    def test_refused_local_port_is_offline(self) -> None:
-        refused = urllib.error.URLError(ConnectionRefusedError())
-        with patch("socket.create_connection", side_effect=ConnectionRefusedError):
-            self.assertEqual(server._probe_tcp("localhost:50051", 1), "offline")
-        with patch("urllib.request.urlopen", side_effect=refused):
-            self.assertEqual(server._probe_http("http://localhost:18000/health", False, 1), "offline")
-            self.assertEqual(server._probe_http("http://[::1]:18000/health", False, 1), "offline")
-            self.assertEqual(server._probe_http("http://llm:8000/health", False, 1), "starting")
-        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError(ConnectionResetError())):
-            self.assertEqual(server._probe_http("http://localhost:18000/health", False, 1), "starting")
-
-    def test_truncated_health_response_is_starting(self) -> None:
-        for error in (http.client.IncompleteRead(b"{"), http.client.BadStatusLine("")):
-            with patch("urllib.request.urlopen", side_effect=error):
-                self.assertEqual(server._probe_http("http://llm:8000/health", True, 1), "starting")
 
     def test_service_that_disappears_after_being_seen_is_error_until_ready(self) -> None:
         self.assertEqual(server._remembered_status("llm", "offline"), "offline")

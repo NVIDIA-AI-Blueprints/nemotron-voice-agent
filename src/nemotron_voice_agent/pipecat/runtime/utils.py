@@ -4,20 +4,16 @@
 """Shared utility functions."""
 
 import asyncio
-import http.client
 import ipaddress
 import json
-import math
 import os
 import socket
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Any, NamedTuple
 from urllib.parse import urlparse, urlunparse
 
 import yaml
@@ -30,6 +26,18 @@ from nemotron_voice_agent.core.catalog import (
     strip_nvcf,
 )
 from nemotron_voice_agent.core.paths import REPO_ROOT, services_path
+from nemotron_voice_agent.core.service_status import (
+    LOCAL_SERVICE_HOSTS,
+    parse_endpoint,
+    service_host_port,
+)
+from nemotron_voice_agent.core.settings import (
+    MISSING,
+    apply_service_settings,
+    entry_settings_schema,
+    get_path,
+    load_settings_profiles,
+)
 
 PROMPTS_FILENAME = "prompts.yaml"
 TOOLS_FILENAME = "tools.yaml"
@@ -256,13 +264,12 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
         for service, ports in services.items()
     },
 }
-_LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 
 
 def _is_compose_service_host(host: str) -> bool:
     """Return true for Docker Compose service names, not public hosts/IPs."""
     normalized = host.strip().lower()
-    if not normalized or normalized in _LOCAL_SERVICE_HOSTS:
+    if not normalized or normalized in LOCAL_SERVICE_HOSTS:
         return False
     try:
         ipaddress.ip_address(normalized)
@@ -333,23 +340,6 @@ _REACHABILITY_CACHE_TTL_SECS = 5.0
 _reachability_cache: dict[str, tuple[float, bool]] = {}
 
 
-def parse_endpoint(server: str) -> tuple[str, int] | None:
-    """Parse ``server`` (host[:port] or URL) into ``(host, port)``.
-
-    Returns ``None`` when the address cannot be parsed.
-    """
-    if not server:
-        return None
-    parsed = urlparse(server if "://" in server else f"//{server}")
-    host = parsed.hostname
-    if not host:
-        return None
-    port = parsed.port
-    if port is None:
-        port = 443 if parsed.scheme == "https" else 80
-    return host, port
-
-
 def is_endpoint_reachable(server: str) -> bool:
     """Return whether ``server`` accepts a TCP connection.
 
@@ -376,17 +366,8 @@ def is_endpoint_reachable(server: str) -> bool:
 CLOUD_SOURCE = "cloud-nim"
 SELF_HOSTED_SOURCE = "self-hosted"
 
-ServiceStatus = Literal["ready", "starting", "error", "offline"]
 _NIM_READY_PATH = "/v1/health/ready"
 _CONNECT_HEALTH_TIMEOUT_SECS = 5
-
-
-def _service_host_port(server: str) -> tuple[str, int]:
-    """Parse a service address into host/port, raising on invalid input."""
-    parsed = parse_endpoint(server)
-    if parsed is None:
-        raise RuntimeError(f"Invalid service address: {server or '(empty)'}")
-    return parsed
 
 
 def _http_host(host: str) -> str:
@@ -401,12 +382,12 @@ def _local_speech_ready_url(label: str, server: str) -> str:
                 parsed = urlparse(server)
                 if parsed.scheme and parsed.netloc:
                     return f"{parsed.scheme}://{parsed.netloc}{entry['health_path']}"
-    host, port = _service_host_port(server)
+    host, port = service_host_port(server)
     normalized_host = host.strip("[]").lower()
     for service, ports in LOCAL_SPEECH_PORTS.get(label.lower(), {}).items():
         if normalized_host == service and port == ports.grpc:
             return f"http://{normalized_host}:{ports.health}{_NIM_READY_PATH}"
-        if normalized_host in _LOCAL_SERVICE_HOSTS and port == ports.host_grpc:
+        if normalized_host in LOCAL_SERVICE_HOSTS and port == ports.host_grpc:
             return f"http://{_http_host(host)}:{ports.host_health}{_NIM_READY_PATH}"
     return ""
 
@@ -433,49 +414,6 @@ def _llm_health_url(base_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{entry['health_path']}"
 
 
-def _unreachable_status(host: str, exc: BaseException) -> ServiceStatus:
-    """An unresolvable host, or a refused local port, means the container is not running.
-
-    A running container's published port accepts connections through docker-proxy even while
-    the model loads, so only a stopped one refuses on ``localhost``.
-    """
-    if isinstance(exc, socket.gaierror):
-        return "offline"
-    if isinstance(exc, ConnectionRefusedError) and host.strip("[]").lower() in _LOCAL_SERVICE_HOSTS:
-        return "offline"
-    return "starting"
-
-
-def _probe_tcp(server: str, timeout: float) -> ServiceStatus:
-    """Probe a gRPC port for services without an HTTP readiness endpoint."""
-    host, port = _service_host_port(server)
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return "ready"
-    except OSError as exc:
-        return _unreachable_status(host, exc)
-
-
-def _probe_http(health_url: str, expects_ready_json: bool, timeout: float) -> ServiceStatus:
-    """Probe a health URL; see ``_unreachable_status`` for when a failure means offline."""
-    try:
-        with urllib.request.urlopen(health_url, timeout=timeout) as response:
-            body = response.read()
-    except urllib.error.URLError as exc:
-        return _unreachable_status(urlparse(health_url).hostname or "", exc.reason)
-    except (OSError, http.client.HTTPException):
-        return "starting"
-    if not expects_ready_json:
-        return "ready"
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return "starting"
-    if isinstance(payload, dict) and (payload.get("status") == "ready" or payload.get("ready") is True):
-        return "ready"
-    return "starting"
-
-
 async def _run_blocking(func, *args, timeout: float | None = None):
     task = asyncio.to_thread(func, *args)
     if timeout is None:
@@ -492,153 +430,6 @@ def _nvcf_catalog(server_catalog: dict) -> dict:
         category: {key: cloud for key, entry in section.items() if (cloud := nvcf_entry(entry)) is not None}
         for category, section in server_catalog.items()
     }
-
-
-_SETTING_TYPES = frozenset({"bool", "int", "float", "enum"})
-_NUMBER_TYPES = frozenset({"int", "float"})
-
-
-def _coerce_setting(name: str, spec: dict, raw: object) -> object:
-    """Validate one client value against its schema, falling back to the default."""
-    default = spec.get("default")
-    if raw is None:
-        return default
-    kind = spec.get("type")
-    try:
-        if kind == "bool":
-            if isinstance(raw, bool):
-                return raw
-            if isinstance(raw, str) and raw.strip().lower() in {"true", "false"}:
-                return raw.strip().lower() == "true"
-            raise ValueError
-        if kind == "enum":
-            if raw in (spec.get("options") or []):
-                return raw
-            raise ValueError
-        if isinstance(raw, bool):
-            raise ValueError
-        value: int | float = int(raw) if kind == "int" else float(raw)
-        if not math.isfinite(value):
-            raise ValueError
-    except (TypeError, ValueError):
-        logger.warning(f"Ignoring invalid value for setting {name!r}: {raw!r}")
-        return default
-    if spec.get("min") is not None:
-        value = max(value, spec["min"])
-    if spec.get("max") is not None:
-        value = min(value, spec["max"])
-    return value
-
-
-def _cap_below(name: str, spec: dict, value: int | float, limit: int | float | None) -> int | float | None:
-    """Keep ``value`` at least ``reserve`` under ``limit``, or return ``None`` when that leaves less than ``min``."""
-    if limit is None:
-        return value
-    cap = limit - spec.get("reserve", 0)
-    if value <= cap:
-        return value
-    if cap < spec.get("min", 0):
-        turned_off = f" and turning off {spec['requires']!r}" if spec.get("requires") else ""
-        logger.warning(f"Dropping setting {name!r}{turned_off}: {spec['below']}={limit}")
-        return None
-    logger.warning(f"Capping setting {name!r} from {value} to {cap} to stay under {spec['below']}={limit}")
-    return cap
-
-
-def _set_path(target: dict, path: str, value: object) -> None:
-    *parents, leaf = path.split(".")
-    for part in parents:
-        child = target.get(part)
-        if not isinstance(child, dict):
-            child = target[part] = {}
-        target = child
-    target[leaf] = value
-
-
-def _pop_path(target: dict, path: str) -> None:
-    *parents, leaf = path.split(".")
-    for part in parents:
-        target = target.get(part)
-        if not isinstance(target, dict):
-            return
-    target.pop(leaf, None)
-
-
-def apply_service_settings(extra_params: dict, schema: Mapping[str, dict], values: Mapping[str, object]) -> dict:
-    """Return ``extra_params`` with each schema setting written at its ``path``.
-
-    Values come from ``values`` when valid, else the schema default. A setting
-    whose ``requires`` setting resolves falsy is removed instead. A ``below``
-    setting that cannot stay under its limit turns its ``requires`` setting off.
-    """
-    resolved = {name: _coerce_setting(name, spec, values.get(name)) for name, spec in schema.items()}
-
-    def active(name: str, spec: dict) -> bool:
-        requirement = spec.get("requires")
-        return resolved[name] is not None and (not requirement or bool(resolved.get(requirement)))
-
-    for name, spec in schema.items():
-        if not spec.get("below") or not active(name, spec):
-            continue
-        resolved[name] = _cap_below(name, spec, resolved[name], resolved.get(spec["below"]))
-        if resolved[name] is None and spec.get("requires"):
-            resolved[spec["requires"]] = False
-    out = json.loads(json.dumps(extra_params))
-    for name, spec in schema.items():
-        if not active(name, spec):
-            _pop_path(out, spec["path"])
-        else:
-            _set_path(out, spec["path"], resolved[name])
-    return out
-
-
-def _load_settings_profiles() -> dict[str, dict]:
-    """Load ``settings.yaml`` profiles, with each setting's ``path`` defaulting to its name."""
-    profiles: dict[str, dict] = {}
-    for profile_name, profile in load_yaml_file(services_path().with_name("settings.yaml"), required=True).items():
-        if str(profile_name).startswith("x-"):
-            continue
-        if not isinstance(profile, dict):
-            raise RuntimeError(f"settings.yaml profile {profile_name!r} must be a mapping")
-        for name, spec in profile.items():
-            if not isinstance(spec, dict) or spec.get("type") not in _SETTING_TYPES:
-                raise RuntimeError(
-                    f"settings.yaml {profile_name}.{name} needs a type ({', '.join(sorted(_SETTING_TYPES))})"
-                )
-            below = spec.get("below")
-            target = profile.get(below) if below is not None else None
-            target_type = target.get("type") if isinstance(target, dict) else None
-            if below is not None and (spec["type"] not in _NUMBER_TYPES or target_type != spec["type"]):
-                raise RuntimeError(
-                    f"settings.yaml {profile_name}.{name} below must name a number setting of the same type"
-                )
-            if "reserve" in spec and below is None:
-                raise RuntimeError(f"settings.yaml {profile_name}.{name} reserve needs below")
-            reserve = spec.get("reserve", 0)
-            if not isinstance(reserve, int) or isinstance(reserve, bool) or reserve < 0:
-                raise RuntimeError(f"settings.yaml {profile_name}.{name} reserve must be a non-negative integer")
-        profiles[profile_name] = {name: {**spec, "path": spec.get("path") or name} for name, spec in profile.items()}
-    return profiles
-
-
-_MISSING = object()
-
-
-def _get_path(source: dict, path: str) -> object:
-    for part in path.split("."):
-        if not isinstance(source, dict) or part not in source:
-            return _MISSING
-        source = source[part]
-    return source
-
-
-def _entry_settings_schema(profile: Mapping[str, dict], extra_params: dict) -> dict[str, dict]:
-    """Use a value already set at a setting's ``path`` in ``extra_params`` as that entry's default."""
-    schema: dict[str, dict] = {}
-    for name, spec in profile.items():
-        value = _get_path(extra_params, spec["path"])
-        schema[name] = spec if value is _MISSING else {**spec, "default": value}
-    return schema
 
 
 def _attach_settings(
@@ -671,7 +462,7 @@ def _attach_settings(
                 unmapped = sorted(spec["path"] for spec in profile.values() if spec["path"] not in field_map)
                 if unmapped:
                     raise RuntimeError(f"Settings profile {profile_name!r} sets {unmapped}, unknown to {category}")
-            schema = _entry_settings_schema(profile, base)
+            schema = entry_settings_schema(profile, base)
             unknown = sorted(set(overrides) - set(schema))
             if unknown:
                 raise RuntimeError(f"Registry settings {unknown} are not in settings profile {profile_name!r}")
@@ -722,7 +513,7 @@ def service_catalog_sources(example: ExampleServiceConfig | None = None) -> list
     if nvidia_cloud_available():
         server_catalog = _normalize_services_catalog(data.get("server"))
         sources.append((CLOUD_SOURCE, _select_example_services(_nvcf_catalog(server_catalog), binding)))
-    profiles = _load_settings_profiles()
+    profiles = load_settings_profiles()
     return [(source, _attach_settings(catalog, profiles, binding.settings)) for source, catalog in sources]
 
 
@@ -910,8 +701,8 @@ def hydrate_config_from_catalog(config: dict) -> None:
             else:
                 applied = apply_service_settings({}, entry["settings"], user_values)
                 for spec in entry["settings"].values():
-                    value = _get_path(applied, spec["path"])
-                    if value is _MISSING:
+                    value = get_path(applied, spec["path"])
+                    if value is MISSING:
                         config.pop(field_map[spec["path"]], None)
                     else:
                         config[field_map[spec["path"]]] = str(value)

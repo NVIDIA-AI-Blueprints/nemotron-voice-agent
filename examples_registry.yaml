@@ -154,13 +154,14 @@ pipecat:
           ice_urls: []
           allowed_hosts: []
 
-# Each LiveKit example lists the services it offers per slot from `services.yaml`. The first entry is the default,
-# and the `LLM_SERVICE`, `ASR_SERVICE`, and `TTS_SERVICE` variables pick another catalog key.
+# Each LiveKit example lists the services it offers per slot from `services.yaml`, in UI order. The UI shows the ones
+# that the recipe can serve. The first entry is the default, and the `LLM_SERVICE`, `ASR_SERVICE`, and `TTS_SERVICE`
+# variables pick another catalog key.
 livekit:
   examples:
     generic-assistant:
       label: Generic Assistant
       services:
-        llm: [nemotron-lightning]
-        asr: [nemotron-asr-streaming-english]
-        tts: [magpie-multilingual-tts]
+        llm: [nemotron-lightning, nemotron-super, nemotron-bolt-74b, nemotron-bolt-4b]
+        asr: [nemotron-asr-streaming-english, parakeet-ctc, parakeet-rnnt]
+        tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]

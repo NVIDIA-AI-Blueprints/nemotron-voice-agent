@@ -14,7 +14,8 @@ deployment profiles when changing shared behavior.
 - Use the root `pyproject.toml` and `uv.lock` for Python versions and dependencies. Each framework has its own
   dependency group (`pipecat`, `livekit`), and the `nva-pipecat` and `nva-livekit` entry points start them.
 - Use `clients/pipecat/package.json` and `clients/pipecat/package-lock.json` for Pipecat client
-  dependencies and scripts. The LiveKit browser files in `clients/livekit/` have no package manifest.
+  dependencies and scripts, and `clients/livekit/package.json` and `clients/livekit/package-lock.json` for the
+  LiveKit client.
 - Use `examples_registry.yaml` for registered examples, transports, the
   services each example offers per slot, and per-example service overrides
   (`settings` and `categories`). It has a `pipecat` and a `livekit` section.
@@ -75,10 +76,17 @@ uv sync --locked
 uv run pytest tests/unit/core tests/unit/sidecars tests/unit/pipecat tests/test_docs_review_receipt.py -v
 uv run pytest tests/unit/livekit -v
 uv run --group eval python tests/evals/pipecat/ci/smoke.py
+uv run --group eval python -m pipecat.evals suite tests/evals/pipecat/ci/manifest.yaml --timeout 5 --name ci
 npm --prefix clients/pipecat ci
 npm --prefix clients/pipecat run lint
 npm --prefix clients/pipecat run build
+npm --prefix clients/livekit ci
+npm --prefix clients/livekit run lint
+npm --prefix clients/livekit run test
+npm --prefix clients/livekit run build
 ```
+
+CI builds the Pipecat client with Node.js 20 and the LiveKit client with Node.js 22. The LiveKit client tests need Node.js 22.18 or newer.
 
 For documentation-only changes, run the configured pre-commit hooks on the
 changed files:
