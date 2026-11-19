@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Lightweight CI: Python lint/format (ruff), Python unit tests (pytest), and
-# client lint + build (eslint, tsc, vite). No deployment and no GPU are required.
+# Lightweight CI: Python lint/format (ruff), Pipecat and LiveKit unit tests (pytest), and
+# Pipecat client lint + build (eslint, tsc, vite). No deployment and no GPU are required.
 
 name: Nemotron Voice Agent CI
 
@@ -35,7 +35,7 @@ jobs:
         run: uvx ruff@0.15.6 format --check .
 
   unit-tests:
-    name: Unit tests (pytest)
+    name: Pipecat unit tests (pytest)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -45,10 +45,26 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --dev --group harness
+        run: uv sync --locked
 
       - name: Run unit tests
-        run: uv run pytest tests/unit -v
+        run: uv run pytest tests/unit/core tests/unit/sidecars tests/unit/pipecat tests/test_docs_review_receipt.py -v
+
+  livekit-tests:
+    name: LiveKit unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run unit tests
+        run: uv run pytest tests/unit/livekit -v
 
   pipecat-evals:
     name: Pipecat eval smoke
@@ -61,13 +77,13 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --group eval
+        run: uv sync --locked --group eval
 
       - name: Validate eval transport wiring
-        run: PYTHONPATH=src uv run --group eval python tests/pipecat_evals/ci/smoke.py
+        run: uv run --group eval python tests/evals/pipecat/ci/smoke.py
 
       - name: Run service-free eval suite
-        run: PYTHONPATH=src uv run --group eval python -m pipecat.evals suite tests/pipecat_evals/ci/manifest.yaml --timeout 5 --name ci
+        run: uv run --group eval python -m pipecat.evals suite tests/evals/pipecat/ci/manifest.yaml --timeout 5 --name ci
 
   client-lint-build:
     name: Client lint and build
@@ -81,13 +97,13 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: client/package-lock.json
+          cache-dependency-path: clients/pipecat/package-lock.json
 
       - name: Install client dependencies
-        run: npm --prefix client ci
+        run: npm --prefix clients/pipecat ci
 
       - name: Lint client
-        run: npm --prefix client run lint
+        run: npm --prefix clients/pipecat run lint
 
       - name: Build client
-        run: npm --prefix client run build
+        run: npm --prefix clients/pipecat run build

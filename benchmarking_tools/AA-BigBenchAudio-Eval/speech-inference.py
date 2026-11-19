@@ -56,7 +56,7 @@ def parse_server_url(url: str, *, insecure_skip_verify: bool = False) -> tuple[s
     host = p.hostname
     if not host:
         raise ValueError("--server-url must include a host")
-    port = p.port if p.port is not None else DEFAULT_HTTP_PORT  # same default as ``src/server.py``
+    port = p.port if p.port is not None else DEFAULT_HTTP_PORT  # same default as ``nva-pipecat``
 
     if ":" in host and not host.startswith("["):
         netloc = f"[{host}]:{port}"
@@ -103,7 +103,8 @@ def request_session_id(
 class BenchmarkClient:
     """WebSocket client for streaming WAV to the voice agent and writing ``output.wav`` per sample.
 
-    Each sample uses ``POST /api/session-config`` then ``/api/ws?session_id=...`` (see Nemotron ``src/server.py``).
+    Each sample uses ``POST /api/session-config`` then ``/api/ws?session_id=...``
+    (see Nemotron ``src/nemotron_voice_agent/pipecat/runtime/server.py``).
     """
 
     def __init__(self, http_base: str, ws_origin: str, ssl_context: ssl.SSLContext | None):

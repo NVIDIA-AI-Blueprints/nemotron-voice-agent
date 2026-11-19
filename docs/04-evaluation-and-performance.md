@@ -1,6 +1,6 @@
 # Evaluation and Performance
 
-This guide provides reference benchmarks for the Nemotron Voice Agent covering **accuracy**, **full-duplex behavior**, and **latency/throughput**.
+This guide provides reference benchmarks for the Nemotron Voice Agent covering **accuracy**, **full-duplex behavior**, and **latency/throughput**. It applies to the Pipecat examples.
 
 ---
 

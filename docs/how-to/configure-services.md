@@ -1,8 +1,8 @@
 # Configure Services
 
-The Nemotron Voice Agent keeps every built-in LLM, ASR, and TTS service in one catalog, [`services.yaml`](../../services.yaml), at the repository root. Each example picks the services it offers in [`examples_registry.yaml`](../../examples_registry.yaml). Editable knobs, such as reasoning on/off and the reasoning budget, live in [`settings.yaml`](../../settings.yaml).
+The Nemotron Voice Agent keeps every built-in LLM, ASR, and TTS service in one catalog, [`services.yaml`](../../services.yaml), at the repository root. Each example picks the services it offers under `pipecat.examples.<example>.services` or `livekit.examples.<example>.services` in [`examples_registry.yaml`](../../examples_registry.yaml). Editable knobs, such as reasoning on/off and the reasoning budget, live in [`settings.yaml`](../../settings.yaml).
 
-This guide covers the **mechanics**: how the catalog is laid out, how the active recipe selects entries, and how to extend it.
+This guide covers the **mechanics**: how the catalog is laid out, how the active recipe selects entries, and how to extend it. For the differences in the LiveKit example, refer to [Use the Catalog with LiveKit](#use-the-catalog-with-livekit).
 
 ## Required credentials
 
@@ -14,6 +14,8 @@ Set one key per recipe family. Do not mix them.
 | Server (`<example>/server`) | `NVIDIA_API_KEY` |
 | Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` |
 | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` |
+
+The LiveKit profiles `generic-assistant-livekit`, `generic-assistant-livekit/server`, and `generic-assistant-livekit/single-gpu` use the same keys as Cloud, Server, and Single-GPU.
 
 `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server and Performance Server additionally need `docker login nvcr.io` before `up`. Single-GPU requires `HF_TOKEN` for Hugging Face model downloads and does not use `NVIDIA_API_KEY`.
 
@@ -48,7 +50,7 @@ server:
 
 ## How the active recipe selects entries
 
-Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The experimental `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run python src/server.py`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
+This section describes the Pipecat backend. Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The experimental `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run nva-pipecat`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |
@@ -61,19 +63,27 @@ Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-
 
 ## Per-example services and defaults
 
-Each example lists the catalog keys it offers per slot under `services` in `examples_registry.yaml`. The slot order is the UI order, and the list order is the order inside each slot. A slot reads the catalog category of the same name. To add a slot that reuses another category, map it under `categories`. The first key that is available for the active recipe becomes the default, with self-hosted entries preferred over NVIDIA Cloud.
+Each Pipecat example lists the catalog keys it offers per slot under `pipecat.examples.<example>.services` in `examples_registry.yaml`. The LiveKit example reads `livekit.examples.<example>.services`, as [Use the Catalog with LiveKit](#use-the-catalog-with-livekit) describes. The slot order is the UI order, and the list order is the order inside each slot. A slot reads the catalog category of the same name. To add a slot that reuses another category, map it under `categories`. The first key that is available for the active recipe becomes the default, with self-hosted entries preferred over NVIDIA Cloud.
 
 ```yaml
-multilingual-assistant:
-  services:
-    llm: [nemotron-lightning, nemotron-super]
-    asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt]
-    tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
+pipecat:
+  examples:
+    multilingual-assistant:
+      services:
+        llm: [nemotron-lightning, nemotron-super]
+        asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt]
+        tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
 ```
 
 On `server` and `single-gpu`, the multilingual ASR default is the self-hosted `nemotron-asr-streaming-multilingual`. On `cloud`, that key has no `nvcf`, so the default becomes `parakeet-rnnt`. To change a default, move the key to the front of its list.
 
 The [Examples table](../../README.md#-examples) links to each example README. Each README lists the models selected for every supported profile.
+
+## Use the Catalog with LiveKit
+
+The Generic Assistant on LiveKit reads the same `services.yaml` entries and the same `SERVICE_RECIPE` values (`cloud`, `server`, and `single-gpu`). Each agent service in [`docker/livekit/docker-compose.yaml`](../../docker/livekit/docker-compose.yaml) sets its recipe. The example has no `auto` recipe, and an unset `SERVICE_RECIPE` means `cloud`. The Cloud recipe offers only entries with an `nvcf` key.
+
+The defaults are the first keys of each slot under `livekit.examples.generic-assistant.services` in `examples_registry.yaml`. To pick another catalog key, set `LLM_SERVICE`, `ASR_SERVICE`, or `TTS_SERVICE` in `.env`, and then recreate the agent service. The example has no **Services** tab and no `settings.yaml` controls. Only the entry's `extra_params.extra_body` applies. The example does not support ASR entries that use the Transcribe HTTP API, such as `nemotron-transcribe`. For the commands and the Server and Single GPU sidecar setup, refer to [Configure Models](../../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#configure-models) in the LiveKit example README.
 
 ## Switching services in the UI
 
@@ -119,28 +129,30 @@ NIM and vLLM name the budget differently (`reasoning_budget` and `thinking_token
 The Frontend/Backend Live backend LLM uses the `thinker-llm` slot. It reads the same `llm` entries as the talker through `categories`, and the registry sets its defaults:
 
 ```yaml
-frontend-backend-live:
-  services:
-    llm: [nemotron-lightning]
-    thinker-llm: [nemotron-super, nemotron-lightning]
-  categories:
-    thinker-llm: llm
-  settings:
-    thinker-llm:
-      nemotron-super:
-        temperature: 0.0
-        max_tokens: 4096
-        enable_thinking: true
-      nemotron-lightning:
-        temperature: 0.7
-        max_tokens: 4096
-        enable_thinking: true
-        reasoning_budget: 256
+pipecat:
+  examples:
+    frontend-backend-live:
+      services:
+        llm: [nemotron-lightning]
+        thinker-llm: [nemotron-super, nemotron-lightning]
+      categories:
+        thinker-llm: llm
+      settings:
+        thinker-llm:
+          nemotron-super:
+            temperature: 0.0
+            max_tokens: 4096
+            enable_thinking: true
+          nemotron-lightning:
+            temperature: 0.7
+            max_tokens: 4096
+            enable_thinking: true
+            reasoning_budget: 256
 ```
 
 ## Adding a self-hosted service
 
-To configure a specific local model, check its Docker Compose file under [`docker/`](../../docker/) for the **service name**, **port**, and the **profile** that launches it, then point a catalog entry at that endpoint. For example, Nemotron ASR Streaming (English) is defined in [`docker/docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml):
+To configure a specific local model, check its Docker Compose file under [`docker/sidecars/`](../../docker/sidecars/) for the **service name**, **port**, and the **profile** that launches it, then point a catalog entry at that endpoint. For example, Nemotron ASR Streaming (English) is defined in [`docker/sidecars/docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml):
 
 ```yaml
 services:
@@ -157,7 +169,7 @@ services:
 
 The matching entry under `server` points at that Compose service name and **container** port (`50052`). For host-native runs, the backend rewrites it to the published host port automatically. Here `nemotron-asr-streaming-english:50052` becomes `localhost:50152`.
 
-Every speech sidecar publishes its own host ports, so alternatives can run side by side and the Services tab switches between them. A gRPC speech sidecar needs unused host ports in its Compose file and a matching row in `LOCAL_SPEECH_PORTS` in [`src/utils.py`](../../src/utils.py), which drives both the host rewrite and the readiness check. HTTP-only speech sidecars use `_HOST_RUNTIME_PORT_OVERRIDES` for the host port and `health_path` on their catalog entry for readiness, as LLMs do.
+Every speech sidecar publishes its own host ports, so alternatives can run side by side and the Services tab switches between them. A gRPC speech sidecar needs unused host ports in its Compose file and a matching row in `LOCAL_SPEECH_PORTS` in [`src/nemotron_voice_agent/pipecat/runtime/utils.py`](../../src/nemotron_voice_agent/pipecat/runtime/utils.py), which drives both the host rewrite and the readiness check. HTTP-only speech sidecars use `_HOST_RUNTIME_PORT_OVERRIDES` for the host port and `health_path` on their catalog entry for readiness, as LLMs do.
 
 | Sidecar | gRPC host port | HTTP host port |
 | --- | --- | --- |
@@ -172,7 +184,7 @@ Every speech sidecar publishes its own host ports, so alternatives can run side 
 
 When two containers serve the same model for different profiles, give them the same Compose network alias so one catalog entry covers both. Every NeMo-Speech.cpp variant answers on `nemo-speech`, and both single-GPU Lightning containers answer on `nvidia-llm-vllm`.
 
-To run models locally for a **new example**, add your example's profile (e.g. `my-example/server`) to the relevant service(s) under `docker/`, add the app service with `SERVICE_RECIPE` in `docker-compose.yml`, and list the catalog keys under the example's `services` in `examples_registry.yaml`. See [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
+To run models locally for a **new example**, add your example's profile (for example `my-example/server`) to the relevant service(s) under `docker/sidecars/`, add the app service with `SERVICE_RECIPE` in `docker/pipecat/docker-compose.yaml`, and list the catalog keys under `pipecat.examples.<example>.services` in `examples_registry.yaml`. Refer to [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
 
 ## Adding an NVIDIA Cloud service
 
@@ -210,4 +222,4 @@ ASR entries can set `speaker_diarization_supported: true` to show the **Diarizat
 
 `streaming_url` is an optional self-hosted LLM field that points at an OpenAI Realtime text session WebSocket. The Services tab shows a **Streaming Input** toggle for it when the example lists `streaming_input` under `capabilities`. For details, refer to [Configure LLM](configure-llm.md).
 
-`api` is an optional LLM field that names the API that the Frontend/Backend Live delegation core uses to call the model: `chat-completions`, the default, or `openai-responses`. A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant, unless the `nvcf` block sets `api: chat-completions`. An `api` in the `nvcf` block applies to the NVIDIA Cloud variant only. For the servers that support `openai-responses`, refer to [Configuration](../../src/examples/frontend_backend_live/README.md#configuration) in the Frontend/Backend Live README.
+`api` is an optional LLM field that names the API that the Frontend/Backend Live delegation core uses to call the model: `chat-completions`, the default, or `openai-responses`. A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant, unless the `nvcf` block sets `api: chat-completions`. An `api` in the `nvcf` block applies to the NVIDIA Cloud variant only. For the servers that support `openai-responses`, refer to [Configuration](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) in the Frontend/Backend Live README.

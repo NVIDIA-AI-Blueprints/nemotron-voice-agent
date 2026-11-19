@@ -31,8 +31,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCHMARK_PY="$SCRIPT_DIR/benchmark.py"
 
 # Prefer the project's uv-managed venv when available.
-if command -v uv >/dev/null 2>&1 && [[ -f "$SCRIPT_DIR/../../pyproject.toml" ]]; then
-  PY=("uv" "run" "--no-sync" "python3")
+REPO_ROOT="$SCRIPT_DIR/../.."
+if command -v uv >/dev/null 2>&1 && [[ -f "$REPO_ROOT/pyproject.toml" ]]; then
+  PY=("uv" "run" "--no-sync" "--project" "$REPO_ROOT" "python3")
 else
   PY=("python3")
 fi

@@ -1,6 +1,6 @@
 # Deploying Voice Agent on Jetson Thor
 
-This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker Compose.
+This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker Compose. It covers the Pipecat examples and the Generic Assistant on LiveKit.
 
 Thor deploys with the `*/single-gpu` recipes. They run the NeMo-Speech.cpp speech
 stack (ASR and TTS from local GGUF weights) next to vLLM on the same GPU, which is
@@ -11,7 +11,7 @@ the supported configuration on Thor.
 ## Prerequisites
 
 - **Jetson Thor** flashed with **JetPack 7.0** using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) (with CUDA, CUDA-X, TensorRT, and NVIDIA Container Runtime components installed). Orin-class Jetsons are not supported.
-- [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and [Docker Compose](https://docs.docker.com/compose/install/linux/)
+- [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and [Docker Compose](https://docs.docker.com/compose/install/linux/) 2.24.4 or newer
 - [HuggingFace API token](https://huggingface.co/docs/hub/en/security-tokens) for downloading LLM models
 - The [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/en/guides/cli) (`hf`) for downloading the speech GGUFs
 
@@ -78,7 +78,12 @@ the supported configuration on Thor.
 
     # Frontend/Backend Live: NeMo-Speech.cpp + Lightning vLLM
     docker compose --profile frontend-backend-live/single-gpu up -d
+
+    # Generic Assistant on LiveKit: NeMo-Speech.cpp + Lightning vLLM (not validated on Jetson Thor)
+    docker compose --profile generic-assistant-livekit/single-gpu up -d
     ```
+
+    For the Generic Assistant on LiveKit, refer to its [README](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md). It serves its UI at `http://localhost:3000`, and steps 6 and 7 apply only to the Pipecat examples.
 
     > **Note:** The `frontend-backend-live/single-gpu` profile serves the Live session routes (`/v1/live`) when you set `LIVE_API_TOKEN` in `.env`, and every route then requires that token. To serve the routes without a token, for example on a trusted network, set `LIVE_ENABLED=true` instead. For details, refer to [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
 

@@ -1,6 +1,6 @@
 # Configure Prompts
 
-You can customize your voice agent's personality, behavior, and response format using system prompts. Built-in prompts are defined in example-local `prompts.yaml` files and can be switched or added at runtime via the UI.
+You can customize your voice agent's personality, behavior, and response format using system prompts. Built-in prompts are defined in example-local `prompts.yaml` files and can be switched or added at runtime through the UI. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 ## Switching / Adding Prompts via the UI
 
@@ -35,7 +35,7 @@ my_prompt:
 
 ## Adding Built-In Prompts via `prompts.yaml`
 
-To make a prompt available as a built-in option for all users of an example, add an entry to that example's `prompts.yaml`, such as [`src/examples/generic/prompts.yaml`](../../src/examples/generic/prompts.yaml). The client loads built-in prompts for the active example. Refresh open browser tabs after editing YAML.
+To make a prompt available as a built-in option for all users of an example, add an entry to that example's `prompts.yaml`, such as [`src/nemotron_voice_agent/pipecat/examples/generic/prompts.yaml`](../../src/nemotron_voice_agent/pipecat/examples/generic/prompts.yaml). The client loads built-in prompts for the active example. Refresh open browser tabs after editing YAML.
 
 ```yaml
 my_custom_prompt:

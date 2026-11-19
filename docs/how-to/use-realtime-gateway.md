@@ -2,7 +2,7 @@
 
 ## Goals
 
-`WS /v1/realtime` lets OpenAI Realtime–shaped clients (SDK or raw WebSocket) talk to this blueprint without a separate Realtime model stack.
+`WS /v1/realtime` lets OpenAI Realtime–shaped clients (SDK or raw WebSocket) talk to this blueprint without a separate Realtime model stack. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 - **Wire compatibility** — Accept and emit OpenAI Realtime JSON events (GA names, plus pre-GA aliases where OpenAI renamed them).
 - **Same pipelines as the UI** — Drive the cascaded ASR → LLM → TTS pipelines already used by `WS /api/ws` (Pipecat RTVI).
@@ -187,4 +187,4 @@ top-level event type or duplicate these values in `session.nvidia`.
 - Pipeline barge-in (`InterruptionFrame`) cancels the active Realtime response even when `TTSStopped` never arrives.
 - Non-empty `response.create.response` overrides return `unsupported_response_override`; omit the field or send `{}`.
 
-Run `RUN_REALTIME_COMPAT=1 uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v` for a live check. Refer to [`tests/integration/README.md`](../../tests/integration/README.md) for setup.
+Run `RUN_REALTIME_COMPAT=1 uv run pytest tests/integration/pipecat/test_realtime_openai_sdk_compat.py -v` for a live check. Refer to [`tests/integration/pipecat/README.md`](../../tests/integration/pipecat/README.md) for setup.

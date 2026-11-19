@@ -1,6 +1,6 @@
 # Run Scaling & Performance Tests
 
-Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/) to run latency and scaling tests against a running voice-agent server.
+Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/) to run latency and scaling tests against a running voice-agent server. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 `benchmark.py` drives a single client. `simulate_concurrency.sh` orchestrates multiple parallel clients and rolls up suite-level results.
 
@@ -30,13 +30,13 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 3. Start the voice-agent server with TLS enabled. The scaling benchmark connects to `wss://<host>:<port>/api/ws` and disables certificate verification for the local self-signed certificate.
 
     ```bash
-    uv run python src/server.py
+    uv run nva-pipecat
     ```
 
-    To run perf tests against the Generic Cascaded example with the benchmark prompt catalog, set `selection: generic-assistant` in [`examples_registry.yaml`](../../examples_registry.yaml) and then start the server with the perf prompt catalog:
+    To run perf tests against the Generic Assistant example with the benchmark prompt catalog, set `pipecat.selection` to `generic-assistant` in [`examples_registry.yaml`](../../examples_registry.yaml) and then start the server with the perf prompt catalog:
 
     ```bash
-    uv run python src/server.py \
+    uv run nva-pipecat \
       --prompt-file benchmarking_tools/scaling-perf/perf_prompts.yaml
     ```
 
