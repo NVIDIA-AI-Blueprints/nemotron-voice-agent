@@ -1,6 +1,6 @@
 # Tune Pipeline Performance
 
-This section covers pipeline configurations for optimizing the performance and user experience of the Nemotron Voice Agent.
+This section covers pipeline configurations for optimizing the performance and user experience of the Nemotron Voice Agent. It applies to the Pipecat examples (`nva-pipecat`).
 
 - [Smart Turn Detection](#smart-turn-detection)
 - [Chat History Limit](#chat-history-limit)
@@ -132,7 +132,7 @@ The server supports both WebRTC and WebSocket transports simultaneously on diffe
 
 ### Choosing which transports are exposed
 
-Both transports are exposed by default and the browser UI picks one. To restrict the server to a single transport, set `transports` in [`examples_registry.yaml`](../../examples_registry.yaml) or override it at runtime with the `TRANSPORT_SELECTION` environment variable (the env var wins):
+Both transports are exposed by default and the browser UI picks one. To restrict the server to a single transport, set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) or override it at runtime with the `TRANSPORT_SELECTION` environment variable (the env var wins):
 
 | Value | Exposes |
 |-------|---------|

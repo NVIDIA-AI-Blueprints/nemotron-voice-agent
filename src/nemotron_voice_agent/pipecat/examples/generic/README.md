@@ -6,7 +6,7 @@ Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`Nvidi
 
 ## Default Models
 
-The `services` lists in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
+The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
 
 | Profile | ASR | LLM | TTS |
 | --- | --- | --- | --- |
@@ -73,7 +73,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    docker compose --profile generic-assistant/dynamo down      # NVIDIA Dynamo (experimental)
    ```
 
-To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
+To run host-native without Docker, set `pipecat.selection` to `generic-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
 
 ## Transcribe ASR
 

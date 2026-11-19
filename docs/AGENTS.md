@@ -108,9 +108,9 @@ Style Guide above.
   READMEs aligned with checked-in benchmark procedures and published evidence.
 - Use `docs/05-best-practices.md` for production guidance and
   `docs/06-troubleshooting.md` for symptoms, causes, and verified resolutions.
-- Keep each `src/nemotron_voice_agent/pipecat/examples/<example>/README.md` aligned with that example's
-  pipeline, prompts, service catalogs, supported transports, and deployment
-  profiles.
+- Keep each `src/nemotron_voice_agent/<framework>/examples/<example>/README.md`
+  aligned with that example's pipeline, prompts, service catalogs, supported
+  transports, and deployment profiles.
 
 ## Documentation Sources and Maintenance
 
@@ -118,13 +118,16 @@ Style Guide above.
   `examples_registry.yaml`.
 - Verify pipeline behavior in `src/nemotron_voice_agent/pipecat/examples/<example>/pipeline.py` and shared
   behavior in `src/nemotron_voice_agent/pipecat/shared/` and `src/nemotron_voice_agent/pipecat/runtime/server.py`.
+- Verify LiveKit behavior in `src/nemotron_voice_agent/livekit/examples/<example>/`,
+  including its `run.sh`, and in `src/nemotron_voice_agent/livekit/runtime/`.
 - Verify prompt configuration in the example-local `prompts.yaml` and service
   configuration in the root `services.yaml` and `settings.yaml`.
 - Verify Compose profiles, service names, ports, image tags, environment
   variables, and hardware placement in `docker-compose.yml`, `docker/`, and
   `.env.example`.
 - Verify Python and client dependencies in `pyproject.toml`, `uv.lock`,
-  `clients/pipecat/package.json`, and `clients/pipecat/package-lock.json`.
+  `clients/pipecat/package.json`, and `clients/pipecat/package-lock.json`. The
+  LiveKit browser files in `clients/livekit/` have no package manifest.
 - Preserve the relative-link style used by the existing Markdown files. When
   adding or renaming a page, update `README.md`,
   `docs/02-configuration-guide.md`, and other indexes that should expose it.

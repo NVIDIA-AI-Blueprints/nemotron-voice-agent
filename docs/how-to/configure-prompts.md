@@ -1,6 +1,6 @@
 # Configure Prompts
 
-You can customize your voice agent's personality, behavior, and response format using system prompts. Built-in prompts are defined in example-local `prompts.yaml` files and can be switched or added at runtime via the UI.
+You can customize your voice agent's personality, behavior, and response format using system prompts. Built-in prompts are defined in example-local `prompts.yaml` files and can be switched or added at runtime through the UI. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 ## Switching / Adding Prompts via the UI
 

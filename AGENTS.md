@@ -13,16 +13,17 @@ deployment profiles when changing shared behavior.
 
 - Use the root `pyproject.toml` and `uv.lock` for Python versions and dependencies. Each framework has its own
   dependency group (`pipecat`, `livekit`), and the `nva-pipecat` and `nva-livekit` entry points start them.
-- Use `clients/pipecat/package.json` and `clients/pipecat/package-lock.json` for client
-  dependencies and scripts.
+- Use `clients/pipecat/package.json` and `clients/pipecat/package-lock.json` for Pipecat client
+  dependencies and scripts. The LiveKit browser files in `clients/livekit/` have no package manifest.
 - Use `examples_registry.yaml` for registered examples, transports, the
   services each example offers per slot, and per-example service overrides
-  (`settings` and `categories`).
+  (`settings` and `categories`). It has a `pipecat` and a `livekit` section.
 - Use `services.yaml` for built-in LLM, ASR, and TTS entries (`server` and
   `single-gpu` sections, `nvcf` for NVIDIA Cloud) and `settings.yaml` for
   editable service settings.
 - The Python package is `src/nemotron_voice_agent/`. Each framework folder (`pipecat/`, `livekit/`) has
-  `runtime/` for the server, gateways, and deployment helpers, and `examples/`. A framework adds `shared/` for
+  `runtime/` and `examples/`. `pipecat/runtime/` holds the server, gateways, and tracing. `livekit/runtime/` holds
+  LiveKit server credentials and phone (SIP) configuration. A framework adds `shared/` for
   code that several of its examples use, as `pipecat/` does. `core/` holds code that both frameworks use,
   such as the paths and loaders of `services.yaml` and `examples_registry.yaml`. `sidecars/` holds code that
   runs inside the model containers, such as the vLLM Realtime server. A runtime never imports an example, one framework never imports another,
@@ -30,7 +31,8 @@ deployment profiles when changing shared behavior.
 - Use each `src/nemotron_voice_agent/pipecat/examples/<example>/pipeline.py` and `prompts.yaml` for example
   behavior and configuration. Shared runtime behavior lives in `src/nemotron_voice_agent/pipecat/shared/` and
   `src/nemotron_voice_agent/pipecat/runtime/`, which holds `server.py`.
-- Use `src/nemotron_voice_agent/livekit/examples/generic_assistant/` for the LiveKit example.
+- Use `src/nemotron_voice_agent/livekit/examples/generic_assistant/`, including its `run.sh`, for the Generic
+  Assistant on LiveKit.
 - For the Frontend/Backend Live example, also use the `config` block of its
   `examples_registry.yaml` entry, its `factory.py`, its `frontend.py`, which
   builds the pipeline for the UI bot and live sessions, the Live gateway in
@@ -38,7 +40,7 @@ deployment profiles when changing shared behavior.
   `src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/delegation_core/`.
 - Use `docker-compose.yml` for Compose profiles. It includes
   `docker/pipecat/docker-compose.yaml` and `docker/livekit/docker-compose.yaml`, and their model
-  services extend the files in `docker/sidecars/`. These files define service names, container
+  services include or extend the files in `docker/sidecars/`. These files define service names, container
   images, ports, and hardware-specific deployment behavior.
 - Use `README.md`, the example READMEs, and `docs/` for user-facing behavior.
   When prose and implementation disagree, verify the implementation and update
@@ -51,7 +53,8 @@ deployment profiles when changing shared behavior.
   state, benchmark results, caches, or local model data.
 - Select exactly one recipe profile for a Docker Compose deployment. Cloud
   profiles use `<example>`; local profiles use `<example>/<hardware>`.
-  Observability profiles such as `tracing` and `turn` are overlays.
+  The Pipecat observability profiles `tracing` and `turn` are overlays. The LiveKit
+  `generic-assistant-livekit/sip` profile is an overlay for phone calls.
 - Load `.agents/skills/nemotron-voice-agent-deploy/SKILL.md` for deployment, startup troubleshooting, or
   changes to `.env`, `examples_registry.yaml`, prompts, service catalogs, settings, transports, tracing, or
   audio settings.

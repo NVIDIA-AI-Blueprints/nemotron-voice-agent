@@ -8,7 +8,7 @@ The pattern uses dedicated ASR, LLM, and TTS services with a plain-text response
 
 ## Default Models
 
-The `services` lists in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
+The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
 
 | Profile | ASR | LLM | TTS |
 | --- | --- | --- | --- |
@@ -71,7 +71,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
    docker compose --profile multilingual-assistant/dynamo down       # NVIDIA Dynamo (experimental)
    ```
 
-To run host-native without Docker, set `selection: multilingual-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
+To run host-native without Docker, set `pipecat.selection` to `multilingual-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
 
 After deploying, validate the session language with the steps in [Testing](#testing).
 
@@ -99,7 +99,7 @@ TTS voices and supported language codes are discovered at runtime by prewarming 
 
 **Parakeet 1.1B RNNT Multilingual** offers stronger multilingual recognition quality at higher latency (see [Model Selection Notes](#model-selection-notes)). To run it instead of the default Nemotron ASR Streaming Multilingual on-prem:
 
-1. In [`examples_registry.yaml`](../../../../../examples_registry.yaml), under `multilingual-assistant`, set `services.asr: [parakeet-rnnt, nemotron-asr-streaming-multilingual]`.
+1. In [`examples_registry.yaml`](../../../../../examples_registry.yaml), under `pipecat.examples.multilingual-assistant`, set `services.asr: [parakeet-rnnt, nemotron-asr-streaming-multilingual]`.
 2. Redeploy with the recipe profile plus the Parakeet profile. Each ASR sidecar publishes its own host port, so both can run when the GPU has room. Scale the Nemotron sidecar off to free its GPU:
 
    ```bash

@@ -162,7 +162,7 @@ Magpie Multilingual and Magpie Zeroshot reference the `magpie-tts` profile in [`
 
 > **NIM only.** `NvidiaWordTTSService` supports Magpie served by NVIDIA NIM. It does not support the GGML/GGUF-based NeMo-Speech.cpp backend used by `*/single-gpu` profiles.
 
-All examples use Pipecat's `NvidiaTTSService` by default, which keeps Magpie Multilingual, Magpie Zeroshot, and Chatterbox switchable through the service catalog. For Magpie TTS Multilingual NIM 1.10.0 or newer, [`NvidiaWordTTSService`](../../src/nemotron_voice_agent/pipecat/shared/nvidia_word_tts.py) is an optional drop-in subclass that adds word-level input streaming and timestamp-based LLM context commits. It requires `nvidia-riva-client>=2.27.0,<3`.
+All Pipecat examples use Pipecat's `NvidiaTTSService` by default, which keeps Magpie Multilingual, Magpie Zeroshot, and Chatterbox switchable through the service catalog. For Magpie TTS Multilingual NIM 1.10.0 or newer, [`NvidiaWordTTSService`](../../src/nemotron_voice_agent/pipecat/shared/nvidia_word_tts.py) is an optional drop-in subclass that adds word-level input streaming and timestamp-based LLM context commits. It requires `nvidia-riva-client>=2.27.0,<3`.
 
 To opt in for a custom example, change only the service import and constructor:
 

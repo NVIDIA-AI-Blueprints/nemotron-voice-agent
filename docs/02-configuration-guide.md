@@ -14,9 +14,11 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 
 ## Configuration how-to guides
 
+Unless a row names the Generic Assistant on LiveKit, the guides apply to the Pipecat examples.
+
 | Guide | Description |
 |-------|-------------|
-| [Configure Services](how-to/configure-services.md) | How the catalog works: switch, add, and override LLM/ASR/TTS services via the UI or YAML |
+| [Configure Services](how-to/configure-services.md) | How the catalog works: switch, add, and override LLM/ASR/TTS services through the UI or YAML, and the LiveKit catalog differences |
 | [Configure Prompts](how-to/configure-prompts.md) | Switch and add prompt presets via the UI or example-local prompt catalogs |
 | [Enable Speaker Labels](how-to/enable-speaker-labels.md) | Turn on speaker labels in the Generic Assistant for single-speaker or multi-speaker diarization |
 | [Multilingual Voice Agent](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Prompt-driven multilingual replies with a fixed language and TTS voice per session |
@@ -26,24 +28,27 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
 | [Use the Live Gateway](how-to/use-live-gateway.md) | Live sessions at `/v1/live` for Pipecat apps and other clients of the Frontend/Backend Live example |
 | [Frontend/Backend Live](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) | The Frontend/Backend Live example's settings, such as its backend adapter, in the `config` block of its `examples_registry.yaml` entry |
+| [Configure Models (Generic Assistant on LiveKit)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#configure-models) | Choose the ASR, LLM, and TTS models of the Generic Assistant on LiveKit per profile |
+| [Phone Calls (SIP)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md) | Connect a phone number to the Generic Assistant on LiveKit |
 | [Connect an Agent Harness](how-to/connect-an-agent-harness.md) | Deploy Hermes or another Agent Client Protocol (ACP) agent for the Frontend/Backend Live example's harness backend |
 
 ## Welcome Message
 
 When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, and Omni Assistant Subagents examples, and to the Frontend/Backend Live example's repository UI bot.
 
-- **Per example (backend-only):** set `welcome_message: false` on an example in [`examples_registry.yaml`](../examples_registry.yaml). The default is `true` when the key is omitted.
+- **Per example (backend-only):** set `welcome_message: false` on an example under `pipecat.examples` in [`examples_registry.yaml`](../examples_registry.yaml). The default is `true` when the key is omitted.
 - **Global override:** set `ENABLE_WELCOME_MESSAGE` in `.env`. When set, `ENABLE_WELCOME_MESSAGE` overrides every example's registry value. For example, the `generic-assistant/server-perf` profile uses it to disable the greeting.
 
 ```yaml
 # examples_registry.yaml: keep one example quiet until the user speaks
-examples:
-  generic-assistant:
-    welcome_message: false
+pipecat:
+  examples:
+    generic-assistant:
+      welcome_message: false
 ```
 
 While the welcome message is enabled, the user is muted until the bot finishes its opening turn (`MuteUntilFirstBotCompleteUserMuteStrategy`), which prevents interruption. When you disable the welcome message, the pipeline removes that mute strategy because there is no first bot turn. The user is unmuted immediately.
 
 ## Performance tuning
 
-Pipeline tuning knobs (smart turn, chat-history window, audio buffering, transport) live in [Tune Pipeline Performance](how-to/tune-pipeline-performance.md). For benchmark results, see [Evaluation and Performance](04-evaluation-and-performance.md).
+This section applies to the Pipecat examples. Pipeline tuning knobs (smart turn, chat-history window, audio buffering, transport) live in [Tune Pipeline Performance](how-to/tune-pipeline-performance.md). For benchmark results, refer to [Evaluation and Performance](04-evaluation-and-performance.md).

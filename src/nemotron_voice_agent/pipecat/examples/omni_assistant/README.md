@@ -8,7 +8,7 @@ The pattern replaces the separate ASR and text LLM stages with one audio-input L
 
 ## Default Models
 
-The `services` lists in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
+The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
 
 | Profile | Audio-input LLM | TTS |
 | --- | --- | --- |
@@ -48,7 +48,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    docker compose --profile omni-assistant/single-gpu up -d
    ```
 
-   | Recipe profile | App service | Shared sidecars pulled from `docker/` |
+   | Recipe profile | App service | Shared sidecars pulled from `docker/sidecars/` |
    | --- | --- | --- |
    | `omni-assistant` | `omni-assistant` | none (cloud NVCF) |
    | `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
@@ -66,7 +66,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    docker compose --profile omni-assistant/single-gpu down   # One GPU (incl. DGX Spark and Jetson Thor)
    ```
 
-To run host-native without Docker, set `selection: omni-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
+To run host-native without Docker, set `pipecat.selection` to `omni-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
 
 ## Customization
 

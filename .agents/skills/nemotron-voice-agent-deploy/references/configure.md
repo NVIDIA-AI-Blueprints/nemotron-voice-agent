@@ -7,7 +7,7 @@ Open this file only to change the configuration of a deployed agent. Edit the sm
 | File | Owns |
 | --- | --- |
 | `.env` | Feature flags, tracing, chat history, audio debugging, buffering, supported vLLM memory overrides |
-| `examples_registry.yaml` | `selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `transports`, and per example: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, and, on `frontend-backend-live` only, `live` and `config` (below) |
+| `examples_registry.yaml` | `pipecat.selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `pipecat.transports`, and per example under `pipecat.examples.<example>`: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, and, on `frontend-backend-live` only, `live` and `config` (below) |
 | `services.yaml` | Built-in LLM, ASR, and TTS entries under `server` (NIM) and `single-gpu` (vLLM and NeMo-Speech.cpp). An entry with `nvcf` is also served by NVIDIA Cloud |
 | `settings.yaml` | Editable LLM setting profiles referenced by `settings: <profile>` in `services.yaml` |
 | `src/nemotron_voice_agent/pipecat/examples/<package>/prompts.yaml` | Built-in prompts for that example |

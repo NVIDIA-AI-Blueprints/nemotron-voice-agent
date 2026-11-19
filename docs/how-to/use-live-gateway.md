@@ -2,7 +2,7 @@
 
 ## Goals
 
-`/v1/live` lets live session clients, such as Pipecat apps or your own app, talk to the [Frontend/Backend Live example](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply. The gateway serves the live session protocol of OpenAI's GPT-Live API on the example's cascade. It is not a drop-in replacement for the hosted API. The gateway imports no Pipecat: it reaches the example's frontend adapter and delegation core only through the ports in [`ports.py`](../../src/nemotron_voice_agent/pipecat/runtime/gateways/live/ports.py).
+`/v1/live` lets live session clients, such as Pipecat apps or your own app, talk to the [Frontend/Backend Live example](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) over WebRTC or WebSocket, with the prompts that they supply. The gateway serves the live session protocol of OpenAI's GPT-Live API on the example's cascade. It is not a drop-in replacement for the hosted API. The gateway imports no Pipecat: it reaches the example's frontend adapter and delegation core only through the ports in [`ports.py`](../../src/nemotron_voice_agent/pipecat/runtime/gateways/live/ports.py). This guide applies to the Pipecat server (`nva-pipecat`), which serves the gateway.
 
 ## How This Differs from GPT-Live
 

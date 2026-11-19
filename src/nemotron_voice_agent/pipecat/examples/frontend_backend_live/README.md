@@ -27,7 +27,7 @@ caller --- app (Live client) --- LIVE GATEWAY: sessions, media, command order, t
 
 ## Default Models
 
-The `services` lists in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
+The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
 
 | Profile | ASR | Talker LLM | Backend LLM | TTS |
 | --- | --- | --- | --- | --- |
@@ -77,11 +77,11 @@ This example runs with the **Cloud**, **Server**, and **Single GPU** profiles. S
 
 5. Clean up when you are done by tearing down with the same profile that you started, for example `docker compose --profile frontend-backend-live down`.
 
-To run host-native without Docker, set `selection: frontend-backend-live` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
+To run host-native without Docker, set `pipecat.selection` to `frontend-backend-live` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
 
 ## Configuration
 
-The example's settings are the `config` block of its entry in [`examples_registry.yaml`](../../../../../examples_registry.yaml), which must set `frontend.adapter` and its block, `frontend.cascade.slot`, `core.backend.slot`, `core.backend.prompt`, and `ui_bot.channel`. Every other key keeps its default, which the settings models document: [`config_manager/schema.py`](config_manager/schema.py) for `frontend`, [`delegation_core/config.py`](delegation_core/config.py) for `core.delegation`, and each backend adapter's `settings.py` for its block. The server reads the block once, so restart it after an edit. An unknown key or an invalid value refuses the sessions and routes that read it, and the server log names the key. The block has three parts:
+The example's settings are the `config` block of its `pipecat.examples.frontend-backend-live` entry in [`examples_registry.yaml`](../../../../../examples_registry.yaml), which must set `frontend.adapter` and its block, `frontend.cascade.slot`, `core.backend.slot`, `core.backend.prompt`, and `ui_bot.channel`. Every other key keeps its default, which the settings models document: [`config_manager/schema.py`](config_manager/schema.py) for `frontend`, [`delegation_core/config.py`](delegation_core/config.py) for `core.delegation`, and each backend adapter's `settings.py` for its block. The server reads the block once, so restart it after an edit. An unknown key or an invalid value refuses the sessions and routes that read it, and the server log names the key. The block has three parts:
 
 - `frontend`: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`), which sets the talker, the voice, and the caller's turns.
 - `core`: the delegation core of live sessions, as [Build and Configure the Core](delegation_core/README.md#build-and-configure-the-core) describes.

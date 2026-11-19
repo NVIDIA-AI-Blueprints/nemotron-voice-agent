@@ -1,6 +1,6 @@
 # Nemotron Voice Agent Client
 
-The Nemotron Voice Agent Client is the browser front end for the [Nemotron Voice Agent](../../README.md) blueprint. It gives you a real-time, interruptible voice conversation with the agent, along with controls to switch models and prompts, preview TTS voices, watch live latency metrics, and follow the conversation transcript.
+The Nemotron Voice Agent Client is the browser front end for the [Nemotron Voice Agent](../../README.md) blueprint. It gives you a real-time, interruptible voice conversation with the agent, along with controls to switch models and prompts, preview TTS voices, watch live latency metrics, and follow the conversation transcript. The Generic Assistant on LiveKit uses its own browser files in `clients/livekit/`.
 
 It is a React and TypeScript single-page app built with [Vite](https://vite.dev/) and the [Pipecat Client SDK](https://docs.pipecat.ai/client/introduction). The client connects to the Python backend (`src/nemotron_voice_agent/pipecat/runtime/server.py`) over WebRTC or WebSocket and reads its `/api/*` endpoints for session, service, and voice configuration. In a deployed stack the backend serves this client's production build from `clients/pipecat/dist/`, so you normally reach the UI at `https://localhost:7860` rather than running it on its own.
 

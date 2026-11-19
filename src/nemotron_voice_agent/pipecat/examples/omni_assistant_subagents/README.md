@@ -8,7 +8,7 @@ The pattern splits responsibility across a transport agent, speaker agent, media
 
 ## Default Models
 
-The `services` lists in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
+The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../../../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../../../services.yaml):
 
 | Profile | Audio-input LLM | TTS |
 | --- | --- | --- |
@@ -48,7 +48,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    docker compose --profile omni-assistant-subagents/single-gpu up -d
    ```
 
-   | Recipe profile | App service | Shared sidecars pulled from `docker/` |
+   | Recipe profile | App service | Shared sidecars pulled from `docker/sidecars/` |
    | --- | --- | --- |
    | `omni-assistant-subagents` | `omni-assistant-subagents` | none (cloud NVCF) |
    | `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
@@ -64,7 +64,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    docker compose --profile omni-assistant-subagents/single-gpu down   # One GPU (incl. DGX Spark)
    ```
 
-To run host-native without Docker, set `selection: omni-assistant-subagents` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
+To run host-native without Docker, set `pipecat.selection` to `omni-assistant-subagents` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
 
 ## Customization
 
@@ -80,7 +80,7 @@ To run host-native without Docker, set `selection: omni-assistant-subagents` in 
 | `subagents.yaml` | source of truth for worker capabilities, routing rules, reasoning modes and budgets, and UI labels |
 | `prompts.yaml` | example-local prompt catalog (top-level prompt plus `agent_prompts:` per agent) |
 
-The example declares `capabilities: [attachments, webcam]` in `examples_registry.yaml`, which gates these UI surfaces and backend endpoints:
+The example declares `capabilities: [attachments, webcam]` under `pipecat.examples.omni-assistant-subagents` in `examples_registry.yaml`, which gates these UI surfaces and backend endpoints:
 
 | Endpoint | Purpose |
 | --- | --- |

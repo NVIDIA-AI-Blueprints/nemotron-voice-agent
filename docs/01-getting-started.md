@@ -1,12 +1,12 @@
 # Getting Started
 
-This guide walks you through the cloud-only, server, single-GPU, and experimental Dynamo deployment options for the Nemotron Voice Agent. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
+This guide walks you through the cloud-only, server, single-GPU, and experimental Dynamo deployment options for the Nemotron Voice Agent. It covers the Pipecat examples and the Generic Assistant on LiveKit. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
 
 ## Prerequisites
 
 Before you begin, ensure you have the following:
 
-- Docker Compose v2.20 or newer. Check the version with `docker compose version`.
+- Docker Compose 2.24.4 or newer. Check the version with `docker compose version`.
 - **Cloud (`<example>`), Server (`*/server`), and Performance Server (`generic-assistant/server-perf`):** an NVIDIA API key (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server and Performance Server also need NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
 - **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `generic-assistant/single-gpu` also builds its diarization VAD model locally, which needs `uv`, or Python 3 with `gguf==0.19.0` and `numpy==2.2.6`. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
 - **Dynamo (`*/dynamo`, experimental):** both `NVIDIA_API_KEY` with NGC access for the ASR and TTS NIMs, and `HF_TOKEN` for the Nemotron 3.5 Lightning weights. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
@@ -26,8 +26,9 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`omni-assistant`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
 | [`frontend-backend-live`](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) | Routing talker with the `/v1/live` session API and three backend adapters: the backend LLM, an LLM agent, or an agent runtime harness (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`generic-assistant-livekit`](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md) | Cascaded pipeline on LiveKit Agents with its own web UI and optional phone calls (SIP). Refer to [Deploy the Generic Assistant on LiveKit](#deploy-the-generic-assistant-on-livekit). | `generic-assistant-livekit`, `generic-assistant-livekit/server`, `generic-assistant-livekit/single-gpu` (workstation, DGX Spark and Jetson Thor not validated) |
 
-> Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
+> Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any Pipecat profile.
 
 ---
 
@@ -67,7 +68,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
     Skip this step for cloud-only and `*/single-gpu`.
 
-4. Deploy the example profile of your choice.
+4. Deploy the example profile of your choice. These commands start the Pipecat examples. For the Generic Assistant on LiveKit, refer to [Deploy the Generic Assistant on LiveKit](#deploy-the-generic-assistant-on-livekit).
 
     **4.1 Cloud only** (no local GPU):
 
@@ -126,7 +127,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     >
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 
-5. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require).
+5. Access the Pipecat application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require). The Generic Assistant on LiveKit serves its UI at `http://localhost:3000`.
 
     > **Note:** `PIPELINE_TLS=false` serves plain HTTP for headless/API testing only. For plain-HTTP browser testing, see [plain-HTTP deployment and usage](06-troubleshooting.md#browser-access).
     >
@@ -136,7 +137,22 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
 ---
 
+## Deploy the Generic Assistant on LiveKit
+
+The Generic Assistant on LiveKit uses the same `.env`, `services.yaml`, and model sidecar definitions in `docker/sidecars/` as the Pipecat examples. It runs its own LiveKit server, agent worker, and web UI, so the deployment steps differ in the following ways:
+
+- **Profiles:** deploy with `docker compose --profile generic-assistant-livekit up -d`, or the `/server` or `/single-gpu` profile. For `/single-gpu`, first run `bash scripts/download-nemo-speech-models.sh`. The helper script `src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up <cloud|server|single-gpu>` runs the same profiles with extra checks, and waits until the agent is ready.
+- **Web UI:** open `http://localhost:3000/` on the host, or use `run.sh tunnel <user>@<host>` from another computer.
+- **One stack per machine:** do not run a Pipecat recipe on the same machine at the same time, because the profiles share GPUs and ports.
+- **Phone calls:** the optional `generic-assistant-livekit/sip` profile connects a phone number to the agent.
+
+For the full procedure, refer to the [Generic Assistant on LiveKit README](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md). For phone calls, refer to [Phone Calls (SIP)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md).
+
+---
+
 ## Optional: Local Development (without Docker)
+
+This procedure runs the Pipecat server. For the Generic Assistant on LiveKit, refer to its [README](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md).
 
 For development and debugging, you can run the server directly:
 
@@ -177,11 +193,11 @@ For development and debugging, you can run the server directly:
     PIPELINE_TLS=false uv run nva-pipecat --host 0.0.0.0 --port 7860
     ```
 
-    Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `selection` field to choose what the UI exposes, then start the server normally. The server has no example-selection CLI flag. Pipeline options such as `--prompt-file` remain available.
+    Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `pipecat.selection` field to choose what the UI exposes, then start the server normally. The server has no example-selection CLI flag. Pipeline options such as `--prompt-file` remain available.
 
     Without reachable local sidecars, a host-native server uses the NVIDIA Cloud (NVCF) service endpoints, which need a real `NVIDIA_API_KEY` (not empty or `not-needed`). To run against **local on-prem services**, start the matching Compose sidecars first, then start the app. The backend detects whether the NIM (`/server`) or NeMo-Speech.cpp (`/single-gpu`) sidecars are reachable and rewrites Compose endpoints to `localhost` automatically. Set `SERVICE_RECIPE=server` or `SERVICE_RECIPE=single-gpu` to pin the section instead.
 
-    | `selection` in `examples_registry.yaml` | UI behavior |
+    | `pipecat.selection` in `examples_registry.yaml` | UI behavior |
     |-----------------------------------------|-------------|
     | `all` | Show every registered example (default) |
     | `generic-assistant` | Lock to Generic Assistant |

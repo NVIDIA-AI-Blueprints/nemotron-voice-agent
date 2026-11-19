@@ -1,6 +1,6 @@
 # Enable the Audio Recorder
 
-The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each conversation turn is saved as a separate WAV file for easy analysis.
+The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each conversation turn is saved as a separate WAV file for easy analysis. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 ## Configuration
 
@@ -72,7 +72,7 @@ The `<stream_id>` is a unique 8-character hex ID per session, so files from conc
 
 The recorder's `INFO` log line at a session's start names that session's `<stream_id>`. The Frontend/Backend Live example records its live sessions, over WebRTC and WebSocket, each from its start.
 
-> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker-compose.yml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
+> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker/pipecat/docker-compose.yaml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
 >
 > ```bash
 > docker compose --profile <recipe> cp <app-service>:/app/audio_dumps ./

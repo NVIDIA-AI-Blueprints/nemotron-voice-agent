@@ -16,6 +16,8 @@ metadata:
 
 Use this skill to bring up or tear down the Nemotron Voice Agent with a Docker Compose recipe profile. It covers choosing a cloud, `*/server`, `*/single-gpu`, or experimental `*/dynamo` recipe, wiring the right credentials (`NVIDIA_API_KEY` plus an `nvcr.io` login for `*/server`, `HF_TOKEN` for `*/single-gpu`, and both for `*/dynamo`), inspecting host hardware, selecting a recipe, and troubleshooting startup or authentication failures.
 
+This skill covers the Pipecat recipes. For the `generic-assistant-livekit` profiles, follow `src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md`.
+
 It also covers configuration changes to a running deployment (`.env`, prompts, default services, LLM settings, speaker labels, exposed examples and transports) through `references/configure.md`.
 
 Do not use this skill to change `pipeline.py` or migrate Pipecat versions (use `nemotron-voice-agent-upgrade-pipecat`), or for work unrelated to this blueprint.
@@ -23,7 +25,7 @@ Do not use this skill to change `pipeline.py` or migrate Pipecat versions (use `
 ## Rules
 
 - Run commands from the repository root that contains `docker-compose.yml`. Use Docker Compose.
-- Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any recipe. The optional LLM sidecar profiles `nemotron-35-super-vl`, `nemotron-35-super-vl-single-gpu`, `nemotron-35-bolt-single-gpu`, `nemotron-35-bolt-e4b`, and `nemotron-35-bolt-e4b-single-gpu` are added next to a matching recipe (see `references/configure.md`). None of these are recipes.
+- Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any Pipecat recipe. The optional LLM sidecar profiles `nemotron-35-super-vl`, `nemotron-35-super-vl-single-gpu`, `nemotron-35-bolt-single-gpu`, `nemotron-35-bolt-e4b`, and `nemotron-35-bolt-e4b-single-gpu` are added next to a matching recipe (refer to `references/configure.md`). None of these are recipes.
 - The optional `transcribe-asr` sidecar runs with `generic-assistant/server` or `multilingual-assistant/server`. It is not a recipe. Refer to `references/configure.md` for setup and `references/server.md` for GPU placement.
 - Preserve existing `.env`. Create it only if missing: `test -f .env || cp .env.example .env`.
 - Use `references/configure.md` for `.env`, catalog, setting, or prompt changes. Do not write host-specific vLLM flags into `.env`.

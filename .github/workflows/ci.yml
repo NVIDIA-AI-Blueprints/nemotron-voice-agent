@@ -9,9 +9,9 @@ name: Nemotron Voice Agent CI
 on:
   workflow_dispatch:
   push:
-    branches: [main, develop, feat/framework-support]
+    branches: [main, develop]
   pull_request:
-    branches: [main, develop, feat/framework-support]
+    branches: [main, develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

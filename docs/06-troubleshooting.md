@@ -126,7 +126,13 @@ The hosted **[build.nvidia.com](https://build.nvidia.com/)** endpoints are for *
 | With the harness adapter, a delegation fails with `the connection to the agent is lost` | The agent process ended, or its connection broke. A WARNING before the failure names the cause: `harness.runtime_exited` with the exit code and the end of the agent's stderr, `harness.connection_closed` with the WebSocket close code, or `harness.connection_lost`, for example for a line on the agent's stdout that is not a JSON object. Fix that cause, and keep the agent's stdout for Agent Client Protocol (ACP) messages only. | [Connect an Agent Harness](how-to/connect-an-agent-harness.md) |
 | With the harness adapter, the backend ignores the core's instructions or answers in the default Hermes persona, and nothing fails | Hermes does not receive the identity or the instructions that the core relies on. The Hermes home has no `SOUL.md`, or, over WebSocket, Hermes cannot access the session's folder under `work_root` and logs `configured working directory does not exist`. Write the home's `SOUL.md`, mount `work_root` at the same path for the server and Hermes, and run Hermes as the server's user or as root. | [Connect an Agent Harness](how-to/connect-an-agent-harness.md) |
 
+## Generic Assistant on LiveKit
+
+For the Generic Assistant on LiveKit, including its web UI, agent worker, and phone calls, refer to [Troubleshooting](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#troubleshooting) in its README and [Troubleshooting](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md#troubleshooting) in the SIP guide.
+
 ## Browser access
+
+This section applies to the Pipecat examples.
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
