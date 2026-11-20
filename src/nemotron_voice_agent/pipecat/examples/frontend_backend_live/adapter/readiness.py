@@ -8,17 +8,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from nemotron_voice_agent.core.catalog import NVCF_LLM_BASE_URL
+from nemotron_voice_agent.core.service_status import parse_endpoint, probe_http, probe_tcp
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.adapter.contract import ServiceStarting
 from nemotron_voice_agent.pipecat.runtime.utils import (
     _CONNECT_HEALTH_TIMEOUT_SECS,
     _REACHABILITY_TIMEOUT_SECS,
     _llm_health_url,
     _local_speech_ready_url,
-    _probe_http,
-    _probe_tcp,
     _run_blocking,
     is_nvcf,
-    parse_endpoint,
 )
 
 
@@ -32,8 +30,8 @@ def is_ready(name: str, address: str) -> bool:
     model = "://" in address
     url = _llm_health_url(address) if model else _local_speech_ready_url(name, address)
     if not url:
-        return _probe_tcp(address, _REACHABILITY_TIMEOUT_SECS) == "ready"
-    return _probe_http(url, not model, _REACHABILITY_TIMEOUT_SECS) == "ready"
+        return probe_tcp(address, _REACHABILITY_TIMEOUT_SECS) == "ready"
+    return probe_http(url, not model, _REACHABILITY_TIMEOUT_SECS) == "ready"
 
 
 class EndpointReadiness:

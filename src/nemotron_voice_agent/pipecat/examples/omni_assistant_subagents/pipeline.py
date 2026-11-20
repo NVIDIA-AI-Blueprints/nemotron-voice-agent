@@ -27,13 +27,13 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.runner.types import RunnerArguments
 from pipecat.workers.runner import WorkerRunner
 
+from nemotron_voice_agent.core.settings import apply_service_settings
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.media_analyzer import MediaAnalyzerWorker
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.speaker import SpeakerOmniAgent
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.thinker import ThinkerWorker
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.transport import OmniTransportAgent
 from nemotron_voice_agent.pipecat.examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from nemotron_voice_agent.pipecat.runtime.utils import (
-    apply_service_settings,
     is_nvcf,
     load_prompt_catalog,
     load_service_entry,

@@ -279,7 +279,7 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
             calls.append((address, threading.current_thread() is threading.main_thread()))
             return "ready" if answers.get(address, True) else "starting"
 
-        return patch.object(readiness_module, "_probe_tcp", probe), calls
+        return patch.object(readiness_module, "probe_tcp", probe), calls
 
     async def test_a_nim_without_ready_json_is_still_starting(self):
         probe, _ = self.probed({})

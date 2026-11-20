@@ -68,14 +68,15 @@ def _read_credentials(path: Path) -> dict[str, str] | None:
     return pair if all(pair.values()) else None  # an empty key or secret would lock LiveKit out, so replace it
 
 
-def _truthy(value: str | None) -> bool:
+def truthy(value: str | None) -> bool:
+    """Whether an environment flag is on: `1`, `true`, `yes`, or `on`."""
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _write_overlays(state_dir: Path, creds: Mapping[str, str], env: Mapping[str, str]) -> None:
     """Write (or remove) the config of the optional SIP overlay, so a stale file never outlives its flag."""
     sip_path = state_dir / telephony.SIP_CONFIG_FILE
-    if _truthy(env.get("LIVEKIT_SIP")):
+    if truthy(env.get("LIVEKIT_SIP")):
         _write_shared(sip_path, telephony.sip_config_yaml(creds["api_key"], creds["api_secret"]))
     else:
         sip_path.unlink(missing_ok=True)
@@ -105,7 +106,7 @@ def load_or_create(state_dir: Path = DEFAULT_STATE_DIR, env: Mapping[str, str] |
     _write_private(path, json.dumps(creds))
     _write_private(
         state_dir / SERVER_CONFIG_FILE,
-        server_config(creds["api_key"], creds["api_secret"], redis=_truthy(env.get("LIVEKIT_SIP"))),
+        server_config(creds["api_key"], creds["api_secret"], redis=truthy(env.get("LIVEKIT_SIP"))),
     )
     _write_overlays(state_dir, creds, env)
     return creds

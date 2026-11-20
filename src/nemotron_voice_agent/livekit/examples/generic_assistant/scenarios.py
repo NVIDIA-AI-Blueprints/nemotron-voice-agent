@@ -373,9 +373,37 @@ def get_scenario(scenario_id: object) -> Scenario:
     )
 
 
+def custom_scenario(instructions: str) -> Scenario:
+    """Return a use case with the user's own prompt and no tools. The model writes the default use case's greeting."""
+    default = SCENARIOS[DEFAULT_SCENARIO]
+    return Scenario(
+        id="custom",
+        name="Custom prompt",
+        description="",
+        instructions=instructions,
+        greeting=default.greeting,
+        greeting_text=None,
+        examples=(),
+        make_tools=list,
+    )
+
+
+def scenario_tools() -> dict[str, Callable]:
+    """Return every tool that a use case offers, by name, in use-case order."""
+    return {fn.__name__: fn for s in SCENARIOS.values() for fn in s.make_tools()}
+
+
 def scenario_catalog() -> list[dict]:
-    """Return what the UI needs to render the picker."""
+    """Return what the UI needs to render the prompt picker and the Prompts and Tools tabs."""
     return [
-        {"id": s.id, "name": s.name, "description": s.description, "examples": list(s.examples)}
+        {
+            "id": s.id,
+            "name": s.name,
+            "description": s.description,
+            "examples": list(s.examples),
+            "content": s.instructions,
+            "tools": [fn.__name__ for fn in s.make_tools()],
+            "default": s.id == DEFAULT_SCENARIO,
+        }
         for s in SCENARIOS.values()
     ]

@@ -5,7 +5,7 @@
 
 from types import SimpleNamespace
 
-from nemotron_voice_agent.livekit.examples.generic_assistant.errors import describe_error
+from nemotron_voice_agent.livekit.examples.generic_assistant.errors import MAX_MESSAGE_CHARS, describe_error
 
 
 class APIStatusError(Exception):
@@ -28,8 +28,16 @@ def test_a_failure_is_not_recoverable_and_long_text_is_cut():
     summary = describe_error(error)
     assert summary["recoverable"] is False
     assert summary["status"] is None
-    assert len(summary["message"]) == 200
+    assert len(summary["message"]) == MAX_MESSAGE_CHARS
     assert "\n" not in summary["message"]
+
+
+def test_a_long_message_keeps_its_cause_at_the_end():
+    cause = "last error: UNKNOWN: ipv4:127.0.0.1:9: Failed to connect to remote host: Connection refused"
+    error = SimpleNamespace(error=RuntimeError(f"STT failed after 4 attempts {'x' * 400} {cause}"), recoverable=False)
+    message = describe_error(error)["message"]
+    assert message.startswith("RuntimeError: STT failed after 4 attempts")
+    assert message.endswith(cause)
 
 
 def test_a_plain_exception_without_the_wrapper_still_works():

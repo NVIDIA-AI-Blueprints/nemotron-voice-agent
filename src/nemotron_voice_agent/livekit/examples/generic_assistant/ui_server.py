@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve the web UI and mint a LiveKit join token at /token (a fresh room per connect), with the chosen use case."""
+"""Serve the web UI and mint a LiveKit join token at /token (a fresh room per connect), with the session choices."""
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import itertools
@@ -25,12 +26,13 @@ from livekit import api
 from nemotron_voice_agent.core.paths import REPO_ROOT
 from nemotron_voice_agent.livekit.runtime.credentials import DEFAULT_STATE_DIR, apply_to_environ
 
-from .scenarios import scenario_catalog
-from .session import token_attributes
+from .config import CUSTOM_FIELDS, CUSTOM_REQUIRED, custom_endpoints_enabled
+from .scenarios import scenario_catalog, scenario_tools
+from .service_state import SERVICES_FILE, read_service_state, voices_of
+from .session import session_attributes
 from .state import DEPLOYMENT_FILE, read_json
-from .voices import VOICES_FILE, read_voices_file
 
-PUBLIC = REPO_ROOT / "clients" / "livekit"
+PUBLIC = REPO_ROOT / "clients" / "livekit" / "dist"
 
 # Optional login. Set LIVEKIT_UI_USERNAME and LIVEKIT_UI_PASSWORD (in .env) and the data endpoints need a signed session
 # cookie. With neither set there is no login. The values stay on the server: the page posts what the user types to
@@ -42,6 +44,7 @@ SESSION_SECONDS = 8 * 3600
 FAILED_LOGIN_DELAY = 1.0  # seconds a wrong password waits, which makes guessing slow
 MAX_LOGIN_ATTEMPTS_PER_MINUTE = 10  # per client
 MAX_LOGIN_BODY = 1024  # bytes
+MAX_TOKEN_BODY = 32 * 1024  # bytes: the session choices, including a custom prompt
 _attempts: dict[str, list[tuple[float, int]]] = {}  # client -> (time, ticket) of each attempt in the last minute
 _attempts_lock = threading.Lock()
 _tickets = itertools.count()
@@ -196,7 +199,37 @@ def phone_info() -> dict:
     return value
 
 
-PROTECTED = {"/voices", "/scenarios", "/deployment", "/phone", "/token"}  # the page itself and its scripts stay public
+PROTECTED = {"/services", "/prompts", "/tools", "/voices", "/deployment", "/phone", "/token"}
+
+
+@functools.cache
+def tool_catalog() -> list[dict]:
+    """Return every use-case tool with the JSON schema that LiveKit sends to the LLM, for the Tools tab."""
+    from livekit.agents import llm
+
+    schemas = [
+        llm.utils.build_strict_openai_schema(llm.function_tool(fn))["function"] for fn in scenario_tools().values()
+    ]
+    return [
+        {
+            "name": schema["name"],
+            "description": schema.get("description", "").strip(),
+            "parameters": schema["parameters"],
+        }
+        for schema in schemas
+    ]
+
+
+def client_config() -> dict:
+    """Return the LiveKit address and the custom endpoint form. Public, because the page needs it before a login."""
+    return {
+        "ws_url": public_ws_url(),
+        "custom_endpoints": custom_endpoints_enabled(),
+        "custom_fields": {
+            slot: {"fields": list(fields), "required": list(CUSTOM_REQUIRED[slot])}
+            for slot, fields in CUSTOM_FIELDS.items()
+        },
+    }
 
 
 def state_path(name: str) -> Path:
@@ -204,12 +237,14 @@ def state_path(name: str) -> Path:
     return Path(os.environ.get("LIVEKIT_STATE_DIR", DEFAULT_STATE_DIR)) / name
 
 
-def voices_path() -> Path:
-    """Return the voice list that the agent worker publishes."""
-    return state_path(VOICES_FILE)
+def service_state() -> dict:
+    """Return the services and voices that the agent worker publishes."""
+    return read_service_state(state_path(SERVICES_FILE))
 
 
-def send_json(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 200, headers: dict | None = None) -> None:
+def send_json(
+    handler: SimpleHTTPRequestHandler, payload: dict | list, status: int = 200, headers: dict | None = None
+) -> None:
     """Send a JSON response."""
     body = json.dumps(payload).encode()
     handler.send_response(status)
@@ -222,12 +257,12 @@ def send_json(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 20
 
 
 class Handler(SimpleHTTPRequestHandler):
-    """Static files from ui/, plus the token endpoint."""
+    """The built client from `clients/livekit/dist`, plus the login, data, and token endpoints."""
 
     timeout = 15  # seconds a connection may stay idle, so a stalled request cannot hold a thread forever
 
     def __init__(self, *args, **kwargs):
-        """Serve static files from the ui directory."""
+        """Serve static files from the built client."""
         super().__init__(*args, directory=str(PUBLIC), **kwargs)
 
     def end_headers(self):
@@ -242,18 +277,38 @@ class Handler(SimpleHTTPRequestHandler):
         jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
         return SESSION_COOKIE in jar and valid_session(jar[SESSION_COOKIE].value)
 
-    def do_POST(self):
-        """Handle /login. A right username and password set the session cookie."""
-        if urlsplit(self.path).path != "/login":
-            return self.send_error(404)
+    def body_length(self, limit: int) -> int | None:
+        """Return the request's Content-Length, or None after answering a missing, bad, or too large one."""
+        # This server does not read chunked bodies.
+        if self.headers.get("Content-Length") is None:
+            send_json(self, {"error": "Content-Length required"}, 411)
+            return None
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            length = int(self.headers["Content-Length"])
         except ValueError:
-            return send_json(self, {"error": "bad Content-Length"}, 400)
+            length = -1
         if length < 0:
-            return send_json(self, {"error": "bad Content-Length"}, 400)
-        if length > MAX_LOGIN_BODY:
-            return send_json(self, {"error": "request too large"}, 413)
+            send_json(self, {"error": "bad Content-Length"}, 400)
+            return None
+        if length > limit:
+            send_json(self, {"error": "request too large"}, 413)
+            return None
+        return length
+
+    def do_POST(self):
+        """Handle /login and /token."""
+        path = urlsplit(self.path).path
+        if path == "/login":
+            return self.login()
+        if path == "/token":
+            return self.token()
+        return self.send_error(404)
+
+    def login(self):
+        """A right username and password set the session cookie."""
+        length = self.body_length(MAX_LOGIN_BODY)
+        if length is None:
+            return
         key = client_key(self.client_address[0], self.headers.get("X-Forwarded-For"))
         ticket = reserve_attempt(key)
         if ticket is None:
@@ -278,8 +333,44 @@ class Handler(SimpleHTTPRequestHandler):
             cookie += "; Secure"
         send_json(self, {"ok": True}, headers={"Set-Cookie": cookie})
 
+    def token(self):
+        """Mint a join token for a new room, with the validated session choices as participant attributes."""
+        if not self.authenticated():
+            return send_json(self, {"error": "login required"}, 401)
+        length = self.body_length(MAX_TOKEN_BODY)
+        if length is None:
+            return
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except TimeoutError:
+            self.close_connection = True
+            return
+        except (ValueError, RecursionError):
+            body = None
+        if not isinstance(body, dict):
+            return send_json(self, {"error": "the body must be a JSON object"}, 400)
+        state = service_state()
+        if not state["services"]:
+            return send_json(self, {"error": "the agent is still starting. Try again in a few seconds."}, 503)
+        try:
+            attributes = session_attributes(body, state)
+        except ValueError as exc:
+            return send_json(self, {"error": str(exc)}, 400)
+        # A new room each time, so the agent is dispatched per session.
+        room = f"voice-{uuid.uuid4().hex[:8]}"
+        grants = api.VideoGrants(room_join=True, room=room)
+        token = (
+            api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
+            .with_identity(f"user-{uuid.uuid4().hex[:6]}")
+            .with_attributes(attributes)
+            .with_grants(grants)
+            .with_ttl(timedelta(hours=1))
+            .to_jwt()
+        )
+        send_json(self, {"token": token, "room": room})
+
     def do_GET(self):
-        """Serve /voices, /phone and /token, and static files for everything else."""
+        """Serve the data endpoints, and static files for everything else."""
         url = urlsplit(self.path)
         if url.path == "/auth/status":
             return send_json(
@@ -290,32 +381,23 @@ class Handler(SimpleHTTPRequestHandler):
                     "authenticated": self.authenticated(),
                 },
             )
-        if url.path == "/client-config":  # public: the page needs it before it can sign in or connect
-            return send_json(self, {"ws_url": public_ws_url()})
+        if url.path == "/client-config":
+            return send_json(self, client_config())
         if url.path in PROTECTED and not self.authenticated():
             return send_json(self, {"error": "login required"}, 401)
+        if url.path == "/services":
+            return send_json(self, service_state()["services"])
         if url.path == "/voices":
-            return send_json(self, read_voices_file(voices_path()))
-        if url.path == "/scenarios":
-            return send_json(self, {"scenarios": scenario_catalog()})
+            return send_json(self, voices_of(service_state(), parse_qs(url.query).get("tts", [""])[0]))
+        if url.path == "/prompts":
+            return send_json(self, scenario_catalog())
+        if url.path == "/tools":
+            return send_json(self, tool_catalog())
         if url.path == "/phone":
             return send_json(self, phone_info())
         if url.path == "/deployment":
             return send_json(self, read_json(state_path(DEPLOYMENT_FILE)) or {})
-        if url.path != "/token":
-            return super().do_GET()
-        attributes = token_attributes(parse_qs(url.query), [v["id"] for v in read_voices_file(voices_path())["voices"]])
-        room = f"voice-{uuid.uuid4().hex[:8]}"  # a new room each time, so the agent dispatches per session
-        grants = api.VideoGrants(room_join=True, room=room)
-        token = (
-            api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
-            .with_identity(f"user-{uuid.uuid4().hex[:6]}")
-            .with_attributes(attributes)  # the agent reads the use case and voice when it joins
-            .with_grants(grants)
-            .with_ttl(timedelta(hours=1))
-            .to_jwt()
-        )
-        send_json(self, {"token": token, "room": room})
+        return super().do_GET()
 
 
 def main() -> None:
@@ -328,6 +410,8 @@ def main() -> None:
     host = os.environ.get("LIVEKIT_UI_HOST", "127.0.0.1")
     port = int(os.environ.get("LIVEKIT_UI_PORT", "3000"))
     print(f"UI on http://{host}:{port}", flush=True)
+    if ui_username() and not ui_password():
+        print(f"warning: {USERNAME_ENV} is set without {PASSWORD_ENV}, so no login can succeed. Set both.", flush=True)
     ThreadingHTTPServer((host, port), Handler).serve_forever()  # noqa: S104 - the container binds 0.0.0.0 by design
 
 

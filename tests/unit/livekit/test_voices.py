@@ -10,9 +10,7 @@ from nemotron_voice_agent.livekit.examples.generic_assistant.voices import (
     parse_set_voice,
     parse_voices,
     preferred_voice,
-    read_voices_file,
     with_current,
-    write_voices_file,
 )
 
 
@@ -107,28 +105,6 @@ def test_choose_voice_uses_only_listed_voices():
     assert choose_voice("Magpie-Multilingual.EN-US.Evil", available, "default") == "default"
     assert choose_voice(None, available, "default") == "default"
     assert choose_voice(["Aria"], available, "default") == "default"
-
-
-def test_voices_file_round_trip_is_atomic_and_readable(tmp_path):
-    path = tmp_path / "state" / "voices.json"
-    voices = [{"id": "Aria", "name": "Aria"}, {"id": "Mia", "name": "Mia"}]
-    write_voices_file(path, voices, "Aria")
-    assert read_voices_file(path) == {"voices": voices, "default": "Aria"}
-    assert [p.name for p in path.parent.iterdir()] == ["voices.json"]  # no temporary files left behind
-    write_voices_file(path, voices[:1], "Aria")
-    assert read_voices_file(path)["voices"] == voices[:1]
-
-
-def test_reading_a_missing_or_broken_voices_file_returns_an_empty_list(tmp_path):
-    empty = {"voices": [], "default": ""}
-    assert read_voices_file(tmp_path / "missing.json") == empty
-    bad = tmp_path / "bad.json"
-    bad.write_text("{not json")
-    assert read_voices_file(bad) == empty
-    bad.write_text(json.dumps({"voices": "nope"}))
-    assert read_voices_file(bad) == empty
-    bad.write_text(json.dumps({"voices": [{"id": "x"}, {"id": "Aria", "name": "Aria"}, 7], "default": "Aria"}))
-    assert read_voices_file(bad)["voices"] == [{"id": "Aria", "name": "Aria"}]
 
 
 def test_sofia_is_the_default_when_the_server_lists_her():

@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// The few styles that the LiveKit client adds to the shared NVIDIA theme, built from its tokens.
+
+fieldset {
+  border: 0;
+  min-width: 0;
+}
+
+.settings-hint {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.brand-accent {
+  color: var(--nvidia-green);
+  font-weight: var(--font-bold);
+  letter-spacing: 0.08em;
+}
+
+.error-text {
+  font-size: var(--text-xs);
+  color: var(--color-error);
+}
+
+.device-disabled .audio-level-bar {
+  background: var(--text-muted);
+}
+
+.message-event {
+  background-color: var(--bg-tertiary);
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+
+  &--ok { border-left-color: var(--nvidia-green); }
+  &--notice { border-left-color: var(--color-notice); }
+  &--error {
+    border-left-color: var(--color-error);
+    color: var(--text-primary);
+  }
+}
+
+.status-row:has(> .status-value--wrap) {
+  gap: var(--space-3);
+}
+
+.login-card {
+  width: min(360px, calc(100vw - 2 * var(--space-6)));
+  padding: var(--space-6);
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.phone-number {
+  color: var(--nvidia-green);
+  font-family: var(--font-mono);
+  text-decoration: none;
+
+  &:hover { text-decoration: underline; }
+}

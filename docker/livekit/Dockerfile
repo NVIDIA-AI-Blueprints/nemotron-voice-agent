@@ -6,6 +6,24 @@
 # One image runs both the agent worker and the web UI server; Compose picks the command.
 
 # Base image - OSRB approved Ubuntu base (same as docker/pipecat/Dockerfile)
+FROM nvcr.io/nvidia/base/ubuntu:noble-20260610 AS client-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /client
+
+COPY clients/livekit/package.json clients/livekit/package-lock.json ./
+RUN npm ci
+COPY clients/livekit/ ./
+RUN npm run build
+
 FROM nvcr.io/nvidia/base/ubuntu:noble-20260610
 
 LABEL maintainer="NVIDIA"
@@ -39,7 +57,7 @@ RUN uv sync --frozen --python python3.12 --no-default-groups --group livekit --n
 
 COPY src/ src/
 RUN uv sync --frozen --python python3.12 --no-default-groups --group livekit
-COPY clients/livekit/ clients/livekit/
-COPY services.yaml examples_registry.yaml ./
+COPY services.yaml settings.yaml examples_registry.yaml ./
+COPY --from=client-builder /client/dist/ clients/livekit/dist/
 
 CMD ["nva-livekit", "start"]

@@ -9,6 +9,7 @@ import pytest
 
 from nemotron_voice_agent.livekit.examples.generic_assistant import config
 
+CUSTOM_ON = {"LIVEKIT_UI_CUSTOM_ENDPOINTS": "1"}
 CATALOG = config.load_catalog(Path(__file__).resolve().parents[3] / "services.yaml")
 
 
@@ -20,9 +21,12 @@ def test_cloud_recipe_uses_nvcf_endpoints():
     assert cfg.tts_server == config.NVCF_GRPC_SERVER
     assert cfg.asr_function_id == CATALOG["server"]["asr"]["nemotron-asr-streaming-english"]["nvcf"]["function_id"]
     assert cfg.tts_function_id == CATALOG["server"]["tts"]["magpie-multilingual-tts"]["nvcf"]["function_id"]
-    # The Riva client needs the catalog entry model, not the nvcf override that Pipecat uses.
-    assert cfg.asr_model == CATALOG["server"]["asr"]["nemotron-asr-streaming-english"]["model"]
-    assert cfg.asr_model != "nemotron-asr-streaming"
+    assert cfg.asr_model == ""
+
+
+def test_every_cloud_asr_entry_lets_the_function_pick_its_model():
+    for key in config.available_services(CATALOG, "cloud")["asr"]:
+        assert config.load_config("cloud", env={"ASR_SERVICE": key}, catalog=CATALOG).asr_model == "", key
 
 
 def test_server_recipe_uses_compose_hostnames():
@@ -134,3 +138,129 @@ def test_list_command_prints_choices_and_marks_defaults(capsys, monkeypatch):
     assert out.startswith("single-gpu\n")
     assert "LLM_SERVICE: nemotron-lightning (default)" in out
     assert config.main(["nope"]) == 2
+
+
+def ids(options):
+    return {slot: [entry["id"] for entry in entries] for slot, entries in options.items()}
+
+
+def test_offered_services_follow_the_registry_order_and_the_recipe():
+    cloud = ids(config.service_options("cloud", CATALOG, env={}))
+    assert cloud["llm"] == ["nemotron-lightning", "nemotron-super", "nemotron-bolt-4b"]  # bolt-74b has no nvcf key
+    assert "magpie-zeroshot-tts" not in cloud["tts"]
+    server = ids(config.service_options("server", CATALOG, env={}))
+    assert server["tts"] == config.REGISTRY_SERVICES["tts"]
+    single = ids(config.service_options("single-gpu", CATALOG, env={}))
+    assert single["asr"] == ["nemotron-asr-streaming-english"]
+
+
+def test_the_environment_default_is_offered_first():
+    offered = config.service_options("server", CATALOG, env={"LLM_SERVICE": "nemotron-super"})
+    assert [(e["id"], e["default"]) for e in offered["llm"][:2]] == [
+        ("nemotron-super", True),
+        ("nemotron-lightning", False),
+    ]
+
+
+def test_offered_entries_carry_the_source_and_the_editable_settings():
+    llm = config.service_options("server", CATALOG, env={})["llm"][0]
+    assert llm["source"] == "self-hosted" and llm["health_path"]
+    assert {"temperature", "top_p", "max_tokens"} <= set(llm["settings"])
+    assert config.service_options("cloud", CATALOG, env={})["tts"][0]["source"] == "cloud-nim"
+    single_asr = config.service_options("single-gpu", CATALOG, env={})["asr"][0]
+    assert set(single_asr["settings"]) == {"automatic_punctuation"}
+    single_tts = config.service_options("single-gpu", CATALOG, env={})["tts"][0]
+    assert single_tts["settings"] == {}  # synthesis_mode is a Pipecat setting
+
+
+def test_a_session_choice_picks_another_offered_service():
+    cfg = config.load_config("server", env={}, catalog=CATALOG, choices={"tts": {"key": "chatterbox-multilingual-tts"}})
+    assert cfg.keys["tts"] == "chatterbox-multilingual-tts"
+    assert cfg.tts_name == CATALOG["server"]["tts"]["chatterbox-multilingual-tts"]["name"]
+
+
+def test_llm_settings_split_into_client_arguments_and_the_body():
+    choices = {"llm": {"key": "nemotron-super", "settings": {"temperature": 0.2, "max_tokens": 200}}}
+    cfg = config.load_config("server", env={}, catalog=CATALOG, choices=choices)
+    assert cfg.llm_options["temperature"] == 0.2 and cfg.llm_options["max_tokens"] == 200
+    assert not set(config.LLM_ARGUMENTS) & set(cfg.llm_extra_body)
+    assert cfg.llm_extra_body["chat_template_kwargs"]["enable_thinking"] is False
+
+
+def test_asr_punctuation_follows_the_session_setting():
+    choices = {"asr": {"key": "nemotron-asr-streaming-english", "settings": {"automatic_punctuation": False}}}
+    assert not config.load_config("single-gpu", env={}, catalog=CATALOG, choices=choices).asr_punctuate
+    assert config.load_config("single-gpu", env={}, catalog=CATALOG).asr_punctuate
+
+
+def test_a_custom_llm_gets_only_its_own_parameters_and_no_api_key():
+    custom = {"base_url": "http://my-llm:8000/v1", "model_id": "my/model", "extra_params": '{"top_k": 5}'}
+    cfg = config.load_config("cloud", env=CUSTOM_ON, catalog=CATALOG, choices={"llm": {"custom": custom}})
+    assert (cfg.llm_base_url, cfg.llm_model, cfg.llm_extra_body) == ("http://my-llm:8000/v1", "my/model", {"top_k": 5})
+    assert not cfg.slot_hosted("llm") and cfg.slot_hosted("asr")
+    assert next(m for m in cfg.models() if m["kind"] == "LLM")["runs"] == config.CUSTOM_RUNTIME
+
+
+def test_a_custom_endpoint_on_nvidia_cloud_gets_tls_and_the_key():
+    nvcf_llm = {"base_url": config.NVCF_LLM_BASE_URL, "model_id": "m"}
+    assert config.load_config(
+        "server", env=CUSTOM_ON, catalog=CATALOG, choices={"llm": {"custom": nvcf_llm}}
+    ).slot_hosted("llm")
+    tts = {"server": config.NVCF_GRPC_SERVER, "voice_id": "v", "function_id": "f"}
+    cfg = config.load_config("single-gpu", env=CUSTOM_ON, catalog=CATALOG, choices={"tts": {"custom": tts}})
+    assert cfg.slot_hosted("tts") and cfg.tts_sample_rate == config.DEFAULT_TTS_SAMPLE_RATE
+    asr = {"server": "my-asr:50051", "model": "my-model"}
+    cfg = config.load_config("server", env=CUSTOM_ON, catalog=CATALOG, choices={"asr": {"custom": asr}})
+    assert not cfg.slot_hosted("asr") and cfg.asr_model == "my-model"
+
+
+@pytest.mark.parametrize("slot", ["asr", "tts"])
+def test_a_function_id_on_another_host_is_not_nvidia_cloud(slot):
+    entry = {"server": "attacker.example:443", "function_id": "f", "voice_id": "v"}
+    cfg = config.load_config("cloud", env=CUSTOM_ON, catalog=CATALOG, choices={slot: {"custom": entry}})
+    assert not cfg.slot_hosted(slot)
+
+
+@pytest.mark.parametrize(
+    ("slot", "entry", "hosted"),
+    [
+        ("llm", {"base_url": "https://integrate.api.nvidia.com/v1"}, True),
+        ("llm", {"base_url": "http://integrate.api.nvidia.com:443/v1"}, False),
+        ("llm", {"base_url": "http://integrate.api.nvidia.com/v1"}, False),
+        ("llm", {"base_url": "https://integrate.api.nvidia.com.attacker.example/v1"}, False),
+        ("tts", {"server": "grpc.nvcf.nvidia.com:443", "function_id": "f"}, True),
+        ("tts", {"server": "grpc.nvcf.nvidia.com:443"}, False),
+        ("asr", {"server": "grpc.nvcf.nvidia.com:50051", "function_id": "f"}, False),
+    ],
+)
+def test_only_nvidia_cloud_over_tls_gets_the_api_key(slot, entry, hosted):
+    assert config.custom_on_nvidia_cloud(slot, entry) is hosted
+
+
+@pytest.mark.parametrize(
+    ("extra_params", "error"),
+    [
+        ('{"extra_body": 5}', "extra_body must be a JSON object"),
+        ('{"chat_template_kwargs": []}', "chat_template_kwargs must be a JSON object"),
+        ('{"max_tokens": 1e999}', "with finite numbers"),
+        ('{"temperature": NaN}', "with finite numbers"),
+        ("[1]", "must be a JSON object"),
+    ],
+)
+def test_unusable_extra_params_are_an_error(extra_params, error):
+    with pytest.raises(ValueError, match=error):
+        config.custom_entry("llm", {"base_url": "http://x:1/v1", "model_id": "m", "extra_params": extra_params})
+
+
+def test_custom_endpoints_are_off_unless_turned_on():
+    custom = {"llm": {"custom": {"base_url": "http://x:1/v1", "model_id": "m"}}}
+    with pytest.raises(ValueError, match="custom endpoints are turned off"):
+        config.load_config("cloud", env={}, catalog=CATALOG, choices=custom)
+    assert config.load_config("cloud", env=CUSTOM_ON, catalog=CATALOG, choices=custom).keys["llm"] == ""
+
+
+def test_a_custom_endpoint_without_its_required_fields_is_an_error():
+    with pytest.raises(ValueError, match="needs model_id"):
+        config.custom_entry("llm", {"base_url": "http://x:1/v1"})
+    with pytest.raises(ValueError, match="JSON object"):
+        config.custom_entry("llm", {"base_url": "http://x:1/v1", "model_id": "m", "extra_params": "{not json"})

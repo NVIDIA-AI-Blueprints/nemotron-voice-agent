@@ -5,6 +5,7 @@
 venv/
 **/node_modules
 clients/pipecat/dist
+clients/livekit/dist
 **/__pycache__
 **/*.pyc
 .pytest_cache/

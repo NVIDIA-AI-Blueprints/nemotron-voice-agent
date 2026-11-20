@@ -26,6 +26,22 @@ def test_registry_and_fallback():
     assert all(c["examples"] and c["description"] and c["name"] for c in sc.scenario_catalog())
 
 
+def test_the_catalog_lists_each_prompt_with_its_tools_and_one_default():
+    catalog = sc.scenario_catalog()
+    assert [c["id"] for c in catalog if c["default"]] == [sc.DEFAULT_SCENARIO]
+    for entry in catalog:
+        assert entry["content"] == sc.SCENARIOS[entry["id"]].instructions
+        assert entry["tools"] == list(tools_by_name(entry["id"]))
+    assert set(sc.scenario_tools()) == {name for entry in catalog for name in entry["tools"]}
+
+
+def test_a_custom_prompt_has_no_tools_and_the_model_greets():
+    custom = sc.custom_scenario("Answer in one sentence.")
+    assert custom.instructions == "Answer in one sentence."
+    assert custom.make_tools() == []
+    assert custom.greeting_text is None and custom.greeting
+
+
 def test_every_tool_has_docstring_and_args_section():
     for s in sc.SCENARIOS.values():
         for fn in s.make_tools():
