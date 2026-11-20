@@ -160,7 +160,9 @@ The single-GPU vLLM service and the server NIM read the **Reasoning Budget** fro
 
 ### Run Nemotron 3.5 Lightning on NVIDIA Dynamo (Experimental)
 
-The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` recipes serve Lightning with [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) and pair it with the ASR and TTS NIMs from the matching `/server` recipe. The `dynamo-frontend` service routes requests to the vLLM workers, and the recipe starts one worker, `dynamo-lightning-worker`, on GPU `0`. The workers register through file-based discovery on the shared `dynamo_kv` volume, so the recipe needs no etcd or NATS.
+[NVIDIA Dynamo](https://docs.nvidia.com/dynamo/) is an open source inference framework that serves an engine such as vLLM behind one OpenAI-compatible frontend. The frontend routes each request to one of several engine workers, so you can scale the LLM across GPUs and hosts without changing the pipeline. When a worker stops, its in-flight chat completions move to another worker.
+
+The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` recipes serve Lightning with Dynamo and pair it with the ASR and TTS NIMs from the matching `/server` recipe. The `dynamo-frontend` service routes requests to the vLLM workers, and the recipe starts one worker, `dynamo-lightning-worker`, on GPU `0`. The workers register through file-based discovery on the shared `dynamo_kv` volume, so the recipe needs no etcd or NATS.
 
 ```bash
 docker compose --profile generic-assistant/dynamo up -d
@@ -199,7 +201,7 @@ services:
 
 Repeat the entry with a new name and GPU for each worker, then run `docker compose --profile generic-assistant/dynamo up -d`. The worker registers with the frontend when its model is loaded. Confirm the count with `curl -s localhost:18005/v1/models/nvidia/nemotron-3.5-lightning-30b-a3b/ready`. The response counts each worker once per endpoint type, chat and realtime, so two workers report `"workers":4`.
 
-Workers on other hosts need a discovery service that spans hosts. Run etcd, and set `DYN_DISCOVERY_BACKEND=etcd` and `ETCD_ENDPOINTS` on the frontend and every worker, and `DYN_TCP_RPC_HOST` to each worker's routable address. Refer to the [Dynamo runtime configuration](https://github.com/ai-dynamo/dynamo/blob/main/docs/fern/pages/reference/components/runtime-configuration.mdx).
+Workers on other hosts need a discovery service that spans hosts. Run etcd, and set `DYN_DISCOVERY_BACKEND=etcd` and `ETCD_ENDPOINTS` on the frontend and every worker, and `DYN_TCP_RPC_HOST` to each worker's routable address. Refer to the [Dynamo runtime configuration](https://docs.nvidia.com/dynamo/reference/components/runtime-configuration). To run Dynamo on Kubernetes, refer to the [Dynamo Kubernetes installation guide](https://docs.nvidia.com/dynamo/kubernetes-deployment/start-here/installation-guide).
 
 ### Deployment Tuning Parameters
 
@@ -284,6 +286,7 @@ Cloud (NVCF) endpoints enable the parsers server-side. **Self-hosted NIM and vLL
 
 - **NIM** receives them through `NIM_PASSTHROUGH_ARGS`, which is already fixed in the Lightning, Super VL, and Bolt E4B Compose files.
 - **Raw vLLM** (single-GPU or Omni) takes the same flags directly on `vllm serve`.
+- **NVIDIA Dynamo** parses tool calls and reasoning in the frontend, so the worker in `docker-compose.dynamo-lightning.yaml` sets `--dyn-tool-call-parser qwen3_coder` and `--dyn-reasoning-parser nemotron_v3` instead of `--enable-auto-tool-choice --tool-call-parser`.
 
 ## Tuning LLM Request Parameters
 
@@ -314,5 +317,6 @@ llm:
 - [Troubleshooting guide](../06-troubleshooting.md): self-hosted startup/runtime failures (tool-parser `HTTP 400`, reasoning leaking into speech, `nemotron_v3` parser not found, CUDA-graph / precision aborts) and cloud rate limits (`HTTP 429`).
 - [Configure Services](configure-services.md): how the catalog is loaded, switched, and overridden.
 - [NIM for LLMs documentation](https://docs.nvidia.com/nim/large-language-models/latest/): [support matrix](https://docs.nvidia.com/nim/large-language-models/latest/reference/support-matrix.html), [model profiles and selection](https://docs.nvidia.com/nim/large-language-models/latest/deployment/model-profiles-and-selection.html), [GPU memory / OOM troubleshooting](https://docs.nvidia.com/nim/large-language-models/latest/troubleshooting/memory.html).
+- [NVIDIA Dynamo documentation](https://docs.nvidia.com/dynamo/): [architecture](https://docs.nvidia.com/dynamo/design-docs/overall-architecture), [vLLM backend](https://docs.nvidia.com/dynamo/backends/v-llm), [router](https://docs.nvidia.com/dynamo/components/router), [request migration](https://docs.nvidia.com/dynamo/user-guides/fault-tolerance/request-migration), [support matrix](https://docs.nvidia.com/dynamo/resources/support-matrix).
 - [vLLM documentation](https://docs.vllm.ai/en/latest/): `vllm serve` flags, quantization, and the OpenAI-compatible server reference.
 - [Pipecat NVIDIA LLM service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/llm.py): `NvidiaLLMService`.
