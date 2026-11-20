@@ -243,6 +243,9 @@ ERROR_MESSAGES = {
 - Use container orchestration (Kubernetes).
 - Enable auto-scaling based on CPU/memory/queue depth.
 
+**LLM:**
+- Serve the LLM with NVIDIA Dynamo to spread sessions across workers on more GPUs or hosts. Refer to [Add Dynamo Workers](how-to/configure-llm.md#add-dynamo-workers).
+
 **Stateful Services:**
 - Use sticky sessions.
 - Implement distributed session storage (Redis).
