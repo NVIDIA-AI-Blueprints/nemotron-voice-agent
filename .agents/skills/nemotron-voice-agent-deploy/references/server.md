@@ -47,7 +47,7 @@ docker run --rm --gpus '"device=2,3"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 
 Confirm GPUs `2` and `3` are the same supported GPU type and that the manifest lists the exact TP2 profile before changing `NIM_MODEL_PROFILE`.
 
-The optional `transcribe-asr` sidecar uses GPU `1` and publishes HTTP port `9002`. Its default placement requires GPU `1` to be available.
+The optional `transcribe-asr` sidecar uses GPU `1` and publishes HTTP port `9002`. Its default placement requires GPU `1` to be available. Start it with `--scale nemotron-asr-streaming-english=0` (or `nemotron-asr-streaming-multilingual=0` for the Multilingual Assistant) so the default NIM ASR sidecar does not use GPU `0`.
 
 Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. The Super VL NIM uses GPUs `1` and `2`: `frontend-backend-live/server` starts it, and other recipes add it as an optional sidecar. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 

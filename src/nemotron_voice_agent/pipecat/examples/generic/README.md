@@ -77,7 +77,7 @@ To run host-native without Docker, set `pipecat.selection` to `generic-assistant
 
 ## Transcribe ASR
 
-Optional. Transcribe runs self-hosted with the server recipe only. Start it with `docker compose --profile generic-assistant/server --profile transcribe-asr up -d`. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting. Refer to [Configure ASR](../../../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and configuration.
+Optional. Transcribe runs self-hosted with the server recipe only. Start it with `docker compose --profile generic-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-english=0`. The scale option keeps the NIM ASR sidecar from using GPU memory. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting. Refer to [Configure ASR](../../../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and configuration.
 
 ## Customization
 
