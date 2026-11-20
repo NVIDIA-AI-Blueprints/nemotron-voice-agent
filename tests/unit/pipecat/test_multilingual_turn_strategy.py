@@ -169,6 +169,12 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
             self.assertEqual(params.user_turn_strategies.stop[0]._user_speech_timeout, 0.0)
             self.assertEqual(params.user_mute_strategies, [])
 
+    def test_catalog_vad_default_and_env_override(self) -> None:
+        for override, expected in (("", 0.8), ("0.3", 0.3)):
+            with self.subTest(override=override), patch.dict(os.environ, {"SILERO_VAD_STOP_SECS": override}):
+                params = _build_multilingual_user_aggregator_params(False, vad_only=True, vad_stop_secs=0.8)
+                self.assertEqual(params.vad_analyzer.params.stop_secs, expected)
+
     def test_transcribe_prewarm_skips_grpc_and_forwards_static_languages(self) -> None:
         with (
             patch("nemotron_voice_agent.pipecat.examples.multilingual.pipeline.prewarm_asr") as asr,
@@ -325,6 +331,7 @@ class MultilingualASRSelectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_selected_catalog_type_builds_stt_with_session_language_and_no_prompt(self):
         transcribe = {
             "asr_type": "transcribe",
+            "vad_stop_secs": 0.8,
             "language_code": "en-US",
             "supported_languages": ["de", "es", "hi"],
             "transcription_prompt": "English-only catalog prompt must be ignored.",
@@ -369,7 +376,7 @@ class MultilingualASRSelectionTests(unittest.IsolatedAsyncioTestCase):
                     await multilingual_pipeline.bot(SimpleNamespace(body=body))
                 self.assertEqual(http.call_count, int(expected))
                 self.assertEqual(streaming.call_count, int(not expected))
-                params.assert_called_once_with(True, vad_only=expected)
+                params.assert_called_once_with(True, vad_only=expected, vad_stop_secs=0.8 if expected else 0.5)
                 self.assertEqual(
                     prepare.call_args.kwargs["asr_supported_languages"], ["de", "es", "hi"] if expected else None
                 )

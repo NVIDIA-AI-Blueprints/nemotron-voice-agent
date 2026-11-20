@@ -97,7 +97,7 @@ def _is_eval_transport(runner_args: RunnerArguments) -> bool:
 
 
 def _build_multilingual_user_aggregator_params(
-    welcome_enabled: bool, *, vad_only: bool = False
+    welcome_enabled: bool, *, vad_only: bool = False, vad_stop_secs: float = 0.5
 ) -> LLMUserAggregatorParams:
     """Use VAD-only turn starts so interim ASR text does not start a user turn."""
     if not vad_only and not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
@@ -110,7 +110,7 @@ def _build_multilingual_user_aggregator_params(
             ),
         )
 
-    stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
+    stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", vad_stop_secs, min_value=0.0)
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
         user_mute_strategies=build_user_mute_strategies(welcome_enabled),
@@ -359,7 +359,9 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=_build_multilingual_user_aggregator_params(welcome_enabled, vad_only=transcribe_asr),
+        user_params=_build_multilingual_user_aggregator_params(
+            welcome_enabled, vad_only=transcribe_asr, vad_stop_secs=asr_entry.get("vad_stop_secs", 0.5)
+        ),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "

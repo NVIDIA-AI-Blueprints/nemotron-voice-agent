@@ -43,6 +43,11 @@ x-vllm-lightning: &vllm-lightning
 services:
   nvidia-llm-vllm-lightning: &vllm-lightning-service
     <<: *vllm-lightning
+    # Allocate Lightning only after an enabled Transcribe sidecar takes its VRAM.
+    depends_on:
+      nemotron-transcribe-single-gpu:
+        condition: service_healthy
+        required: false
     profiles:
       - generic-assistant/single-gpu
       - multilingual-assistant/single-gpu

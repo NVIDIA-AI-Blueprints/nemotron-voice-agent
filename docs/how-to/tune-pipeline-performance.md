@@ -31,7 +31,7 @@ Smart Turn.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `USE_SILERO_VAD_TURN_DETECTION` | `false` | Keep `false` for Smart Turn. Set `true` to disable it and use pure Silero VAD end-of-utterance detection instead. |
-| `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance in pure-VAD mode, including Transcribe. |
+| `SILERO_VAD_STOP_SECS` | `0.5`, or `0.8` with single-GPU Transcribe | Silence (seconds) before end-of-utterance in pure-VAD mode, including Transcribe. |
 | `SMART_TURN_STOP_SECS` | `1.0` | Smart Turn silence fallback (seconds) before the turn completes without a `COMPLETE` classification. Applies **only** in Smart Turn mode (`USE_SILERO_VAD_TURN_DETECTION=false`). |
 
 The Generic and Multilingual Assistants always use pure Silero VAD with Nemotron 3.5 Transcribe, regardless of `USE_SILERO_VAD_TURN_DETECTION`.

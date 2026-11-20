@@ -294,7 +294,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     else:
         context = LLMContext(messages)
     preserve_prompt_messages = len(messages)
-    user_params = build_user_aggregator_params(welcome_enabled, vad_only=transcribe_asr)
+    user_params = build_user_aggregator_params(
+        welcome_enabled, vad_only=transcribe_asr, vad_stop_secs=asr_entry.get("vad_stop_secs", 0.5)
+    )
     if speaker_processor and not multi_speaker_support:
         user_params.user_turn_strategies.start = [TranscriptionUserTurnStartStrategy(use_interim=False)]
     if streaming:

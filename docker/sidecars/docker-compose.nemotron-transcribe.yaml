@@ -41,5 +41,54 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  # Opt-in NeMo-Speech.cpp service for Generic and Multilingual single-GPU recipes.
+  nemotron-transcribe-single-gpu:
+    image: ${NEMO_SPEECH_TRANSCRIBE_IMAGE:-nvcr.io/nvidia/nemo-speech.cpp:26.10}
+    profiles:
+      - transcribe-asr-single-gpu
+    command:
+      - serve
+      - --asr-model
+      - /models/transcribe.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --no-ui
+      - --asr.model.name
+      - nvidia-nemotron-3p5-transcribe
+    ports:
+      - "9002:9000"
+    volumes:
+      - type: bind
+        source: ${TRANSCRIBE_MODEL_LOC:-../../models/transcribe}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      default:
+        aliases:
+          - nemotron-transcribe
+    healthcheck:
+      test: ["CMD", "/opt/nemo-speech/bin/nemo-speech", "health", "--url", "http://127.0.0.1:9000/ready", "--quiet"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
 volumes:
   transcribe_cache:
