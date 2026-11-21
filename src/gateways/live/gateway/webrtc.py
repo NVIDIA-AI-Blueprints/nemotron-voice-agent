@@ -72,8 +72,14 @@ async def create_webrtc_session(
     async def start() -> None:
         try:
             await session.start()
-        except Exception:
-            logger.exception(f"session={session.id} WebRTC startup failed")
+        except Exception as exc:
+            # Startup may fail after lifecycle.start's guarded open. Keep a diagnostic, but never re-log its
+            # authority-bearing message, cause, context or locals, even when the inner failure was unmarked.
+            reference = getattr(exc, "_live_attachment_reference", None)
+            logger.error(
+                f"session={session.id} WebRTC startup failed: error_type={type(exc).__name__} "
+                f"attachment_reference={reference}"
+            )
 
     session.spawn(start(), "start")
 

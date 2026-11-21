@@ -14,7 +14,7 @@ The following table compares OpenAI's hosted GPT-Live API with this gateway:
 | A `delegation.responses` change in `session.update` | Applies to every later delegation | Applies from the next delegation that starts new work. A delegation that joins open work keeps that work's settings until the next `response.create`. |
 | A typed message in `response.item.create` | Queues behind the work already running | Steers open work, as a spoken request does |
 | An unrelated request while work is open | Runs as its own delegation | Joins the open work with the `llm` adapter or at `max_running` 1, so the caller hears both answers together. Above 1, the conductor can start separate work. |
-| Captions | Stream with the speech | Each sentence's `session.output_transcript.delta` arrives after its audio has played |
+| Captions | Stream with the speech | `session.output_transcript.delta` follows each sentence's audio in `per_sentence` mode and the line's audio in `stitched` mode |
 | Stored recordings and session forks | Available | Not available |
 | `store: true` | Keeps the voice session for forks and recordings, and backend work ends with the session | Keeps backend work that outlives the call, and its records, for a later session, as [Work That Outlives the Call](#work-that-outlives-the-call) describes |
 
@@ -86,6 +86,10 @@ For each session, the server delegation opens a conversation in the core and sen
 
 The core places each request by its backend adapter's rule, as [Choose a Backend Adapter](../../src/examples/frontend_backend_live/README.md#choose-a-backend-adapter) describes.
 
+### Resolve Catalog Names in Your App
+
+Register `LOOKUP_TOOL` from the [read-only lookup example](../../benchmarking_tools/live_catalog/lookup.py) in `delegation.responses.tools`. On a tool call, pass the exact caller request, catalog mapping, and read-only record reader to `lookup_named_entry()`. The helper reads one record only for a unique name match. Pass `None` if your app cannot bind the call to an exact request. Return the result with the original `call_id` through the usual Responses continuation.
+
 ### How a Delegation Ends
 
 In Responses mode, the client sees each delegation's events in `response.event`, and the voice reads each ending from those events, never from their text. The following table lists the endings. The voice's lines are `agent_prompts.Lines` entries, and the `texts.*` lines are `agent_prompts.Core` entries, of the example's [`prompts.yaml`](../../src/examples/frontend_backend_live/prompts.yaml):
@@ -97,7 +101,7 @@ In Responses mode, the client sees each delegation's events in `response.event`,
 | Stopped for a newer request | `texts.cancelled_line`, or `texts.unconfirmed_line` when the stop was not confirmed, as a `final_answer`, then `response.completed` | That line |
 | Failed | `response.failed` with `rate_limit_exceeded`, `server_error`, or the attempt's own code, or `response.incomplete` with a reason such as `max_output_tokens` | `apology` when no tool ran, else `unclear` |
 | Timed out | The function outputs did not arrive within `delegation.client_tool_timeout_seconds`, so the core stops the work and writes nothing more, unless another request that a task took in carries the work | `unclear`, or nothing when another request carries the work |
-| Late | Function outputs for work that already ended get an empty response that ends with `response.completed` | `unclear`, or nothing more when the delegation already ended |
+| Late | Valid outputs-only continuations for an ended single-target Work get an empty response that ends with `response.completed` | `unclear`, or nothing more when the delegation already ended |
 | Cancelled at close | `response.incomplete` with status `cancelled` and `incomplete_details: null` | Nothing: the session is closing |
 | Lost | No terminal event: the stream ended, and the client gets a `response.failed` with `server_error` | `lost` |
 
@@ -105,16 +109,81 @@ The core writes no apology of its own and never retries work, so a client that s
 
 - `response.create` continues each waiting response whose calls all have results. When it would continue none while results are still owed, it is refused with `function_call_outputs_required`.
 - With the core's `delegation.result_format` set to `speak_display`, a result's screen-only detail comes before its answer, as an `mcp_call` item named `show`, with server label `delegation_core`, whose `output` is the display.
-- A task can ask the caller a question while its work goes on. The question is a `final_answer` message while the response is still `in_progress`, and more items and the task's answer can follow. A `final_answer` is one result for the caller. Only the response's terminal event ends the delegation. When the caller's reply joins the work while this response is still open, its `response.in_progress` names this response in `previous_response_id`, and this delegation still ends answered.
-- The core's work tools use the names `cancel_work` and `ask_caller`, `show` with `speak_display`, and `continue_after_call` where [work can outlive the call](#work-that-outlives-the-call). A function in `delegation.responses.tools` with one of these names is refused, together with the work tool.
+- A task can ask the caller a question or give a factual status message while its work goes on. Both are `final_answer` messages while the response is still `in_progress`, and more items and the task's answer can follow. A `final_answer` is one result for the caller; only the response's terminal event ends the delegation. For a legacy single-target response, a reply that joins its open work names this response in `previous_response_id`, and this delegation still ends answered. Shared responses use the scoped ownership rules below.
+- The core reserves the [work tool names](../../src/examples/frontend_backend_live/delegation_core/README.md#build-and-configure-the-core). Choose other names for your app's tools.
+
+### Continue a Shared Response
+
+A response that carries several tasks emits one app-call batch at a time. Return the full batch with `response.item.create`, then send `response.create`. Typed messages sent with that active batch go to the task that owns it.
+
+If the shared batch expires, send late outputs with their original call IDs in an outputs-only batch. Send fresh typed input separately. An exact repeat preserves the original result. An unrecognized call ID or conflicting result rejects the batch.
+
+### Resume a Dropped WebSocket Call
+
+The optional version-1 reconnect extension retains a Responses-mode call briefly after an accidental primary WebSocket loss. It preserves eligible backend work and delivery evidence while replacing the audio frontend. It is disabled by default and requires an app that implements this extension. The repository UI, WebRTC transport, and the stock Pipecat client do not negotiate it.
+
+To opt in, send `reconnect: {"version": 1}` beside the initial `session` and set `session.delegation.reconnect_grace_seconds` to a positive duration, for example 30 seconds:
+
+```json
+{
+  "type": "session.start",
+  "reconnect": {"version": 1},
+  "session": {
+    "model": "<live model>",
+    "delegation": {
+      "type": "responses",
+      "responses": {"model": "<backend model>"},
+      "reconnect_grace_seconds": 30
+    }
+  }
+}
+```
+
+The grace period is 0 through 120 seconds and is fixed at startup. A positive value needs frontend snapshot support and a Core client that implements `set_attachment`, such as the built-in client. For a custom prompt catalog, include the [reconnect attachment template](configure-prompts.md#frontendbackend-live-prompt-catalog). `GET /v1/live/info` advertises the extension under `reconnect`.
+
+After `session.started`, the primary socket receives `session.reconnect.ready`. Protect its token and use the same authentication scope for resume. During a reconnectable call, include a stable `operation_id` of 1 through 128 characters on each `response.item.create`, `response.create`, and `session.*.append` command. Send them from the primary socket.
+
+The `session.operation.receipt` event records gateway admission. Retry identical input with the same ID to check its recorded or unknown status. A definite refusal before admission leaves the ID available. A reserved ID can only be reused with identical input. For example:
+
+```json
+{"type": "response.create", "event_id": "response-event-1", "operation_id": "response-operation-1"}
+```
+
+On an accidental loss, reconnect to the same `WS /v1/live/sessions` route before the original grace deadline. The first message contains `resume` and no replacement `session` configuration:
+
+```json
+{
+  "type": "session.start",
+  "resume": {
+    "version": 1,
+    "token": "<protected token>",
+    "generation": 1,
+    "request_id": "<stable resume request identifier>"
+  }
+}
+```
+
+Use a stable `request_id` of 1 through 128 characters. The server replies with `session.resumed`, a fresh reconnect token and generation, and a `pending` snapshot. Repeating the exact successful claim retrieves `session.resume.receipt` without creating another attachment.
+
+The snapshot lists `pending.results` and `pending.unclear_calls`. Results indicate whether presentation was never forwarded or uncertain. The server can present results that the earlier frontend could not have delivered. Interrupted audio remains context for the resumed call.
+
+If your app has a known tool result, send it with its original `call_id` and a stable operation ID. Continue outstanding work with `response.create` after sending the entire batch. A compatible Core client can retain a late result for future status. An unsupported reconciliation returns `action_outcome_unclear`. Keep uncertain effects as unresolved until you have evidence of their outcome.
+
+A clean or explicit close, expiry, server restart, or policy error ends this extension. A stale or expired claim returns `resume_unavailable`. An accidental disconnect can close the old socket with 1013. Resume before the original deadline.
+
+The reconnect journal holds up to 512 records and 2 MiB, and the frontend snapshot holds up to 256 KiB. The gateway ends the call when required recovery state exceeds these limits. It keeps up to 512 operation receipts and refuses new identifiers at capacity.
 
 ### Work That Outlives the Call
 
 A session that sets `store: true` lets long backend work go on after the caller hangs up. The core offers each task the `continue_after_call` work tool when the backend runs more than one task at once: with `llm-agent` or `harness` above `max_running: 1`. A task calls it when its work will take longer than the caller should wait and needs nothing more from the caller or the app. The caller hears the task's message as a `final_answer` while the response stays `in_progress`.
 
-When the session closes, the core keeps the conversation while its records list such work, open or among the newest ended work. The other work stops as at any close, and so does such work that waits for the app's function outputs. Every open response ends `cancelled`. With nobody on the call, the app's functions and `ask_caller` do not run, and the work's events reach no client. A request that the caller added to the work during the call does not run if the work ends before a task takes it in, so the caller asks for it again in a later call.
+When the session closes, the core keeps the conversation while its records list such work, open or among the newest ended work. The other work stops as at any close, and so does such work that waits for the app's function outputs. Every open response ends `cancelled`. With nobody on the call, app functions and caller publications do not run, and work events reach no client. A request added during the call does not run if the work ends before applying it, so the caller asks again in a later call.
 
-`session.started` names the core's conversation in `delegation.responses.conversation`. `session.closed` names it only when the core kept the conversation, so keep the ID for a later call only then. A start that names the ID and ends before `session.started`, by your own close or with an `error` other than `invalid_value`, leaves the conversation as it was. In that case, keep the ID and try again. To continue, start a session with `store: true` and the ID in `delegation.responses.conversation`. When the caller asks, the backend answers from the work's records. The following rules apply:
+`session.started` names the core's conversation in `delegation.responses.conversation`. If you receive `session.closed`, it includes the ID only when the core kept the conversation. A start that names the ID and ends before `session.started`, by your own close or with an `error` other than `invalid_value`, leaves the conversation as it was. In that case, keep the ID and try again. To continue, start a session with `store: true` and the ID in `delegation.responses.conversation`. When the caller asks, the backend answers from the work's records.
+
+If the WebSocket reconnect grace expires, you can try the same procedure with the ID from the earlier `session.started`. The conversation must still be retained. The core restores delegation before the new call reports `session.started`. The earlier call's resume token stays expired.
+
+The following rules apply:
 
 - `delegation.responses.conversation` is set at the start only, and it needs `store: true`.
 - An ID that is unknown, has expired, or belongs to a session that is still open fails the start with `invalid_value` on `session.delegation.responses.conversation`. Over WebRTC, the offer is answered, but the connection never opens and no event arrives. After a hang-up, retry after the earlier session has closed.
@@ -174,5 +243,5 @@ The following limits apply to every live session:
 
 - **Long calls.** The talker's memory drops its oldest whole turn groups past `compact_at` of `memory.context_tokens`, and the backend's history drops its oldest requests past `delegation.context_tokens`.
 - **Session start.** Before a session starts, the server checks each speech service and the talker's model that does not run on NVIDIA Cloud. A session started before one of them is ready is refused with `server_error` and a message such as "asr is still starting. Try again in a moment." A WebSocket gets that `error` event and a close with code 1008, and `POST /v1/live/sessions` answers HTTP 503. A command sent before `session.started` waits up to 30 seconds, and earlier audio can be dropped, so send audio after `session.started`.
-- **Event and settings size.** A WebSocket event longer than 1,048,576 characters gets an `error` and ends the connection. `delegation.responses` settings longer than about 1,048,576 characters of JSON get `invalid_value`.
+- **Event and settings size.** A WebSocket event larger than 1,048,576 UTF-8 bytes gets an `error` and ends the connection. Invalid UTF-8 text also gets an `error`. `delegation.responses` settings longer than about 1,048,576 characters of JSON get `invalid_value`.
 - **WebSocket reply audio.** Reply audio arrives in `session.output_audio.delta` events of `AUDIO_OUT_10MS_CHUNKS` times 10 ms (100 ms by default). The last event of each reply is padded with silence, and 100 ms events of silence flow while no reply plays.

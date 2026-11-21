@@ -132,7 +132,13 @@ def root() -> Root:
 
 def core_endpoint(endpoint: ModelEndpoint) -> CoreEndpoint:
     """Return a resolved endpoint as the delegation core takes it, without the frontend's own fields."""
-    return CoreEndpoint(endpoint.model, endpoint.base_url, endpoint.api_key, dict(endpoint.extra_params), endpoint.api)
+    return CoreEndpoint(
+        endpoint.model,
+        endpoint.base_url,
+        endpoint.api_key,
+        dict(endpoint.extra_params),
+        endpoint.api,
+    )
 
 
 def endpoint_lookup(catalog: ExampleCatalog, slot: str, overrides: dict | None = None) -> EndpointLookup:
@@ -165,7 +171,7 @@ def ui_bot_instructions(prompts: Prompts, channel: str) -> Callable[[str], str]:
 
 
 def core_client(core: DelegationCore) -> LocalResponsesClient:
-    """Return the in-process client of a core's endpoints, carrying the core's close budget and its close."""
+    """Return the in-process client with the Core's close budget and shutdown callback."""
     service = ResponsesService(core.session, stateless_session=core.one_shot_session, backend=core)
     return LocalResponsesClient(service, close_seconds=core.close_seconds, close_core=core.aclose)
 

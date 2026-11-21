@@ -184,6 +184,8 @@ def _delegation_changes(patch: object, current_type: str) -> dict:
 
 
 MAX_ACKNOWLEDGEMENT_DELAY_MS = 800
+DEFAULT_RECONNECT_GRACE_SECONDS = 0
+MAX_RECONNECT_GRACE_SECONDS = 120
 
 
 class ClientDelegationConfig(StrictModel):
@@ -210,6 +212,10 @@ class ResponsesDelegationConfig(StrictModel):
     type: Literal["responses"]
     responses: BackendConfig
     acknowledgement_delay_ms: int = Field(default=0, ge=0, le=MAX_ACKNOWLEDGEMENT_DELAY_MS)
+    # Version-1 primary-WebSocket resume extension; zero retains the ordinary close-on-loss behavior.
+    reconnect_grace_seconds: float = Field(
+        default=DEFAULT_RECONNECT_GRACE_SECONDS, ge=0, le=MAX_RECONNECT_GRACE_SECONDS, allow_inf_nan=False, strict=True
+    )
 
     def updated(self, patch: object) -> ResponsesDelegationConfig:
         """Return this delegation after a ``session.update``'s ``delegation`` block, which may not be ``null``."""
@@ -220,6 +226,12 @@ class ResponsesDelegationConfig(StrictModel):
                 "session.delegation",
             )
         changes = _delegation_changes(patch, self.type)
+        if "reconnect_grace_seconds" in changes and changes["reconnect_grace_seconds"] != self.reconnect_grace_seconds:
+            raise ProtocolError(
+                "delegation.reconnect_grace_seconds cannot change after startup",
+                "immutable_field_update",
+                "session.delegation.reconnect_grace_seconds",
+            )
         current = self.model_dump()
         if isinstance(changes.get("responses"), dict):
             responses = changes["responses"]
@@ -398,6 +410,11 @@ class SessionConfig(StrictModel):
             raise ProtocolError("WebRTC negotiates audio format in SDP", param="session.audio.format")
         if transport == "websocket" and self.client is not None:
             raise ProtocolError("client.data_channel is only supported for WebRTC sessions", param="session.client")
+        if transport != "websocket" and getattr(self.delegation, "reconnect_grace_seconds", 0):
+            raise ProtocolError(
+                "Reconnect requires a primary WebSocket with Responses delegation",
+                param="session.delegation.reconnect_grace_seconds",
+            )
 
     def with_wire_format(self) -> SessionConfig:
         """Return these settings with the WebSocket wire format resolved: the client's, or 24 kHz PCM."""

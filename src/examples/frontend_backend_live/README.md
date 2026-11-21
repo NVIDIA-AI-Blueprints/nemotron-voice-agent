@@ -100,8 +100,8 @@ config:
       prompt: generic                    # the Talker prompt of a session with no instructions
       delegation:
         app_wait_seconds: 50             # the app-wait line after the app takes this long; null: none
-        progress_after_seconds: 8        # a progress line after this much silent work; null: none
-        progress_max_per_delegation: 3   # progress lines for one delegation
+        progress_after_seconds: 8        # earliest progress with new backend evidence; null: none
+        progress_max_per_delegation: 3   # progress allowance for each work branch
       memory:
         context_tokens: 16000            # the talker's memory budget
       speech:
@@ -119,12 +119,14 @@ The delegation core calls a backend model over chat completions unless the model
 
 | | `llm` (default) | `llm-agent` | `harness` |
 | --- | --- | --- | --- |
-| What runs the work | The backend LLM, directly connected | Backend LLM workers | An Agent Client Protocol (ACP) agent that you deploy, such as Hermes, on its own model |
-| Tasks at once | 1 | `max_running` (3) | `max_running` (3), at most 4 for Hermes |
+| What runs the work | The backend LLM, directly connected | Backend LLM workers | An agent that you deploy, over ACP |
+| Tasks at once | 1 | `max_running` (3) | `max_running` (3); ACP Hermes allows at most 4 per process |
 | What places each request | A rule, with no model call | A model conductor, with one call per decision | A conductor session of the agent, with one prompt per decision |
 | What you deploy | Nothing more | Nothing more | The agent, as [Connect an Agent Harness](../../../docs/how-to/connect-an-agent-harness.md) describes |
 
-The rule joins each request to the open work, else continues the work that ended last, else starts new work. A conductor runs only while `max_running` is above 1. It places every request, so a new request waits for the conductor's decision. That wait lasts up to 20 seconds with `llm-agent`, and with `harness` until the conductor's agent is free and has decided. The conductor can also answer a status question. For how this differs from OpenAI's GPT-Live API, refer to [How This Differs from GPT-Live](../../../docs/how-to/use-live-gateway.md#how-this-differs-from-gpt-live).
+At one worker, a rule joins open work, continues the last eligible ended task, or starts a task. Above one worker, a conductor can group actions into one decision. It can update one task and stop another, or ask which task the caller means.
+
+Parallel workers receive focused assignments, relevant caller excerpts, and their own task history and playback records. The conductor sees conversation history for routing. For adapter behavior and task controls, refer to [Complete Routing Decisions](delegation_core/README.md#complete-routing-decisions).
 
 To switch adapters, set `core.backend.adapter`, and for `llm-agent` or `harness` also `core.delegation.result_format: speak_display`, which asks every worker for a `show` item for the screen before the answer. Then restart the app service, for example `docker compose restart frontend-backend-live`.
 
@@ -137,21 +139,29 @@ To switch adapters, set `core.backend.adapter`, and for `llm-agent` or `harness`
 
 The `tools` style is experimental, so test a model's routing decisions on your own calls first. To move a model to it, list the model under `services.llm`, set its style, for example `nemotron-super: tools`, and restart the server. Live sessions use the first listed model whose service is up, and the UI bot uses the model that you select in the **Services** tab.
 
+### Progress and Status
+
+A progress line needs new backend evidence, such as a completed tool step or a worker note. The frontend waits at least `frontend.cascade.delegation.progress_after_seconds` before saying it. Setting the delay to `null` disables these automatic updates. The frontend tracks available sentence-level playback evidence when speech is interrupted.
+
+The caller can ask for the status of a task. Any operational status reflects retained work and tool results. Closing or interrupting playback does not itself authorize an action.
+
 ### Turns and Interruptions
 
-`frontend.cascade.speech` sets the caller's turns. While the bot is silent, `vad_start_seconds` (0.12 seconds) of the caller's speech starts their turn. While the bot speaks, the caller's turn starts, and cuts the bot off, after `interrupt_min_words` words (2), so a cough or a one-word backchannel does not. Smart Turn judges each pause of `vad_stop_seconds` (0.2 seconds), and a pause of `turn_silence_seconds` (1.2 seconds) ends any turn.
+`frontend.cascade.speech` sets the caller's turns. While the bot is silent, voice activity lasting `vad_start_seconds` (0.12 seconds) or the first recognized word starts a turn. While the bot speaks, `interrupt_min_words` recognized words (2) start the caller's turn and interrupt playback, so a cough or a one-word backchannel does not. Smart Turn judges each pause of `vad_stop_seconds` (0.2 seconds), and a pause of `turn_silence_seconds` (1.2 seconds) ends any turn.
+
+After an interruption, the frontend can reuse result wording whose inputs are still current. If it requeues a result before any audio plays, it records that attempt as unheard.
 
 ### Prompts
 
 [`prompts.yaml`](prompts.yaml) holds the talker prompt that the repository UI lists (`cafe`) and, in `agent_prompts`, the other texts, which the **Prompts** tab shows read-only. `Talker` and `Backend` hold the default talker and backend prompts, and `Channel` holds the UI bot's channel context. `Cascade` holds the text of the talker's calls, `Lines` holds the voice's fixed lines, and `Core` holds the delegation core's texts.
 
-Each session reads the file when it starts, but the server reads the core's texts and the Live core's default backend prompt once, so restart it after you edit them. A file that `PROMPT_FILE_PATH` names replaces the whole file, so it must hold every `agent_prompts` entry. It can leave out the `tools` style's entries in `Cascade` (`tool_frame_before`, `tool_routing`, `tool_rules`, `tools.delegate`, and `tools.wait`) when no model uses that style. An unknown entry in `Cascade` or `Lines` refuses the live and UI bot sessions, and the server log names the entry or its group.
+A file named by `PROMPT_FILE_PATH` replaces the whole catalog. Refer to [Frontend/Backend Live Prompt Catalog](../../../docs/how-to/configure-prompts.md#frontendbackend-live-prompt-catalog) for the required entries and how to separate frontend guidance from backend procedures. Restart the server after editing the Core texts or backend default prompt.
+
+You can omit the `tools` style's `Cascade` entries (`tool_frame_before`, `tool_routing`, `tool_rules`, `tools.delegate`, and `tools.wait`) when no model uses that style. An unknown entry in `Cascade` or `Lines` refuses Live and UI bot sessions, and the server log names the entry or its group.
 
 ## Customization
 
-To change the prompts, edit [`prompts.yaml`](prompts.yaml), or send them in each session's `instructions` and `delegation.responses.instructions`. For models, services, and prompts, refer to [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure Services](../../../docs/how-to/configure-services.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md).
-
-To add a part, add one class and one entry in its name table, which the settings, or a model's `services.yaml` entry, choose by name. The name tables are `FRONTEND_ADAPTERS` ([`adapter/registry.py`](adapter/registry.py)) for a frontend adapter, `LLM_SERVICES` ([`talker.py`](talker.py)) for a talker service, and the core's tables in [Extend the Core](delegation_core/README.md#extend-the-core).
+To add a component, register its class in `FRONTEND_ADAPTERS` ([`adapter/registry.py`](adapter/registry.py)), `LLM_SERVICES` ([`talker.py`](talker.py)), or the matching table in [Extend the Core](delegation_core/README.md#extend-the-core).
 
 ## Troubleshooting
 
@@ -161,6 +171,6 @@ For a Live route that answers 404, a refused session, or a harness that does not
 
 Follow these practices:
 
-- **Repeat the talker's limits in the backend's instructions.** When the talker cannot word a result, the voice says the backend's text as written. So also put any limits on what the caller may hear in `delegation.responses.instructions`, or in your backend's prompt in client mode.
+- **Repeat the talker's disclosure limits in the backend's instructions.** After a Writer failure, the voice can use the original wording of each item whose source is still current at speech handoff. Set any limits on what the caller can hear in `delegation.responses.instructions` or, in client mode, in your backend's prompt.
 - **Keep the app-wait line before the deadline.** `core.delegation.client_tool_timeout_seconds` (60) is the core's deadline for the app's function outputs. Keep `frontend.cascade.delegation.app_wait_seconds` (50) below it, so the `app_wait_line` plays while the work still waits.
 - **Change the UI bot's backend with its talker prompt.** A new top-level talker prompt keeps the cafe's channel context, backend prompt, tools, and greeting lines. So also change `backend.prompt` and `backend.tools` under `ui_bot.core`, `ui_bot.channel`, and the `intro` and `greeting` lines in `agent_prompts.Lines`.

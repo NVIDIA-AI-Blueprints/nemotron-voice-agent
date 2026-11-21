@@ -256,9 +256,7 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
         config = {"base_url": "http://picked:8000/v1", "thinker_base_url": "http://picked-thinker:8000/v1"}
         await server._ensure_llm_ready_for_connection(config, self.EXAMPLE)
         picked, thinker = "http://picked:8000/v1", "http://picked-thinker:8000/v1"
-        self.assertEqual(
-            self.checked, [("LLM", picked, f"{picked}/health"), ("Thinker LLM", thinker, f"{thinker}/health")]
-        )
+        assert self.checked == [("LLM", picked, f"{picked}/health"), ("Thinker LLM", thinker, f"{thinker}/health")]
 
     async def test_an_unset_slot_is_checked_at_its_default_entry(self):
         await server._ensure_llm_ready_for_connection({}, self.EXAMPLE)

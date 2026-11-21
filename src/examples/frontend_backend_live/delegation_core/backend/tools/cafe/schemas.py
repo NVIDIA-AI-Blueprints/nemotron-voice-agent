@@ -81,8 +81,8 @@ CAFE_TOOLS = [
         "name": "place_order",
         "description": (
             "Place the current cart as an order. Call with confirmed=false to get a "
-            "read-back summary to confirm with the user, and confirmed=true only after "
-            "the user has said yes. Takes a few seconds to complete."
+            "read-back summary to confirm with the user. Set confirmed=true only after "
+            "the caller clearly approves the exact cart read back to them. Takes a few seconds to complete."
         ),
         "parameters": {
             "type": "object",
@@ -93,7 +93,7 @@ CAFE_TOOLS = [
                 },
                 "confirmed": {
                     "type": "boolean",
-                    "description": "True only if the user explicitly confirmed the order.",
+                    "description": "True only after explicit approval of the cart read back to the caller.",
                 },
             },
             "required": ["customer_name", "confirmed"],

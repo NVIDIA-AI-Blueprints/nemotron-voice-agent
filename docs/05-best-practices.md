@@ -124,12 +124,12 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 
 **Filler Words or Intermediate Responses:**
 - Generate or use random filler words to reduce perceived latency.
-- Generate intermediate responses based on function calls or thinking tokens for high latency agents or reasoning models.
+- Generate intermediate responses from observed backend activity and completed tool results. State only what those observations support.
 
 **Design Agents for Voice use case:**
 - When the real work is slow (reasoning models, multi-step tool use, or an agentic backend), split the assistant into a fast front-channel LLM that owns the live conversation and a deliberative backend agent that does the work.
-- The frontend LLM keeps the voice loop responsive by acknowledging the request, asking clarifying questions, and speaking filler while the backend runs, so perceived latency stays low even when end-to-end task latency is high.
-- Refer to the [Frontend/Backend Live example](../src/examples/frontend_backend_live/README.md) for the reference pattern. On every caller turn, its talker speaks a reply, delegates the turn, or waits. During longer delegated work, the voice speaks a progress line after 8 seconds of silent work (`frontend.cascade.delegation.progress_after_seconds`), and it says each result when the caller is idle.
+- The frontend LLM keeps the voice loop responsive by acknowledging requests and voicing supported backend questions, progress, and results. It can wait when the caller needs a moment. The backend owns task decisions and application actions.
+- Refer to the [Frontend/Backend Live example](../src/examples/frontend_backend_live/README.md) for the reference pattern. On every caller turn, its talker speaks a reply, delegates the turn, or waits. During longer delegated work, new backend evidence can produce a brief progress line after 8 seconds of silent work (`frontend.cascade.delegation.progress_after_seconds`). It says each result when the caller is idle.
 
 ---
 

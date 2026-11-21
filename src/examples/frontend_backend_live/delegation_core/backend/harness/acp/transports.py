@@ -9,8 +9,9 @@ import asyncio
 import contextlib
 import os
 import signal
+import subprocess
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from loguru import logger
@@ -30,6 +31,8 @@ class Transport(Protocol):
 
     # Set once the process exits or the connection closes, so the client ends every outstanding prompt.
     closed: asyncio.Event
+    name: str
+    runtime_stopped: bool
 
     @classmethod
     def check(cls, command: Sequence[str], url: str | None) -> None:
@@ -45,18 +48,30 @@ class Transport(Protocol):
     async def close(self) -> None:
         """End the process (stdin closed, then terminate, then kill) or the connection; safe to call twice."""
 
+    async def wait_closed(self) -> None:
+        """Wait for any deferred transport cleanup."""
+
+    async def send_record(self, writer: asyncio.StreamWriter, data: bytes, submitted: Callable[[], None]) -> None:
+        """Submit one record without another local queue, reporting its local transport handoff."""
+
 
 class StdioTransport:
     """``stdio``: start the agent as a child process and speak over its stdin and stdout."""
+
+    name = "stdio"
 
     def __init__(self, launch: RuntimeLaunch, *, stop_grace_seconds: float):
         """Start ``launch.command`` when opened; give it ``stop_grace_seconds`` to exit at each close step."""
         self.launch, self.grace = launch, stop_grace_seconds
         self.closed = asyncio.Event()
-        self.process: asyncio.subprocess.Process | None = None
+        self.process: subprocess.Popen[bytes] | None = None
+        self._opening: asyncio.Task | None = None
+        self._cleanup: asyncio.Task | None = None
+        self._pipes: list[asyncio.BaseTransport] = []
         self._tasks: list[asyncio.Task] = []
         self._stderr: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
-        self._closing = False
+        self._opened = False
+        self.runtime_stopped = False
 
     @classmethod
     def check(cls, command: Sequence[str], url: str | None) -> None:
@@ -73,40 +88,75 @@ class StdioTransport:
 
     async def open(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         """Start the process in its work folder and its own process group; return its stdout and its stdin."""
-        self.process = await asyncio.create_subprocess_exec(
-            *self.launch.command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        if self._opening is not None or self._cleanup is not None:
+            raise RuntimeError("A stdio transport owns one launch")
+        self._opening = asyncio.create_task(self._open(), name="harness-stdio-open")
+        try:
+            streams = await asyncio.shield(self._opening)
+        except asyncio.CancelledError:
+            await self.close()
+            raise
+        if self._cleanup is not None:
+            raise ConnectionError("The stdio launch was closed")
+        self._opened = True
+        return streams
+
+    async def _open(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        # Process creation can block before returning a PID, including inside uvloop's native fork path.
+        process = self.process = await asyncio.to_thread(
+            subprocess.Popen,
+            self.launch.command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=dict(self.launch.env),
             cwd=str(self.launch.folder),
-            limit=STREAM_LIMIT,
             start_new_session=True,
         )
+        if self._cleanup is not None:
+            raise ConnectionError("The stdio launch was closed")
+        loop = asyncio.get_running_loop()
+        stdout = await self._reader(loop, process.stdout)
+        stderr = await self._reader(loop, process.stderr)
+        write_peer = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(write_peer)
+        pipe, _ = await loop.connect_write_pipe(lambda: protocol, process.stdin)
+        self._pipes.append(pipe)
         name = os.path.basename(self.launch.command[0])
-        reading = asyncio.create_task(self._log_stderr(name), name="harness-stderr")
+        reading = asyncio.create_task(self._log_stderr(name, stderr), name="harness-stderr")
         self._tasks = [reading, asyncio.create_task(self._watch(reading), name="harness-exit")]
-        return self.process.stdout, self.process.stdin
+        return stdout, asyncio.StreamWriter(pipe, protocol, write_peer, loop)
 
-    async def _log_stderr(self, name: str) -> None:
+    async def _reader(self, loop, file) -> asyncio.StreamReader:
+        reader = asyncio.StreamReader(limit=STREAM_LIMIT)
+        pipe, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), file)
+        self._pipes.append(pipe)
+        return reader
+
+    async def _log_stderr(self, name: str, stream: asyncio.StreamReader) -> None:
         """Drain the agent's stderr into the debug log, since a full pipe blocks the agent; keep its last lines."""
-        stream = self.process.stderr
         with contextlib.suppress(Exception):
             while line := await stream.readline():
                 text = line.decode("utf-8", "replace").rstrip()[:STDERR_LINE_CHARS]
                 self._stderr.append(text)
                 logger.debug(f"harness.stderr [{name} {self.process.pid}] {text}")
 
+    async def send_record(self, writer: asyncio.StreamWriter, data: bytes, submitted: Callable[[], None]) -> None:
+        """Write one complete JSON-RPC record before yielding; drain failure leaves delivery uncertain."""
+        writer.write(data)
+        submitted()
+        await writer.drain()
+
     async def _watch(self, reading: asyncio.Task) -> None:
         """Set ``closed`` once the process exits; warn of an exit not asked for, with its code and last stderr.
 
-        The exit is polled, since ``Process.wait`` waits for the pipes, which a process the agent left may hold open.
+        Polling reaps the child independently of any pipes its descendants still hold open.
         """
         process = self.process
         try:
-            while process.returncode is None:
+            while process.poll() is None:
                 await asyncio.sleep(EXIT_POLL_SECONDS)
-            if self._closing:
+            if self._cleanup is not None:
                 logger.debug(f"harness.runtime_exited pid={process.pid} code={process.returncode}")
                 return
             try:
@@ -123,15 +173,30 @@ class StdioTransport:
 
         The group is ended even once the agent has exited, since a process it left there may still run.
         """
+        if self._cleanup is None:
+            self._cleanup = asyncio.create_task(self._stop(), name="harness-stdio-stop")
+        if self._opening is None or self._opened:
+            await self.wait_closed()
+
+    async def wait_closed(self) -> None:
+        """Join physical cleanup, which owns a launch even if its opener timed out."""
+        if self._cleanup is not None:
+            await asyncio.shield(self._cleanup)
+
+    async def _stop(self) -> None:
+        if self._opening is not None:
+            await asyncio.gather(self._opening, return_exceptions=True)
         process = self.process
         if process is None:
+            self.runtime_stopped = True
             self.closed.set()
             return
-        self._closing = True
-        with contextlib.suppress(Exception):
+        if len(self._pipes) == 3:
+            self._pipes[-1].close()
+        elif process.stdin is not None:
             process.stdin.close()
         steps = (None, signal.SIGTERM, signal.SIGKILL)
-        if process.returncode is not None:
+        if process.poll() is not None:
             # With nothing left, signal no one: the group's id may later be another's.
             steps = steps[1:] if _group_runs(process.pid) else ()
         for sig in steps:
@@ -143,12 +208,18 @@ class StdioTransport:
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        for pipe in self._pipes:
+            pipe.close()
+        for file in (process.stdout, process.stderr)[len(self._pipes) :]:
+            if file is not None:
+                file.close()
+        self.runtime_stopped = process.poll() is not None and not _group_runs(process.pid)
         self.closed.set()
 
     async def _ended(self) -> bool:
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(self.grace):
-                while self.process.returncode is None or _group_runs(self.process.pid):
+                while self.process.poll() is None or _group_runs(self.process.pid):
                     await asyncio.sleep(EXIT_POLL_SECONDS)
                 return True
         return False
@@ -219,6 +290,8 @@ class _FrameWriter(asyncio.Transport):
 class WebSocketTransport:
     """``websocket``: connect to the URL the operator serves the agent on, one connection per runtime process."""
 
+    name = "websocket"
+
     def __init__(self, launch: RuntimeLaunch, *, stop_grace_seconds: float):
         """Connect to ``launch.url`` when opened."""
         self.launch, self.grace = launch, stop_grace_seconds
@@ -227,6 +300,7 @@ class WebSocketTransport:
         self._writer: _FrameWriter | None = None
         self._reading: asyncio.Task | None = None
         self._closing = False
+        self.runtime_stopped = False
 
     @classmethod
     def check(cls, command: Sequence[str], url: str | None) -> None:
@@ -273,6 +347,11 @@ class WebSocketTransport:
             reader.feed_eof()
             self.closed.set()
 
+    async def send_record(self, writer: asyncio.StreamWriter, data: bytes, submitted: Callable[[], None]) -> None:
+        """Enter the socket send directly; its asynchronous acceptance cannot prove remote consumption."""
+        submitted()
+        await self.socket.send(data.decode("utf-8").rstrip("\n"))
+
     async def close(self) -> None:
         """Close the connection; the operator's server ends its runtime process."""
         self._closing = True
@@ -287,6 +366,9 @@ class WebSocketTransport:
             self._reading.cancel()
             await asyncio.gather(self._reading, return_exceptions=True)
         self.closed.set()
+
+    async def wait_closed(self) -> None:
+        """WebSocket close joins all transport cleanup."""
 
 
 TRANSPORTS: Mapping[str, type[Transport]] = {"stdio": StdioTransport, "websocket": WebSocketTransport}

@@ -444,6 +444,52 @@ class KeptConversationTests(CoreCase):
         refusals.append(await refusal(conversation))
         self.assertEqual([text for text in refusals if "conv_" in text], [])
 
+    async def test_only_one_later_call_claims_a_kept_conversation_during_activation(self):
+        finish, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        self.kept_core([MARK, wait(finish), answer("The comparison is ready.")], [answer("I can take a new request.")])
+        conversation, session = await self.marked()
+
+        async def activate(attached):
+            self.assertTrue(attached)
+            entered.set()
+            await release.wait()
+
+        try:
+            await self.client.set_attachment(conversation, False)
+            self.assertFalse((await self.client.delete_conversation(conversation))["deleted"])
+            deadline = session._keep
+            with mock.patch.object(session.conductor, "set_attachment", new=activate, create=True):
+                pending = asyncio.create_task(self.client.update_conversation(conversation, STORED))
+                try:
+                    await asyncio.wait_for(entered.wait(), 2)
+                    self.assertTrue(session.detached)
+                    self.assertFalse(session.attachment_ready)
+                    with self.assertRaises(NotFound):
+                        await self.client.update_conversation(conversation, STORED)
+                finally:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                self.assertIs(session._keep, deadline)
+                self.assertFalse(session.caller_attached)
+                backend = session.backend
+                entered.clear()
+                pending = asyncio.create_task(self.client.update_conversation(conversation, STORED))
+                try:
+                    await asyncio.wait_for(entered.wait(), 2)
+                    finish.set()
+                    await until(lambda: not session.works, "the retained work finishing during activation")
+                    self.assertIsNone(session._backend_closing)
+                finally:
+                    release.set()
+                    await pending
+                self.assertIs(session.backend, backend)
+            self.assertTrue(session.attachment_ready)
+            events = await self.ask(self.request(conversation, metadata={"live_delegation_id": "item_2"}))
+            self.assertEqual(answer_text(events[-1]), "I can take a new request.")
+        finally:
+            finish.set()
+            await session.close()
+
     async def test_a_delete_cancelled_while_it_leaves_keeps_the_conversation(self):
         gate, other = asyncio.Event(), asyncio.Event()
         scripts = ([MARK, wait(gate), answer("The comparison is ready.")], [wait(other), answer("Free all day.")])
@@ -468,9 +514,7 @@ class KeptConversationTests(CoreCase):
         gate = asyncio.Event()
         self.kept_core(*([MARK, wait(gate), answer("Done.")] for _ in range(2)), max_after_call_conversations=1)
         sessions = [(await self.marked({**STORED, "live_session_id": f"live_{n}"}))[1] for n in (1, 2)]
-        self.assertEqual(
-            [marks(session) for session in sessions], [[TEXTS.continued_output], [TEXTS.not_continued_output]]
-        )
+        assert [marks(session) for session in sessions] == [[TEXTS.continued_output], [TEXTS.not_continued_output]]
         gate.set()
 
     async def test_a_failed_close_at_the_keep_times_end_is_logged(self):

@@ -235,12 +235,17 @@ class ScriptedChat(FakeChat):
             raise step
         if kwargs.get("stream"):
             return HeldStream(step)
+        finish = "stop"
         if isinstance(step, list):
+            chunks = [item for item in step if hasattr(item, "choices")]
             for item in step:
                 if isinstance(item, asyncio.Event):
                     await item.wait()
-            step = "".join(item.choices[0].delta.content or "" for item in step if hasattr(item, "choices"))
-        choice = {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": step}}
+            finish = next(
+                (item.choices[0].finish_reason for item in reversed(chunks) if item.choices[0].finish_reason), finish
+            )
+            step = "".join(item.choices[0].delta.content or "" for item in chunks)
+        choice = {"index": 0, "finish_reason": finish, "message": {"role": "assistant", "content": step}}
         return ChatCompletion.model_validate(
             {"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": [choice]}
         )
@@ -256,10 +261,16 @@ class Port:
         self.acknowledgement_delay_ms, self.answer_event = acknowledgement_delay_ms, answer
         self.asked = 0
         self.inputs: list[list[dict]] = []
+        self.pending_turns: set[object] = set()
         self.listener = None
 
     def listen(self, listener):
         self.listener = listener
+
+    def begin_caller_turn(self):
+        turn = object()
+        self.pending_turns.add(turn)
+        return lambda: self.pending_turns.discard(turn)
 
     async def delegate(self, input):
         self.asked += 1
@@ -351,6 +362,15 @@ class CallHarness:
         words = TranscriptionFrame(text=text, user_id="caller", timestamp=str(time.time()), finalized=True)
         await self.stt.push_frame(words)
         await self.stt.push_frame(ProposedUserStoppedSpeakingFrame())
+
+    async def delegate(self, text: str, *, count: int = 1) -> None:
+        """Say a caller turn and wait for the requested number of accepted handoffs."""
+        await self.say(text)
+        await self.until(lambda: len(self.port.inputs) == count, f"accepted handoff {count}")
+
+    async def hear(self, *lines: str) -> None:
+        """Wait for the frontend to record the expected sequence of spoken lines."""
+        await self.until(lambda: self.said() == list(lines), f"spoken lines {lines}")
 
     async def noise(self) -> None:
         """Make a sound with no words as the caller: a turn that ends empty once its cut has passed the aggregator."""

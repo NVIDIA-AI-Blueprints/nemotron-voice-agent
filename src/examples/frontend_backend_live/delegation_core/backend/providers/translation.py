@@ -5,6 +5,7 @@
 
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from examples.shared.ids import uid
@@ -161,6 +162,31 @@ class _Call:
 CUT_SHORT = {"length": "max_output_tokens", "content_filter": "content_filter"}
 
 
+def _reported_usage(usage) -> dict | None:
+    """Translate reported chat counters without supplying values for missing observations."""
+
+    def value(holder, name):
+        return holder.get(name) if isinstance(holder, Mapping) else getattr(holder, name, None)
+
+    result = {}
+    for source, target in (
+        ("prompt_tokens", "input_tokens"),
+        ("completion_tokens", "output_tokens"),
+        ("total_tokens", "total_tokens"),
+    ):
+        count = value(usage, source)
+        if type(count) is int and count >= 0:
+            result[target] = count
+    for source, target, counter in (
+        ("prompt_tokens_details", "input_tokens_details", "cached_tokens"),
+        ("completion_tokens_details", "output_tokens_details", "reasoning_tokens"),
+    ):
+        count = value(value(usage, source), counter)
+        if type(count) is int and count >= 0:
+            result[target] = {counter: count}
+    return result or None
+
+
 class ChatResponseTranslator:
     """Chat-completion chunks in, Responses stream events out."""
 
@@ -247,11 +273,7 @@ class ChatResponseTranslator:
         events: list[dict] = []
         usage = getattr(chunk, "usage", None)
         if usage is not None:
-            self.usage = {
-                "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-            }
+            self.usage = _reported_usage(usage)
         if not chunk.choices:
             return events
         choice = chunk.choices[0]

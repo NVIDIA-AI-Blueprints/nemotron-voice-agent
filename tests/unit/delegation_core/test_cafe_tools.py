@@ -34,9 +34,7 @@ class CafeToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_menu_filters_and_the_total_adds_size_and_tax(self):
         tools = CafeTools()
-        self.assertEqual(
-            (await self.run_tool(tools, "m", "get_menu", query=None, category=None))["items"][0]["id"], "esp"
-        )
+        assert (await self.run_tool(tools, "m", "get_menu", query=None, category=None))["items"][0]["id"] == "esp"
         tea = await self.run_tool(tools, "t", "get_menu", category="tea")
         self.assertEqual([item["name"] for item in tea["items"]], ["Matcha Latte", "Earl Grey"])
         added = await self.run_tool(

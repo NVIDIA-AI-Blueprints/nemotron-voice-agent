@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from starlette.websockets import WebSocketState
 
 AdapterCloseReason = Literal["connection_lost", "remote_hangup"]
+DelegationRequestState = Literal["submitted", "accepted", "failed", "cancelled", "lost"]
 
 
 class SessionPort(Protocol):
@@ -99,6 +100,27 @@ class DelegationEvents(Protocol):
         """Take the loss of the delegation's stream: it ended with no terminal, so no event will end the delegation."""
 
 
+class DelegationRequests(Protocol):
+    """Optional private lifecycle of a new source before its first Responses event."""
+
+    def on_delegation_request(
+        self, request_ref: str, state: DelegationRequestState, delegation_id: str | None = None
+    ) -> None:
+        """Record an actual submission or its transport outcome; failure does not prove business nonexecution.
+
+        An opaque request reference identifies the submission before its source ID is known. Acceptance binds the
+        actual source ID; it does not route work. These facts are not Responses events, caller speech, or a handover.
+        Parked frontend reservations and same-source application continuations do not submit new sources here.
+        """
+
+
+class WorkProvenanceEvents(Protocol):
+    """Optional private Core ownership restoration; ordinary delegation listeners need not implement it."""
+
+    def restore_work_provenance(self, delegation_id: str, event: dict) -> None:
+        """Restore forwarded host ownership before legacy replay hooks, idempotently and without publishing speech."""
+
+
 class DelegationPort(Protocol):
     """Where the frontend adapter hands its delegations: its narrow view of the session's delegation part.
 
@@ -169,8 +191,8 @@ class DelegationView(Protocol):
     async def emit(self, kind: str, **fields: Any) -> None:
         """Send a server event: only ``session.delegation.created`` and ``response.event``."""
 
-    async def emit_paced(self, kind: str, **fields: Any) -> None:
-        """Send a delegation event as :meth:`emit` does, once the primary connection's queue is at most half full."""
+    async def emit_paced(self, kind: str, *, before_publish: Callable[[], bool] | None = None, **fields: Any) -> None:
+        """Wait for queue room, then publish to the current attachment if the optional callback admits it."""
 
     def report_refusal(self, message: str, code: str, client_event_id: str | None, param: str | None = None) -> None:
         """Report the core's refusal of a request or settings that a client command made; a plain call.

@@ -1,0 +1,133 @@
+{
+  "provenance": {
+    "upstream": "NousResearch/hermes-agent",
+    "commit": "b200f5bc60e31588ba2cb60e288029c4a54ba5fa",
+    "generators": [
+      "gateway.session_local_mcp._server_names",
+      "acp_adapter.tools.build_tool_start",
+      "acp_adapter.tools.build_tool_complete"
+    ],
+    "qualification": "Exact pinned upstream serializers, synthetic menu only; no daemon, model or customer payload"
+  },
+  "assigned_server": "w1",
+  "effective_server": "editor_w1_75aece0c",
+  "cases": {
+    "direct": {
+      "start": {
+        "kind": "other",
+        "locations": [],
+        "title": "mcp__editor_w1_75aece0c__get_menu",
+        "toolCallId": "outer_direct",
+        "sessionUpdate": "tool_call"
+      },
+      "end": {
+        "content": [
+          {
+            "content": {
+              "text": "synthetic menu result",
+              "type": "text"
+            },
+            "type": "content"
+          }
+        ],
+        "kind": "other",
+        "rawOutput": "synthetic menu result",
+        "status": "completed",
+        "toolCallId": "outer_direct",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    "single": {
+      "start": {
+        "content": [
+          {
+            "content": {
+              "text": "{\n  \"calls\": [\n    {\n      \"name\": \"mcp__editor_w1_75aece0c__get_menu\",\n      \"arguments\": {}\n    }\n  ]\n}",
+              "type": "text"
+            },
+            "type": "content"
+          }
+        ],
+        "kind": "other",
+        "locations": [],
+        "rawInput": {
+          "calls": [
+            {
+              "name": "mcp__editor_w1_75aece0c__get_menu",
+              "arguments": {}
+            }
+          ]
+        },
+        "title": "tool_call: Editor W1 75aece0c \u00b7 get menu",
+        "toolCallId": "outer_single",
+        "sessionUpdate": "tool_call"
+      },
+      "end": {
+        "content": [
+          {
+            "content": {
+              "text": "synthetic menu result",
+              "type": "text"
+            },
+            "type": "content"
+          }
+        ],
+        "kind": "other",
+        "rawOutput": "synthetic menu result",
+        "status": "completed",
+        "toolCallId": "outer_single",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    "batch": {
+      "start": {
+        "content": [
+          {
+            "content": {
+              "text": "{\n  \"calls\": [\n    {\n      \"name\": \"mcp__editor_w1_75aece0c__get_menu\",\n      \"arguments\": {\n        \"kind\": \"tea\"\n      }\n    },\n    {\n      \"name\": \"mcp__editor_w1_75aece0c__get_menu\",\n      \"arguments\": {\n        \"kind\": \"coffee\"\n      }\n    }\n  ]\n}",
+              "type": "text"
+            },
+            "type": "content"
+          }
+        ],
+        "kind": "other",
+        "locations": [],
+        "rawInput": {
+          "calls": [
+            {
+              "name": "mcp__editor_w1_75aece0c__get_menu",
+              "arguments": {
+                "kind": "tea"
+              }
+            },
+            {
+              "name": "mcp__editor_w1_75aece0c__get_menu",
+              "arguments": {
+                "kind": "coffee"
+              }
+            }
+          ]
+        },
+        "title": "tool_call: Editor W1 75aece0c \u00b7 get menu +1",
+        "toolCallId": "outer_batch",
+        "sessionUpdate": "tool_call"
+      },
+      "end": {
+        "content": [
+          {
+            "content": {
+              "text": "synthetic menu result",
+              "type": "text"
+            },
+            "type": "content"
+          }
+        ],
+        "kind": "other",
+        "rawOutput": "synthetic menu result",
+        "status": "completed",
+        "toolCallId": "outer_batch",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  }
+}

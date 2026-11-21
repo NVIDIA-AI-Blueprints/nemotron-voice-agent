@@ -7,19 +7,37 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
 
 from pydantic import ValidationError
 
 from examples.shared.strict_settings import StrictSettings
 
+from ..protocol import HarnessCapabilities, MessageChunk, NativeCompletion, NativeSteering, PromptEnded, RuntimeLaunch
+
 if TYPE_CHECKING:
     from acp.client.connection import ClientSideConnection
-    from acp.schema import AgentCapabilities
+    from acp.schema import AgentCapabilities, NewSessionResponse
 
     from .updates import SessionUpdates
 
 CloseRequest = Callable[["ClientSideConnection", str], Awaitable[Any]]
+
+
+class AcpSteering(NativeSteering, Protocol):
+    """Adapter-specific producer and verifier attached to a single ACP worker."""
+
+    def prompt(self, number: int, invocation: str, text: str) -> str:
+        """Bind the original prompt to this verifier."""
+
+    def capture(self, event: MessageChunk) -> bool:
+        """Return whether the verifier took custody of this message chunk."""
+
+    def finish(self, ended: PromptEnded) -> MessageChunk | None:
+        """Settle the verifier and return any authorized final text."""
+
+    async def close(self) -> None:
+        """Retire the verifier and join its control requests."""
 
 
 async def close_session(conn: ClientSideConnection, session_id: str) -> None:
@@ -36,8 +54,9 @@ class AcpAgent:
     turns_per_process: ClassVar[int | None] = None
     # The model of its agents.<name> block, whose values build it; a plain agent's block holds no key.
     Settings: ClassVar[type[StrictSettings]] = StrictSettings
-    # The text that opens a mid-turn steer; None: it takes no mid-turn steer.
-    steer_command: str | None = None
+    # ACP usage field descriptions do not establish a shared counter epoch or trustworthy per-invocation scope.
+    capabilities: ClassVar[HarnessCapabilities] = HarnessCapabilities(delivery="cancel_reprompt")
+    runtime_ownership: ClassVar[Literal["process_group", "external"]] = "process_group"
 
     @classmethod
     def from_settings(cls, block: Mapping[str, Any]) -> AcpAgent:
@@ -48,11 +67,6 @@ class AcpAgent:
             # Raised again with the block's place: pydantic would merge the error into the harness block's without it.
             raise ValueError(f"backend.harness.agents.{cls.name}: {exc}") from None
         return cls(**settings.model_dump())
-
-    @property
-    def native_steer(self) -> bool:
-        """Whether it takes a steer in the middle of a turn: its runs steer with it, or else cancel and re-prompt."""
-        return self.steer_command is not None
 
     def environment(self) -> Mapping[str, str]:
         """Return what its process needs in its environment when this side starts it: nothing."""
@@ -66,27 +80,47 @@ class AcpAgent:
         """Return a prompt's text as the agent gets it: as written."""
         return text
 
-    def steer_text(self, text: str) -> str:
-        """Return a mid-turn steer's text as the agent gets it: its steer command, then ``text``."""
-        if self.steer_command is None:
-            raise RuntimeError(f"The {self.name} agent takes no steer in the middle of a turn")
-        return self.steer_command + text
+    def bind_steering(
+        self, launch: RuntimeLaunch, workspace: Path, response: NewSessionResponse, server: str, timeout: float
+    ) -> AcpSteering | None:
+        """Bind optional verified steering from this worker's actual ACP session reply."""
+        return None
 
     def tool_name(self, title: Any) -> str:
         """Return a tool card's tool name from its title: the title as given."""
         return str(title or "").strip()
 
+    def observed_arguments(self, name: str, arguments: dict[str, Any] | None, server: str) -> dict[str, Any] | None:
+        """Return the arguments safe to retain in a tool observation."""
+        return arguments
+
     def bridged(self, name: str, server: str) -> bool:
         """Return whether a tool card is a bridged call: every card is, so only the bridge reports calls."""
         return True
+
+    def bridged_call(self, name: str, arguments: Mapping[str, Any] | None, server: str) -> bool:
+        """Classify a card using this agent's structured metadata; plain ACP keeps its existing name policy."""
+        return self.bridged(name, server)
 
     def unnamed_message(self, updates: SessionUpdates) -> str | None:
         """Return the id for a message chunk with none: the message being streamed, as ids are not stable ACP."""
         return updates.continued()
 
-    def no_answer(self, total: int | None, total_before: int | None) -> str | None:
-        """Return why an ``end_turn`` turn gave no answer: ``None``, since a plain agent's always gave one."""
-        return None
+    def completion(self, event: PromptEnded) -> NativeCompletion:
+        """Interpret ACP's terminal independently of output validation, inference, and usage accounting."""
+        invoked = None
+        if event.dispatch == "not_dispatched":
+            invoked = False
+        elif type(event.completion_calls) is int and event.completion_calls >= 0:
+            invoked = event.completion_calls > 0
+        if event.error is not None:
+            outcome = "failed" if event.terminal_confirmed or event.dispatch == "not_dispatched" else "unknown"
+            return NativeCompletion(outcome, invoked, event.error)
+        if event.stop_reason == "cancelled":
+            return NativeCompletion("cancelled", invoked, "the agent cancelled the foreground turn")
+        if event.stop_reason != "end_turn":
+            return NativeCompletion("unknown", invoked, f"the agent ended the turn {event.stop_reason}")
+        return NativeCompletion("succeeded", invoked)
 
     def close_request(self, advertised: AgentCapabilities) -> CloseRequest | None:
         """Return what ends a session in the agent: ``session/close`` when its ``initialize`` answer advertised it.

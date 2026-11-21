@@ -45,7 +45,19 @@ my_custom_prompt:
     Define personality, rules, and response format.
 ```
 
+## Frontend/Backend Live Prompt Catalog
+
+A `PROMPT_FILE_PATH` override replaces the full catalog. Start from the shipped [Live prompts.yaml](../../src/examples/frontend_backend_live/prompts.yaml) so the `Cascade`, `Lines`, and `Core` entries stay aligned with the tool and event schemas.
+
+Use `session.instructions` for identity, speaking style, and when to delegate. Describe the backend's capabilities briefly. Put detailed procedures in `delegation.responses.instructions` and function schemas in `delegation.responses.tools`. For example, tell the frontend that it can delegate reservation changes. Give the backend the lookup and confirmation rules. Use `session.update` to replace the tool set for new work.
+
+Keep the current Core schemas for `caller_message`, `resolve_questions`, `set_work_state`, and `submit_decision`. The Writer's `Cascade.commentary` and `Cascade.answer` entries should preserve the result, question, and actor for each step. Use short sentences and place the requested result first.
+
+Custom catalogs for [reconnectable calls](use-live-gateway.md#resume-a-dropped-websocket-call) need a nonblank `Cascade.attachment_note` template with a plain `{text}` placeholder. Copy the shipped wording to preserve uncertainty about interrupted speech.
+
 ## Best Practices for Voice Prompts
+
+Use the following practices when writing voice prompts:
 
 - Keep responses concise (1-2 sentences).
 - Avoid special characters like `*`, `-`, `/` in output.

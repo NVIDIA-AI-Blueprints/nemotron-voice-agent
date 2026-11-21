@@ -258,7 +258,7 @@ class RootTests(RootCase):
 
         with (
             patch.object(factory, "build_core", build_core),
-            patch.object(factory, "core_client", side_effect=lambda core: ("client of", core)),
+            patch.object(factory, "core_client", side_effect=lambda core, **kwargs: ("client of", core)),
         ):
             first, second = asyncio.run(factory.core()), asyncio.run(factory.core())
         self.assertIs(first, second)
@@ -384,9 +384,7 @@ class EndpointTests(unittest.TestCase):
     def test_a_named_model_keeps_the_settings_of_its_slot(self):
         self.assertEqual(PICKED.model("thinker-llm").model, "org/b")
         self.assertEqual(PICKED.model("llm", {"model_id": "org/custom"}).model, "org/custom")
-        self.assertEqual(
-            (PICKED.service("asr")["server"], PICKED.models("thinker-llm")), ("asr:50052", ["org/b", "org/a"])
-        )
+        assert (PICKED.service("asr")["server"], PICKED.models("thinker-llm")) == ("asr:50052", ["org/b", "org/a"])
         with self.assertRaisesRegex(ValueError, "'tts' slot has no model"):
             PICKED.model("tts")
         self.assertEqual(PICKED.named("thinker-llm", "org/a").extra_params, {"temperature": 0.7})

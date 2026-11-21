@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -16,6 +17,7 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     AdapterSource,
     AppOutputStep,
     AppOutputSteps,
+    BoundedRetentionSource,
     EndpointLookup,
     OneShotSource,
     ToolSources,
@@ -49,6 +51,7 @@ class DelegationCore:
         self.settings, self.source, self.one_shot_source = settings, source, one_shot_source
         self.defaults, self.result_format = defaults, result_format
         self.output_steps, self.observe = output_steps, observe
+        self._closing: asyncio.Task | None = None
 
     def session(self, **hooks: Callable[[IMSession], Any]) -> IMSession:
         """Return a new IM session for a new conversation, on a new adapter of the backend source.
@@ -106,9 +109,18 @@ class DelegationCore:
         return {"adapter": backend.adapter, "one_shot_adapter": backend.one_shot_adapter, **self.source.describe()}
 
     async def aclose(self) -> None:
-        """Release what the backend sources hold, each source once."""
-        for source in dict.fromkeys((self.source, self.one_shot_source)):
-            await source.aclose()
+        """Release all distinct sources once; a caller cancellation leaves their owned closes running."""
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close(), name="delegation-core-close")
+            self._closing.add_done_callback(lambda done: done.cancelled() or done.exception())
+        await asyncio.shield(self._closing)
+
+    async def _close(self) -> None:
+        sources = {id(source): source for source in (self.source, self.one_shot_source)}
+        results = await asyncio.gather(*(source.aclose() for source in sources.values()), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
 
 def tool_sources(blocks: Mapping[str, Mapping[str, Any]]) -> ToolSources:
@@ -172,6 +184,9 @@ def build_core(
         )
         for name in dict.fromkeys((backend.adapter, backend.one_shot_adapter))
     }
+    for source in sources.values():
+        if isinstance(source, BoundedRetentionSource):
+            source.set_context_budget(settings.delegation.context_tokens)
     one_shot_source = sources[backend.one_shot_adapter]
     if not isinstance(one_shot_source, OneShotSource):
         raise ValueError(

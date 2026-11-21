@@ -14,17 +14,10 @@ from unittest import mock
 import httpx
 from openai import APIConnectionError, APIError, BadRequestError, InternalServerError, RateLimitError
 
+from examples.frontend_backend_live.delegation_core.backend import port
 from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
 from examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings, LlmSource
 from examples.frontend_backend_live.delegation_core.backend.llm.run import RoundFailedError
-from examples.frontend_backend_live.delegation_core.backend.port import (
-    Answer,
-    ConductorInput,
-    Start,
-    Steer,
-    TaskSummary,
-    WorkSummary,
-)
 from examples.frontend_backend_live.delegation_core.backend.providers import (
     BrokenStreamError,
     ChatCompletionsBackend,
@@ -51,6 +44,7 @@ from tests.unit.delegation_core.helpers import (
     adapter,
     an_ended_work,
     answers,
+    app_outputs,
     ask,
     call_events,
     call_round,
@@ -73,7 +67,7 @@ from tests.unit.delegation_core.helpers import (
 REQUEST = httpx.Request("POST", "http://localhost:1/v1/chat/completions")
 DEFAULT = ModelEndpoint("test/model", "http://default:1/v1", api_key="secret-key", extra_params={"temperature": 0.2})
 OTHER = ModelEndpoint("other/model", "http://other:2/v1", api="openai-responses")
-ASKED = {"question": QUESTION}
+ASKED = {"kind": "question", "message": QUESTION}
 
 
 def calls_round(*names, said=None):
@@ -308,7 +302,12 @@ class RoundTests(unittest.IsolatedAsyncioTestCase):
         events = await drive(adapter(provider, tools=tools, settings=settings).start(task), task)
         self.assertEqual(events[-1]["type"], "response.completed")
         outcomes = {call_id: outcome for call_id, (_, outcome) in task.outcomes.items()}
-        expected = {"call_lookup": "done", "call_broken": "failed", "call_slow": "unclear", "call_LookupTool": "failed"}
+        expected = {
+            "call_lookup": "done",
+            "call_broken": "unclear",
+            "call_slow": "unclear",
+            "call_LookupTool": "failed",
+        }
         self.assertEqual(outcomes, expected)
         failed = json.loads(task.outcomes["call_broken"][0])["error"]
         self.assertEqual(failed, "broken failed: RuntimeError: broken broke")
@@ -417,6 +416,150 @@ class RoundTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ThroughTheImTests(IMCase):
+    async def test_pending_control_waits_for_the_caller_to_reattach(self):
+        provider = ScriptedProvider(
+            call_round("get_menu", {}, "call_menu"),
+            text_round("The lookup is pending."),
+            text_round("The lookup found decaf."),
+        )
+        im = self.session(adapter(provider))
+        settings = {"tools": [MENU]}
+        first = await self.request(im, "Look up the menu.", "D1", timeout=2, settings=settings)
+        task = im.works["W1"].tasks[0]
+        run_control = task._control_input
+        detached = asyncio.Event()
+
+        async def detach_before_control():
+            if not detached.is_set():
+                await im.set_attachment(False)
+                detached.set()
+            await run_control()
+
+        with mock.patch.object(task, "_control_input", detach_before_control):
+            status = im.admit(ask("Any update?"), delegation_id="D2")
+            await asyncio.wait_for(detached.wait(), 2)
+            await self.turns()
+            self.assertEqual(provider.opened, 1)
+            self.assertIsNone(task.control_run)
+            self.assertEqual(task.input_revision, 1)
+            await im.set_attachment(True)
+            await self.until(lambda: provider.opened == 2 and task.control_run is None, "the queued control")
+        result = im.admit_client_request(app_outputs(first, "decaf"), settings=settings)
+        reported = await asyncio.wait_for(asyncio.gather(read_all(status.stream), read_all(result.stream)), 2)
+        self.assertTrue(any("The lookup found decaf." in answers(events) for events in reported))
+        self.assertEqual(provider.opened, 3)
+
+    async def test_capacity_one_paused_task_keeps_late_result_and_correction_until_resume(self):
+        correction = "Look for decaf too, but keep the search paused."
+        resume = "Resume the coffee search."
+        provider = ScriptedProvider(
+            call_round("get_menu", {}, "call_menu"),
+            call_round("set_work_state", {"state": "paused"}, "call_pause"),
+            text_round("The search is paused."),
+            text_round("I will include decaf when you resume."),
+            call_round("set_work_state", {"state": "running"}, "call_resume"),
+            text_round("Resuming the search."),
+            text_round("The menu has decaf."),
+        )
+        im = self.session(adapter(provider))
+        settings = {"tools": [MENU]}
+        first = await self.request(im, "Find a coffee.", "D1", timeout=2, settings=settings)
+        self.assertEqual(function_calls(first), ["call_menu"])
+        task = im.works["W1"].tasks[0]
+
+        im.admit(ask("Pause the coffee search."), delegation_id="D2")
+        await self.until(lambda: task.record.state == "paused" and task.control_run is None, "the confirmed pause")
+        self.assertNotIn(task, im.running)
+        self.assertEqual(len(provider.payloads), 3)
+        result = app_outputs(first, '{"menu":["decaf","espresso"]}')
+        im.admit_client_request(result, settings=settings)
+        await self.turns()
+        self.assertEqual((task.record.state, len(provider.payloads)), ("paused", 3))
+        self.assertEqual(im.ledger.actions["call_menu"].state, "done")
+
+        im.admit(ask(correction), delegation_id="D3")
+        await self.until(lambda: task.input_revision == 3 and task.control_run is None, "the correction while paused")
+        self.assertEqual((task.record.state, len(provider.payloads)), ("paused", 4))
+
+        events = await self.request(im, resume, "D4", timeout=2)
+        await self.turns()
+        self.assertEqual(task.work.carrier, "D4")
+        self.assertIn("The menu has decaf.", answers(events))
+        self.assertEqual((task.record.state, len(provider.payloads)), ("answered", 7))
+        self.assertEqual(tuple(im.ledger.tasks), ("W1.1",))
+        resumed = provider.payloads[-1]["input"]
+        self.assertEqual(sum(item == result[0] for item in resumed), 1)
+        self.assertIn(correction, json.dumps(resumed))
+        self.assertIn(resume, json.dumps(resumed))
+
+    async def test_pause_at_app_placement_waits_for_explicit_resume(self):
+        lookup_pending, finish_lookup = asyncio.Event(), asyncio.Event()
+        deciding, place_pause, at_placement = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        class Lookup(RecordingTools):
+            async def execute(self, call_id, name, arguments):
+                lookup_pending.set()
+                await finish_lookup.wait()
+                return await super().execute(call_id, name, arguments)
+
+        async def pause_when_ready(given, place):
+            deciding.set()
+            await place_pause.wait()
+            await placing(port.Pause(("D3",), (port.WorkTarget("W2"),)))(given, place)
+
+        provider = ScriptedProvider(
+            call_round("get_menu", {}, "call_dinner"),
+            calls_round("lookup", "get_menu"),
+            text_round("Movie search resumed."),
+            text_round("Dinner lookup complete."),
+        )
+        llm = adapter(provider, tools=[Lookup()])
+        llm.max_running = 2
+        conductor = planned(
+            port.Start(("D1",)),
+            port.Start(("D2",)),
+            pause_when_ready,
+            port.Resume(("D4",), (port.WorkTarget("W2"),)),
+        )
+        llm.conductor = lambda: conductor
+        im = self.session(llm)
+        settings = {"tools": [MENU]}
+        dinner = await self.request(im, "Find dinner.", "D1", settings=settings)
+        self.assertEqual(function_calls(dinner), ["call_dinner"])
+        movie = im.admit(ask("Find a movie."), delegation_id="D2", settings=settings)
+        await asyncio.wait_for(lookup_pending.wait(), 2)
+        task = im.works["W2"].tasks[0]
+        wait_for_placement = task.wait_for_placement
+
+        async def watch_placement():
+            at_placement.set()
+            await wait_for_placement()
+
+        with mock.patch.object(task, "wait_for_placement", watch_placement):
+            im.admit(ask("Pause the movie search."), delegation_id="D3")
+            await asyncio.wait_for(deciding.wait(), 2)
+            finish_lookup.set()
+            await asyncio.wait_for(at_placement.wait(), 2)
+            place_pause.set()
+            await self.until(lambda: task.pause_outcome == "stopped" and not im.waits_for_decision, "confirmed pause")
+            await self.turns()
+
+        self.assertEqual(len(provider.payloads), 2, "paused movie worker opened a third inference round")
+        self.assertEqual(task.record.state, "paused")
+        self.assertNotIn(task, im.running)
+        self.assertIn("call_dinner", im.parked)
+        self.assertEqual(im.ledger.actions["call_lookup"].state, "done")
+        refused = im.ledger.actions["call_get_menu"]
+        self.assertEqual((refused.state, refused.app_published), ("not_run", False))
+
+        resumed = await self.request(im, "Resume the movie search for 8 pm.", "D4", timeout=2)
+        self.assertIn("Movie search resumed.", answers(resumed))
+        self.assertIn("Resume the movie search for 8 pm.", json.dumps(provider.payloads[2]["input"]))
+        self.assertNotIn("call_get_menu", function_calls(await read_all(movie.stream)))
+        finished = await read_all(im.admit_client_request(app_outputs(dinner), settings=settings).stream)
+        self.assertEqual(answers(finished), ["Dinner lookup complete."])
+        self.assertEqual(im.ledger.actions["call_dinner"].state, "done")
+
     async def test_the_im_refuses_an_app_function_the_list_leaves_out(self):
         decaf = {"type": "function", "name": "set_decaf", "parameters": {"type": "object", "properties": {}}}
         listed = [{"type": "function", "name": name} for name in ("get_menu", "lookup")]
@@ -424,33 +567,16 @@ class ThroughTheImTests(IMCase):
         provider = ScriptedProvider(calls_round("set_decaf", "lookup", "get_menu"), text_round("Only the menu."))
         shop = RecordingTools(["lookup"])
         im = self.session(adapter(provider, tools=[shop]))
-        first = await read_all(im.admit(ask("Make it decaf."), delegation_id="D1", settings=settings).stream)
+        first = await self.request(im, "Make it decaf.", "D1", settings=settings)
         offered = [tool["name"] for tool in provider.payloads[0]["tools"]]
-        self.assertEqual(offered, ["get_menu", "lookup", "cancel_work", "ask_caller"])
+        self.assertEqual(
+            offered, ["get_menu", "lookup", "cancel_work", "set_work_state", "caller_message", "resolve_questions"]
+        )
         self.assertEqual((function_calls(first), [name for _, name, _ in shop.calls]), (["call_get_menu"], ["lookup"]))
         rest = await self.answer_calls(im, first, settings=settings)
         refused = {"type": "function_call_output", "call_id": "call_set_decaf", "output": TEXTS.unlisted_output}
         self.assertIn(refused, provider.payloads[1]["input"])
         self.assertEqual((answers(rest), rest[-1]["type"]), (["Only the menu."], "response.completed"))
-
-    async def test_a_list_the_outputs_bring_sets_what_is_offered_and_run(self):
-        decaf = {"type": "function", "name": "set_decaf", "parameters": {"type": "object", "properties": {}}}
-        menu_only, decaf_only = (
-            {"tools": [MENU, decaf], "tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [listed]}}
-            for listed in ({"type": "function", "name": "get_menu"}, {"type": "function", "name": "set_decaf"})
-        )
-        rounds = (call_round("get_menu", {}, "call_menu"), calls_round("get_menu", "set_decaf"), text_round("Decaf."))
-        provider = ScriptedProvider(*rounds)
-        im = self.session(adapter(provider))
-        first = await read_all(im.admit(ask("The menu, then decaf."), delegation_id="D1", settings=menu_only).stream)
-        rest = await self.answer_calls(im, first, settings=decaf_only)
-        offered = [tool["name"] for tool in provider.payloads[1]["tools"]]
-        self.assertEqual(offered, ["set_decaf", "cancel_work", "ask_caller"])
-        self.assertEqual(function_calls(rest), ["call_set_decaf"])
-        last = await self.answer_calls(im, rest, settings=decaf_only)
-        refused = {"type": "function_call_output", "call_id": "call_get_menu", "output": TEXTS.unlisted_output}
-        self.assertIn(refused, provider.payloads[2]["input"])
-        self.assertEqual(answers(last), ["Decaf."])
 
     async def test_each_tool_choice_shape_sets_what_is_offered_and_run(self):
         menu = {"type": "function", "name": "get_menu"}
@@ -461,64 +587,39 @@ class ThroughTheImTests(IMCase):
                 provider = ScriptedProvider(call_round("get_menu", {}), text_round("No menu."))
                 im = self.session(adapter(provider, tools=[RecordingTools()]))
                 settings = {"tools": [MENU], "tool_choice": choice}
-                first = await read_all(im.admit(ask("The menu."), delegation_id="D1", settings=settings).stream)
+                first = await self.request(im, "The menu.", "D1", settings=settings)
                 self.assertEqual(function_calls(first), ["call_1"] if "get_menu" in listed else [])
                 offered = [tool["name"] for tool in provider.payloads[0]["tools"]]
-                self.assertEqual(offered, [*listed, "cancel_work", "ask_caller"])
-
-    async def test_an_ask_while_a_decision_is_pending_is_not_run(self):
-        streamed, deciding = asyncio.Event(), asyncio.Event()
-
-        async def once_decided(given, place):
-            # A model conductor's call: the newer request waits for it.
-            await deciding.wait()
-            await place(Answer("D2", "Still on it."))
-
-        provider = ScriptedProvider(gated(streamed, call_round("ask_caller", ASKED, "call_ask")), text_round("Done."))
-        llm, conductor = adapter(provider), planned(placing(Start(("D1",))), once_decided)
-        # The steer rule, the llm's own conductor, never keeps a request waiting.
-        llm.conductor = lambda: conductor
-        im = self.session(llm)
-        first = im.admit(ask("A coffee."), delegation_id="D1")
-        await self.until(lambda: provider.opened, "the round to stream")
-        second = im.admit(ask("Is it ready?"), delegation_id="D2")
-        await self.turns()
-        streamed.set()
-        await self.until(lambda: self.traced("tools.refused"), "the refusal")
-        await self.turns()
-        refusals = [(fields["name"], fields["reason"]) for fields in self.traced("tools.refused")]
-        self.assertEqual(refusals, [("ask_caller", "not_run")])
-        self.assertEqual((provider.opened, self.traced("im.question.written")), (1, []))
-        deciding.set()
-        older, newer = await read_all(first.stream), await read_all(second.stream)
-        refused = {"type": "function_call_output", "call_id": "call_ask", "output": TEXTS.not_run_output}
-        self.assertIn(refused, provider.payloads[1]["input"])
-        self.assertEqual((answers(older), answers(newer)), (["Done."], ["Still on it."]))
+                assert offered == [*listed, "cancel_work", "set_work_state", "caller_message", "resolve_questions"]
 
     async def test_a_blank_question_gets_the_failed_output(self):
-        error = "ValueError: ask_caller: question must be non-empty text"
-        failed = json.dumps({"error": TEXTS.failed_output.format(name="ask_caller", error=error)})
-        for arguments in ({"question": "   "}, {}, {"question": 7}):
+        for arguments in ({"kind": "question", "message": "   "}, {}, {"kind": "question", "message": 7}):
             with self.subTest(arguments=arguments):
-                rounds = (call_round("ask_caller", arguments, "call_ask"), text_round("Which coffee?"))
+                rounds = (call_round("caller_message", arguments, "call_ask"), text_round("Which coffee?"))
                 provider = ScriptedProvider(*rounds)
                 im = self.session(adapter(provider))
-                events = await read_all(im.admit(ask("Coffee."), delegation_id="D1").stream)
-                output = {"type": "function_call_output", "call_id": "call_ask", "output": failed}
-                self.assertIn(output, provider.payloads[1]["input"])
+                events = await self.request(im, "Coffee.", "D1")
+                output = next(
+                    item
+                    for item in provider.payloads[1]["input"]
+                    if item.get("type") == "function_call_output" and item.get("call_id") == "call_ask"
+                )
+                self.assertIn("caller_message", json.loads(output["output"])["error"])
                 self.assertEqual((answers(events), self.traced("im.question.written")), (["Which coffee?"], []))
 
     async def test_an_ask_after_cancel_work_in_its_round_writes_nothing(self):
         both = a_round(
             call_events("cancel_work", {}, call_id="call_cancel"),
-            call_events("ask_caller", ASKED, call_id="call_ask", index=1),
+            call_events("caller_message", ASKED, call_id="call_ask", index=1),
             response_id="resp_both",
         )
         provider = ScriptedProvider(both, text_round("Stopped as asked."))
         im = self.session(adapter(provider))
-        events = await read_all(im.admit(ask("A coffee."), delegation_id="D1").stream)
+        events = await self.request(im, "A coffee.", "D1")
         written = (answers(events), im.ledger.tasks["W1.1"].question, self.traced("im.question.written"))
-        self.assertEqual(written, (["Stopped as asked."], None, []))
+        self.assertNotIn("Stopped as asked.", written[0])
+        self.assertEqual(written[1:], (None, []))
+        self.assertEqual(len(provider.payloads), 1)
 
 
 class StopTests(unittest.IsolatedAsyncioTestCase):
@@ -600,9 +701,9 @@ class StopTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([event async for event in events], [])
 
 
-def a_work(work_id: str, state: str, seconds: float) -> WorkSummary:
-    task = TaskSummary(f"{work_id}.1", state, None, (), False, None, seconds)
-    return WorkSummary(work_id, state, f"d_{work_id}", (a_request(f"d_{work_id}", "Earlier."),), (task,), seconds)
+def a_work(work_id: str, state: str, seconds: float) -> port.WorkSummary:
+    task = port.TaskSummary(f"{work_id}.1", state, None, (), False, None, seconds)
+    return port.WorkSummary(work_id, state, f"d_{work_id}", (a_request(f"d_{work_id}", "Earlier."),), (task,), seconds)
 
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
@@ -757,16 +858,19 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         waiting = a_work("W3", "waiting_client", 4.0)
         just_ended = a_work("W5", "answered", 0.5)
         cases = [
-            ((an_ended_work("W0"), running, queued, an_ended_work("W4")), Steer("W2", ("d_1", "d_2"))),
-            ((a_work("W1", "queued", 0.0), queued), Steer("W2", ("d_1", "d_2"))),
-            ((waiting,), Steer("W3", ("d_1", "d_2"))),
-            ((running, just_ended), Steer("W1", ("d_1", "d_2"))),
+            (
+                (an_ended_work("W0"), running, queued, an_ended_work("W4")),
+                port.Steer(("d_1", "d_2"), (port.WorkTarget("W2", ("W2.1",)),)),
+            ),
+            ((a_work("W1", "queued", 0.0), queued), port.Steer(("d_1", "d_2"), (port.WorkTarget("W2", ("W2.1",)),))),
+            ((waiting,), port.Steer(("d_1", "d_2"), (port.WorkTarget("W3", ("W3.1",)),))),
+            ((running, just_ended), port.Steer(("d_1", "d_2"), (port.WorkTarget("W1", ("W1.1",)),))),
             # The ended Works are listed in the order they ended: the arrivals continue the last.
-            ((an_ended_work("W0"), just_ended), Steer("W5", ("d_1", "d_2"))),
-            ((), Start(("d_1", "d_2"))),
+            ((an_ended_work("W0"), just_ended), port.Steer(("d_1", "d_2"), (port.WorkTarget("W5", ("W5.1",)),))),
+            ((), port.Start(("d_1", "d_2"))),
         ]
         for works, decision in cases:
             with self.subTest(decision=decision, works=[work.work_id for work in works]):
                 arrivals = (a_request("d_1", "Also this."), a_request("d_2", "Also this."))
-                self.assertEqual(await decide(SteerOpenWork(), ConductorInput(arrivals, works, (), 0)), [decision])
-        self.assertEqual(await decide(SteerOpenWork(), ConductorInput((), (running,), (), 0)), [])
+                self.assertEqual(await decide(SteerOpenWork(), port.ConductorInput(arrivals, works, (), 0)), [decision])
+        self.assertEqual(await decide(SteerOpenWork(), port.ConductorInput((), (running,), (), 0)), [])

@@ -9,6 +9,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import reduce
 from pathlib import Path
+from string import Formatter
 from typing import Any
 
 from pydantic import StrictStr, ValidationError
@@ -59,6 +60,7 @@ class WorkTexts(StrictSettings):
     """The words of one open delegation's line in the work note."""
 
     item: StrictStr
+    progress_item: StrictStr
     running: StrictStr
     ended: StrictStr
     ended_call: StrictStr
@@ -96,6 +98,8 @@ class PromptSet(StrictSettings):
     typed_request_label: StrictStr
     work_texts: WorkTexts
     update_label: StrictStr
+    notice_update: StrictStr
+    attachment_note: StrictStr | None = None
     result_label: StrictStr
     context_label: StrictStr
     cut_mark: StrictStr
@@ -116,6 +120,26 @@ class PromptSet(StrictSettings):
     tool_rules: StrictStr | None = None
     tools: RoutingTools = RoutingTools()
     empty_turn_note: StrictStr
+
+    def reconnect_note(self) -> str:
+        """Require supplied uncertainty context only when a frontend claims reconnect capability."""
+        note = self.attachment_note
+        try:
+            fields = [
+                (field, spec, conversion)
+                for _, field, spec, conversion in Formatter().parse(note or "")
+                if field is not None
+            ]
+            if (
+                not note
+                or not note.strip()
+                or not fields
+                or any(field != "text" or spec or conversion for field, spec, conversion in fields)
+            ):
+                raise ValueError("reconnect context requires plain {text} placeholders")
+        except (ValueError, KeyError, IndexError, AttributeError) as exc:
+            raise ValueError("Reconnect requires a usable Cascade.attachment_note containing {text}") from exc
+        return note
 
     def writer_framed(self, instructions: str) -> str:
         """Return the client's instructions as the writer reads them: word for word, inside the writer frame."""

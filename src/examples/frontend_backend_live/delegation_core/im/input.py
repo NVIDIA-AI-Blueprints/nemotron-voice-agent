@@ -6,13 +6,225 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+import re
+from collections import defaultdict
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
+from itertools import islice
 
-from examples.shared.delegation_contract import OPTIONS
+from examples.shared.delegation_contract import OPTIONS, CallerContext
+from examples.shared.ids import uid
+
+from ..backend.port import CallerLine, DecisionRejected
 
 SETTINGS = ("model", "instructions", "tools", "tool_choice", "max_output_tokens", *OPTIONS)
+SCOPED_INPUT_ID = "scoped_input"
+
+
+def is_scoped_input(item: dict) -> bool:
+    """Identify task-only input emitted by Core."""
+    return item.get("role") == "developer" and str(item.get("id", "")).startswith(SCOPED_INPUT_ID + "_")
+
+
+def _scope_key(item: dict) -> tuple[str, str]:
+    identity = item.get("id")
+    return ("id", identity) if identity else ("item", json.dumps(item, sort_keys=True, ensure_ascii=False))
+
+
+def _covers_text(text: str, spans: Iterable[tuple[int, int]]) -> bool:
+    """Return whether a set of copied spans covers every word of this content part."""
+    covered = 0
+    for start, end in sorted(spans):
+        if text[covered:start].strip():
+            return False
+        covered = max(covered, end)
+    return not text[covered:].strip()
+
+
+def _caller_parts(item: dict) -> tuple[str, ...]:
+    content = item.get("content")
+    if isinstance(content, str):
+        return (content,)
+    return tuple(
+        part["text"]
+        for part in content or ()
+        if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str)
+    )
+
+
+def _source_words(items: Iterable[dict], contexts: Mapping[str, CallerContext]) -> dict[str, dict[int, str]]:
+    words: dict[str, dict[int, str]] = {}
+    for item in items:
+        source = item.get("id")
+        if item.get("role") == "user" and source and source not in words:
+            context = contexts.get(source)
+            words[source] = dict(context["caller_turns"] if context is not None else enumerate(_caller_parts(item)))
+    return words
+
+
+def caller_lines(items: Iterable[dict], contexts: Mapping[str, CallerContext]) -> tuple[dict, ...]:
+    """Give the conductor the same caller lines Core uses when binding selections."""
+    return tuple(
+        {"source_message_id": source, "sequence": index, "text": text}
+        for source, parts in _source_words(items, contexts).items()
+        for index, text in parts.items()
+        if text.strip()
+    )
+
+
+def _quote_patterns(quote: str) -> tuple[re.Pattern, ...]:
+    tokens = quote.split()
+    # Resolve verbatim first, then account for ASR spacing when finding the stored words.
+    return (re.compile(re.escape(quote)), re.compile(r"\s+".join(map(re.escape, tokens)))) if tokens else ()
+
+
+def _selected_line_span(line: CallerLine, words: Mapping[str, dict[int, str]]) -> tuple[str, int, int, int]:
+    text = words.get(line.source_message_id, {}).get(line.sequence)
+    if text is None or not text.strip():
+        raise DecisionRejected("Select caller lines only from the sources bound to this action")
+    if line.excerpt is None:
+        return line.source_message_id, line.sequence, 0, len(text)
+    for pattern in _quote_patterns(line.excerpt):
+        matches = list(islice(pattern.finditer(text), 2))
+        if len(matches) == 1:
+            return line.source_message_id, line.sequence, *matches[0].span()
+        if matches:
+            break
+    raise DecisionRejected("Copy only the task's exact excerpt from the selected caller line, once")
+
+
+def _scoped_playback(source: str, context: CallerContext, owners: frozenset[str]) -> Iterable[dict]:
+    for receipt in context["playback"]:
+        results = receipt["results"]
+        if results and all(result.get("item_id") and result.get("task_ref") in owners for result in results):
+            yield {
+                "source_message_id": source,
+                **{key: value for key, value in receipt.items() if key not in {"work_refs", "delegation_ids"}},
+            }
+
+
+@dataclass(frozen=True)
+class InputScope:
+    """A worker's routing interpretation with exact, optional text from the bound source messages."""
+
+    covered: frozenset[tuple[str, str]]
+    item: dict
+    source_spans: tuple[tuple[str, int, int, int], ...] = ()
+    whole_sources: frozenset[str] = frozenset()
+
+    @classmethod
+    def bind(
+        cls,
+        text: str,
+        evidence: tuple[str, ...],
+        items: Iterable[dict],
+        caller_context: Mapping[str, CallerContext] | None = None,
+        playback_owners: frozenset[str] = frozenset(),
+        *,
+        require_evidence: bool = False,
+        selections: tuple[CallerLine, ...] = (),
+        include_bound_lines: bool = False,
+    ) -> InputScope:
+        """Keep the original input in Core and build one model-facing data item for this worker."""
+        items = tuple(items)
+        contexts = caller_context or {}
+        words = _source_words(items, contexts)
+        playback = [
+            receipt
+            for source in words
+            if source in contexts
+            for receipt in _scoped_playback(source, contexts[source], playback_owners)
+        ]
+        if include_bound_lines and not (evidence or selections):
+            selections = tuple(
+                CallerLine(source, index)
+                for source, parts in words.items()
+                if source in contexts
+                for index, part in parts.items()
+                if part.strip()
+            )
+        selected = [_selected_line_span(line, words) for line in selections]
+        for quote in evidence:
+            for pattern in _quote_patterns(quote):
+                matches = list(
+                    islice(
+                        (
+                            (identity, index, match)
+                            for identity, parts in words.items()
+                            for index, part in parts.items()
+                            for match in pattern.finditer(part)
+                        ),
+                        2,
+                    )
+                )
+                if matches:
+                    break
+            else:
+                raise DecisionRejected(
+                    "Scoped input evidence must copy exact text from a bound caller source, one excerpt per caller line"
+                )
+            # The same words can refer to different caller turns. A bare quote cannot select one.
+            if len(matches) != 1:
+                continue
+            source, index, match = matches[0]
+            selected.append((source, index, *match.span()))
+        if require_evidence and not selected and any(contexts.get(source, {}).get("caller_turns") for source in words):
+            raise DecisionRejected("Each shared steer update needs a selection from its applicable caller lines")
+        excerpts = []
+        spans: dict[tuple[str, int], list[tuple[int, int]]] = defaultdict(list)
+        for source, index, start, end in dict.fromkeys(selected):
+            excerpt = {"source_message_id": source, "text": words[source][index][start:end]}
+            if source in contexts:
+                excerpt["sequence"] = index
+            excerpts.append(excerpt)
+            spans[source, index].append((start, end))
+        whole_sources = frozenset(
+            source
+            for source in {identity for identity, _ in spans}
+            if all(_covers_text(part, spans.get((source, index), ())) for index, part in words[source].items())
+        )
+        note = {"task_input": text, "source_message_ids": list(words), "source_excerpts": excerpts}
+        if playback:
+            note["playback"] = playback
+        item = with_parts([], json.dumps({"conductor_routing_context": note}, ensure_ascii=False))[0]
+        item["id"] = uid(SCOPED_INPUT_ID)
+        source_spans = tuple(
+            (source, index, start, end) for (source, index), ranges in spans.items() for start, end in ranges
+        )
+        return cls(frozenset(map(_scope_key, items)), item, source_spans, whole_sources)
+
+    def conflicts(self, other: InputScope) -> bool:
+        """Reject whole shared sources or overlapping excerpts when assigning independent new work."""
+        if any(("id", identity) in other.covered for identity in self.whole_sources) or any(
+            ("id", identity) in self.covered for identity in other.whole_sources
+        ):
+            return True
+        return any(
+            source == other_source and part == other_part and start < other_end and other_start < end
+            for source, part, start, end in self.source_spans
+            for other_source, other_part, other_start, other_end in other.source_spans
+        )
+
+
+def scoped_items(items: list[dict], scopes: Iterable[InputScope]) -> list[dict]:
+    """Replace bound material in caller order, preserving other inputs and separate host lifecycle facts."""
+    if not scopes:
+        return items
+    insertions: dict[int, list[dict]] = {}
+    keys = list(map(_scope_key, items))
+    positions = {key: index for index, key in enumerate(keys)}
+    covered = set()
+    for scope in scopes:
+        point = max((positions[key] for key in scope.covered if key in positions), default=len(items))
+        insertions.setdefault(point, []).append(scope.item)
+        covered.update(scope.covered)
+    projected = []
+    for index, item in enumerate(items):
+        if keys[index] not in covered:
+            projected.append(item)
+        projected.extend(insertions.get(index, ()))
+    return [*projected, *insertions.get(len(items), ())]
 
 
 @dataclass(frozen=True)
@@ -93,21 +305,15 @@ def user_message(text: str) -> dict:
 
 
 def with_parts(items: list[dict], *texts: str) -> list[dict]:
-    """Return ``items`` with each non-empty text as an ``input_text`` part of the last user message, copied if changed.
+    """Append a separate immutable host-context snapshot without rewriting caller messages.
 
-    The parts stay inside the request's own message, so a trim keeps or drops them with it.
+    Each constructed snapshot owns its identity. A later task can omit an old snapshot without presenting changed
+    caller content under a previously served caller-message ID.
     """
     parts = [{"type": "input_text", "text": text} for text in texts if text]
     if not parts:
         return items
-    for index in range(len(items) - 1, -1, -1):
-        if is_user_message(items[index]):
-            items = deepcopy(items)
-            content = items[index].get("content")
-            text = [{"type": "input_text", "text": content}] if isinstance(content, str) else list(content or [])
-            items[index]["content"] = text + parts
-            return items
-    return items
+    return [*deepcopy(items), {"type": "message", "role": "developer", "id": uid("backend_context"), "content": parts}]
 
 
 def records_parts(template: str, closing: str, records: Iterable[dict]) -> tuple[str, ...]:

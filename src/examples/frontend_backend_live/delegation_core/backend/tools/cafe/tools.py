@@ -53,6 +53,7 @@ class CafeTools:
     """One IM session's cart and orders, in memory: a server tool source made fresh for each session."""
 
     label: ClassVar[str] = "cafe"
+    read_only_tools: ClassVar[frozenset[str]] = frozenset({"get_menu"})
 
     def __init__(self):
         """Start with an empty cart."""

@@ -13,6 +13,8 @@ from pathlib import Path
 
 # Locked by the process that owns the folder; holds that process's id, as a note.
 MARKER = ".delegation-core-harness-work"
+# Native ownership which cannot be disproved by the application process exiting is never swept on restart.
+NATIVE_OWNER = ".native-shutdown-unconfirmed"
 
 # This process's own work folders: a sweep never takes one, even where a process may take its own lock again (NFS).
 _HELD: set[Path] = set()
@@ -64,6 +66,20 @@ class WorkFolder:
             shutil.rmtree(self.path, ignore_errors=True)
         _HELD.discard(self.path.resolve())
 
+    def protect_native_owner(self) -> None:
+        """Retain a native runtime's workspace across an application crash until shutdown is confirmed."""
+        descriptor = os.open(self.path / NATIVE_OWNER, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+
+    def quarantine(self) -> None:
+        """Keep durable native-ownership evidence after cleanup settles, releasing only the application's lock."""
+        if not (self.path / NATIVE_OWNER).exists():
+            self.protect_native_owner()
+        if self._lock is not None:
+            os.close(self._lock)
+            self._lock = None
+        _HELD.discard(self.path.resolve())
+
     @staticmethod
     def sweep(root: Path) -> int:
         """Delete the work folders under ``root`` whose marker no process holds locked; return how many.
@@ -75,7 +91,13 @@ class WorkFolder:
         removed = 0
         for child in root.iterdir():
             marker = child / MARKER
-            if child.is_dir() and marker.is_file() and child.resolve() not in _HELD and not _held(marker):
+            if (
+                child.is_dir()
+                and marker.is_file()
+                and not (child / NATIVE_OWNER).exists()
+                and child.resolve() not in _HELD
+                and not _held(marker)
+            ):
                 shutil.rmtree(child, ignore_errors=True)
                 removed += 1
         return removed

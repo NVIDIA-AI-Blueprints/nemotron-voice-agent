@@ -40,13 +40,14 @@ def _thought(updates: SessionUpdates, update: dict) -> SessionEvent:
 
 
 def _card(updates: SessionUpdates, update: dict) -> SessionEvent:
-    arguments = update.get("rawInput")
+    raw = update.get("rawInput")
+    arguments = raw if isinstance(raw, dict) else None
     name = updates.agent.tool_name(update.get("title"))
     return ToolCard(
         str(update.get("toolCallId") or ""),
         name,
-        arguments if isinstance(arguments, dict) else None,
-        updates.agent.bridged(name, updates.server),
+        updates.agent.observed_arguments(name, arguments, updates.server),
+        updates.agent.bridged_call(name, arguments, updates.server),
         # ACP lets a tool_call carry its final status.
         _card_update(updates, update),
     )
@@ -96,6 +97,10 @@ class SessionUpdates:
         """Read a session of ``agent`` whose bridged tools are served under the MCP server name ``server``."""
         self.agent, self.server = agent, server
         self._unnamed: str | None = None
+
+    def begin_prompt(self) -> None:
+        """Start a new local message segment at a confirmed transport submission boundary."""
+        self._unnamed = None
 
     def read(self, update: Any) -> SessionEvent | None:
         """Return the event one ``session/update`` carries, or ``None`` for a kind a run does not use.

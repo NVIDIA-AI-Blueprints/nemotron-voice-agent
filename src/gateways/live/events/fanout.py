@@ -115,7 +115,10 @@ class Fanout:
         async def failure(reason: str) -> None:
             logger.warning(reason)
             if source == "primary":
-                await self.on_primary_lost()
+                if close is not None:
+                    await close(reason)
+                else:
+                    await self.on_primary_lost()
                 return
             await self.unsubscribe(key)
             if close is not None:
@@ -131,9 +134,17 @@ class Fanout:
 
     async def unsubscribe(self, key: str) -> None:
         """Detach a connection."""
-        sub = self.subscribers.pop(key, None)
+        sub = self.detach(key)
         if sub:
             await sub.close()
+
+    def detach(self, key: str) -> Subscription | None:
+        """Revoke authority and stop queued writes synchronously; the owner then awaits the writer's close."""
+        sub = self.subscribers.pop(key, None)
+        if sub is not None:
+            sub._stop()
+            sub.task.cancel()
+        return sub
 
     async def publish(self, message: dict, audience: str = "all") -> None:
         """Send ``message`` to every permitted connection of ``audience`` (``all``, ``primary`` or ``sideband``)."""

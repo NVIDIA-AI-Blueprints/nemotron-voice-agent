@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
@@ -17,6 +18,7 @@ from pipecat.utils.context.llm_context_summarization import LLMContextSummarizat
 
 from examples.frontend_backend_live.adapter.pipeline_host import PipelineHost
 from examples.frontend_backend_live.adapter.readiness import EndpointReadiness
+from examples.frontend_backend_live.attachment import export_attachment, restore_attachment, resume_presentation
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
 from examples.frontend_backend_live.frontend import FrontendSpec, build_frontend
 from examples.frontend_backend_live.media.services import build_stt, build_tts, named_mode, speech_server
@@ -92,7 +94,8 @@ class CascadeAdapterSettings:
         talkers = partial(pick, LLM_SERVICES, kind="talker_style")
         for style in live.talker_style.values():
             talkers(style)
-        load_prompts().text("Talker", live.prompt)
+        prompts = load_prompts()
+        prompts.text("Talker", live.prompt)
         return cls(
             live=live,
             talkers=talkers,
@@ -239,6 +242,64 @@ class CascadeAdapter(PipelineHost):
             return None
         return self.live_config.memory.context_tokens
 
+    def attachment_fingerprint(self) -> str:
+        """Hash critical frontend contracts for private reconnect matching, excluding credential values."""
+        self.prompts.cascade.reconnect_note()
+        endpoint = asdict(self.frontend_endpoint)
+        endpoint.pop("api_key", None)
+
+        def public(value):
+            if isinstance(value, Mapping):
+                return {
+                    key: (
+                        sorted(item)
+                        if key.lower() in {"headers", "extra_headers"} and isinstance(item, Mapping)
+                        else public(item)
+                    )
+                    for key, item in value.items()
+                    if key.lower().replace("-", "_")
+                    not in {"api_key", "x_api_key", "authorization", "access_token", "password", "secret", "token"}
+                }
+            if isinstance(value, (tuple, list)):
+                return [public(item) for item in value]
+            return value
+
+        content = {
+            "config": self.live_config.model_dump(),
+            "prompts": self.prompts.agent_prompts,
+            "instructions": self.instructions,
+            "endpoint": endpoint,
+            "delegation": self.config.delegation.model_dump(),
+        }
+        encoded = json.dumps(public(content), sort_keys=True, ensure_ascii=False, default=str).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def export_attachment(self) -> dict | None:
+        """Return bounded private text state; no live object, audio or pending action is transferable."""
+        if self.voice is None:
+            return None
+        return {"fingerprint": self.attachment_fingerprint(), "voice": export_attachment(self.voice)}
+
+    def restore_attachment(self, snapshot: dict | None) -> None:
+        """Restore behind the host's input fence, scheduling no model call, action or speech."""
+        if snapshot is None:
+            return
+        if snapshot.get("fingerprint") != self.attachment_fingerprint():
+            raise ValueError("Frontend attachment configuration changed")
+        if self.voice is None:
+            raise RuntimeError("Start the replacement frontend before restoring its attachment")
+        restore_attachment(self.voice, snapshot["voice"])
+
+    async def prepare_resume(self) -> None:
+        """Reconcile frontend evidence behind the attachment fence, without running the model."""
+        if self.voice is not None:
+            resume_presentation(self.voice)
+
+    def resume_pending(self) -> None:
+        """Route proven pending obligations after the host admits this attachment generation."""
+        if self.voice is not None and self.voice._due():
+            self.voice.request_run()
+
     async def history(self) -> dict | None:
         """Return the adapter's half of ``GET /v1/live/sessions/{id}/history``; ``None`` before the start."""
         frontend = self.frontend_history()
@@ -291,7 +352,7 @@ class CascadeAdapter(PipelineHost):
         self, text: str, client_event_id: str | None = None, delegation_id: str | None = None
     ) -> None:
         """Interrupt current speech and decide on the new direction for the call; ``delegation_id`` is unused."""
-        self._spawn(self.voice.instruction(text))
+        await self.voice.instruction(text)
 
     async def append_thinking(
         self, text: str, client_event_id: str | None = None, delegation_id: str | None = None

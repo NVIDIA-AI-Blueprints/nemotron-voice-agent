@@ -80,6 +80,8 @@ class HarnessPrompts(Settings):
     after_call: Text
     answer: Text
     none: Text
+    # Empty preserves older custom catalogs; the shipped YAML supplies the native worker policy.
+    worker_protocol: StrictStr = ""
     worker_input: Text
     user: Text
     assistant: Text
@@ -188,9 +190,8 @@ class HarnessSettings(Settings):
         Raises:
             ValueError: A name no table has, a block the protocol refuses, or ``max_running`` over a process's turns.
         """
-        protocol = pick(PROTOCOLS, self.protocol_name, "harness protocol")().from_settings(
-            self.model_dump(by_alias=True)
-        )
+        block = self.model_dump(by_alias=True)
+        protocol = pick(PROTOCOLS, self.protocol_name, "harness protocol")().from_settings(block)
         permission = pick(PERMISSIONS, self.permission_name, "permission answer")()()
         turns = protocol.agent.turns_per_process if self.turns_per_process is None else self.turns_per_process
         if turns is not None and self.max_running > turns:

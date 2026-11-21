@@ -18,6 +18,8 @@ from pipecat.frames.frames import (
     TTSTextFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator
 from pipecat.tests.utils import SleepFrame, run_test
 
 from examples.frontend_backend_live.media.silent_lines import SILENT_KEY, SilentLines, SilentSentences
@@ -28,12 +30,12 @@ from tests.unit.frontend_helpers import TransportOutput
 
 class Settled:
     def __init__(self):
-        self.events: list[str] = []
+        self.events: list[str | tuple[str, str]] = []
 
     def heard(self, line, cut):
-        self.events.append("heard")
+        self.events.append(("heard", line.heard))
 
-    def not_heard(self, line):
+    def not_heard(self, line, *, audio_exhausted=False):
         self.events.append("not_heard")
 
     def say_again(self, line):
@@ -61,14 +63,20 @@ def audio():
 
 
 async def speak(*sentences):
-    """Return the texts that pass the reader and what line 1 did, each sentence's audio coming before its text."""
+    """Return the playout receipt using Pipecat's actual recorded transcript."""
     settled = Settled()
     spoken = SpokenLines(settled, observe=lambda *a, **k: None)
     spoken.handed(Line(LineKind.REPLY, "Hi. How can I help?", number=1))
     line = [response(LLMFullResponseStartFrame()), TTSStartedFrame(), *sentences, TTSStoppedFrame()]
-    pipeline = Pipeline([SilentSentences(), Output(), SilentLines(spoken)])
-    down, _ = await run_test(pipeline, frames_to_send=[*line, response(LLMFullResponseEndFrame())])
-    return [frame.text for frame in down if isinstance(frame, TTSTextFrame)], settled.events
+    assistant = LLMAssistantAggregator(LLMContext())
+
+    @assistant.event_handler("on_assistant_turn_stopped")
+    async def settle_playout(_, message):
+        spoken.end_played(1, message.content)
+
+    pipeline = Pipeline([SilentSentences(), Output(), SilentLines(spoken), assistant])
+    await run_test(pipeline, frames_to_send=[*line, response(LLMFullResponseEndFrame())])
+    return settled.events
 
 
 class SilentLinesTests(unittest.IsolatedAsyncioTestCase):
@@ -76,20 +84,24 @@ class SilentLinesTests(unittest.IsolatedAsyncioTestCase):
         for name, (sentences, outcome) in {
             "a sentence with no audio goes no further; the next is heard": (
                 [text("Hi."), audio(), audio(), audio(), text("How can I help?")],
-                (["How can I help?"], ["heard"]),
+                [("heard", "How can I help?")],
             ),
             "a line whose sentences all got no audio is said once more": (
                 [text("Hi."), text("How can I help?")],
-                ([], ["again"]),
+                ["again"],
             ),
             # The first audio is half of the output's chunk: it goes out with the next sentence's, after "Hi.".
             "a short first sentence is heard though its text leaves first": (
                 [audio(), text("Hi."), audio(), audio(), audio(), text("How can I help?")],
-                (["Hi.", "How can I help?"], ["heard"]),
+                [("heard", "Hi. How can I help?")],
             ),
             "a line that played in part is heard and not said once more": (
                 [audio(), audio(), text("Hi."), text("How can I help?")],
-                (["Hi."], ["heard"]),
+                [("heard", "Hi.")],
+            ),
+            "audio alone supplies no words": (
+                [audio(), audio()],
+                [("heard", "")],
             ),
         }.items():
             with self.subTest(name):

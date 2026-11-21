@@ -6,10 +6,9 @@
 """An IM session's responses: admission, the items and notes it writes, its instructions, history, failures, close."""
 
 import asyncio
-import json
 from unittest import mock
 
-from examples.frontend_backend_live.delegation_core.backend.port import Start
+from examples.frontend_backend_live.delegation_core.backend.port import Start, TaskSpec, ToolNotExecuted
 from examples.frontend_backend_live.delegation_core.im.conversation import item_size
 from examples.frontend_backend_live.delegation_core.im.results import SpeakDisplay
 from examples.frontend_backend_live.delegation_core.im.session import DelegationError
@@ -30,7 +29,6 @@ from tests.unit.delegation_core.helpers import (
     app_call,
     ask,
     call_item,
-    placing,
     planned,
     progress,
     read_all,
@@ -66,8 +64,15 @@ class ResponseTests(IMCase):
         self.assertEqual(events[-1]["response"]["usage"], usage)
 
     async def test_admission_refuses_a_full_queue_a_used_id_and_a_close(self):
-        im = self.session(ScriptedAdapter([wait(asyncio.Event())], conductor=StartEach()))
-        # One runs and sixteen wait.
+        async def routing(given, place):
+            if any(source.delegation_id == "D1" for source in given.arrivals):
+                await place(Start(("D1",)))
+            else:
+                await asyncio.Event().wait()
+
+        conductor = ScriptedConductor(routing)
+        im = self.session(ScriptedAdapter([wait(asyncio.Event())], conductor=conductor))
+        # One task runs and sixteen sources wait for the occupied routing producer.
         await self.admit_each(im, *(f"Request {n}." for n in range(1, 18)))
         with self.assertRaisesRegex(DelegationError, "full"):
             im.admit(ask("One too many."), delegation_id="D18")
@@ -83,7 +88,10 @@ class ResponseTests(IMCase):
         im = self.session(adapter)
         await im.admit(ask("Book it."), delegation_id="D1").stream.aclose()
         gate.set()
-        await read_all(im.admit(ask("Booked?"), delegation_id="D2").stream)
+        await self.until(
+            lambda: bool(adapter.runs) and adapter.runs[0].task.ended, "the original work to finish without its reader"
+        )
+        await self.request(im, "Booked?", "D2")
         (record,) = records_of(adapter.runs[1].histories[0][-1])
         self.assertEqual((record["state"], record["steps"]), ("answered", ["book_table: done"]))
 
@@ -91,8 +99,8 @@ class ResponseTests(IMCase):
         im = self.session(
             ScriptedAdapter([Attempt(("First.", "Last."))], [failed_attempt(), answer()], conductor=StartEach())
         )
-        two = await read_all(im.admit(ask("Find teas."), delegation_id="D1").stream)
-        retried = await read_all(im.admit(ask("Find coffee."), delegation_id="D2").stream)
+        two = await self.request(im, "Find teas.", "D1")
+        retried = await self.request(im, "Find coffee.", "D2")
         self.assertEqual(said(two), [("commentary", "First."), ("final_answer", "Last.")])
         self.assertEqual((said(retried), retried[-1]["type"]), ([("final_answer", "Done.")], "response.completed"))
         self.assertNotIn("Half an answ", str(retried))
@@ -153,7 +161,10 @@ class ResponseTests(IMCase):
         self.assertIn("Let me look.", history)
 
     async def test_the_work_tools_follow_the_result_format(self):
-        plain, envelope = ["cancel_work", "ask_caller"], ["show", "cancel_work", "ask_caller"]
+        plain, envelope = (
+            ["cancel_work", "set_work_state", "caller_message", "resolve_questions"],
+            ["show", "cancel_work", "set_work_state", "caller_message", "resolve_questions"],
+        )
         for result_format, offered in ((None, plain), (SPEAK_DISPLAY, envelope)):
             with self.subTest(offered=offered):
                 gate = asyncio.Event()
@@ -166,16 +177,20 @@ class ResponseTests(IMCase):
         self.assertEqual((tool["description"], tool["parameters"]), (schema["description"], dict(schema["parameters"])))
         with self.assertRaises(ValueError):
             await tools.execute("c1", "show", "{}")
-        unknown = TEXTS.unknown_tool_output.format(name="book_table", offered="show, cancel_work, ask_caller")
-        self.assertEqual(await tools.execute("c2", "book_table", "{}"), json.dumps({"error": unknown}))
+        unknown = TEXTS.unknown_tool_output.format(
+            name="book_table", offered="show, cancel_work, set_work_state, caller_message, resolve_questions"
+        )
+        with self.assertRaises(ToolNotExecuted) as error:
+            await tools.execute("c2", "book_table", "{}")
+        self.assertEqual(str(error.exception), unknown)
 
     async def test_rounds_and_snapshots_read_the_composed_instructions(self):
         notes = (TEXTS.caller_note.strip(), TEXTS.voice_note.strip())
         adapter = ScriptedAdapter([answer()], [answer()], conductor=StartEach())
         im = self.session(adapter, result_format=SPEAK_DISPLAY)
         brief = {"instructions": "Be brief."}
-        events = await read_all(im.admit(ask("Find teas."), delegation_id="D1", settings=brief).stream)
-        await read_all(im.admit(ask("Hours?"), delegation_id="D2").stream)
+        events = await self.request(im, "Find teas.", "D1", settings=brief)
+        await self.request(im, "Hours?", "D2")
         composed = "\n".join(["Be brief.", *notes, TEXTS.result_formats["speak_display"]])
         self.assertEqual(adapter.runs[0].requests[0]["instructions"], composed)
         self.assertEqual({event["response"]["instructions"] for event in events if "response" in event}, {composed})
@@ -183,19 +198,25 @@ class ResponseTests(IMCase):
         self.assertEqual(adapter.runs[1].requests[0]["instructions"], default)
         adapter = ScriptedAdapter([answer()])
         no_notes = TEXTS.model_copy(update={"caller_note": "", "voice_note": " "})
-        await read_all(self.session(adapter, texts=no_notes).admit(ask("Find teas."), delegation_id="D1").stream)
+        await self.request(self.session(adapter, texts=no_notes), "Find teas.", "D1")
         self.assertEqual(adapter.runs[0].requests[0]["instructions"], DEFAULTS.instructions)
 
     async def test_a_request_carries_the_newest_ended_works_records(self):
         count = CORE_SETTINGS.delegation.records_max_works + 2
         scripts = [[OwnCall("book_table"), answer("Booked.")], *([answer()] for _ in range(count - 1))]
-        adapter = ScriptedAdapter(*scripts, conductor=StartEach())
-        im = self.session(adapter)
+        im, adapter = self.scripted_session(*scripts, conductor=StartEach())
         for n in range(count):
-            await read_all(im.admit(ask(f"Question {n}."), delegation_id=f"D{n}").stream)
-        first, second = (run.histories[0][-1]["content"] for run in adapter.runs[:2])
-        self.assertEqual(first, [{"type": "input_text", "text": "Question 0."}])
-        self.assertEqual((second[0]["text"], second[-1]["text"]), ("Question 1.", TEXTS.closing_line))
+            await self.request(im, f"Question {n}.", f"D{n}")
+        first, second = (
+            next(item for item in run.histories[0] if item.get("id") == f"D{index}")
+            for index, run in enumerate(adapter.runs[:2])
+        )
+        self.assertEqual(first["content"], [{"type": "input_text", "text": "Question 0."}])
+        self.assertEqual(second, {**ask("Question 1.")[0], "id": "D1"})
+        context = adapter.runs[1].histories[0][-1]
+        self.assertEqual(context["role"], "developer")
+        self.assertTrue(context["id"].startswith("backend_context_"))
+        self.assertEqual(context["content"][-1]["text"], TEXTS.closing_line)
         record = {"work": "W1", "state": "answered", "requests": ["Question 0."], "steps": ["book_table: done"]}
         self.assertEqual(records_of(adapter.runs[1].histories[0][-1]), [record])
         works = [record["work"] for record in records_of(adapter.runs[-1].histories[0][-1])]
@@ -204,36 +225,38 @@ class ResponseTests(IMCase):
     async def test_each_work_reads_its_own_segment_of_the_history(self):
         gate = asyncio.Event()
         scripts = ([app_call("get_menu"), answer("Menu.")], [OwnCall("lookup"), wait(gate), answer()], [answer()])
-        adapter = ScriptedAdapter(*scripts, conductor=StartEach(), max_running=2)
-        im = self.session(adapter)
-        await read_all(im.admit(ask("Menu?"), delegation_id="D1", settings={"tools": [MENU]}).stream)
+        im, adapter = self.scripted_session(*scripts, conductor=StartEach(), max_running=2)
+        await self.request(im, "Menu?", "D1", settings={"tools": [MENU]})
         second = im.admit(ask("Hours?"), delegation_id="D2").stream
         await self.turns()
         gate.set()
         await read_all(second)
-        await read_all(im.admit(ask("Third?"), delegation_id="D3").stream)
+        await self.request(im, "Third?", "D3")
         own, later = adapter.runs[1].histories[-1], adapter.runs[2].histories[0]
         self.assertEqual([item["name"] for item in own if item.get("type") == "function_call"], ["lookup"])
-        self.assertEqual(records_of(own[0])[0]["steps"], ["get_menu: started"])
+        self.assertEqual(own[0], {**ask("Hours?")[0], "id": "D2"})
+        self.assertEqual(own[1]["role"], "developer")
+        self.assertEqual(records_of(own[1])[0]["work"], "W2")
+        self.assertNotIn("get_menu", str(own))
         shared = [(item["type"], item["call_id"]) for item in later if "call_id" in item]
-        self.assertEqual(shared, [("function_call", "call_W2.1_1"), ("function_call_output", "call_W2.1_1")])
+        self.assertEqual(shared, [])
 
     async def test_the_history_is_trimmed_and_a_long_output_is_cut(self):
         output = "H" * 60_000 + "T" * 40_000
         script = [OwnCall("book_table", output=output), answer("Booked.")]
         adapter = ScriptedAdapter(script, *([answer()] for _ in range(3)), conductor=StartEach())
         im = self.session(adapter, context_tokens=3000)
-        await read_all(im.admit(ask("Book a table."), delegation_id="D1").stream)
+        await self.request(im, "Book a table.", "D1")
         (kept,) = [item["output"] for item in adapter.runs[0].histories[-1] if item["type"] == "function_call_output"]
         half = CORE_SETTINGS.delegation.tool_output_chars // 2
         self.assertEqual(kept, output[:half] + TEXTS.cut_output.format(chars=len(output) - 2 * half) + output[-half:])
         for n in range(3):
-            await read_all(im.admit(ask(f"Question {n}." + "x" * 3000), delegation_id=f"D{n + 2}").stream)
+            await self.request(im, f"Question {n}." + "x" * 3000, f"D{n + 2}")
         last = adapter.runs[-1].histories[0]
         self.assertNotIn("book_table", str(last[:-1]))
         self.assertIn("book_table: done", str(records_of(last[-1])))
         im = self.session(ScriptedAdapter([answer()]), context_tokens=50)
-        events = await read_all(im.admit(ask("x" * 2000), delegation_id="D1").stream)
+        events = await self.request(im, "x" * 2000, "D1")
         self.assertEqual(events[-1]["type"], "response.failed")
 
     def test_the_budget_counts_the_id_of_no_input_message(self):
@@ -289,7 +312,7 @@ class EndingTests(IMCase):
         ended = (await read_all(self.session(ScriptedAdapter([Dies()])).admit(ask("Teas?")).stream))[-1]
         (item,) = ended["response"]["output"]
         self.assertEqual((item["type"], item["status"]), ("mcp_call", "incomplete"))
-        gate, split = asyncio.Event(), planned(placing(Start(("D1",), ("teas", "hours"))))
+        gate, split = asyncio.Event(), planned(Start(("D1",), (TaskSpec("teas"), TaskSpec("hours"))))
         im = self.session(ScriptedAdapter([answer("Teas.")], [wait(gate), Fail()], conductor=split, max_running=2))
         (stream,) = await self.admit_each(im, "Teas and hours.")
         gate.set()
@@ -297,7 +320,10 @@ class EndingTests(IMCase):
         self.assertEqual((texts(events), events[-1]["type"]), (["Teas."], "response.failed"))
 
     async def test_at_close_queued_and_running_work_end_cancelled(self):
-        adapter = ScriptedAdapter([wait(asyncio.Event())], [answer()], conductor=StartEach())
+        def blocked(given, place):
+            return asyncio.Event().wait()
+
+        adapter = ScriptedAdapter([wait(asyncio.Event())], conductor=planned(Start(("D1",)), blocked))
         im = self.session(adapter, close_grace_seconds=0.02)
         streams = await self.admit_each(im, "Busy.", "Next.")
         await im.close()
@@ -311,7 +337,7 @@ class EndingTests(IMCase):
     async def test_at_close_waiting_work_stops_and_placing_ends(self):
         adapter = ScriptedAdapter([app_call("get_menu"), answer()])
         im = self.session(adapter, close_grace_seconds=60)
-        await read_all(im.admit(ask("Menu?"), delegation_id="D1", settings={"tools": [MENU]}).stream)
+        await self.request(im, "Menu?", "D1", settings={"tools": [MENU]})
         await asyncio.wait_for(im.close(), 5)
         self.assertEqual(adapter.runs[0].stops, 1)
         im = self.session(ScriptedAdapter(conductor=ScriptedConductor(lambda given, place: asyncio.Event().wait())))

@@ -86,15 +86,23 @@ class HandOffs:
         self.delegation, self.heard_log, self.worknote, self.display = delegation, heard_log, worknote, display
         self.acknowledgements, self.refused, self.observe = acknowledgements, refused, observe
         self.tasks: set[asyncio.Task] = set()
-        self.parked: dict[str, tuple[str | None, str, str, int]] = {}
+        self.parked: dict[str, tuple] = {}
 
-    def delegate(self, request: str, lead_in: str, *, decided_at: int, call_id: str = "") -> None:
+    def delegate(
+        self,
+        request: str,
+        lead_in: str,
+        *,
+        decided_at: int,
+        call_id: str = "",
+        receipt: Callable[[str, str | None], None] | None = None,
+    ) -> None:
         """Reserve the turn's work-note entry at once; hand it over, or park it for the handler of call ``call_id``."""
         reservation = self.worknote.reserve(request)
         if call_id:
-            self.parked[call_id] = (reservation, request, lead_in, decided_at)
+            self.parked[call_id] = (reservation, request, lead_in, decided_at, receipt)
         else:
-            self._start(reservation, request, lead_in, decided_at)
+            self._start(reservation, request, lead_in, decided_at, receipt)
 
     async def hand_off(self, call_id: str) -> bool | None:
         """Run the hand-off parked for call ``call_id``; return whether the part took it, ``None`` with none parked."""
@@ -115,26 +123,39 @@ class HandOffs:
         for call_id in list(self.parked):
             self._start(*self.parked.pop(call_id))
 
-    def _start(self, reservation: str | None, request: str, lead_in: str, decided_at: int) -> None:
+    def _start(self, reservation: str | None, request: str, lead_in: str, decided_at: int, receipt=None) -> None:
         task = asyncio.create_task(
-            self._hand_off(reservation, request, lead_in, decided_at), name="delegation-hand-off"
+            self._hand_off(reservation, request, lead_in, decided_at, receipt), name="delegation-hand-off"
         )
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
-    async def _hand_off(self, reservation: str | None, request: str, lead_in: str, decided_at: int) -> bool:
-        """Send the heard log's input; confirm the reserved entry and return ``True``, or release it on a refusal."""
+    async def _hand_off(
+        self, reservation: str | None, request: str, lead_in: str, decided_at: int, receipt=None
+    ) -> bool:
+        """Send the heard input; confirm its reservation on acceptance, or release it on refusal."""
         try:
-            delegation_id = await self.heard_log.delegate(self.delegation, unheard=self.worknote.answer_ready())
+            if receipt is not None:
+                receipt("attempted", None)
+            delegation_id = await self.heard_log.delegate(
+                self.delegation,
+                unheard=self.worknote.answer_ready(),
+            )
         except asyncio.CancelledError:
+            if receipt is not None:
+                receipt("unknown", None)
             self.worknote.release(reservation)
             raise
         except Exception as exc:
+            if receipt is not None:
+                receipt("unknown", None)
             self.worknote.release(reservation)
             logger.warning(f"The delegation was refused: {type(exc).__name__}: {exc}")
             self.observe("delegation.refused", error_type=type(exc).__name__)
             self.refused()
             return False
+        if receipt is not None:
+            receipt("accepted", delegation_id)
         self.worknote.confirm(reservation, delegation_id)
         self.display.started(delegation_id, request)
         self.observe("delegation.handed", delegation_id=delegation_id)

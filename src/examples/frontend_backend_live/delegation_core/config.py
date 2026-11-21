@@ -24,35 +24,16 @@ from examples.shared.strict_settings import StrictSettings as Settings
 
 # Each outcome text the IM returns to a conductor (texts.outcomes), with the fields it must hold.
 OUTCOME_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
-    {
-        "started": ("work", "tasks"),
-        "steered": ("work", "tasks"),
-        "restarted": ("work", "new"),
-        "cancel_requested": ("work", "tasks"),
-        "ended": ("work",),
-        "answered": ("delegation",),
-        "already_placed": ("delegation", "work", "tasks"),
-        "refused": ("reason",),
-    }
+    {"cancel_requested": ("work", "tasks"), "refused": ("reason",)}
 )
-# Each reason texts.outcomes.refused gives for a refused decision (texts.refusal_reasons), with the fields it must hold.
-REFUSAL_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
-    {
-        "ended": (),
-        "unplaced": ("delegations",),
-        "no_work": ("work",),
-        "no_task": ("task", "work"),
-        "no_open_work": (),
-        "over_limit": ("max_running",),
-        "idle": (),
-    }
-)
+REFUSAL_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType({"ended": (), "idle": ()})
 # The templates among the texts, with the fields each one must hold.
 TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "handover_line": ("delegation",),
         "records_block": ("records",),
         "task_line": ("task",),
+        "task_status_label": ("task", "status"),
         "unknown_tool_output": ("name", "offered"),
         "failed_output": ("name", "error"),
         "misrouted_output": ("name",),
@@ -61,7 +42,23 @@ TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "conductor_prompt": ("max_running",),
     }
 )
-WORK_TOOL_KEYS = ("show", "cancel_work", "ask_caller", "continue_after_call")
+WORK_TOOL_KEYS = ("show", "cancel_work", "set_work_state", "caller_message", "resolve_questions", "continue_after_call")
+TASK_STATUS_KEYS = (
+    "queued",
+    "running",
+    "waiting_client",
+    "waiting_for_caller",
+    "pausing",
+    "paused",
+    "answered",
+    "failed",
+    "cancelled",
+    "continued",
+    "stop_requested",
+    "stopped",
+    "unconfirmed",
+)
+DEFAULT_CONTEXT_TOKENS = 24_000
 TEXTS_SOURCE = "agent_prompts.Core in the example's prompts.yaml"
 
 Count = Annotated[int, Field(strict=True, ge=0)]
@@ -114,7 +111,7 @@ class DelegationSettings(Settings):
     # The recently ended Works the work records list, before the open ones.
     records_max_works: Count = 5
     # The backend history's budget in tokens (fits a 32,768-token local window).
-    context_tokens: WholeNumber = 24_000
+    context_tokens: WholeNumber = DEFAULT_CONTEXT_TOKENS
     # A longer tool output enters the backend history cut to its head and tail.
     tool_output_chars: WholeNumber = 8_000
 
@@ -131,9 +128,22 @@ class Texts(Settings):
     cancelled_line: Text
     unconfirmed_line: Text
     owed_output: Text
+    routing_failed_output: Text
+    routing_rejected_output: Text
+    conductor_failed_output: Text
+    capacity_unavailable_output: Text
     not_run_output: Text
     stopped_output: Text
-    asked_output: Text
+    paused_output: Text
+    control_worker_note: Text
+    control_unavailable_line: Text
+    control_uncertain_line: Text
+    control_requested_line: Text
+    pause_requested_line: Text
+    paused_line: Text
+    pause_unconfirmed_line: Text
+    resume_requested_line: Text
+    unavailable_output: Text
     continued_output: Text
     not_continued_output: Text
     after_call_output: Text
@@ -148,6 +158,8 @@ class Texts(Settings):
     records_block: Text
     closing_line: Text
     task_line: Text
+    task_status_label: Text
+    task_status: dict[str, Text]
     round_cap_note: Text
     conductor_prompt: Text
     outcomes: dict[str, Text]
@@ -188,6 +200,14 @@ class Texts(Settings):
         if set(tools) != set(WORK_TOOL_KEYS):
             raise ValueError(f"work_tools must hold exactly {', '.join(WORK_TOOL_KEYS)}")
         return tools
+
+    @field_validator("task_status")
+    @classmethod
+    def every_task_status(cls, statuses: dict[str, str]) -> dict[str, str]:
+        """Require plain wording for every operational task state reported by Core."""
+        if set(statuses) != set(TASK_STATUS_KEYS):
+            raise ValueError(f"task_status must hold exactly {', '.join(TASK_STATUS_KEYS)}")
+        return statuses
 
     def refusal(self, reason: str, **values: str) -> str:
         """Return the outcome of a refused decision: ``outcomes.refused`` with ``refusal_reasons[reason]`` filled in."""
@@ -286,5 +306,15 @@ def _joined(where: str, block: Any, texts: Any) -> dict[str, Any]:
         raise ValueError(f"{where} comes from {TEXTS_SOURCE}")
     joined = deepcopy(dict(block))
     for key, text in texts.items():
+        if key == "agents" and isinstance(block.get("agent"), str) and isinstance(text, Mapping):
+            # Agent prompt defaults belong only to the explicitly selected leaf. Keep every
+            # explicit settings entry so the selected protocol can still reject unknown agents.
+            selected = block["agent"]
+            defaults = {selected: text[selected]} if selected in text else {}
+            if key in block:
+                joined[key] = _joined(f"{where}.{key}", block[key], defaults)
+            elif defaults:
+                joined[key] = deepcopy(defaults)
+            continue
         joined[key] = _joined(f"{where}.{key}", block[key], text) if key in block else deepcopy(text)
     return joined

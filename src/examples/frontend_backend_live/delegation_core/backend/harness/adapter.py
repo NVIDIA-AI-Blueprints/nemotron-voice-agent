@@ -6,38 +6,56 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
-from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, TaskContext, ToolSource
+from examples.frontend_backend_live.delegation_core.backend.port import (
+    BackendRun,
+    ControlContext,
+    ControlRun,
+    ControlTools,
+    TaskContext,
+    ToolSource,
+)
 
 from .bridge import Door
 from .conductor import HarnessConductor
-from .protocol import Role
+from .control import BorrowedControl
+from .protocol import NativeCleanup, Role
 from .render import Renderer
 from .runtime import RuntimeOpener, RuntimeProcess
 from .sessions import SessionPool
 from .worker import WorkerRun
 
 if TYPE_CHECKING:
+    from examples.frontend_backend_live.delegation_core.backend.llm.adapter import LlmAdapter
+
     from .sessions import KeptSession
     from .source import HarnessSource
+
+_DRAINS: set[asyncio.Task] = set()
 
 
 class HarnessAdapter:
     """The backend of one IM session on the harness (``port.BackendAdapter``)."""
 
-    def __init__(self, source: HarnessSource, *, tools: Sequence[ToolSource]):
+    def __init__(
+        self,
+        source: HarnessSource,
+        *,
+        tools: Sequence[ToolSource],
+        on_drained: Callable[[HarnessAdapter], None] | None = None,
+    ):
         """Serve one IM session from ``source``, with its server tool sources; nothing starts before conductor()."""
         self.source, self.settings = source, source.settings
         self.max_running = self.settings.max_running
         self.tools = tuple(tools)
         self.vocabulary: ControlTools = source.vocabulary
         self.bridge = source.bridge
+        self.retirements = source.retirements
         self.renderer = Renderer(self.settings.prompts)
         self.opener = RuntimeOpener(self.settings)
         self.conductor_role = Role("conductor", "c")
@@ -45,10 +63,31 @@ class HarnessAdapter:
         self.closed = False
         self._started = False
         self._conductor: HarnessConductor | None = None
+        self._restricted: LlmAdapter | None = None
         self._shared: dict[str, list[asyncio.Task]] = {}
         self._runs: set[WorkerRun] = set()
-        self._warm_door: Door | None = None
+        self._doors: set[Door] = set()
+        self._draining: list[RuntimeProcess] = []
+        self._closing: asyncio.Task | None = None
+        self._drain: asyncio.Task | None = None
+        self._on_drained = on_drained
+        self._close_errors: list[BaseException] = []
         self.pool = SessionPool(self.max_running)
+
+    def can_run_without_attachment(self) -> bool:
+        """Whether every native tool effect is covered by the IM's attachment fence."""
+        return self.settings.agent.capabilities.tool_mediation == "bridge_only"
+
+    def usage_identity(self, task: TaskContext) -> dict:
+        """Identify the fixed native model, which may differ from the requested model."""
+        if task.business_access != "full" and not self.can_run_without_attachment():
+            return self._restricted_adapter().usage_identity(task)
+        return {
+            "backend": "harness",
+            "protocol": self.settings.protocol_name,
+            "model": self.source.endpoint().model,
+            "model_source": "configured_endpoint",
+        }
 
     def conductor(self) -> HarnessConductor | SteerOpenWork:
         """Return the session's conductor, and start the runtime processes in the background.
@@ -63,8 +102,14 @@ class HarnessAdapter:
             self._warm(self.workers, first_session=True)
         return self._conductor or SteerOpenWork()
 
-    def start(self, task: TaskContext) -> WorkerRun:
-        """Return a ``WorkerRun`` for one task, and pool idle sessions again; nothing opens before its ``events()``."""
+    def start(self, task: TaskContext) -> BackendRun:
+        """Start native work or route a restricted task through the Core-controlled tool loop."""
+        if task.business_access != "full" and not self.can_run_without_attachment():
+            return self._restricted_adapter().start(task)
+        return self._start_native(task)
+
+    def _start_native(self, task: TaskContext) -> WorkerRun:
+        """Create a native worker and pool idle sessions; neither opens until its events are read."""
         model, served = task.request().get("model"), self.source.endpoint().model
         if model not in (None, served):
             logger.info(f"harness.other_model task={task.task_id} model={model!r}: the agent runs its own model")
@@ -73,18 +118,62 @@ class HarnessAdapter:
         self._runs.add(run)
         return run
 
+    def start_control(self, task: ControlContext, *, parent: BackendRun | None = None) -> ControlRun:
+        """Interpret input under Core-only gates while keeping the original task and its effects."""
+        if isinstance(parent, WorkerRun) and (parent.host is not self or parent.task is not task.original_context):
+            raise ValueError("A control foreground requires this adapter's original worker")
+        if not self.can_run_without_attachment():
+            prepare = parent.prepare_restricted_control if isinstance(parent, WorkerRun) else None
+            return self._restricted_adapter().start_control(task, parent=parent, prepare=prepare)
+        if parent is None:
+            parent = self._start_native(task.original_context)
+        if not isinstance(parent, WorkerRun):
+            raise ValueError("A native control foreground requires this adapter's original worker")
+        return BorrowedControl(parent, task)
+
+    def _restricted_adapter(self) -> LlmAdapter:
+        """Reuse one provider pool for this session's restricted invocations."""
+        if self.closed:
+            raise RuntimeError("The harness session is closing")
+        if self._restricted is None:
+            self._restricted = self.source.new_restricted(self.tools)
+        return self._restricted
+
     def release_idle(self) -> None:
         """Retire every idle session, and pool none until a task starts: the caller left, so no task takes one."""
         self._retire_idle(self.pool.close(), "the pool closed")
 
     async def close(self) -> None:
-        """Retire every session and close every runtime process, which deletes its work folder."""
-        self.closed = True
+        """Fence and logically close once; native physical cleanup remains owned for final source shutdown."""
+        if self._closing is None:
+            self.closed = True
+            self._closing = asyncio.create_task(self._close(), name="harness-adapter-close")
+            self._closing.add_done_callback(lambda done: done.cancelled() or done.exception())
+        await asyncio.shield(self._closing)
+
+    async def wait_closed(self) -> None:
+        """Join only this adapter's physical cleanup, without cancelling its logical close or native owners."""
+        results = await asyncio.gather(self.close(), return_exceptions=True)
+        if self._drain is not None:
+            results.extend(await asyncio.gather(asyncio.shield(self._drain), return_exceptions=True))
+        for result in [*self._close_errors, *results]:
+            if isinstance(result, BaseException):
+                raise result
+
+    async def _close(self) -> None:
         if self._conductor is not None:
-            with contextlib.suppress(Exception):
+            try:
                 await self._conductor.close()
-        await asyncio.gather(*(run.release() for run in self._runs), return_exceptions=True)
+            except BaseException as error:
+                self._close_errors.append(error)
+        released = await asyncio.gather(*(run.release() for run in self._runs), return_exceptions=True)
+        self._close_errors.extend(result for result in released if isinstance(result, BaseException))
         self._runs.clear()
+        if self._restricted is not None:
+            try:
+                await self._restricted.close()
+            except BaseException as error:
+                self._close_errors.append(error)
         self._retire_idle(self.pool.drain(), "the call's end")
         opened, self._shared = [task for pool in self._shared.values() for task in pool], {}
         for task in opened:
@@ -92,9 +181,45 @@ class HarnessAdapter:
                 task.cancel()
         results = await asyncio.gather(*opened, return_exceptions=True)
         processes = [result for result in results if not isinstance(result, BaseException)]
-        await asyncio.gather(*(process.close() for process in processes), return_exceptions=True)
-        if self._warm_door is not None:
-            self.bridge.close(self._warm_door, "")
+        stopped = await asyncio.gather(*(process.close() for process in processes), return_exceptions=True)
+        self._close_errors.extend(result for result in stopped if isinstance(result, BaseException))
+        processes += self._draining
+        self._draining = []
+        for door in self._doors:
+            self.bridge.close(door, "")
+        doors, self._doors = self._doors, set()
+
+        async def forget() -> None:
+            # Release the bridge state before waiting for native workspace cleanup.
+            calls = {call for door in doors for call in door.pending_calls}
+            await asyncio.gather(*(asyncio.shield(call) for call in calls), return_exceptions=True)
+            for door in doors:
+                self.bridge.forget(door)
+            unique = list(dict.fromkeys(processes))
+            results = await asyncio.gather(*(process.wait_closed() for process in unique), return_exceptions=True)
+            receipts = {
+                process: result if isinstance(result, NativeCleanup) else process.cleanup_receipt
+                for process, result in zip(unique, results, strict=True)
+            }
+            for process, receipt in receipts.items():
+                if isinstance(receipt, NativeCleanup) and receipt.confirmed and receipt.scope == "runtime":
+                    self.source.retirements.native_retired(process)
+            results.extend(await asyncio.gather(self.opener.wait_closed(), return_exceptions=True))
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+            if self._on_drained is not None and not self._close_errors:
+                self._on_drained(self)
+
+        self._drain = asyncio.create_task(forget(), name="harness-door-cleanup")
+        self._drain.add_done_callback(_logged)
+        _DRAINS.add(self._drain)
+        self._drain.add_done_callback(_DRAINS.discard)
+
+    def own_door[T: Door](self, door: T) -> T:
+        """Keep a session's tool door until this adapter closes."""
+        self._doors.add(door)
+        return door
 
     async def shared(self, role: Role) -> RuntimeProcess:
         """Return a process of ``role`` with a turn free, its place taken for the caller's session.
@@ -111,6 +236,7 @@ class HarnessAdapter:
                     pool.remove(opening)
                 alive = [opening.result() for opening in lost if not opening.cancelled() and not opening.exception()]
                 await asyncio.gather(*(process.close() for process in alive), return_exceptions=True)
+                self._draining.extend(alive)
                 # Look again from the start: the session may have closed meanwhile.
                 continue
             free = next((each.result() for each in pool if each.done() and not self._full(each.result())), None)
@@ -171,7 +297,12 @@ class HarnessAdapter:
             try:
                 await self._first_session(process, role)
             except BaseException:
-                await process.close()
+                self._draining.append(process)
+                try:
+                    await process.close()
+                except BaseException as error:
+                    self._close_errors.append(error)
+                    raise
                 raise
         return process
 
@@ -182,13 +313,13 @@ class HarnessAdapter:
         reconnect and then pause that server: so its door serves nothing until the adapter closes.
         """
         name = process.server_name(role.prefix)
-        door = Door(name)
+        door = self.own_door(Door(name))
         server = self.bridge.open(door)
         session = None
         try:
             folder = process.session_folder(name)
             self.settings.agent.prepare(folder, "")
-            session = await process.client.new_session(folder, server, asyncio.Queue())
+            session = await process.client.new_session(folder, server, asyncio.Queue(), role=role.name)
             async with asyncio.timeout(self.settings.ready_timeout_seconds):
                 await door.listed.wait()
             logger.debug(f"harness.first_session_opened role={role.name} server={name}")
@@ -196,11 +327,9 @@ class HarnessAdapter:
             # The warm-up only saves time: the first task opens its own session either way.
             logger.warning(f"harness.first_session_failed role={role.name} {type(exc).__name__}: {exc}")
         finally:
-            closed = session is not None and session.retire()
-            if door.listed.is_set() and not closed:
-                self._warm_door = door
-            else:
-                self.bridge.close(door, "")
+            if session is not None:
+                session.retire()
+            self.bridge.close(door, "")
 
 
 def _lost(opening: asyncio.Future) -> bool:

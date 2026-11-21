@@ -87,7 +87,6 @@ class SpeechMode(Protocol):
     """How the text-to-speech takes a line, and what keeps the line's text behind its audio."""
 
     synthesis_mode: ClassVar[str]
-    reports_sentences: ClassVar[bool]
 
     def text_hold(self) -> list[FrameProcessor]:
         """Return new processors for right after the text-to-speech, which keep its text behind its audio or mark it."""
@@ -97,7 +96,6 @@ class PerSentence:
     """One synthesis request per sentence: Pipecat yields a sentence's audio, then its text, so nothing is held."""
 
     synthesis_mode: ClassVar[str] = "per_sentence"
-    reports_sentences: ClassVar[bool] = True
 
     def text_hold(self) -> list[FrameProcessor]:
         """Return a :class:`SilentSentences`, which marks the text of each sentence that got no audio."""
@@ -108,7 +106,6 @@ class Stitched:
     """One stitched stream per line: smoother across sentences, with each sentence's text queued before its audio."""
 
     synthesis_mode: ClassVar[str] = "stitched"
-    reports_sentences: ClassVar[bool] = False
 
     def text_hold(self) -> list[FrameProcessor]:
         """Return a :class:`LineTextHold`, so a line's text follows all of its audio."""

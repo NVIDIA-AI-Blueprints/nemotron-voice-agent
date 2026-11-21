@@ -15,7 +15,14 @@ from typing import Any, Protocol
 from examples.frontend_backend_live.delegation_core.im.input import request_settings
 from examples.frontend_backend_live.delegation_core.im.session import DelegationError, IMSession
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
-from examples.shared.delegation_contract import DELEGATION_ID, STORE, TYPED_RUN
+from examples.shared.delegation_contract import (
+    CALLER_EXCERPT,
+    CALLER_EXCERPT_CHARS,
+    DELEGATION_ID,
+    STORE,
+    TYPED_RUN,
+    CallerContext,
+)
 from examples.shared.ids import approx_tokens
 
 MODEL_OWNER = "delegation_core"
@@ -133,6 +140,25 @@ class ResponsesService:
             self._closed(session)
         return {"id": conversation_id, "object": "conversation.deleted", "deleted": True}
 
+    async def set_attachment(self, conversation_id: str, attached: bool) -> dict:
+        """Fence or restore the listener of a process-local retained call."""
+        if not isinstance(attached, bool):
+            raise InvalidRequest("attached must be a boolean", param="attached")
+        return await self._session(conversation_id).set_attachment(attached)
+
+    def begin_caller_turn(self, conversation_id: str) -> Callable[[], None] | None:
+        """Start the local dispatch hold if the conversation still serves the caller."""
+        session = self.sessions.get(conversation_id)
+        return session.begin_caller_turn() if session is not None else None
+
+    async def reconcile_tool_outputs(self, conversation_id: str, outputs: list[dict]) -> dict:
+        """Record exact late application evidence without reopening or replaying a generation."""
+        session = self._session(conversation_id)
+        try:
+            return session.reconcile_tool_outputs(outputs)
+        except DelegationError as refused:
+            raise InvalidRequest(str(refused), param="input", code=refused.code) from None
+
     def _room(self, session: IMSession) -> bool:
         """Return whether ``session``'s work may outlive its call by the cap of such conversations.
 
@@ -176,7 +202,9 @@ class ResponsesService:
         await self.backend.check_model(model)
         return {"id": model, "object": "model", "created": self.created_at, "owned_by": MODEL_OWNER}
 
-    async def create_response(self, params: dict) -> ResponseStream | StatelessStream:
+    async def create_response(
+        self, params: dict, *, caller_context: CallerContext | None = None
+    ) -> ResponseStream | StatelessStream:
         """Check a request, admit it, and return its stream (``POST /v1/responses``, streamed).
 
         A request with no conversation is served in a one-shot IM session of its own. A refusal raises before any
@@ -190,7 +218,14 @@ class ResponsesService:
         if clients_own(input_items, metadata):
             admission = im.admit_client_request(input_items, delegation_id=delegation_id, settings=settings)
         else:
-            admission = im.admit(input_items, delegation_id=delegation_id, settings=settings)
+            excerpt = metadata.get(CALLER_EXCERPT)
+            admission = im.admit(
+                input_items,
+                delegation_id=delegation_id,
+                settings=settings,
+                caller_excerpt=excerpt[-CALLER_EXCERPT_CHARS:] if isinstance(excerpt, str) else None,
+                caller_context=caller_context,
+            )
         return admission.stream
 
     async def input_tokens(self, params: dict) -> dict:

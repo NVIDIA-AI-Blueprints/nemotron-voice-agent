@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import httpx
 from openai import APIError, APITimeoutError, BadRequestError
+from openai.types.completion_usage import CompletionUsage
 
 from examples.frontend_backend_live.delegation_core.backend.providers import (
     BrokenStreamError,
@@ -135,6 +136,61 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual((completed["id"], completed["status"]), (created["id"], "completed"))
         self.assertEqual(completed["usage"], {"input_tokens": 7, "output_tokens": 5, "total_tokens": 12})
 
+    def test_usage_reports_preserve_partial_optional_and_zero_counters_on_each_terminal(self):
+        for finish, terminal in (("stop", "completed"), ("length", "incomplete")):
+            for supplied, expected in (
+                ({"prompt_tokens": 11}, {"input_tokens": 11}),
+                (
+                    {
+                        "prompt_tokens": 17,
+                        "completion_tokens": 9,
+                        "total_tokens": 26,
+                        "prompt_tokens_details": {"cached_tokens": 5},
+                        "completion_tokens_details": {"reasoning_tokens": 4},
+                    },
+                    {
+                        "input_tokens": 17,
+                        "output_tokens": 9,
+                        "total_tokens": 26,
+                        "input_tokens_details": {"cached_tokens": 5},
+                        "output_tokens_details": {"reasoning_tokens": 4},
+                    },
+                ),
+                (
+                    {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "prompt_tokens_details": SimpleNamespace(cached_tokens=0),
+                        "completion_tokens_details": SimpleNamespace(reasoning_tokens=0),
+                    },
+                    {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                    },
+                ),
+                ({"prompt_tokens": True, "completion_tokens": -1, "total_tokens": "12"}, None),
+                ({}, None),
+                (None, None),
+            ):
+                with self.subTest(finish=finish, usage=supplied):
+                    # The SDK can construct models from compatible endpoint responses without strict validation.
+                    # Keep absent and invalid observations intact at the translator boundary.
+                    report = None if supplied is None else CompletionUsage.model_construct(**supplied)
+                    usage_chunk = chunk().model_copy(update={"usage": report})
+                    event = translated(chunk("Answer."), chunk(finish=finish), usage_chunk)[-1]
+                    self.assertEqual(event["type"], f"response.{terminal}")
+                    self.assertEqual(event["response"].get("usage"), expected)
+
+    def test_a_partial_last_usage_report_does_not_reuse_stale_earlier_totals(self):
+        earlier = {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
+        last = chunk().model_copy(update={"usage": CompletionUsage.model_construct(prompt_tokens=11)})
+        events = translated(chunk("Answer.", usage=earlier), chunk(finish="stop"), last)
+        self.assertEqual(events[-1]["response"]["usage"], {"input_tokens": 11})
+
     def test_call_fragments_become_calls_with_our_own_ids(self):
         menu = [tool_fragment(0, "call_abc", "get_menu", ""), tool_fragment(0, arguments='{"cate')]
         rest = [tool_fragment(0, arguments='gory":"pastry"}'), tool_fragment(1, None, "manage_cart", "{}")]
@@ -166,6 +222,14 @@ class TranslationTests(unittest.TestCase):
 
 
 class RequestTests(unittest.TestCase):
+    def test_restricted_requests_refuse_endpoint_tool_overrides(self):
+        for provider in (ChatCompletionsBackend, OpenAIResponsesBackend):
+            for params in ({"tools": []}, {"extra_body": {"tool_choice": "required"}}):
+                with self.subTest(provider=provider, params=params):
+                    model = provider(endpoint(**params), NO_RETRY, client=object())
+                    with self.assertRaisesRegex(ValueError, "cannot override the restricted invocation's tools"):
+                        model.request({**payload(), "_restricted_tools": True})
+
     def test_every_round_sends_the_whole_history_unstored(self):
         provider = OpenAIResponsesBackend(endpoint(), NO_RETRY, client=object())
         first, second = provider.request(payload()), provider.request(payload())

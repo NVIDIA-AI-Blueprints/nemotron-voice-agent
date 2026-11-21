@@ -60,14 +60,22 @@ class Session(Record):
 
 
 @dataclass(eq=False)
+class Placement:
+    """A source's exact target, private to the ledger and absent from ordinary model records."""
+
+    work: str
+    tasks: tuple[str, ...]
+
+
+@dataclass(eq=False)
 class Delegation(Record):
     """One delegation: one request and the responses that answer it; its id is ``metadata.live_delegation_id``."""
 
-    # It never fails while queued: an arrival no decision placed is placed by the IM's fallback rule.
+    # An unplaced request can fail if its unqualified native control prompt loses its attachment with effects unknown.
     MOVES = moves(
-        queued=("running", "answered", "handed_over", "cancelled"),
+        queued=("running", "answered", "handed_over", "failed", "cancelled"),
         running=("waiting_client", "answered", "handed_over", "failed", "cancelled"),
-        waiting_client=("running", "handed_over", "failed", "cancelled"),
+        waiting_client=("running", "answered", "handed_over", "failed", "cancelled"),
         answered=(),
         handed_over=(),
         failed=(),
@@ -80,6 +88,9 @@ class Delegation(Record):
     work: str = ""
     tasks: tuple[str, ...] = ()
     responses: list[str] = field(default_factory=list)
+    placements: tuple[Placement, ...] = ()
+    call_generation: int = 0
+    caller_excerpt: str | None = None
 
 
 @dataclass(eq=False)
@@ -104,6 +115,8 @@ class Stop(Record):
 
     MOVES = moves(none=("stop_requested",), stop_requested=("stopped", "unconfirmed"), stopped=(), unconfirmed=())
     START = "none"
+    # A later positive resource proof supplements the original bounded stop result; it never rewrites it.
+    quiescent_later: bool = False
 
 
 @dataclass(eq=False)
@@ -114,14 +127,53 @@ class Result(Record):
     START = "none"
 
 
+@dataclass(frozen=True)
+class InputReceipt:
+    """An actual task-local application of caller messages, not a model-authored revision."""
+
+    id: str
+    revision: int
+    source_message_ids: tuple[str, ...]
+    caller_order: tuple[tuple[str, int | None], ...] = ()
+
+
+@dataclass(eq=False)
+class Question:
+    """A private question identity, its written evidence and its explicit resolution."""
+
+    id: str
+    text: str
+    call_id: str
+    input_revision: int
+    dispatch: str = "pending"
+    resolution: str = "open"
+    input_ref: str | None = None
+    creator_task_id: str = ""
+    owner_task_id: str = ""
+    response_id: str | None = None
+    item_id: str | None = None
+    publication_revision: int = 0
+    publication_call_id: str = ""
+    created_input_revision: int = 0
+    previous_owners: tuple[str, ...] = ()
+    input_caller_order: int = 0
+
+    @property
+    def open(self) -> bool:
+        """Whether the task still owns this unresolved question."""
+        return self.resolution == "open"
+
+
 @dataclass(eq=False)
 class Task(Record):
     """One task of a Work: one worker, one backend run; its id is its Work's and its number, such as ``W1.2``."""
 
     MOVES = moves(
-        queued=("running", "cancelled"),
-        running=("waiting_client", "answered", "failed", "cancelled"),
-        waiting_client=("running", "failed", "cancelled"),
+        queued=("running", "pausing", "paused", "failed", "cancelled"),
+        running=("waiting_client", "pausing", "paused", "answered", "failed", "cancelled"),
+        waiting_client=("running", "pausing", "paused", "failed", "cancelled"),
+        pausing=("paused", "queued", "waiting_client", "failed", "cancelled"),
+        paused=("queued", "waiting_client", "pausing", "failed", "cancelled"),
         answered=(),
         failed=(),
         cancelled=(),
@@ -133,7 +185,22 @@ class Task(Record):
     acted: bool = False
     progress: str | None = None
     question: str | None = None
+    questions: list[Question] = field(default_factory=list)
+    question_sequence: int = 0
+    input_revision: int = 0
+    input_receipts: dict[str, InputReceipt] = field(default_factory=dict)
+    publications: dict[str, dict] = field(default_factory=dict)
+    continues: str | None = None
+    verifies: str | None = None
+    # Canonical lineage survives pruning the successor's own records/history.
+    successor_task_id: str | None = None
+    successor_work_id: str | None = None
+    # An explicit stop can close an ended thread's unresolved questions without changing its physical stop state.
+    continuation_cancelled_by: str | None = None
+    history_mode: str = "shared"
     answer: str | None = None
+    answer_item_id: str | None = None
+    answer_publication: str = "none"
     started_at: float | None = None
     ended_at: float | None = None
     stop: Stop = field(init=False)
@@ -144,15 +211,37 @@ class Task(Record):
         super().__post_init__()
         self.stop, self.result = Stop(self.id), Result(self.id)
 
+    @property
+    def retained_answer(self) -> str | None:
+        """Return the answer eligible for conversation context."""
+        return None if self.answer_publication == "superseded" else self.answer
+
+    def without_superseded_answer(self, items: list[dict]) -> list[dict]:
+        """Exclude just the superseded final item, preserving other task evidence."""
+        if self.answer_publication != "superseded" or self.answer_item_id is None:
+            return items
+        return [item for item in items if item.get("id") != self.answer_item_id]
+
+    def close_questions(self, disposition: str) -> tuple[Question, ...]:
+        """Resolve only this record's owned questions after their publication has settled."""
+        owned = [q for q in self.questions if q.owner_task_id == self.id and q.open]
+        closed = tuple(q for q in owned if disposition != "failed" or q.dispatch != "written")
+        for question in closed:
+            question.resolution = disposition
+        self.question = "\n".join(q.text for q in owned if q.open) or None
+        return closed
+
 
 @dataclass(eq=False)
 class Work(Record):
     """One unit of backend work: the requests it carries, run by its tasks; the newest to join carries it."""
 
     MOVES = moves(
-        queued=("running", "cancelled"),
-        running=("waiting_client", "answered", "failed", "cancelled"),
-        waiting_client=("running", "failed", "cancelled"),
+        queued=("running", "pausing", "paused", "failed", "cancelled"),
+        running=("queued", "waiting_client", "pausing", "paused", "answered", "failed", "cancelled"),
+        waiting_client=("queued", "running", "pausing", "paused", "answered", "failed", "cancelled"),
+        pausing=("queued", "running", "waiting_client", "paused", "answered", "failed", "cancelled"),
+        paused=("queued", "running", "waiting_client", "pausing", "answered", "failed", "cancelled"),
         answered=(),
         failed=(),
         cancelled=(),
@@ -174,11 +263,13 @@ class Steering(Record):
 
     # Unapplied when its task ends, it goes follow_up: its requests start a follow-up Work, unless their call has ended.
     MOVES = moves(
-        waiting=("taken", "follow_up"),
-        taken=("applied", "not_applied", "follow_up"),
-        not_applied=("taken", "follow_up"),
+        waiting=("taken", "follow_up", "cancelled"),
+        taken=("applied", "not_applied", "unknown", "follow_up", "cancelled"),
+        not_applied=("taken", "follow_up", "cancelled"),
         applied=(),
+        unknown=(),
         follow_up=(),
+        cancelled=(),
     )
     START = "waiting"
 
@@ -196,7 +287,23 @@ class Action(Record):
     work: str = ""
     name: str = ""
     runner: Runner | None = None
-    output: str | None = None
+    arguments: str | None = None
+    app_published: bool = False
+    output: str | list[dict] | None = None
+    late_output: str | list[dict] | None = None
+    late_outcome: str | None = None
+
+
+@dataclass
+class ControlAction:
+    """A declared routing obligation, with host identity and independent execution evidence."""
+
+    id: str
+    kind: str
+    sources: tuple[str, ...]
+    state: str = "pending"
+    receipt: dict = field(default_factory=dict)
+    delivery: dict[str, str] = field(default_factory=dict)
 
 
 class WorkLedger:
@@ -211,6 +318,7 @@ class WorkLedger:
         self.tasks: dict[str, Task] = {}
         self.steerings: dict[str, Steering] = {}
         self.actions: dict[str, Action] = {}
+        self.controls: dict[str, ControlAction] = {}
         self._works_made = 0
         self._steerings_made = 0
 
@@ -252,19 +360,22 @@ class WorkLedger:
         self.actions[call_id] = action
         return action
 
-    def prune(self) -> list[Work]:
+    def prune(self, needed: Collection[str] = (), sources: Collection[str] = ()) -> list[Work]:
         """Forget what no open or recent Work needs, and return the Works forgotten."""
-        forgotten = [self.works.pop(key) for key in _closed(self.works)[:-MAX_KEPT_CLOSED]]
+        forgotten = [self.works.pop(key) for key in _closed(self.works, needed)[:-MAX_KEPT_CLOSED]]
         gone = {task.id for work in forgotten for task in work.tasks}
         for task_id in gone:
             del self.tasks[task_id]
         for records in (self.actions, self.steerings):
             for key in [key for key, record in records.items() if record.task in gone]:
                 del records[key]
-        carried = {delegation for work in self.works.values() for delegation in work.requests}
+        carried = {delegation for work in self.works.values() for delegation in work.requests} | set(sources)
         _forget(self.delegations, carried)
         kept = carried & set(self.delegations)
         _forget(self.responses, {response for key in kept for response in self.delegations[key].responses})
+        for key, control in list(self.controls.items()):
+            if control.state != "pending" and not any(source in self.delegations for source in control.sources):
+                del self.controls[key]
         return forgotten
 
 

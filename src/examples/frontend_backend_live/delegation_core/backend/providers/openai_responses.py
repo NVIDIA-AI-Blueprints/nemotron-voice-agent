@@ -48,7 +48,7 @@ class OpenAIResponsesBackend(Backend):
         a ``tool_choice`` that only a tool left out matches becomes ``auto``, as on chat completions. A message other
         than an output message goes without its ``id`` (:func:`input_item`).
         """
-        extra = self.endpoint.extra_params
+        extra = self.endpoint_params(payload)
         request = {name: extra[key] for key, name in ENDPOINT_PARAMS.items() if key in extra}
         if "extra_body" in extra:
             request["extra_body"] = deepcopy(extra["extra_body"])

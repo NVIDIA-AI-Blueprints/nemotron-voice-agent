@@ -66,7 +66,7 @@ class ChatCompletionsBackend(Backend):
         messages = responses_items_to_messages(payload.get("instructions"), payload["input"])
         request = {
             **DEFAULT_SAMPLING,
-            **deepcopy(self.endpoint.extra_params),
+            **deepcopy(self.endpoint_params(payload)),
             "model": payload.get("model") or self.endpoint.model,
             "messages": messages,
             "stream": True,

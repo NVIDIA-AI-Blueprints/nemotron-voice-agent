@@ -17,11 +17,13 @@ from gateways.live.gateway import security
 from gateways.live.gateway.settings import LiveSettings
 from gateways.live.ports import AdapterFactory, CoreHook, MediaConnection, PrimarySocket, SessionParts
 from gateways.live.protocol import ProtocolError, SessionConfig
+from gateways.live.server_delegation.responses_client import AttachmentClient, CallerContextClient
 from gateways.live.session import LiveProtocolSession
 from gateways.live.session.session import no_core
 
 if TYPE_CHECKING:
-    from gateways.live.server_delegation.responses_client import ResponsesClient
+    from examples.shared.delegation_contract import CallerContext
+    from gateways.live.server_delegation.responses_client import ResponsesClient, ResponseStream
 
 # The ICE servers of a request's WebRTC peer, shaped as ``RTCIceServer`` objects, TURN credentials included.
 IceServers = Callable[[Request], list[dict]]
@@ -80,6 +82,23 @@ class CoreClient:
         """Call ``DELETE /v1/conversations/{id}`` on the core."""
         return await (await self.client()).delete_conversation(conversation_id)
 
+    async def attachment_supported(self) -> bool:
+        """Check the actual core boundary rather than assuming every Responses implementation supports retention."""
+        return isinstance(await self.client(), AttachmentClient)
+
+    async def set_attachment(self, conversation_id: str, attached: bool) -> dict:
+        """Fence caller-dependent effects while retaining the logical conversation lease."""
+        client = await self.client()
+        change = getattr(client, "set_attachment", None)
+        if change is None:
+            raise ProtocolError("This core does not support attachment retention", "resume_unavailable")
+        return await change(conversation_id, attached)
+
+    def begin_caller_turn(self, conversation_id: str) -> Callable[[], None] | None:
+        """Forward the local routing hold to the client that opened the conversation."""
+        begin = getattr(self._client, "begin_caller_turn", None)
+        return begin(conversation_id) if callable(begin) else None
+
     async def retrieve_model(self, model: str) -> dict:
         """Call ``GET /v1/models/{model}`` on the core."""
         return await (await self.client()).retrieve_model(model)
@@ -87,6 +106,13 @@ class CoreClient:
     async def create_response(self, params: dict):
         """Call ``POST /v1/responses`` on the core."""
         return await (await self.client()).create_response(params)
+
+    async def create_response_with_caller_context(self, params: dict, context: CallerContext) -> ResponseStream:
+        """Forward private caller evidence to a core that accepts it."""
+        client = await self.client()
+        if isinstance(client, CallerContextClient):
+            return await client.create_response_with_caller_context(params, context)
+        return await client.create_response(params)
 
     async def list_conversation_items(self, conversation_id: str) -> dict:
         """Call ``GET /v1/conversations/{id}/items`` on the core."""
@@ -122,6 +148,7 @@ class LiveGateway:
         self.sessions: dict[str, LiveProtocolSession] = {}
         self.connections: dict[str, MediaConnection] = {}
         self.starting = 0
+        self.resume_leases = {}
 
     def authorize(self, connection) -> None:
         """Check the bearer token (when configured), reject cross-site browser origins, then check the host name."""

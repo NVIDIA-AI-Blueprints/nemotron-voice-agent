@@ -10,8 +10,9 @@ core decides what a request means, whether a result is right and how a delegatio
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import dataclass
@@ -20,15 +21,26 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
-from examples.shared.delegation_contract import DELEGATION_ID, OPTIONS, STORE, TERMINALS, TYPED_RUN
+from examples.shared.delegation_contract import (
+    CALLER_CONTEXT,
+    CALLER_EXCERPT,
+    DELEGATION_ID,
+    OPTIONS,
+    STORE,
+    TERMINALS,
+    TYPED_RUN,
+)
 from examples.shared.ids import uid
 from examples.shared.observe import log_observation
+from examples.shared.work_provenance import WORK_PROVENANCE_KEY, strip_provenance
 from gateways.live.protocol import CONVERSATION_PARAM, BackendConfig, ProtocolError, SessionConfig
+from gateways.live.server_delegation.responses_client import CallerContextClient
+from gateways.live.server_delegation.retention import DUPLICATE, DeliveryMailbox, MailboxFull
 from gateways.live.server_delegation.sender import Request, RequestSender
 
 if TYPE_CHECKING:
-    from gateways.live.ports import DelegationEvents, DelegationView
-    from gateways.live.server_delegation.responses_client import ResponsesClient
+    from gateways.live.ports import DelegationEvents, DelegationRequestState, DelegationView
+    from gateways.live.server_delegation.responses_client import ResponsesClient, ResponseStream
 
 Observe = Callable[..., None]
 LIVE_SESSION_ID = "live_session_id"
@@ -39,6 +51,15 @@ MAX_QUEUED_ITEMS = 16
 CONVERSATION_SECONDS = 10
 RELAY_SECONDS = 5.0
 CLOSE_SECONDS = 10.0
+
+
+def _log_conversation_failure(failure: Exception, operation: str) -> None:
+    """Mark an authority-bearing failure for safe outer logging without replacing the exception."""
+    reference = uid(operation)
+    # Messages, causes, contexts and traceback locals may all contain the attachment authority. Keep the original
+    # exception for the internal caller, but never attach its traceback to a production log record.
+    failure._live_attachment_reference = reference
+    logger.error(f"core.conversation_{operation}_failed reference={reference} error_type={type(failure).__name__}")
 
 
 def request_settings(responses: BackendConfig | None) -> dict:
@@ -62,13 +83,14 @@ COMPOSED_SOURCE = "the core: the newest request's instructions, as composed (ins
 
 
 def sanitize_response_event(raw: dict) -> dict:
-    """Return ``raw`` with its response snapshot redacted: no ``instructions``, ``input``, ``tools`` or ``output``."""
-    response = raw.get("response")
+    """Remove private ownership and redact response instructions, input, tools and output from the public copy."""
+    public = strip_provenance(raw)
+    response = public.get("response")
     if not isinstance(response, dict):
-        return raw
+        return public
     snapshot = {name: value for name, value in response.items() if name != "input"}
     snapshot.update(instructions=None, tools=[], output=[])
-    return {**raw, "response": snapshot}
+    return {**public, "response": snapshot}
 
 
 def lost_response(response_id: str, sequence_number: int | None) -> dict:
@@ -93,11 +115,14 @@ class BackendEventRelay:
         """Relay through the session's delegation ``view``; ``routes`` hears of each call and each end."""
         self.view, self.routes = view, routes
         self.responses: dict[str, str | None] = {}
+        self.forward = True
 
     async def announce(
         self, delegation_id: str, response_id: str, offset_ms: int, client_event_id: str | None = None
     ) -> None:
         """Announce a delegation with ``session.delegation.created`` at the first response of its starting request."""
+        if not self.forward:
+            return
         await self.view.emit_paced(
             "session.delegation.created",
             offset_ms=offset_ms,
@@ -105,7 +130,14 @@ class BackendEventRelay:
             client_event_id=client_event_id,
         )
 
-    async def backend_event(self, delegation_id: str, event: dict, client_event_id: str | None = None) -> None:
+    async def backend_event(
+        self,
+        delegation_id: str,
+        event: dict,
+        client_event_id: str | None = None,
+        *,
+        before_publish: Callable[[], bool] | None = None,
+    ) -> None:
         """Relay one event of a delegation to the client, and route the calls the client must answer."""
         kind = event.get("type", "")
         response = event.get("response") if isinstance(event.get("response"), dict) else {}
@@ -116,8 +148,11 @@ class BackendEventRelay:
         elif kind in TERMINALS:
             self.responses.pop(delegation_id, None)
             self.routes.response_ended(delegation_id, response.get("id"))
+        if not self.forward:
+            return
         await self.view.emit_paced(
             "response.event",
+            before_publish=before_publish,
             delegation_id=delegation_id,
             event=sanitize_response_event(event),
             client_event_id=client_event_id,
@@ -216,6 +251,42 @@ class ClientRoutes:
         self.messages.clear()
         self.in_flight.clear()
         self.messages_in_flight.clear()
+
+    def prepare_item(self, item: dict) -> Result | Typed:
+        """Validate and copy one exact input without consuming routes, result buffers or typed messages."""
+        kind = item.get("type", "message")
+        if kind == "function_call_output":
+            key = item.get("call_id")
+            if not isinstance(key, str) or key not in self.routes:
+                raise ProtocolError("Unknown pending call", param="item.call_id")
+            if len(self.results) >= MAX_PENDING_RESULTS:
+                raise ProtocolError(f"Too many pending results: at most {MAX_PENDING_RESULTS}", "rate_limit_exceeded")
+            return Result(key, deepcopy(item))
+        if kind != "message":
+            raise ProtocolError("Unsupported response item", param="item.type")
+        if item.get("role") != "user" or not isinstance(item.get("content"), list):
+            raise ProtocolError("Expected a user message", param="item")
+        parts = item["content"]
+        if not parts or any(
+            not isinstance(p, dict)
+            or p.get("type") not in {"input_text", "input_image"}
+            or (p["type"] == "input_text" and not isinstance(p.get("text"), str))
+            for p in parts
+        ):
+            raise ProtocolError("Unsupported message content", param="item.content")
+        if len(self.messages) >= MAX_QUEUED_ITEMS:
+            raise ProtocolError(f"Too many queued response items: at most {MAX_QUEUED_ITEMS}", "rate_limit_exceeded")
+        return Typed(deepcopy(item))
+
+    def commit_item(self, prepared: Result | Typed) -> None:
+        """Consume the already checked exact item, without an intervening await or frontier re-read."""
+        if isinstance(prepared, Result):
+            self.results.append(prepared)
+            self.observe("tool.result.received", call_id=prepared.key, name=self.routes[prepared.key].name)
+        else:
+            self.messages.append(prepared)
+            text = "\n".join(p.get("text", "") for p in prepared.item["content"] if p.get("type") == "input_text")
+            self.observe("input.typed", text=text, chars=len(json.dumps(prepared.item)))
 
     def item(self, item: dict) -> None:
         """Take a result or a typed user message from ``response.item.create``; raise ``ProtocolError`` to refuse it."""
@@ -338,6 +409,113 @@ class ServerDelegation:
         self.composed: str | None = None
         self._closing = False
         self._opened = self._closed = False
+        self.mailbox: DeliveryMailbox | None = None
+        self._reconciled_output = False
+        self._attached = True
+        self.on_mailbox_full: Callable[[], None] | None = None
+        self._attachment_ready = asyncio.Event()
+        self._attachment_ready.set()
+        self._control_openings: dict[str, asyncio.Task] = {}
+
+    async def reconnect_supported(self) -> bool:
+        """Require an explicit attachment boundary on the actual core client."""
+        check = getattr(self.client, "attachment_supported", None)
+        return await check() if check is not None else callable(getattr(self.client, "set_attachment", None))
+
+    def retain_attachments(self) -> None:
+        """Enable bounded canonical delivery evidence for this logical call."""
+        self.mailbox = DeliveryMailbox()
+
+    async def suspend_attachment(self) -> None:
+        """Fence the frontend and effects, retaining accepted requests, readers, results and the core lease."""
+        self._attached = False
+        self._attachment_ready.clear()
+        self.listener = None
+        if self.relay is not None:
+            self.relay.forward = False
+        if self.mailbox is not None and self.routes is not None:
+            self.mailbox.disconnected(self.routes)
+        if self.conversation is not None:
+            await self.client.set_attachment(self.conversation, False)
+
+    async def resume_attachment(self) -> dict:
+        """Restore the retained frontier to the new listener while public forwarding remains fenced."""
+        current = {}
+        if self.mailbox is not None and self.mailbox.exhausted:
+            raise MailboxFull()
+        if self.conversation is not None:
+            current = await self.client.set_attachment(self.conversation, True)
+        if self.mailbox is not None:
+            if self.mailbox.exhausted:
+                raise MailboxFull()
+            self.mailbox.revalidate_calls(set(current.get("pending_calls", [])))
+        if self.mailbox is not None and self.listener is not None:
+            calls: set[str] = set()
+            for entry in self.mailbox.replay():
+                if entry.request_state is not None:
+                    self._hand_request(entry.request_ref, entry.request_state, entry.delegation_id)
+                    continue
+                restore_provenance = getattr(self.listener, "restore_work_provenance", None)
+                if entry.forwarded and WORK_PROVENANCE_KEY in entry.event and callable(restore_provenance):
+                    restore_provenance(entry.delegation_id, deepcopy(entry.event))
+                item = entry.event.get("item") or {}
+                kind = entry.event.get("type")
+                if kind == "response.created":
+                    calls.discard(entry.delegation_id)
+                elif item.get("type") == "function_call":
+                    calls.add(entry.delegation_id)
+                terminal = kind in TERMINALS
+                if terminal and entry.forwarded and (kind != "response.completed" or entry.delegation_id not in calls):
+                    restore_terminal = getattr(self.listener, "restore_terminal", None)
+                    if restore_terminal is not None:
+                        restored = {**entry.event, "_nva_lost": True} if entry.lost else entry.event
+                        restore_terminal(entry.delegation_id, restored)
+                        continue
+                if entry.lost:
+                    entry.forwarded = True
+                    self.listener.on_delegation_lost(entry.delegation_id)
+                    continue
+                if item.get("type") == "message" and entry.forwarded:
+                    restore_progress = getattr(self.listener, "restore_progress", None)
+                    if restore_progress is not None and item.get("phase") == "commentary":
+                        restore_progress(entry.delegation_id, item)
+                    restore_final = getattr(self.listener, "restore_final", None)
+                    if restore_final is not None and item.get("phase", "final_answer") != "commentary":
+                        restore_final(entry.delegation_id)
+                    continue
+                entry.forwarded = True
+                self.listener.on_delegation_event(entry.delegation_id, deepcopy(entry.event))
+        self._attached = True
+        self._attachment_ready.set()
+        return current
+
+    async def relay_pending_calls(self, current: dict) -> None:
+        """Enable public forwarding after admission and send only revalidated, never-emitted calls."""
+        if self.mailbox is not None and self.mailbox.exhausted:
+            raise MailboxFull()
+        if self.relay is not None:
+            self.relay.forward = True
+        if self.mailbox is None or self.view is None:
+            return
+        # Revalidate after normal delivery is active: an asynchronous core client can wake a worker during
+        # resume_attachment(), after its first snapshot but before this attachment can receive that call.
+        if self.conversation is not None:
+            current = await self.client.set_attachment(self.conversation, True)
+        if self.mailbox.exhausted:
+            raise MailboxFull()
+        allowed = set(current.get("pending_calls", []))
+        self.mailbox.revalidate_calls(allowed)
+        for entry in self.mailbox.entries:
+            item = entry.event.get("item") or {}
+            key = item.get("call_id")
+            if item.get("type") != "function_call" or key in self.mailbox.emitted or key not in allowed:
+                continue
+            await self.view.emit_paced(
+                "response.event",
+                before_publish=partial(self.mailbox.claim_call, key),
+                delegation_id=entry.delegation_id,
+                event=sanitize_response_event(entry.event),
+            )
 
     async def open(self, view: DelegationView | None) -> None:
         """Open the session's conversation with the core, then build the call routes and the relay.
@@ -366,7 +544,7 @@ class ServerDelegation:
             ) from None
         # Closed while the core created or attached it: nothing else would delete it (a kept one stays kept).
         if self._closed:
-            await self.client.delete_conversation(conversation["id"])
+            await self._delete(conversation["id"])
             return
         self.conversation = conversation["id"]
         self.routes = ClientRoutes(self.observe)
@@ -388,12 +566,25 @@ class ServerDelegation:
             async with asyncio.timeout(limit):
                 return await self.client.update_conversation(conversation_id, metadata)
         except TimeoutError:
-            raise RuntimeError(f"The delegation core did not attach the conversation within {limit:g} s") from None
+            failure = RuntimeError(f"The delegation core did not attach the conversation within {limit:g} s")
+            _log_conversation_failure(failure, "attach")
+            raise failure from None
         except LookupError:
             raise ProtocolError(
                 "The conversation to continue is unknown, has ended, or serves another call",
                 param=CONVERSATION_PARAM,
             ) from None
+        except Exception as refused:
+            _log_conversation_failure(refused, "attach")
+            raise
+
+    async def _delete(self, conversation_id: str) -> dict:
+        """Delete a conversation, retaining the original failure only for the internal caller."""
+        try:
+            return await self.client.delete_conversation(conversation_id)
+        except Exception as failure:
+            _log_conversation_failure(failure, "delete")
+            raise
 
     def stop_handing(self) -> None:
         """Close step 2: send no new request and hand the frontend nothing; the readers still relay to the client."""
@@ -408,13 +599,18 @@ class ServerDelegation:
         if self._closed:
             return
         self._closed = self._closing = True
+        self._attachment_ready.set()
         conversation, self.conversation = self.conversation, None
         for check in list(self.checks):
             check.cancel()
         try:
             await self.sender.close()
+            openings = tuple(self._control_openings.values())
+            for opening in openings:
+                opening.cancel()
+            await asyncio.gather(*openings, return_exceptions=True)
             if conversation is not None:
-                deleted = await self.client.delete_conversation(conversation)
+                deleted = await self._delete(conversation)
                 if deleted.get("deleted") is False:
                     self.conversation = conversation
             if self.readers:
@@ -436,6 +632,20 @@ class ServerDelegation:
         """The session's acknowledgement delay, read when asked; 0 (at once) without a live session."""
         return self.view.acknowledgement_delay_ms if self.view is not None else 0
 
+    def begin_caller_turn(self) -> Callable[[], None] | None:
+        """Use the in-process routing hold when this delegation client offers it."""
+        begin = getattr(self.client, "begin_caller_turn", None)
+        if callable(begin) and self.conversation is not None and not self._closing and self._attached:
+            settle = begin(self.conversation)
+            if settle is not None:
+
+                def attached_settle() -> None:
+                    if not self._closing and self._attached:
+                        settle()
+
+                return attached_settle
+        return None
+
     async def delegate(self, input: list[dict]) -> str:
         """Delegate a request and return its delegation id once the core accepts it; a refusal raises."""
         self._check_open()
@@ -456,6 +666,8 @@ class ServerDelegation:
             raise RuntimeError("Session is closing")
         if self.conversation is None:
             raise RuntimeError("The server delegation is not open")
+        if not self._attached:
+            raise ProtocolError("The caller attachment is unavailable", "session_reconnecting")
 
     def listen(self, listener: DelegationEvents) -> None:
         """Hand every event of every delegation, typed runs included, to ``listener``."""
@@ -463,6 +675,7 @@ class ServerDelegation:
 
     async def _send(self, request: Request) -> bool:
         """Send one request for the sender, settle its outcome, and return whether the core accepted it."""
+        await self._attachment_ready.wait()
         if self.conversation is None or self._closing:
             if not request.outcome.done():
                 request.outcome.set_exception(RuntimeError("Session is closing"))
@@ -472,18 +685,42 @@ class ServerDelegation:
             metadata = {LIVE_SESSION_ID: self.view.id, **metadata}
         if request.typed_run:
             metadata[TYPED_RUN] = "true"
+        input_items = deepcopy(request.input)
+        context = None
+        if request.starts and input_items:
+            context = input_items[0].pop(CALLER_CONTEXT, None)
+            if isinstance(excerpt := input_items[0].pop(CALLER_EXCERPT, None), str):
+                metadata[CALLER_EXCERPT] = excerpt
         params = {
             **request_settings(self.view.responses if self.view is not None else None),
-            "input": deepcopy(request.input),
+            "input": input_items,
             "conversation": self.conversation,
             "metadata": metadata,
             "stream": True,
             "background": True,
             "store": False,
         }
+        if request.starts:
+            try:
+                self._request_state(request.delegation_id, "submitted", request.delegation_id)
+            except MailboxFull as error:
+                if not request.outcome.done():
+                    request.outcome.set_exception(error)
+                return False
         try:
-            stream = await self.client.create_response(params)
+            client = self.client
+            stream = (
+                await client.create_response_with_caller_context(params, context)
+                if context is not None and isinstance(client, CallerContextClient)
+                else await client.create_response(params)
+            )
+        except asyncio.CancelledError:
+            if request.starts:
+                self._request_state(request.delegation_id, "cancelled", request.delegation_id)
+            raise
         except Exception as refused:
+            if request.starts:
+                self._request_state(request.delegation_id, "failed", request.delegation_id)
             code = getattr(refused, "code", None)
             if isinstance(code, str):
                 refusal = ProtocolError(str(refused), code)
@@ -497,21 +734,66 @@ class ServerDelegation:
                 request.outcome.set_exception(refusal)
             return False
         # An accepted request gets its reader even when its caller gave up, so no accepted work goes unread.
+        try:
+            if request.starts:
+                self._request_state(request.delegation_id, "accepted", request.delegation_id)
+        finally:
+            self._start_reader(request, stream)
+        if not request.outcome.done():
+            request.outcome.set_result(request.delegation_id)
+        return True
+
+    def _request_state(self, request_ref: str, state: DelegationRequestState, delegation_id: str | None = None) -> None:
+        """Journal new-source submission before dispatch, then report only descriptive transport facts."""
+        entry = None
+        try:
+            if self.mailbox is not None:
+                entry = self.mailbox.record_request(request_ref, state, delegation_id)
+                if entry is None:
+                    return
+        except MailboxFull:
+            self._mailbox_full()
+            if state == "submitted":
+                raise  # No unjournalled request has been sent yet.
+            # Acceptance cannot be undone. The accepted stream still gets its owned reader as the call closes.
+        if not self._closing and self._attached:
+            if entry is not None:
+                entry.forwarded = True
+            if not self._hand_request(request_ref, state, delegation_id) and state == "submitted":
+                self._request_state(request_ref, "failed", delegation_id)
+                raise RuntimeError("The frontend could not register the submitted request")
+
+    def _mailbox_full(self) -> None:
+        """Fence new work once before the session's close owner runs."""
+        if not self._closing:
+            self.stop_handing()
+            if self.on_mailbox_full is not None:
+                self.on_mailbox_full()
+
+    def _hand_request(self, request_ref: str, state: DelegationRequestState, delegation_id: str | None = None) -> bool:
+        callback = getattr(self.listener, "on_delegation_request", None)
+        if callable(callback):
+            try:
+                callback(request_ref, state, delegation_id)
+            except Exception:
+                logger.exception(f"The frontend could not take delegation request state {request_ref}")
+                return False
+        return True
+
+    def _start_reader(self, request: Request, stream: ResponseStream) -> None:
+        """Keep every producer on the same per-source response ordering and cleanup path."""
         previous = self._newest_reader.get(request.delegation_id)
         reader = asyncio.create_task(self._read(request, stream, previous), name="delegation-reader")
         self._newest_reader[request.delegation_id] = reader
         self.readers.add(reader)
         reader.add_done_callback(self.readers.discard)
         reader.add_done_callback(lambda done: self._reader_ended(request.delegation_id, done))
-        if not request.outcome.done():
-            request.outcome.set_result(request.delegation_id)
-        return True
 
     def _reader_ended(self, delegation_id: str, reader: asyncio.Task) -> None:
         if self._newest_reader.get(delegation_id) is reader:
             del self._newest_reader[delegation_id]
 
-    async def _read(self, request: Request, stream: AsyncIterator[dict], previous: asyncio.Task | None) -> None:
+    async def _read(self, request: Request, stream: ResponseStream, previous: asyncio.Task | None) -> None:
         """Hand each event of a request to the frontend, then relay it to the client, until its stream ends.
 
         It starts once ``delegate()`` returned and the delegation's ``previous`` reader ended, so events stay in order.
@@ -522,7 +804,10 @@ class ServerDelegation:
         delegation_id = request.delegation_id
         announcing = request.starts
         ended, sequence = False, None
+        response_id = None
         try:
+            if self.mailbox is not None and self.mailbox.exhausted:
+                raise MailboxFull()
             async for event in stream:
                 kind = event.get("type") if isinstance(event, dict) else None
                 ended = ended or kind in TERMINALS
@@ -530,42 +815,88 @@ class ServerDelegation:
                     sequence = event["sequence_number"]
                 if kind == "response.created" and isinstance(event.get("response"), dict):
                     self.composed = event["response"].get("instructions") or self.composed
-                if not self._closing:
+                    response_id = event["response"].get("id")
+                entry = None
+                if self.mailbox is not None:
+                    if self.mailbox.exhausted:
+                        raise MailboxFull()
+                    entry = self.mailbox.record(delegation_id, event, response_id=response_id)
+                    if entry == DUPLICATE:
+                        if kind == "response.created":
+                            announcing = False
+                        continue
+                if not self._closing and self._attached:
+                    if entry is not None and self.listener is not None:
+                        entry.forwarded = True  # A mutating callback may fail after queuing presentation.
                     self._hand(delegation_id, event)
                 announce = announcing and kind == "response.created"
                 if announce:
                     announcing = False
                 if self.relay is not None:
                     await self._relay(request, event, announce)
+        except MailboxFull:
+            self._mailbox_full()
+            try:
+                await stream.aclose()
+            except Exception as error:
+                logger.warning(
+                    f"Could not close a response stream after exhausting its journal: {type(error).__name__}"
+                )
+            return
         except Exception:
             logger.exception(f"The stream of delegation {delegation_id} failed")
         if not ended and not self._closing:
             await self._lost(request, sequence)
+        if request.starts and announcing and not self._closing:
+            # No source frame reached the listener; do not retain a first-event hold after its stream ended.
+            self._request_state(request.request_ref or request.delegation_id, "lost", request.delegation_id)
 
-    def _hand(self, delegation_id: str, event: dict) -> None:
+    def _hand(self, delegation_id: str, event: dict) -> bool:
         """Hand one event to the frontend; its failure must not stop the delegation's relay."""
         if self.listener is None:
-            return
+            return False
         try:
             self.listener.on_delegation_event(delegation_id, event)
+            return True
         except Exception:
             logger.exception(f"The frontend could not take an event of delegation {delegation_id}")
+            return False
 
     async def _relay(self, request: Request, event: dict, announce: bool) -> None:
         delegation_id = request.delegation_id
         try:
+            before_publish = None
+            if self.mailbox is not None and event.get("type") == "response.output_item.done":
+                item = event.get("item") or {}
+                if item.get("type") == "function_call":
+                    before_publish = partial(self.mailbox.claim_call, item["call_id"])
             if announce:
                 response_id = event["response"]["id"]
                 await self.relay.announce(delegation_id, response_id, request.offset_ms, request.client_event_id)
-            await self.relay.backend_event(delegation_id, event, request.client_event_id)
+            await self.relay.backend_event(delegation_id, event, request.client_event_id, before_publish=before_publish)
         except Exception:
             logger.exception(f"An event of delegation {delegation_id} could not be relayed; it is skipped")
 
     async def _lost(self, request: Request, sequence: int | None) -> None:
         delegation_id = request.delegation_id
         logger.warning(f"The stream of delegation {delegation_id} ended before its response did")
+        entry = None
+        if self.mailbox is not None and self.relay is not None:
+            response_id = self.relay.responses.get(delegation_id)
+            if response_id is not None:
+                try:
+                    entry = self.mailbox.record(delegation_id, lost_response(response_id, sequence))
+                    if entry == DUPLICATE:
+                        return
+                    if entry is not None:
+                        entry.lost = True
+                except MailboxFull:
+                    self._mailbox_full()
+                    return
         if self.listener is not None:
             try:
+                if entry is not None:
+                    entry.forwarded = True
                 self.listener.on_delegation_lost(delegation_id)
             except Exception:
                 logger.exception(f"The frontend could not take the loss of delegation {delegation_id}")
@@ -614,38 +945,102 @@ class ServerDelegation:
         except Exception:
             logger.exception("The delegation core could not check the session's settings")
 
+    def prepare_item_create(self, item: dict) -> Callable:
+        """Prepare input for the original waiting frame or preserve late evidence on a retained call."""
+        key = item.get("call_id")
+        call = self.mailbox.recovering_calls.get(key) if self.mailbox is not None and isinstance(key, str) else None
+        if (
+            call is not None
+            and call.state == "waiting"
+            and key in self.routes.routes
+            and key not in self.routes.answered
+        ):
+            if item.get("type") != "function_call_output" or not isinstance(item.get("output"), (str, list)):
+                raise ProtocolError("A recovered call requires its function output", param="item")
+            existing = next((result for result in self.routes.results if result.key == key), None)
+            if existing is not None:
+                if existing.item["output"] != item["output"]:
+                    raise ProtocolError("The recovered call already has a different result", param="item.output")
+                return lambda: None
+        elif call is not None:
+            if item.get("type") != "function_call_output" or not isinstance(item.get("output"), str):
+                raise ProtocolError("Late evidence requires the exact call and a string output", param="item")
+            if not callable(getattr(self.client, "reconcile_tool_outputs", None)):
+                raise ProtocolError("This Core cannot reconcile late action evidence", "action_outcome_unclear")
+            frozen = deepcopy(item)
+
+            async def evidence_only():
+                try:
+                    receipt = await self.client.reconcile_tool_outputs(self.conversation, [frozen])
+                except ValueError as refused:
+                    raise ProtocolError(str(refused), getattr(refused, "code", None) or "invalid_value") from None
+                if key not in receipt.get("recorded_call_ids", ()) or receipt.get("resumed") is not False:
+                    raise ProtocolError("Core did not confirm the original result", "action_outcome_unclear")
+                self.mailbox.record_result(key)
+                if key in self.routes.routes:
+                    self.routes.answered.add(key)
+                self._reconciled_output = True
+                self.observe("tool.late_evidence.recorded", call_id=key, resumed=False)
+
+            return evidence_only
+        prepared = self.routes.prepare_item(item)
+        return lambda: self.routes.commit_item(prepared)
+
+    def prepare_response_create(self, client_event_id: str | None) -> Callable[[], None]:
+        """Capture the exact ready continuations without consuming any result or request."""
+        self._check_open()
+        continuations = self.routes.requests()
+        if (
+            self._reconciled_output
+            and len(continuations) == 1
+            and continuations[0].delegation_id is None
+            and not continuations[0].messages
+        ):
+            # The result already reached Core through its evidence-only path.
+            continuations = []
+
+        def commit() -> None:
+            self._reconciled_output = False
+            batch = []
+            for continuation in continuations:
+                self.routes.sending(continuation)
+                request = Request(
+                    continuation.input,
+                    continuation.delegation_id or uid("item"),
+                    offset_ms=self._clock(),
+                    starts=continuation.delegation_id is None,
+                    typed_run=continuation.delegation_id is None,
+                    client_event_id=client_event_id,
+                )
+                request.returned.set()
+                request.outcome.add_done_callback(partial(self._settled, continuation, request), context=copy_context())
+                batch.append(request)
+            if batch:
+                self.sender.put(*batch)
+
+        return commit
+
     async def item_create(self, item: dict, client_event_id: str | None) -> None:
-        """Take a result for a relayed call, or a typed user message, or refuse it at once (``ProtocolError``)."""
-        self.routes.item(item)
+        """Take ordinary input, or reconcile trusted late evidence without resuming business work."""
+        commit = self.prepare_item_create(item)
+        result = commit()
+        if inspect.isawaitable(result):
+            await result
 
     async def response_create(self, client_event_id: str | None) -> None:
         """Queue a continuation for each waiting response whose results the client completed, or a typed run.
 
         It returns once the requests are queued, so the core's answer never holds the command lock.
         """
-        self._check_open()
-        batch = []
-        for continuation in self.routes.requests():
-            self.routes.sending(continuation)
-            request = Request(
-                continuation.input,
-                continuation.delegation_id or uid("item"),
-                offset_ms=self._clock(),
-                starts=continuation.delegation_id is None,
-                typed_run=continuation.delegation_id is None,
-                client_event_id=client_event_id,
-            )
-            # The client's own request: no frontend waits for its id.
-            request.returned.set()
-            # Settled in this command's context, so a refusal reaches the connection that sent the command.
-            request.outcome.add_done_callback(partial(self._settled, continuation, request), context=copy_context())
-            batch.append(request)
-        self.sender.put(*batch)
+        self.prepare_response_create(client_event_id)()
 
     def _settled(self, continuation: Continuation, request: Request, outcome: asyncio.Future) -> None:
         """Settle a request of the client's own: drop or keep what it carries, and report a refusal to the client."""
         if not outcome.cancelled() and outcome.exception() is None:
             self.routes.sent(continuation)
+            if self.mailbox is not None:
+                for result in continuation.results:
+                    self.mailbox.record_result(result.key)
             return
         refusal = None if outcome.cancelled() else outcome.exception()
         if isinstance(refusal, ProtocolError) and refusal.code == "invalid_value":

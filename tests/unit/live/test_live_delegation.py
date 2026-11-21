@@ -12,6 +12,9 @@ import traceback
 import unittest
 from unittest import mock
 
+from loguru import logger
+
+from examples.shared.delegation_contract import CALLER_CONTEXT, CALLER_EXCERPT
 from gateways.live.client_delegation import ClientDelegation
 from gateways.live.gateway.websocket import PrimarySocketView
 from gateways.live.protocol import ProtocolError, SessionConfig
@@ -70,7 +73,9 @@ class View:
     async def emit(self, kind, **fields):
         self.events.append((kind, fields))
 
-    emit_paced = emit
+    async def emit_paced(self, kind, *, before_publish=None, **fields):
+        if before_publish is None or before_publish():
+            await self.emit(kind, **fields)
 
 
 class Case(unittest.IsolatedAsyncioTestCase):
@@ -124,6 +129,29 @@ class Case(unittest.IsolatedAsyncioTestCase):
 
 
 class ConversationTests(Case):
+    async def test_a_delete_failure_keeps_the_original_exception_and_its_chain(self):
+        class TransportFailure(Exception):
+            def __init__(self, operation, detail):
+                super().__init__(operation, detail)
+
+        await self.start(config=responses_config(store=True))
+        failure = TransportFailure("DELETE", f"Transport lost for {self.core.CONVERSATION}")
+        cause, context = OSError("original transport cause"), ValueError("original context")
+        failure.__cause__, failure.__context__ = cause, context
+        failure.add_note("original diagnostic note")
+        self.core.fail["delete"] = failure
+        logged = []
+        self.addCleanup(logger.remove, logger.add(logged.append, format="{message}", diagnose=True))
+        with self.assertRaises(TransportFailure) as raised:
+            await self.session.delegation.close()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(failure.args, ("DELETE", f"Transport lost for {self.core.CONVERSATION}"))
+        self.assertIs(failure.__cause__, cause)
+        self.assertIs(failure.__context__, context)
+        self.assertEqual(failure.__notes__, ["original diagnostic note"])
+        self.assertIn("conversation_delete_failed reference=delete_", "".join(logged))
+        self.assertNotIn(self.core.CONVERSATION, "".join(logged))
+
     async def test_a_start_that_fails_or_times_out_closes_the_session(self):
         for step, fault, log in (
             ("create", RuntimeError("the core cannot create a conversation"), ["create", "close"]),
@@ -569,8 +597,11 @@ class PartTests(Case):
         with self.assertRaisesRegex(RuntimeError, "listen"):
             await part.delegate(HI)
         part.listen(core)
-        delegation_id = await part.delegate(HI)
-        self.assertEqual([request["metadata"] for request in core.requests], [{"live_delegation_id": delegation_id}])
+        context = {"caller_turns": [(1, "Hi.")], "playback": []}
+        delegation_id = await part.delegate([{**HI[0], CALLER_EXCERPT: "Hi.", CALLER_CONTEXT: context}])
+        [request] = core.requests
+        self.assertEqual(request["metadata"], {"live_delegation_id": delegation_id, CALLER_EXCERPT: "Hi."})
+        self.assertEqual(request["input"], HI)
         self.assertEqual(core.heard, [])
         await self.until(lambda: len(core.heard) == 2)
 

@@ -27,13 +27,21 @@ def said(items: Iterable[dict]) -> list[dict]:
             continue
         text = item_text(item.get("content")).strip()
         if text:
-            messages.append({"role": item.get("role", "user"), "text": text})
+            rendered = {"role": item.get("role", "user"), "text": text}
+            if item.get("id"):
+                rendered["id"] = item["id"]
+            messages.append(rendered)
     return messages
 
 
 def request(given: Request) -> dict:
     """Render one request: its delegation id and its messages."""
-    return {"delegation_id": given.delegation_id, "messages": said(given.input)}
+    rendered = {"delegation_id": given.delegation_id, "messages": said(given.input)}
+    if given.caller_lines:
+        rendered["caller_lines"] = list(given.caller_lines)
+    if given.delivery == "pending":
+        rendered["delivery"] = "pending"
+    return rendered
 
 
 def task(summary: TaskSummary) -> dict:
@@ -46,11 +54,25 @@ def task(summary: TaskSummary) -> dict:
         "acted": summary.acted,
         "progress": summary.progress,
         "seconds": round(summary.seconds, SECONDS_DIGITS),
+        "stop": summary.stop,
     }
+    for name in ("continues", "successor_task_id", "successor_work_id", "steering"):
+        value = getattr(summary, name)
+        if value is not None:
+            rendered[name] = value
+    if summary.tool_results or summary.tool_results_omitted:
+        rendered["tool_results"] = list(summary.tool_results)
+        rendered["tool_results_omitted"] = summary.tool_results_omitted
+    if summary.answer_publication != "none":
+        rendered["answer_publication"] = summary.answer_publication
     if summary.question:
         rendered["question"] = summary.question
+    if summary.questions:
+        rendered["questions"] = list(summary.questions)
     if summary.answer:
         rendered["answer"] = summary.answer
+    if summary.answer_end:
+        rendered["answer_end"] = summary.answer_end
     return rendered
 
 
@@ -75,8 +97,19 @@ def round_input(given: ConductorInput) -> dict:
     """
     data = {
         "conversation": said(given.conversation[given.new_from :]),
+        "routing_targets": given.routing_targets(),
         "works": [work(each) for each in given.works],
         "new_requests": [request(each) for each in given.arrivals],
     }
+    if given.available_worker_slots is not None:
+        data["available_worker_slots"] = given.available_worker_slots
+    if given.attempt > 1:
+        data["placement_attempt"] = given.attempt
+    if given.decision_rejection is not None:
+        data["decision_rejection"] = given.decision_rejection
+    if given.clarifications:
+        data["pending_clarifications"] = list(given.clarifications)
+    if given.control_actions:
+        data["control_actions"] = list(given.control_actions)
     text = json.dumps(data, ensure_ascii=False)
     return {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}

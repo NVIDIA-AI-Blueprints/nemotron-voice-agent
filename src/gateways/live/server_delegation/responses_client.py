@@ -6,7 +6,18 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from examples.shared.delegation_contract import CallerContext
+
+
+@runtime_checkable
+class AttachmentClient(Protocol):
+    """Optional process-local retention boundary; ordinary Responses clients need not offer it."""
+
+    async def set_attachment(self, conversation_id: str, attached: bool) -> dict:
+        """Fence or restore caller-owned effects; report current pending calls only after reattachment."""
 
 
 class ResponseStream(Protocol):
@@ -17,6 +28,14 @@ class ResponseStream(Protocol):
 
     async def aclose(self) -> None:
         """Stop reading; a stateless request's one-shot work ends with it."""
+
+
+@runtime_checkable
+class CallerContextClient(Protocol):
+    """Accept frontend evidence alongside a local Responses request."""
+
+    async def create_response_with_caller_context(self, params: dict, context: CallerContext) -> ResponseStream:
+        """Admit the request with private evidence for its transcript."""
 
 
 class ResponsesClient(Protocol):

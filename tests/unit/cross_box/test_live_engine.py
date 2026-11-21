@@ -23,6 +23,7 @@ from pipecat.observers.base_observer import BaseObserver
 from pipecat.processors.frame_processor import FrameProcessor
 
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
+from examples.frontend_backend_live.attachment import export_attachment
 from examples.frontend_backend_live.delegation_core.im.input import compose
 from examples.frontend_backend_live.heard_log import Heard
 from examples.frontend_backend_live.prompts import load_prompts
@@ -130,6 +131,100 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
 
 
 class DelegationTests(EngineCase):
+    async def test_the_next_worker_receives_completed_writer_wording_separately_from_its_original_proposal(self):
+        proposal = (
+            "The exchange would refund $16.63 to your original card ending in 2478 within 5-7 business days. "
+            "Please confirm whether to exchange both items."
+        )
+        worded = "Please confirm whether to exchange both items."
+        followup = "I need to confirm the full details first."
+        await self.serve(
+            RESPONSES_SESSION,
+            [
+                decision("delegate", "Let me check."),
+                [chunk(proposal, finish="stop")],
+                decision("speak", worded),
+                decision("delegate", "One moment."),
+                [chunk(followup, finish="stop")],
+                decision("speak", followup),
+            ],
+        )
+        await self.stt.say("Exchange my items.")
+        await self.heard("items.")
+        await self.until(lambda: not self.engine.voice.spoken.in_flight(), "completed frontend proposal wording")
+        played = next(line for line in self.engine.voice.spoken.presentations if line.text == worded)
+        original = next(
+            row["event"]["item"]
+            for row in self.ws.from_server
+            if row["type"] == "response.event"
+            and row["event"]["type"] == "response.output_item.done"
+            and row["event"]["item"]["type"] == "message"
+            and row["event"]["item"]["content"][0]["text"] == proposal
+        )
+        source = (await self.ws.wait_for("session.delegation.created"))["delegation"]["id"]
+        im = self.hook.client.service.sessions[self.live_session.delegation.conversation]
+        (branch_ref,) = im.ownership.branches
+        result = {"delegation_id": source, "item_id": original["id"], "branch_ref": branch_ref}
+        snapshot = export_attachment(self.engine.voice)
+        saved = next(row for row in snapshot["heard"] if row["line"] == played.number)
+        self.assertEqual(saved["generated_text"], worded)
+        self.assertEqual(saved["results"], [{**result, "task_ref": "W1.1"}])
+        await self.stt.say("Yes, proceed.")
+        await self.heard("first.")
+        followup_source = next(
+            row["delegation"]["id"]
+            for row in reversed(self.ws.from_server)
+            if row["type"] == "session.delegation.created"
+        )
+        context = im._caller_context[followup_source]
+        self.assertEqual([text for _, text in context["caller_turns"]], ["Yes, proceed."])
+        recorded = next(receipt for receipt in context["playback"] if receipt["line_id"] == played.number)
+        self.assertEqual(recorded["recorded_sentence_prefix"], worded)
+        self.assertEqual(recorded["results"], saved["results"])
+        backend = [
+            request for request in self.chat.requests if request["messages"][0]["content"].startswith("Look things up.")
+        ]
+        self.assertEqual(len(backend), 2)
+        self.assertTrue(
+            any(
+                message.get("role") == "assistant" and message.get("content") == proposal
+                for message in backend[1]["messages"]
+            )
+        )
+        delivered = next(
+            message["content"]
+            for message in backend[1]["messages"]
+            if message.get("role") == "user" and "Caller: Yes, proceed." in str(message.get("content"))
+        )
+        receipts = [
+            json.loads(line.partition(": ")[2]) for line in delivered.splitlines() if line.startswith("Agent: ")
+        ]
+        completed = next(receipt for receipt in receipts if receipt["kind"] == "result")
+        self.assertEqual(
+            completed,
+            {
+                "line_id": played.number,
+                "kind": "result",
+                "playback_state": "complete",
+                "audio_started": True,
+                "recorded_sentence_prefix": worded,
+                "complete_conveyance": True,
+                "delegation_ids": [source],
+                "work_refs": [branch_ref],
+                "results": [result],
+            },
+        )
+        self.assertNotIn("16.63", json.dumps(completed))
+        self.assertLess(delivered.index(worded), delivered.index("Caller: Yes, proceed."))
+        self.assertTrue(
+            any(
+                receipt["kind"] == "lead_in" and receipt["recorded_sentence_prefix"] == "Let me check."
+                for receipt in receipts
+            )
+        )
+        remaining = self.engine.voice.heard_log.delegation_input()[0][0]["content"][0]["text"]
+        self.assertNotIn(worded, remaining, "accepted input consumes the old presentation receipt once")
+
     async def test_the_clients_tool_runs_and_its_answer_is_spoken(self):
         answer = "We have Earl Grey and Matcha."
         script = [decision("delegate", "Let me check."), menu_call(), [chunk(answer, finish="stop")]]
@@ -193,9 +288,11 @@ class DelegationTests(EngineCase):
         self.assertNotIn("error", self.ws.kinds())
         self.assertEqual(self.chat.requests[0]["model"], "client/agent-model")
         question = PROMPTS.context_label + "Where is my order?"
-        wording = self.chat.requests[1]["messages"][-1]
+        messages = self.chat.requests[1]["messages"]
+        wording = messages[-1]
         self.assertEqual(wording["role"], "user")
-        self.assertTrue(wording["content"].startswith(f"{question}\n"), wording["content"])
+        self.assertIn({"role": "user", "content": question}, messages[:-1])
+        self.assertTrue(wording["content"].startswith(PROMPTS.update_label + answer), wording["content"])
         context = [(m["role"], m["content"], m["kind"]) for m in self.engine.voice.conversation()]
         self.assertIn(("user", question, "typed"), context)
         self.assertNotIn("caller", [kind for _, _, kind in context])
@@ -214,7 +311,15 @@ class DelegationTests(EngineCase):
         await self.heard("sunny")
         update = self.chat.requests[1]["messages"][-1]["content"]
         self.assertIn("Weather: sunny, 72 degrees.", update)
-        self.assertIn('(the caller already heard: "One moment."; do not say that again)', update)
+        evidence, _ = json.JSONDecoder().raw_decode(update.partition("(presentation evidence: ")[2])
+        (lead_in,) = evidence
+        self.assertEqual(
+            (lead_in["text"], lead_in["state"], lead_in["recorded_sentence_prefix"]),
+            ("One moment.", "heard", "One moment."),
+        )
+        self.assertTrue(lead_in["audio_started"])
+        self.assertTrue(lead_in["complete_conveyance"])
+        self.assertEqual(lead_in["delegation_ids"], [created["id"]])
         schema = self.chat.requests[1]["response_format"]["json_schema"]["schema"]
         self.assertEqual(schema["properties"]["action"]["enum"], ["speak"])
         self.assertEqual(len(self.chat.requests), 2)
@@ -230,6 +335,7 @@ class DelegationTests(EngineCase):
         await self.heard("check.")
         backend_answers.set()
         await self.heard("Grey")
+        await self.until(lambda: not self.engine.voice.spoken.in_flight(), "completed frontend result")
 
         history = await self.live_session.history()
         self.assertEqual(history, json.loads(json.dumps(history)))
@@ -246,9 +352,14 @@ class DelegationTests(EngineCase):
         self.assertIn("The caller is a regular.", request)
         self.assertIn("What teas do you have?", request)
         self.assertIn("We have Earl Grey.", json.dumps(backend["items"][1:]))
-        # The lead-in was said after that input was built, so the next delegation carries it.
-        lead_in = {"kind": Heard.AGENT, "text": f"{PROMPTS.transcript.agent}: Let me check."}
-        self.assertEqual(backend["pending"], [lead_in])
+        # Both actual frontend lines remain pending evidence until the next accepted handoff.
+        self.assertEqual([row["kind"] for row in backend["pending"]], [Heard.AGENT, Heard.AGENT])
+        pending = [json.loads(row["text"].partition(": ")[2]) for row in backend["pending"]]
+        self.assertEqual(
+            [(row["kind"], row["recorded_sentence_prefix"]) for row in pending],
+            [("lead_in", "Let me check."), ("result", "We have Earl Grey.")],
+        )
+        self.assertTrue(all(row["complete_conveyance"] for row in pending))
         im = self.hook.client.service.sessions[self.live_session.delegation.conversation]
         composed = compose("Look things up.", *im.instruction_notes())
         session_part = {"source": "delegation.responses.instructions", "text": "Look things up."}

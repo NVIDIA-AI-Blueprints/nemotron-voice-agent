@@ -70,7 +70,6 @@ class SilentLines(FrameProcessor):
         """Note ``frame``'s fact; return the frames that go on now, in order."""
         if isinstance(frame, LLMFullResponseStartFrame) and RESPONSE_KEY in frame.metadata:
             self._response, self._playing, self._held = frame.metadata[RESPONSE_KEY], False, []
-            self.lines.reached(self._response)
         elif isinstance(frame, OutputAudioRawFrame) and self._response is not None and frame.audio:
             if not self._playing:
                 self._playing = True
@@ -78,17 +77,16 @@ class SilentLines(FrameProcessor):
                 held, self._held = self._held, []
                 return [frame, *held]
         elif isinstance(frame, TTSTextFrame) and SILENT_KEY in frame.metadata:
-            if self._response is not None:
-                self.lines.dropped(self._response)
             return []
         elif isinstance(frame, TTSTextFrame) and self._response is not None and not self._playing:
             # The output sends audio in whole chunks: a short first sentence's text can come out before its audio.
             self._held.append(frame)
             return []
         elif isinstance(frame, LLMFullResponseEndFrame) and RESPONSE_KEY in frame.metadata:
-            self.lines.ended(frame.metadata[RESPONSE_KEY])
+            if self.lines.ended(frame.metadata[RESPONSE_KEY]):
+                frame.interruptible = False
             self._response, self._playing, self._held = None, False, []
         elif isinstance(frame, InterruptionFrame):
-            self.lines.cut(self._response)
+            self.lines.cut(self._response, frame.id, newest=frame.metadata.get(RESPONSE_KEY))
             self._response, self._playing, self._held = None, False, []
         return [frame]

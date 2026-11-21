@@ -17,10 +17,9 @@ from examples.frontend_backend_live.delegation_core.backend.port import (
     WorkSummary,
 )
 from examples.frontend_backend_live.delegation_core.backend.providers.translation import _is_parts
+from examples.shared.delegation_contract import CALLER_EXCERPT_CHARS
 
 from .settings import HarnessPrompts
-
-RECORD_TEXT_CHARS = 300
 
 
 def content_text(content: object) -> str:
@@ -79,6 +78,8 @@ class Renderer:
         text = content_text(item.get("content")).strip()
         if not text:
             return ""
+        if item.get("role") == "developer":
+            return json.dumps({"role": "developer", "id": item.get("id"), "content": text}, ensure_ascii=False)
         template = self.prompts.assistant if item.get("role") == "assistant" else self.prompts.user
         return template.format(text=text)
 
@@ -93,11 +94,26 @@ class Renderer:
     def conductor_input(self, given: ConductorInput, *, fresh: bool) -> str:
         """Write one ``decide()``'s input; ``fresh`` when the session has read nothing of the conversation."""
         conversation = given.conversation if fresh else given.conversation[given.new_from :]
-        arrivals = "\n\n".join(
-            self.prompts.arrival.format(delegation=request.delegation_id, text=request_text(request))
-            for request in given.arrivals
+        requests = []
+        for request in given.arrivals:
+            text = request_text(request)
+            if request.caller_lines:
+                text += "\n" + json.dumps({"caller_lines": request.caller_lines}, ensure_ascii=False)
+            requests.append(self.prompts.arrival.format(delegation=request.delegation_id, text=text))
+        arrivals = "\n\n".join(requests)
+        works = "\n".join(
+            [json.dumps({"routing_targets": given.routing_targets()}), *(self._work(work) for work in given.works)]
         )
-        works = "\n".join(self._work(work) for work in given.works)
+        if given.available_worker_slots is not None:
+            works += "\n" + json.dumps({"available_worker_slots": given.available_worker_slots})
+        if given.attempt > 1:
+            works += "\n" + json.dumps({"placement_attempt": given.attempt})
+        if given.decision_rejection is not None:
+            works += "\n" + json.dumps({"decision_rejection": given.decision_rejection})
+        if given.clarifications:
+            works += "\n" + json.dumps({"pending_clarifications": given.clarifications})
+        if given.control_actions:
+            works += "\n" + json.dumps({"control_actions": given.control_actions})
         return self.prompts.conductor_input.format(
             arrivals=arrivals or self.prompts.none,
             works=works or self.prompts.none,
@@ -106,7 +122,19 @@ class Renderer:
 
     def _work(self, work: WorkSummary) -> str:
         requests = "; ".join(
-            f"[{request.delegation_id}] {request_text(request)[-RECORD_TEXT_CHARS:]}" for request in work.requests
+            json.dumps(
+                {
+                    "delegation_id": request.delegation_id,
+                    "delivery": request.delivery,
+                    "text": (
+                        request_text(request)[-CALLER_EXCERPT_CHARS:]
+                        if request.caller_excerpt is None
+                        else request.caller_excerpt
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            for request in work.requests
         )
         return self.prompts.work.format(
             work=work.work_id,
@@ -118,13 +146,29 @@ class Renderer:
         )
 
     def _task(self, task: TaskSummary) -> str:
+        excerpt = task.answer if task.answer is not None else task.answer_end
+        state = {
+            "state": task.state,
+            "stop": task.stop,
+            "answer_publication": task.answer_publication,
+            "tool_results": task.tool_results,
+            "tool_results_omitted": task.tool_results_omitted,
+        }
+        for name in ("continues", "successor_task_id", "successor_work_id", "steering"):
+            value = getattr(task, name)
+            if value is not None:
+                state[name] = value
         return self.prompts.task.format(
             task=task.task_id,
-            state=task.state,
+            state=json.dumps(state),
             seconds=round(task.seconds),
             brief=self.prompts.brief.format(brief=task.brief) if task.brief else "",
-            question=self.prompts.question.format(question=task.question) if task.question else "",
+            question=self.prompts.question.format(question=json.dumps(task.questions, ensure_ascii=False))
+            if task.questions
+            else self.prompts.question.format(question=task.question)
+            if task.question
+            else "",
             steps=", ".join(task.steps) or self.prompts.none,
             note=task.progress or self.prompts.none,
-            answer=self.prompts.answer.format(answer=task.answer) if task.answer else "",
+            answer=self.prompts.answer.format(answer=excerpt) if excerpt else "",
         )

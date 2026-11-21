@@ -16,6 +16,7 @@ from examples.frontend_backend_live.delegation_core.api.service import (
 )
 from examples.frontend_backend_live.delegation_core.im.session import DelegationError
 from examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
+from examples.shared.delegation_contract import CallerContext
 
 
 def round_trip(value):
@@ -92,9 +93,22 @@ class LocalResponsesClient:
         """Return the model object (``GET /v1/models/{model}``); ``ValueError`` if the core does not serve it."""
         return round_trip(await _refusals_as_json(self.service.retrieve_model(round_trip(model))))
 
-    async def create_response(self, params: dict) -> LocalStream:
+    async def set_attachment(self, conversation_id: str, attached: bool) -> dict:
+        """Apply the core listener fence through the same JSON boundary as remote calls."""
+        return round_trip(await _refusals_as_json(self.service.set_attachment(round_trip(conversation_id), attached)))
+
+    def begin_caller_turn(self, conversation_id: str) -> Callable[[], None] | None:
+        """Register routing in process before the frontend starts its model call."""
+        return self.service.begin_caller_turn(conversation_id)
+
+    async def create_response(self, params: dict, *, caller_context: CallerContext | None = None) -> LocalStream:
         """Return a request's stream once the core has accepted the request (``POST /v1/responses``, streamed)."""
-        return LocalStream(await _refusals_as_json(self.service.create_response(round_trip(params))))
+        result = self.service.create_response(round_trip(params), caller_context=round_trip(caller_context))
+        return LocalStream(await _refusals_as_json(result))
+
+    async def create_response_with_caller_context(self, params: dict, context: CallerContext) -> LocalStream:
+        """Admit an in-process Live request with its frontend evidence outside the public request."""
+        return await self.create_response(params, caller_context=context)
 
     async def input_tokens(self, params: dict) -> dict:
         """Count a request's input (``POST /v1/responses/input_tokens``); ``InvalidRequest`` for what it refuses."""
@@ -103,6 +117,12 @@ class LocalResponsesClient:
     async def list_conversation_items(self, conversation_id: str) -> dict:
         """Return a conversation's items as an official list object (``GET /v1/conversations/{id}/items``)."""
         return round_trip(await _refusals_as_json(self.service.list_conversation_items(round_trip(conversation_id))))
+
+    async def reconcile_tool_outputs(self, conversation_id: str, outputs: list[dict]) -> dict:
+        """Preserve late application evidence without resuming work."""
+        return round_trip(
+            await _refusals_as_json(self.service.reconcile_tool_outputs(conversation_id, round_trip(outputs)))
+        )
 
     async def aclose(self) -> None:
         """Close every conversation the core still serves, kept ones included, then release the core by its close."""

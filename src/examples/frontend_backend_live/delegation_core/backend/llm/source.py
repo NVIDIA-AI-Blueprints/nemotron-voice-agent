@@ -5,10 +5,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar
 
-from examples.frontend_backend_live.delegation_core.backend.port import ControlTools, EndpointLookup, ToolSources
+from examples.frontend_backend_live.delegation_core.backend.port import (
+    ControlTools,
+    EndpointLookup,
+    ToolSource,
+    ToolSources,
+)
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend, provider_class, provider_for
 from examples.shared.delegation_contract import ModelEndpoint
 
@@ -80,9 +85,9 @@ class LlmSource:
                 f"The backend does not serve the model {model!r}: it is not in the model catalog"
             ) from None
 
-    def new(self) -> LlmAdapter:
+    def new(self, *, tools: Sequence[ToolSource] | None = None) -> LlmAdapter:
         """Return the backend of a new IM session: fresh server tool sources, and a failed round tried again."""
-        return LlmAdapter(self, tools=self.tools(), retryable=can_clear_up)
+        return LlmAdapter(self, tools=self.tools() if tools is None else tools, retryable=can_clear_up)
 
     def new_one_shot(self) -> LlmAdapter:
         """Return the backend of one stateless request: no server tools, and only a round that never opened tried again.

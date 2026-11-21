@@ -16,6 +16,7 @@ import signal
 import struct
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -27,10 +28,10 @@ from examples.frontend_backend_live.delegation_core.backend.harness.acp.transpor
     StdioTransport,
     WebSocketTransport,
 )
-from examples.frontend_backend_live.delegation_core.backend.harness.protocol import Role, RuntimeLaunch
+from examples.frontend_backend_live.delegation_core.backend.harness.protocol import NativeCleanup, Role, RuntimeLaunch
 from examples.frontend_backend_live.delegation_core.backend.harness.runtime import RuntimeOpener, RuntimeProcess
 from examples.frontend_backend_live.delegation_core.backend.harness.settings import HarnessSettings
-from examples.frontend_backend_live.delegation_core.backend.harness.workdir import MARKER, WorkFolder
+from examples.frontend_backend_live.delegation_core.backend.harness.workdir import MARKER, NATIVE_OWNER, WorkFolder
 from tests.unit.delegation_core.harness.doubles import AGENT_BLOCKS, PROMPTS, FakeClient, scratch
 
 HOLDER = (
@@ -110,6 +111,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 holder.kill()
         self.assertEqual((WorkFolder.sweep(self.root), folder.exists()), (1, False))
 
+    def test_a_crashed_native_owner_is_quarantined_instead_of_swept(self):
+        leftover = self.root / "work-native-owner"
+        leftover.mkdir()
+        (leftover / MARKER).write_text("999999999\n")
+        (leftover / NATIVE_OWNER).touch()
+        self.assertEqual(WorkFolder.sweep(self.root), 0)
+        self.assertTrue(leftover.exists())
+
     def test_the_environment_is_the_allowlist_and_env_only(self):
         block = {"prompts": PROMPTS, "agents": AGENT_BLOCKS, "command": ["hermes", "acp"]}
         block |= {"env": {"HERMES_HOME": "/srv/hermes"}, "pass_env": ["PATH", "UNSET_NAME"]}
@@ -139,22 +148,65 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await opener.open(Role("workers", "w"))
             # Bounded by the start timeout, not the stop grace.
             self.assertLess(time.monotonic() - started, 2)
+            await opener.wait_closed()
             self.assertEqual(list(root.iterdir()), [])
         for writer in held:
             writer.close()
 
-    async def test_closing_a_runtime_deletes_its_folder_even_on_failure(self):
+    async def test_closing_a_runtime_retains_its_folder_when_shutdown_has_no_physical_confirmation(self):
         class Stubborn(FakeClient):
             async def close(self) -> None:
                 raise RuntimeError("the agent would not stop")
 
+            async def wait_closed(self):
+                return NativeCleanup("connection", True, False)
+
         root = scratch("harness-work-")
         client, work = FakeClient(), WorkFolder.make(root)
-        await RuntimeProcess(client, work).close()
+        owner = RuntimeProcess(client, work)
+        await owner.close()
+        await owner.wait_closed()
         self.assertEqual((client.alive, work.path.exists()), (False, False))
-        with self.assertRaisesRegex(RuntimeError, "would not stop"):
-            await RuntimeProcess(Stubborn(), WorkFolder.make(root)).close()
+        uncertain = WorkFolder.make(root)
+        process = RuntimeProcess(Stubborn(), uncertain)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "would not stop"):
+                await process.close()
+            self.assertTrue((uncertain.path / NATIVE_OWNER).exists())
+            self.assertEqual(WorkFolder.sweep(root), 0)
+            with self.assertRaisesRegex(RuntimeError, "would not stop"):
+                await process.wait_closed()
+            self.assertIsNone(uncertain._lock)
+            uncertain.quarantine()
+            self.assertEqual(WorkFolder.sweep(root), 0)
+            self.assertTrue((uncertain.path / NATIVE_OWNER).exists())
+        finally:
+            # Stubborn is a fixture with no process; only this test's synthetic quarantine is removed.
+            uncertain.remove()
         self.assertEqual(list(root.iterdir()), [])
+
+    async def test_a_logical_close_retains_the_workspace_lock_until_native_drain(self):
+        drained = asyncio.Event()
+
+        class Deferred(FakeClient):
+            async def wait_closed(self):
+                await drained.wait()
+                return NativeCleanup("runtime", True, True)
+
+        work = WorkFolder.make(self.root)
+        process = RuntimeProcess(Deferred(), work)
+        await process.close()
+        self.assertTrue(work.path.exists())
+        self.assertEqual(WorkFolder.sweep(self.root), 0)
+        waiter = asyncio.create_task(process.wait_closed())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+        self.assertTrue(work.path.exists())
+        drained.set()
+        await process.wait_closed()
+        self.assertFalse(work.path.exists())
 
 
 @contextlib.contextmanager
@@ -236,6 +288,31 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         await stubborn.open()
         await stubborn.close()
         self.assertNotEqual(stubborn.process.returncode, 0)
+        late = stdio((sys.executable, "-I", "-c", ECHO), {"MARK": "late"})
+        started, release = asyncio.Event(), threading.Event()
+        loop, popen = asyncio.get_running_loop(), subprocess.Popen
+
+        def delayed(*args, **kwargs):
+            loop.call_soon_threadsafe(started.set)
+            if not release.wait(3):
+                raise TimeoutError("The test did not release the native launch")
+            return popen(*args, **kwargs)
+
+        with mock.patch.object(subprocess, "Popen", side_effect=delayed):
+            opening = asyncio.create_task(late.open())
+            try:
+                await asyncio.wait_for(started.wait(), 1)
+                opening.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(opening, 1)
+                self.assertIsNone(late.process)
+                self.assertFalse(late.runtime_stopped)
+            finally:
+                release.set()
+                await late.close()
+                await asyncio.wait_for(late.wait_closed(), 3)
+        self.assertTrue(late.runtime_stopped)
+        self.assertIsNotNone(late.process.returncode)
 
     async def test_an_unasked_exit_warns_with_its_code_and_stderr(self):
         transport = stdio(("sh", "-c", "echo starting >&2; echo 'No usable credentials' >&2; exit 3"), SHELL)

@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from examples.shared.ids import approx_tokens
@@ -29,6 +31,42 @@ async def item_create(session: LiveProtocolSession, message: dict, source: str, 
     text = typed_text(item)
     if text and isinstance(session.frontend, TypedReader):
         session.frontend.typed(text)
+
+
+def prepare_item_create(
+    session: LiveProtocolSession, message: dict, client_event_id: str | None
+) -> Callable[[], Awaitable[None]]:
+    """Check retained input and prepare its exact synchronous admission before reserving its operation."""
+    item = message.get("item")
+    if not isinstance(item, dict):
+        raise ProtocolError("item must be an object", param="item")
+    if approx_tokens(json.dumps(item)) > MAX_ITEM_TOKENS:
+        raise ProtocolError(f"Response item is too large: at most {MAX_ITEM_TOKENS} tokens", param="item")
+    commit = session.delegation.prepare_item_create(item)
+    text = typed_text(item)
+
+    async def deliver() -> None:
+        result = commit()
+        if inspect.isawaitable(result):
+            await result
+        if text and isinstance(session.frontend, TypedReader):
+            session.frontend.typed(text)
+
+    return deliver
+
+
+def prepare_response_create(
+    session: LiveProtocolSession, message: dict, client_event_id: str | None
+) -> Callable[[], Awaitable[None]]:
+    """Prepare one exact continuation batch without dispatch, effects or asynchronous validation."""
+    if set(message) - {"type", "event_id"}:
+        raise ProtocolError("response.create accepts only type and event_id")
+    commit = session.delegation.prepare_response_create(client_event_id)
+
+    async def deliver() -> None:
+        commit()
+
+    return deliver
 
 
 def typed_text(item: dict) -> str:

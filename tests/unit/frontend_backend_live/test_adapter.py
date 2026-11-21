@@ -10,6 +10,7 @@ import io
 import json
 import threading
 import unittest
+from dataclasses import replace
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -239,13 +240,33 @@ class FromConfigTests(unittest.TestCase):
     def test_describe_is_the_adapters_half_of_info_with_no_key(self):
         info = CascadeAdapter.describe(TALKER_SETTINGS, FakeCatalog())
         frontend = {"talker_style": "json", "slot": "llm", "model": "model-of-llm", "base_url": LOCAL["base_url"]}
-        self.assertEqual(info["frontend"], {**frontend, "prompt": "generic"})
+        assert info["frontend"] == {**frontend, "prompt": "generic"}
         speech = {"vad_start_seconds": 0.12, "vad_stop_seconds": 0.2, "turn_silence_seconds": 1.2}
         self.assertEqual(info["speech"], {"tts_mode": "per_sentence", **speech, "interrupt_min_words": 2})
         self.assertEqual(set(info), {"frontend", "speech"})
         self.assertNotIn("nvapi-secret", json.dumps(info))
         stitched = CascadeAdapter.describe(TALKER_SETTINGS, FakeCatalog(synthesis_mode="stitched"))
         self.assertEqual(stitched["speech"]["tts_mode"], "stitched")
+
+    def test_attachment_fingerprint_covers_contracts_without_credential_values(self):
+        adapter, _, _, _ = self.build()
+        before = adapter.attachment_fingerprint()
+        adapter.frontend_endpoint = replace(adapter.frontend_endpoint, api_key="rotated-secret")
+        self.assertEqual(adapter.attachment_fingerprint(), before)
+        adapter.frontend_endpoint = replace(
+            adapter.frontend_endpoint, extra_params={"extra_headers": {"x-api-key": "a"}}
+        )
+        header_before = adapter.attachment_fingerprint()
+        adapter.frontend_endpoint = replace(
+            adapter.frontend_endpoint, extra_params={"extra_headers": {"x-api-key": "b"}}
+        )
+        self.assertEqual(adapter.attachment_fingerprint(), header_before)
+        adapter.frontend_endpoint = replace(adapter.frontend_endpoint, extra_params={})
+        adapter.frontend_endpoint = replace(adapter.frontend_endpoint, model="different-model")
+        self.assertNotEqual(adapter.attachment_fingerprint(), before)
+        adapter.frontend_endpoint = replace(adapter.frontend_endpoint, model="model-of-llm")
+        adapter.instructions += " Speak another language."
+        self.assertNotEqual(adapter.attachment_fingerprint(), before)
 
 
 class ReadinessTests(unittest.IsolatedAsyncioTestCase):

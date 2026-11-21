@@ -22,14 +22,20 @@ A conversation with `live_store: "true"` offers its tasks the `continue_after_ca
 
 In the [Frontend/Backend Live example](../README.md), the composition root builds one core per process, on first use, for the gateway. Each Live session in `responses` mode reaches it through the gateway's [server delegation](../../../../docs/how-to/use-live-gateway.md#server-delegation), in a conversation of its own. A client-mode app can send each backend round to `POST /v1/live/delegate`, which reaches the core as one stateless request. The repository UI bot builds a core of its own for each bot session, from the core's settings with `ui_bot.core` merged over them, which set the cafe's `backend.prompt` and `backend.tools`.
 
+The in-process client exposes `set_attachment(conversation_id, attached)` for [WebSocket reconnect](../../../../docs/how-to/use-live-gateway.md#resume-a-dropped-websocket-call). It fences caller-owned actions while the audio attachment is absent and checks which app calls remain pending.
+
 ## Build and Configure the Core
 
 `build_core(settings, *, endpoints, defaults)` in [`app.py`](app.py) builds one `DelegationCore`, choosing every implementation by name. The example's composition root, [`factory.py`](../factory.py), reads the settings and the core's texts with `CoreSettings.parse(settings, texts)`. It resolves the default model of `backend.slot` from the service catalog and the instructions of `backend.prompt` from the example's `prompts.yaml`. It hands the core to the gateway through `LocalResponsesClient`.
+
+At final shutdown, `await core.aclose()` starts every distinct backend source close and waits for all of them. It then propagates the first original error; native sources join only their own cleanup.
 
 The core's settings are the `core` block of the example's settings, in the `config` block of its entry in [`examples_registry.yaml`](../../../../examples_registry.yaml), as the example's [Configuration](../README.md#configuration) describes. The server reads them once, so an edit takes effect at the next restart. The block must set `backend.slot` and `backend.prompt`. Every other key that it leaves out keeps its default, and an unknown key stops the load. The block has the following parts:
 
 - `delegation`: the IM's settings, with their defaults in `DelegationSettings` ([`config.py`](config.py)).
 - `backend`: the adapter (`adapter`) and the one that serves stateless requests (`one_shot_adapter`), both `llm` by default, and the default model's slot and prompt (`slot` and `prompt`). It also sets the server tool sources (`tools`) and the steps that the app's outputs take before the backend reads them (`app_output_steps`, none by default). It also has each adapter's own block, whose defaults are in the adapter's `settings.py`. The registry block shows, commented out, how to turn on the ID-shape hints step (`app_output_steps.shape_hints` with its `not_found_pattern`). The hint's words are the `backend.app_output_steps.shape_hints.hint` entry of `agent_prompts.Core`.
+
+The core records each app result under its original `call_id`. If an output step fails, drops a result, or changes a call ID, the core skips that step and continues with the last valid outputs.
 
 The core's texts are the lines that the IM and the backend write or add to a model's input. They are the `agent_prompts.Core` entries of the example's [`prompts.yaml`](../prompts.yaml), which the UI's **Prompts** tab shows. Each entry is named by its place in the settings. `texts.<key>` names the core's own lines, such as `texts.conductor_prompt`. `backend.<block>.<key>` names the texts of a backend block, such as the harness's prompt templates (`backend.harness.prompts`). A block's texts join it only when the settings have the block, so you can remove an app output step without editing `prompts.yaml`. Settings that set one of these places, such as `backend.harness.prompts.user`, stop the load with a message that names `agent_prompts.Core`.
 
@@ -44,9 +50,13 @@ The following table lists the `delegation` settings that you are most likely to 
 | `max_after_call_conversations` | `8` | The most conversations at once whose work still runs after their call. A kept conversation whose work has ended does not count: it holds only memory until its keep time ends. |
 | `result_format` | `plain` | `plain`, or `speak_display`, which adds a `show` item for the screen before the answer to speak. |
 | `progress_note_seconds` | `1.0` | The shortest time between two progress notes of one delegation. `0` writes none. |
-| `context_tokens` | `24000` | The backend history's budget. Over it, the oldest requests leave the history, each one whole. |
+| `context_tokens` | `24000` | The token budget for backend history and private task state. The core drops the oldest requests as whole units to make room. |
 
-Every task of a conversation gets the `cancel_work` and `ask_caller` work tools, `show` too under `speak_display`, `continue_after_call` as described above, and the caller and voice notes (`texts.caller_note` and `texts.voice_note`). With `ask_caller`, a task says one short question to the caller and keeps working, and the caller's reply comes back as a new request. An app function with one of these names is refused together with the work tool. A server tool source must not use them, because its tool would replace the work tool. A one-shot session offers no work tool.
+Every task of a conversation gets the `cancel_work`, `set_work_state`, `caller_message`, and `resolve_questions` work tools. It also gets `show` under `speak_display`, `continue_after_call` as described above, and the caller and voice notes (`texts.caller_note` and `texts.voice_note`). An app function with one of these names is refused together with the work tool. A server tool source must not use them, because its tool would replace the work tool. A one-shot session offers no work tool.
+
+Use `caller_message(kind: question|status)` to publish a question or status while work continues. Each question has a stable ID. The worker calls `resolve_questions` with the IDs it wants to resolve, using an applied caller input reference for `answered` or the `no_longer_needed` disposition. An exact continuation inherits unresolved questions. Unrelated input and dropped publications leave the question open.
+
+The frontend tracks playback. A published message shows its wording and source. Caller hearing and business authorization have separate evidence.
 
 ## Packages
 
@@ -61,15 +71,43 @@ The following table lists the core's packages:
 
 ## Backend Adapters
 
-`backend.adapter` chooses one adapter from the table in [`backend/adapters.py`](backend/adapters.py), which loads an adapter's package only when a core is built with it. The following table lists the adapters:
+Use [Choose a Backend Adapter](../README.md#choose-a-backend-adapter) for backend configuration and [Connect an Agent Harness](../../../../docs/how-to/connect-an-agent-harness.md) for ACP agent setup.
 
-| Adapter | Package | What it runs |
-| --- | --- | --- |
-| `llm` (default) | [`backend/llm/`](backend/llm/) | The backend LLM, directly connected. The steer rule places each request: it joins the newest open Work, else continues the Work that ended last, else starts one. It also serves stateless requests. |
-| `llm-agent` | [`backend/agent/`](backend/agent/) | Backend LLM runs as workers. Above `max_running: 1`, a model conductor places every request, with one model call per decision. At `max_running: 1`, the steer rule places each request. |
-| `harness` | [`backend/harness/`](backend/harness/) | An external agent that its operator deploys, such as Hermes, over the Agent Client Protocol (ACP). Above `max_running: 1`, a conductor session of the agent places every request. At `max_running: 1`, the steer rule places each request. |
+### Complete Routing Decisions
 
-To choose an adapter, refer to [Choose a Backend Adapter](../README.md#choose-a-backend-adapter). To deploy Hermes or connect another ACP agent, refer to [Connect an Agent Harness](../../../../docs/how-to/connect-an-agent-harness.md). To add a backend adapter, a model provider, or a tool source, refer to [Extend the Core](#extend-the-core).
+The model conductor submits one `submit_decision` with all actions for its supplied inputs. The following actions can appear together:
+
+| Action | Purpose |
+| --- | --- |
+| `start` | Assign a focused task brief. Optional `continues` selects an eligible ended task, and `verifies` selects a separate read-only check. |
+| `steer` | Update exact tasks, including eligible continuations. Provide a scoped update for each task when steering multiple tasks or sharing the input with another action. |
+| `stop` | Fence new effects and request an immediate stop for the targets. |
+| `pause`, `resume` | Retain the task and set its desired state. Resumed work requires settled activity and available capacity. |
+| `caller_message` | Ask a routing question or select work for a status update. |
+
+Core generates status updates from the selected tasks' records. The worker that owns a task reports its business results from tool receipts. For a routing question, the conductor supplies the question text.
+
+A caller can say “Pause dinner and check the late showing.” One decision can pause the dinner task and update the movie task. The conductor selects caller lines by source ID and sequence, and Core copies the relevant words from the transcript. Include shared details in each relevant brief. Keep dependent steps in one task.
+
+Core checks exact targets and coverage of the bound input IDs. A decision rejected before any action starts gets one repair attempt. An LLM Agent stream that ends without a complete decision, or a harness disconnect before submission, can use the same repair. If the repair also fails before any action starts, Core can ask the caller to clarify. An invalid target or insufficient worker capacity can produce a notice for the affected request. Accepted actions keep their recorded outcomes.
+
+Harness job previews use caller text, with playback recorded separately.
+
+### Stops and Pending Input
+
+Core can hold tool calls that could change state or end the interaction while the frontend routes a completed turn or Core places a newer request. If a routing action remains unresolved, even within a partially accepted decision, Core can mark affected pending calls and late proposals as `not_run`. The restriction clears for a task after it receives applicable caller input at least as recent as the unresolved request.
+
+A stop fences new effects immediately. Started business actions can still settle, and their real outputs remain recorded. A pause preserves the task and its questions while activity settles. A verification task receives retained evidence and only authorized read-only tools.
+
+### Shared Responses and Work Ownership
+
+Several tasks can contribute to one response with independent histories and separate input, tool, and result ownership. An update moves only the selected task's obligations. For the client-visible tool batch and late result rules, refer to [Continue a Shared Response](../../../../docs/how-to/use-live-gateway.md#continue-a-shared-response).
+
+### Usage Observations
+
+Private `backend.provider_attempt.ended` records cover direct model reader attempts, including failed and incomplete attempts. Harness and conductor runs record their own `harness.round.usage` and `conductor.round.usage`. Use correlation IDs to join attempts to tasks and retain the latest reported observation per native invocation. Core round summaries can mirror the adapter observations.
+
+Count only reported input, output, reasoning, and cache tokens. Missing usage stays unknown. A reader attempt can include provider opening retries, and a native counter snapshot is per-invocation usage only if the runtime supplies that scope.
 
 ## Extend the Core
 
@@ -81,4 +119,7 @@ Each part of the core that you can add is one class and one entry in a name tabl
 | Backend model provider | `BACKENDS` in [`backend/providers/__init__.py`](backend/providers/__init__.py) | `api` in the model's `services.yaml` entry, `chat-completions` when the entry has none |
 | Server tool source | `TOOL_SOURCES` in [`backend/tools/__init__.py`](backend/tools/__init__.py) | `backend.tools` |
 | App output step | `APP_OUTPUT_STEPS` in [`backend/output_steps.py`](backend/output_steps.py) | `backend.app_output_steps` |
-| Harness agent class | `AGENTS` in [`backend/harness/acp/agents.py`](backend/harness/acp/agents.py) | `backend.harness.agent` |
+| Harness protocol | `PROTOCOLS` in [`backend/harness/protocol.py`](backend/harness/protocol.py) | `backend.harness.protocol` |
+| ACP agent class | `AGENTS` in [`backend/harness/acp/agents.py`](backend/harness/acp/agents.py) | `backend.harness.agent` with `protocol: acp` |
+
+Use the [backend port](backend/port.py) for task input, tool admission, and results. Keep harness-specific behavior in the matching agent class. The Core owns task routing and records.

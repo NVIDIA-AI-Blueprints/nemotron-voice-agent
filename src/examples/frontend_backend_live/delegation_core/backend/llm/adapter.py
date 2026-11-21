@@ -6,11 +6,17 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, ClassVar
 
 from examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
-from examples.frontend_backend_live.delegation_core.backend.port import Conductor, TaskContext, ToolSource
+from examples.frontend_backend_live.delegation_core.backend.port import (
+    BackendRun,
+    Conductor,
+    ControlContext,
+    TaskContext,
+    ToolSource,
+)
 from examples.frontend_backend_live.delegation_core.backend.providers import Backend
 
 from .run import LlmRun, Retryable
@@ -29,9 +35,23 @@ class LlmAdapter:
         self.source, self.tools, self.retryable = source, tuple(tools), retryable
         self.providers: dict[str | None, Backend] = {}
 
+    def can_run_without_attachment(self) -> bool:
+        """Whether every native tool effect is covered by the IM's attachment fence."""
+        return True
+
     def conductor(self) -> Conductor:
         """Return the session's conductor: the steer rule, which places each request with no model call."""
         return SteerOpenWork()
+
+    def usage_identity(self, task: TaskContext) -> dict:
+        """Identify the resolved worker model, including when the request selected the default."""
+        endpoint = self.source.endpoint(task.request().get("model"))
+        return {
+            "backend": "llm",
+            "model": endpoint.model,
+            "model_source": "configured_endpoint",
+            "provider_api": endpoint.api,
+        }
 
     def provider(self, model: str | None) -> Backend:
         """Return this session's provider of ``model``, made at its first round; ``ValueError`` if it is unlisted."""
@@ -42,7 +62,29 @@ class LlmAdapter:
     def start(self, task: TaskContext) -> LlmRun:
         """Return one task's run, an ``LlmRun``; no model call happens before its ``events()``."""
         return LlmRun(
-            task, providers=self.provider, tools=self.tools, settings=self.source.settings, retryable=self.retryable
+            task,
+            providers=self.provider,
+            tools=task.tool_sources(self.tools),
+            settings=self.source.settings,
+            retryable=self.retryable,
+        )
+
+    def start_control(
+        self,
+        task: ControlContext,
+        *,
+        parent: BackendRun | None = None,
+        prepare: Callable[[], Awaitable[None]] | None = None,
+    ) -> LlmRun:
+        """Return the same worker with only the invocation-bound Core tools and no business sources."""
+        return LlmRun(
+            task,
+            providers=self.provider,
+            tools=(),
+            settings=self.source.settings,
+            retryable=self.retryable,
+            parent=parent,
+            prepare=prepare,
         )
 
     def release_idle(self) -> None:

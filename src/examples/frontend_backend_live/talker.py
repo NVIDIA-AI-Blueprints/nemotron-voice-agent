@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loguru import logger
 from openai.types.chat import ChatCompletionChunk
@@ -28,7 +28,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.aggregators.llm_context import LLMContext, standard_message_text
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.llm import NvidiaLLMService
-from pipecat.utils.text.alnum_utils import alnum_only
+from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pydantic import TypeAdapter, ValidationError
 
 from examples.frontend_backend_live.models.decision import (
@@ -45,6 +45,7 @@ from examples.shared.json_stream import JsonStringFieldStreamer
 from examples.shared.strict_settings import Tool
 
 if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletion
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
     from examples.frontend_backend_live.config_manager.schema import ModelEndpoint, ReliabilityConfig
@@ -260,6 +261,8 @@ class ToolReply:
         """Return the move of the first ``TOOL_DECISIONS`` name a call made, else a ``speak`` unless cut or empty."""
         calls = self._in_order()
         diagnostics = {**metadata, "tool_calls": [call.name for call in calls]}
+        if calls and finish not in {"stop", "tool_calls"}:
+            return unusable_decision(diagnostics, "incomplete_output")
         for name, decide in TOOL_DECISIONS.items():
             for call in calls:
                 if call.name != name:
@@ -346,8 +349,8 @@ class Calls(Protocol):
     def response_ended(self) -> int:
         """Return the number of the response the talker ends."""
 
-    def interrupted(self) -> None:
-        """Note an interruption that passed the talker: the responses started before it are dropped."""
+    def interrupted(self) -> int:
+        """Note the interruption and return the newest response started before it."""
 
     def caller_started(self) -> None:
         """Note that the caller started speaking."""
@@ -385,32 +388,45 @@ class DecisionReplyMixin:
         call = _current_call.get()
         if call is not None:
             params["messages"] = call.request.messages(params["messages"])
-            if not _out_of_band.get():
+            if _out_of_band.get():
+                params["stream"] = False
+                params.pop("stream_options", None)
+                if schema := self._check_response_schema(call.response_schema()):
+                    params["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {"name": "response", "schema": schema, "strict": True},
+                    }
+            else:
                 params.update(call.request_fields())
             logger.debug(f"{call.role} request: {json.dumps(params['messages'], ensure_ascii=False)}")
         return params
 
     async def run_inference(self, *args, **kwargs) -> str | None:
         """Run one-shot inference with its own request and no decision format."""
-        return await self._one_shot(None, *args, **kwargs)
-
-    async def run_call(self, call: TalkerCall, context: LLMContext) -> str | None:
-        """Run ``call`` out of band on ``context``: its system text as the system instruction, its decision schema."""
-        reply = await self._one_shot(
-            call, context, system_instruction=call.request.system, response_schema=call.response_schema()
-        )
-        duration_ms = round((time.monotonic() - call.started) * 1000, 3)
-        logger.debug(f"{call.role} reply (one-shot, {duration_ms} ms in all): {json.dumps(reply, ensure_ascii=False)}")
-        return reply
-
-    async def _one_shot(self, call: TalkerCall | None, *args, **kwargs) -> str | None:
-        """Run Pipecat's one-shot inference out of band, adjusted as ``call``'s request, or as its arguments give."""
-        out_of_band, current = _out_of_band.set(True), _current_call.set(call)
+        current = _current_call.set(None)
         try:
             return await super().run_inference(*args, **kwargs)
         finally:
             _current_call.reset(current)
+
+    async def run_call(self, call: TalkerCall, context: LLMContext) -> str | None:
+        """Use the existing service for a buffered Writer reply and keep the provider's finish reason."""
+        out_of_band, current = _out_of_band.set(True), _current_call.set(call)
+        try:
+            # Use Pipecat's request path before NvidiaLLMService wraps its response in a stream.
+            response = cast("ChatCompletion", await BaseOpenAILLMService.get_chat_completions(self, context))
+        finally:
+            _current_call.reset(current)
             _out_of_band.reset(out_of_band)
+        choice = response.choices[0] if response.choices else None
+        reply = choice.message.content if choice is not None else None
+        finish = getattr(choice, "finish_reason", None)
+        duration_ms = round((time.monotonic() - call.started) * 1000, 3)
+        logger.debug(
+            f"{call.role} reply (one-shot, finish_reason={finish or 'unknown'}, {duration_ms} ms in all): "
+            f"{json.dumps(reply, ensure_ascii=False)}"
+        )
+        return reply
 
     async def get_chat_completions(self, context: LLMContext) -> AsyncIterator[ChatCompletionChunk]:
         """Run the call the voice chooses for this run: no request, a line with no model call, or the decision."""
@@ -446,8 +462,8 @@ class DecisionReplyMixin:
 
     async def process_frame(self, frame, direction: FrameDirection):
         """Tell the voice when the caller starts and stops speaking, and when an interruption passes the talker."""
-        if isinstance(frame, InterruptionFrame):
-            self.calls.interrupted()
+        if isinstance(frame, InterruptionFrame) and direction is FrameDirection.DOWNSTREAM:
+            frame.metadata[RESPONSE_KEY] = self.calls.interrupted()
         elif isinstance(frame, UserStartedSpeakingFrame):
             self.calls.caller_started()
         elif isinstance(frame, UserStoppedSpeakingFrame):
@@ -524,12 +540,18 @@ class DecisionReplyMixin:
             "response_format": call.format.name,
         }
         logger.debug(
-            f"{call.role} reply ({call.first_token_ms} ms to the first token, {duration_ms} ms in all): "
+            f"{call.role} reply ({call.first_token_ms} ms to the first token, "
+            f"finish_reason={finish or 'unknown'}, {duration_ms} ms in all): "
             f"{json.dumps(reply.raw, ensure_ascii=False)}"
         )
-        text = self.calls.finished(call, reply.decision(metadata, finish), reply.held)
-        for held in calls:
-            yield held
+        if call.cut and not call.said:
+            self.calls.dropped(call)
+            return
+        decision = reply.decision(metadata, finish)
+        text = self.calls.finished(call, decision, reply.held)
+        if not decision.diagnostics.get("recovery"):
+            for held in calls:
+                yield held
         async for line in self._line(text):
             yield line
 
@@ -613,16 +635,19 @@ CALL_FIELDS = ("tool_calls", "tool_call_id")
 
 @dataclass(frozen=True)
 class Request:
-    """What a call does to Pipecat's messages as its request goes out: its ``system`` text first, ``tail`` last."""
+    """Frame Pipecat's messages with ``system`` first and ``tail`` last; ``joiner=None`` keeps the tail separate."""
 
     system: str
     tail: str
-    joiner: str = "\n"
+    joiner: str | None = "\n"
     label: str = ""
     calls: bool = False
+    include_history: bool = True
 
     def messages(self, messages: Sequence[dict]) -> list[dict]:
         """Return the request's messages from Pipecat's ``messages``, which it leaves as they are."""
+        if not self.include_history:
+            messages = ()
         if messages and messages[0].get("role") == "system":
             messages = messages[1:]
         joined: list[dict] = []
@@ -641,7 +666,7 @@ class Request:
                 joined[-1]["content"] += "\n" + content
             else:
                 joined.append({"role": role, "content": content})
-        if joined and joined[-1]["role"] == "user":
+        if self.joiner is not None and joined and joined[-1]["role"] == "user":
             joined[-1]["content"] += self.joiner + self.tail
         else:
             joined.append({"role": "user", "content": self.tail})
@@ -718,25 +743,28 @@ class Layout:
         rules = self.routing_texts.rules.text
         return Request(text + "\n" + rules, runtime, "\n\n", self.prompts.caller_label, calls=True)
 
-    def note(self, told: str | None, newer_requests: Sequence[str] = ()) -> str:
+    def note(self, told: str | None, newer_requests: Sequence[dict] = ()) -> str:
         """Return the notes an update carries: what the caller already heard of it, and newer requests still open."""
         notes = self.prompts.writer_notes
         text = notes.told.format(told=told) if told else ""
         if newer_requests:
-            text += notes.newer.format(requests="; ".join(f'"{request}"' for request in newer_requests))
+            text += notes.newer.format(requests=json.dumps(newer_requests, ensure_ascii=False))
         return text
 
     def relay(self, instructions: str, content: str, note: str) -> Request:
-        """Return the relay's request: the writer's frame and rules, the conversation, then the update to word."""
-        prompts = self.prompts
-        rules = prompts.writer_framed(instructions) + "\n" + prompts.commentary + prompts.answer
-        return Request(rules + "\n" + self.json_rules, prompts.update_label + content + note)
+        """Return the Writer's instructions and a distinct final message for the current update."""
+        return self._writer(instructions, self.prompts.commentary + self.prompts.answer, content, note)
 
     def progress(self, instructions: str, update: str, note: str) -> Request:
-        """Return the progress line's request: the writer's frame and progress rules, then the work's update."""
-        prompts = self.prompts
-        rules = prompts.writer_framed(instructions) + "\n" + prompts.progress
-        return Request(rules + "\n" + self.json_rules, prompts.update_label + update + note)
+        """Return progress instructions with a distinct final message for the work's update."""
+        return self._writer(instructions, self.prompts.progress, update, note)
+
+    def _writer(self, instructions: str, rules: str, update: str, note: str) -> Request:
+        system = self.prompts.writer_framed(instructions) + "\n" + rules + "\n" + self.json_rules
+        context = note.strip("\n")
+        current = self.prompts.update_label + update
+        tail = f"{context}\n\n{current}" if context else current
+        return Request(system, tail, joiner=None)
 
 
 def floored(decision: TalkerDecision, *, work_open: bool, holding: str) -> TalkerDecision:
@@ -752,39 +780,25 @@ def floored(decision: TalkerDecision, *, work_open: bool, holding: str) -> Talke
 
 
 def after_failure(diagnostics: dict, *, work_open: bool, holding: str) -> TalkerDecision:
-    """Return a failed turn's decision: the holding line while work is open, else a delegation with no lead-in.
+    """Keep a failed turn local while work is open, with a holding line when supplied.
 
-    A delegation would join the open work, and could restart it, for a turn nobody decided; with none open, no tool
-    has run at the talker stage, so delegating never repeats an action.
+    While work is open, a fallback delegation could steer it without a valid decision. With no open work,
+    the fallback can delegate the caller's request once.
     """
-    if work_open and holding:
-        held = {**diagnostics, "recovery": "holding", "failed": diagnostics.get("recovery")}
-        return TalkerDecision("speak", holding, held)
-    return TalkerDecision("delegate", "", diagnostics)
+    if not work_open:
+        return TalkerDecision("delegate", "", diagnostics)
+    if not holding.strip():
+        return TalkerDecision("wait", "", diagnostics)
+    held = {**diagnostics, "recovery": "holding", "failed": diagnostics.get("recovery")}
+    return TalkerDecision("speak", holding, held)
 
 
-def relay_line(decision: TalkerDecision, content: str, history: Sequence[dict]) -> str | None:
-    """Return the relay's worded line, or ``None`` when the update must be said as written.
+def relay_line(decision: TalkerDecision | None) -> str | None:
+    """Return valid Writer wording, including repetition and deliberate silence; ``None`` means failure.
 
-    Only a ``speak`` with words that are neither the update nor a line said already is worded; lines compare by
-    ``alnum_only``, so markup, punctuation, case and accents never tell them apart.
+    Repeating reference or previously spoken wording is the Writer's presentation decision. It must not
+    revive raw reference data that the current caller context made obsolete.
     """
-    line = decision.speech
-    said = {alnum_only(standard_message_text(entry)) for entry in history if entry["role"] == "assistant"}
-    if decision.action != "speak" or not line.strip() or alnum_only(line) in {alnum_only(content), *said}:
+    if decision is None or decision.action != "speak" or decision.diagnostics.get("recovery"):
         return None
-    return line
-
-
-def progress_line(decision: TalkerDecision, latest: str | None, history: Sequence[dict]) -> str:
-    """Return the progress line, or nothing when the call does not ``speak``, carries a ``recovery`` or repeats."""
-    line = decision.speech.strip()
-    said = {alnum_only(standard_message_text(entry)) for entry in history if entry["role"] == "assistant"}
-    if (
-        decision.action != "speak"
-        or decision.diagnostics.get("recovery")
-        or (line and latest and alnum_only(line) == alnum_only(latest))
-        or (line and alnum_only(line) in said)
-    ):
-        return ""
-    return line
+    return decision.speech

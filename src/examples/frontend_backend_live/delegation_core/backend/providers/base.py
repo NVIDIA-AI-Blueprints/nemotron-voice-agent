@@ -103,6 +103,16 @@ class Backend:
         """Bind the model endpoint and the round's limits; nothing connects yet."""
         self.endpoint, self.limits = endpoint, limits
 
+    def endpoint_params(self, payload: Mapping[str, Any]) -> dict:
+        """Reject endpoint tool overrides when Core owns the complete tool surface."""
+        params = self.endpoint.extra_params
+        if payload.get("_restricted_tools"):
+            overrides = {"tools", "tool_choice", "functions", "function_call"}
+            body = params.get("extra_body")
+            if overrides.intersection(params) or (isinstance(body, Mapping) and overrides.intersection(body)):
+                raise ValueError("Endpoint settings cannot override the restricted invocation's tools")
+        return params
+
     @classmethod
     def unsupported(cls, settings: Mapping[str, Any]) -> list[tuple[str, str]]:
         """Return the request settings this provider cannot honor, as ``(param, message)``: each tool the client runs.

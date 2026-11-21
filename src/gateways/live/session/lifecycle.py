@@ -53,7 +53,11 @@ async def start(session: LiveProtocolSession, client_event_id: str | None) -> No
             logger.warning(f"session={session.id} start failed: {exc}")
             await session.reply_error(refused, client_event_id)
         else:
-            logger.exception(f"session={session.id} start failed: {exc}")
+            reference = getattr(exc, "_live_attachment_reference", None)
+            if reference is not None:
+                logger.error(f"session={session.id} start failed: attachment_reference={reference}")
+            else:
+                logger.exception(f"session={session.id} start failed: {exc}")
             message = "The voice pipeline could not start. Check server model access and configuration."
             await session.report_error(message, client_event_id)
         await session.close("connection_lost", asked_by="the gateway: the start failed")
@@ -133,8 +137,12 @@ async def _close_part(session: LiveProtocolSession, part, name: str, limit: floa
             await part.close()
     except TimeoutError:
         logger.error(f"session={session.id} {name} did not close within {limit} s")
-    except Exception:
-        logger.exception(f"session={session.id} {name} cleanup failed")
+    except Exception as exc:
+        reference = getattr(exc, "_live_attachment_reference", None)
+        if reference is not None:
+            logger.error(f"session={session.id} {name} cleanup failed: attachment_reference={reference}")
+        else:
+            logger.exception(f"session={session.id} {name} cleanup failed")
 
 
 async def _close_in_order(

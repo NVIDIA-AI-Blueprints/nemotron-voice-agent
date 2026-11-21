@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import partial
 from typing import TYPE_CHECKING
 
 from examples.frontend_backend_live.delegation_core.backend.port import Outcome
@@ -37,14 +38,19 @@ class SpeakDisplay(ResultFormat):
 class CallReports:
     """A call the backend runs, as an official ``mcp_call`` item from its start to its outcome."""
 
+    def __init__(self, *, retain_output: bool = False):
+        """Track completed display publications for subsequent conversation history when requested."""
+        self.retain_output = retain_output
+
     def started(self, task: TaskRun, call: dict, label: str) -> None:
         """Write the call's item as it starts, ``in_progress``, labeled with its tool source."""
         task.work.write(lambda writer: writer.mcp_started(call, label))
 
     def ended(self, task: TaskRun, call_id: str, output: str, outcome: Outcome) -> None:
         """Write the call's end into the response that holds it: its event, then its item with the output or error."""
-        if not task.session.book.mcp_ended(call_id, output, outcome):
-            task.work.write(lambda writer: writer.mcp_ended(call_id, output, outcome))
+        on_written = partial(task.published_calls.add, call_id) if self.retain_output and outcome == "done" else None
+        if not task.session.book.mcp_ended(call_id, output, outcome, on_written=on_written):
+            task.work.write(lambda writer: writer.mcp_ended(call_id, output, outcome, on_written=on_written))
 
 
 class ControlCalls(CallReports):

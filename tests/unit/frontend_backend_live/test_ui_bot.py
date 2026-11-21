@@ -28,24 +28,14 @@ from examples.frontend_backend_live.talker import TalkerChat, TalkerTools
 from gateways.live.server_delegation import ServerDelegation
 from gateways.realtime.lifecycle import announce_response, finish_response
 from gateways.realtime.serializer import RealtimeFrameSerializer
+from tests.unit import frontend_helpers
 from tests.unit.cascade_helpers import FakeSTT, chat_adapters, transcript_turns
 from tests.unit.core_helpers import chunk, tool_fragment
-from tests.unit.frontend_helpers import (
-    CATALOG,
-    FRONT,
-    Port,
-    ScriptedChat,
-    SentenceTTS,
-    SpeakingOutput,
-    StubAdapter,
-    decision,
-    wait_until,
-)
 
 PROMPTS_FILE = yaml.safe_load(Path(pipeline.__file__).with_name("prompts.yaml").read_text(encoding="utf-8"))
 
 
-class RecordingOutput(SpeakingOutput):
+class RecordingOutput(frontend_helpers.SpeakingOutput):
     """The transport's output: speaks as :class:`SpeakingOutput` does and keeps each RTVI message the bot sends."""
 
     def __init__(self, **kwargs):
@@ -80,9 +70,9 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.events, self.aggregator_welcome, self.welcome, self.close_fails = [], [], True, False
-        self.chat, self.body = ScriptedChat(), {"pipeline_mode": "frontend-backend-live"}
+        self.chat, self.body = frontend_helpers.ScriptedChat(), {"pipeline_mode": "frontend-backend-live"}
         self.frontends, self.running = [], asyncio.Event()
-        self.transport, self.stt, self.tts = FakeTransport(), FakeSTT(), SentenceTTS()
+        self.transport, self.stt, self.tts = FakeTransport(), FakeSTT(), frontend_helpers.SentenceTTS()
         config = factory.example_config()
         core = factory.ui_bot_core(config)
         cascade = LiveConfig.model_validate(factory.with_display_label(factory.adapter_block(config), core))
@@ -92,7 +82,7 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
             def create_client(self, api_key=None, base_url=None, **kwargs):
                 return case.chat
 
-        class Delegation(Port):
+        class Delegation(frontend_helpers.Port):
             def __init__(self, client):
                 super().__init__()
 
@@ -134,7 +124,7 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
             built.worker.add_event_handler("on_pipeline_started", lambda worker, frame: case.running.set())
             return built
 
-        root = pipeline.BotRoot(cascade, core, config.ui_bot.channel, CATALOG)
+        root = pipeline.BotRoot(cascade, core, config.ui_bot.channel, frontend_helpers.CATALOG)
         self.enterContext(patch.dict(pipeline.LLM_SERVICES, {"json": ScriptedTalker}))
         for name, value in {
             "bot_root": lambda: root,
@@ -143,7 +133,7 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
             "build_tts": lambda body, entry: case.tts,
             "SmartTurn": TurnEnd,
             "build_core": lambda settings, *, endpoints, defaults: SimpleNamespace(aclose=core_closed),
-            "core_client": lambda core: "client",
+            "core_client": lambda core, **kwargs: "client",
             "ServerDelegation": Delegation,
             "create_audio_recorder": lambda: None,
             "build_frontend": build,
@@ -170,12 +160,12 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(self.bot_task, return_exceptions=True)
         return frontend
 
-    until = staticmethod(wait_until)
+    until = staticmethod(frontend_helpers.wait_until)
 
 
 class GreetingTests(BotCase):
     async def test_the_welcome_is_worded_from_the_intro_on_the_cafe_seed(self):
-        self.chat.script.append(decision("speak", "Welcome to Bluebird."))
+        self.chat.script.append(frontend_helpers.decision("speak", "Welcome to Bluebird."))
         self.body["system_prompt"] = "detailed thinking off"
         self.enterContext(patch.dict(os.environ))
         for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):
@@ -219,10 +209,12 @@ class GreetingTests(BotCase):
 
         self.enterContext(patch.dict(pipeline.LLM_SERVICES, {"tools": ScriptedTools}))
         state = pipeline.bot_root()
-        first = {**FRONT, "id": "local:first", "key": "first"}
-        second = {**FRONT, "id": "local:second", "key": "second", "response_format": "none"}
+        first = {**frontend_helpers.FRONT, "id": "local:first", "key": "first"}
+        second = {**frontend_helpers.FRONT, "id": "local:second", "key": "second", "response_format": "none"}
         cascade = state.cascade.model_copy(update={"talker_style": {"second": "tools"}})
-        root = replace(state, cascade=cascade, catalog=ExampleCatalog({**CATALOG.offered, "llm": [first, second]}))
+        root = replace(
+            state, cascade=cascade, catalog=ExampleCatalog({**frontend_helpers.CATALOG.offered, "llm": [first, second]})
+        )
         self.enterContext(patch.object(pipeline, "bot_root", lambda: root))
         self.body["llm_id"] = "local:second"
         frontend = await self.run_bot()
@@ -243,7 +235,7 @@ class RealtimeGreetingTests(BotCase):
         self.serializer.set_emit(self.emit)
         self.transport._realtime_serializer = self.serializer
         self.body["protocol"] = "realtime"
-        self.chat.script.append(decision("speak", "Welcome to Bluebird."))
+        self.chat.script.append(frontend_helpers.decision("speak", "Welcome to Bluebird."))
 
     async def emit(self, event):
         self.sent.append(event)
@@ -303,7 +295,7 @@ class CloseTests(BotCase):
 class BotCallTests(BotCase):
     def setUp(self):
         super().setUp()
-        self.welcome, self.backend = False, ScriptedChat()
+        self.welcome, self.backend = False, frontend_helpers.ScriptedChat()
 
         def core(settings, *, endpoints, defaults):
             return build_core(settings, endpoints=endpoints, defaults=defaults, adapters=chat_adapters(self.backend))
@@ -324,10 +316,10 @@ class BotCallTests(BotCase):
         first, second = asyncio.Event(), asyncio.Event()
         worded = "One large latte is in your cart, five ninety-seven with tax."
         self.chat.script += [
-            decision("delegate", "Let me add that."),
-            decision("speak", worded),
-            decision("delegate", "One moment."),
-            decision("speak", "Your Matcha is ordered."),
+            frontend_helpers.decision("delegate", "Let me add that."),
+            frontend_helpers.decision("speak", worded),
+            frontend_helpers.decision("delegate", "One moment."),
+            frontend_helpers.decision("speak", "Your Matcha is ordered."),
         ]
         arguments = '{"action":"add","item_id":"lat","size":"large"}'
         self.backend.script += [
@@ -367,7 +359,7 @@ class BotCallTests(BotCase):
         )
 
     async def test_a_finished_turn_and_its_latency_reach_the_client(self):
-        self.chat.script.append(decision("speak", "Earl Grey it is."))
+        self.chat.script.append(frontend_helpers.decision("speak", "Earl Grey it is."))
 
         async def during_run(frontend):
             await self.stt.push_frame(VADUserStoppedSpeakingFrame(stop_secs=0.2))
@@ -386,8 +378,8 @@ class BotRootTests(unittest.TestCase):
         pipeline.bot_root.cache_clear()
         self.addCleanup(pipeline.bot_root.cache_clear)
         with (
-            patch.object(pipeline.ExampleCatalog, "read", return_value=CATALOG),
-            patch.object(pipeline, "frontend_adapters", return_value={"cascade": StubAdapter}),
+            patch.object(pipeline.ExampleCatalog, "read", return_value=frontend_helpers.CATALOG),
+            patch.object(pipeline, "frontend_adapters", return_value={"cascade": frontend_helpers.StubAdapter}),
         ):
             state = pipeline.bot_root()
         self.assertEqual(state.cascade.slot, "llm")

@@ -27,18 +27,25 @@ from examples.frontend_backend_live.delegation_core.backend.agent import (
     ConductorSettings,
     LlmConductor,
 )
+from examples.frontend_backend_live.delegation_core.backend.agent.memory import DecisionRound
+from examples.frontend_backend_live.delegation_core.backend.agent.render import round_input
 from examples.frontend_backend_live.delegation_core.backend.control import ControlVocabulary
 from examples.frontend_backend_live.delegation_core.backend.port import (
-    Answer,
+    CallerMessage,
     Cancel,
     ConductorInput,
+    DecisionRejected,
     Request,
     Start,
     Steer,
+    TaskSpec,
     TaskSummary,
     WorkSummary,
+    WorkTarget,
 )
 from examples.frontend_backend_live.delegation_core.backend.providers import (
+    Backend,
+    BrokenStreamError,
     ChatCompletionsBackend,
     OpenAIResponsesBackend,
     retry,
@@ -52,6 +59,7 @@ from tests.unit.core_helpers import CORE_BLOCK, CORE_TEXTS, FakeChat, chunk, cor
 from tests.unit.delegation_core.helpers import (
     FAST,
     LIMITS,
+    MENU,
     NO_RETRY,
     QUESTION,
     TEXTS,
@@ -62,11 +70,14 @@ from tests.unit.delegation_core.helpers import (
     a_request,
     a_round,
     answers,
+    app_outputs,
     ask,
     call_events,
+    call_round,
     decide,
     drive,
     gated,
+    logged,
     message_events,
     read_all,
     text_round,
@@ -87,31 +98,39 @@ def lookup(model: str | None) -> ModelEndpoint:
 _rounds = itertools.count(1)
 
 
-def decisions(*calls: tuple[str, dict]) -> list[dict]:
-    """Build one conductor round whose model calls the control tools ``(name, arguments)`` at once, in this order."""
+def decisions(*actions: dict) -> list[dict]:
+    """Build one completed conductor response containing a complete action envelope."""
     number = next(_rounds)
-    parts = [
-        call_events(name, arguments, call_id=f"c{number}_{index}", index=index)
-        for index, (name, arguments) in enumerate(calls)
-    ]
-    return a_round(*parts, response_id=f"resp_c{number}")
+    return a_round(
+        call_events("submit_decision", {"actions": list(actions)}, call_id=f"c{number}"), response_id=f"resp_c{number}"
+    )
 
 
 def start(*delegations, tasks=None):
-    return "start_work", {"delegations": list(delegations), **({"tasks": list(tasks)} if tasks is not None else {})}
+    return {
+        "action": "start",
+        "delegations": list(delegations),
+        "tasks": [{"brief": brief} for brief in (tasks if tasks is not None else ["Caller request."])],
+    }
 
 
 def steer(work_id, *delegations, task_id=None):
-    arguments = {"work_id": work_id, "delegations": list(delegations)}
-    return "steer_work", {**arguments, **({"task_id": task_id} if task_id is not None else {})}
+    target = {"work_id": work_id, **({"task_ids": [task_id]} if task_id is not None else {})}
+    return {"action": "steer", "delegations": list(delegations), "targets": [target]}
 
 
-def cancel(work_id, task_id=None):
-    return "cancel_work", {"work_id": work_id, **({"task_id": task_id} if task_id is not None else {})}
+def cancel(work_id, task_id=None, delegations=("D2",)):
+    target = {"work_id": work_id, **({"task_ids": [task_id]} if task_id is not None else {})}
+    return {"action": "stop", "delegations": list(delegations), "targets": [target]}
 
 
-def answer_status(delegation_id, text):
-    return "answer_status", {"delegation_id": delegation_id, "text": text}
+def answer_status(delegation_id, *work_ids):
+    return {
+        "action": "caller_message",
+        "kind": "status",
+        "delegations": [delegation_id],
+        "targets": [{"work_id": work_id} for work_id in work_ids],
+    }
 
 
 def round_data(payload: dict) -> dict:
@@ -122,7 +141,7 @@ def start_each(payload: dict) -> list[dict]:
     return decisions(*(start(request["delegation_id"]) for request in round_data(payload)["new_requests"]))
 
 
-def conductor_on(model: ScriptedProvider, **settings: Any) -> LlmConductor:
+def conductor_on(model: Backend, **settings: Any) -> LlmConductor:
     """Build an ``LlmConductor`` on ``model`` with the shipped vocabulary and ``settings`` over ``CONDUCTOR``."""
     return LlmConductor(
         lambda: model, VOCABULARY, CONDUCTOR.model_copy(update=settings), ENDPOINT.model, SETTINGS.max_running
@@ -149,11 +168,10 @@ def texts_of(payload: dict) -> list[str]:
 
 
 def by_brief(scripts: dict[str, list[list]]) -> Callable[[dict], list]:
-    """Build a workers' model that plays each task the next round of the script of the newest brief it reads."""
-    lines = {TEXTS.task_line.format(task=brief): brief for brief in scripts}
+    """Build a workers' model that plays the next round for its recorded assignment."""
 
     def respond(payload: dict) -> list:
-        brief = next(lines[text] for text in reversed(texts_of(payload)) if text in lines)
+        brief = json.loads(texts_of(payload)[-1])["private_backend_state"]["initial_assignment"]
         return scripts[brief].pop(0)
 
     return respond
@@ -174,7 +192,7 @@ def two_tasks(teas: list[list], hours: list[list]) -> ScriptedProvider:
 
 
 async def read(stream) -> list[dict]:
-    return await asyncio.wait_for(read_all(stream), 10)
+    return await read_all(stream, timeout=10)
 
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
@@ -207,6 +225,10 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             "an unknown key": ({"workers": 3}, "backend.llm-agent\nworkers\n.*Extra inputs"),
             "no task may run": ({"max_running": 0}, "max_running\n.*greater than or equal to 1"),
             "an unknown conductor key": ({"conductor": {"tool_choice": "auto"}}, "conductor.tool_choice\n.*Extra"),
+            "a nonpositive conductor output cap": (
+                {"conductor": {"max_output_tokens_per_request": 0}},
+                "conductor.max_output_tokens_per_request\n.*greater than or equal to 1",
+            ),
             "a provider key": ({"conductor": {"provider": "openai-responses"}}, "conductor.provider\n.*Extra"),
             "a negative wait": ({"conductor": {"timeout_seconds": -1}}, "conductor.timeout_seconds\n.*greater than 0"),
             "no memory": ({"conductor": {"memory_tokens": 0}}, "conductor.memory_tokens\n.*equal to 1"),
@@ -250,11 +272,22 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         thinking = {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}, "temperature": 0.7}
         endpoint = ModelEndpoint("test/model", "http://localhost:1/v1", extra_params=thinking)
         for block, temperature in (({}, 0.0), ({"conductor": {"temperature": None}}, 0.7)):
-            chat = FakeChat([chunk(tool_calls=[tool_fragment(0, "p1", "start_work", '{"delegations": ["D1"]}')])])
+            chat = FakeChat(
+                [
+                    chunk(
+                        tool_calls=[tool_fragment(0, "p1", "submit_decision", json.dumps({"actions": [start("D1")]}))]
+                    ),
+                    chunk(finish="tool_calls"),
+                ]
+            )
             make = {"make_conductor_provider": lambda at, chat=chat: ChatCompletionsBackend(at, NO_RETRY, chat)}
             built = build(block, endpoints=lambda model: endpoint, **make)
-            await decide(built.new().conductor(), given(a_request("D1", "Teas?"), works=(a_work("W1"),)))
+            adapter = built.new()
+            self.addAsyncCleanup(adapter.close)
+            placed = await decide(adapter.conductor(), given(a_request("D1", "Teas?"), works=(a_work("W1"),)))
+            self.assertEqual(placed, [Start(("D1",), (TaskSpec("Caller request."),))])
             sent = chat.requests[0]
+            self.assertNotIn("parallel_tool_calls", sent)
             self.assertEqual(sent["temperature"], temperature)
             self.assertFalse(sent["extra_body"]["chat_template_kwargs"]["enable_thinking"])
         self.assertEqual(endpoint.extra_params["temperature"], 0.7)
@@ -276,18 +309,27 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         dropped = APIConnectionError(request=httpx.Request("POST", "http://localhost:1/v1/chat/completions"))
         placing = decisions(start("D1"))
         cases = {
-            "before its first event": ([dropped], LIMITS, [Start(("D1",))], 2),
-            "after a placement": ([*placing[:-1], dropped], LIMITS, [Start(("D1",))], 1),
+            "before its first event": ([dropped], LIMITS, [Start(("D1",), (TaskSpec("Caller request."),))], 2),
+            "before completion": ([*placing[:-1], dropped], LIMITS, [], 1),
             "with no retry set": ([dropped], NO_RETRY, [], 1),
         }
         for name, (first, limits, placed, opened) in cases.items():
             with self.subTest(name), mock.patch.object(retry, "retry_delay", return_value=0.0) as delay:
                 model = ScriptedProvider(first, decisions(start("D1")), limits=limits)
-                decided = await decide(conductor_on(model), given(a_request("D1", "Teas?")))
-                self.assertEqual((decided, model.opened, delay.call_count), (placed, opened, opened - 1))
+                if name == "before its first event":
+                    decided = await decide(conductor_on(model), given(a_request("D1", "Teas?")))
+                    self.assertEqual(decided, placed)
+                else:
+                    with self.assertRaises(APIConnectionError):
+                        await decide(conductor_on(model), given(a_request("D1", "Teas?")))
+                self.assertEqual((model.opened, delay.call_count), (opened, opened - 1))
 
-    async def test_a_core_built_on_the_agent_answers_a_conversation(self):
-        conductor = ScriptedProvider(respond=start_each)
+    async def test_a_core_built_on_the_agent_repairs_a_cutoff_and_answers_a_conversation(self):
+        def respond(payload):
+            events = start_each(payload)
+            return events if round_data(payload).get("placement_attempt") == 2 else events[:-1]
+
+        conductor = ScriptedProvider(respond=respond)
         workers = ScriptedProvider(respond=lambda payload: text_round("A latte is $4.50."))
 
         class Scripted(AgentSource):
@@ -313,28 +355,126 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(10):
             events = [event async for event in stream]
         self.assertEqual((events[-1]["type"], answers(events)), ("response.completed", ["A latte is $4.50."]))
-        self.assertEqual(len(conductor.payloads), 1)
-        self.assertIn(TEXTS.result_formats["speak_display"], workers.payloads[0]["instructions"])
+        self.assertEqual(len(conductor.payloads), 2)
+        self.assertIn("ended without a completed decision", round_data(conductor.payloads[1])["decision_rejection"])
+        [worker_request] = workers.payloads
+        self.assertIn(TEXTS.result_formats["speak_display"], worker_request["instructions"])
 
 
 class ConductorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_one_model_call_per_decide_with_four_tools(self):
+    async def test_each_conductor_round_logs_one_correlated_usage_record_even_without_a_terminal(self):
+        created = {"type": "response.created", "response": {"id": "observed_response", "model": "reported/model"}}
+        counts = {"input_tokens": 11, "output_tokens": 3}
+        completed = {"type": "response.completed", "response": {"id": "observed_response", "usage": counts}}
+        incomplete = {
+            "type": "response.incomplete",
+            "response": {
+                "id": "observed_response",
+                "usage": counts,
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+        }
+        failed = {
+            "type": "response.failed",
+            "response": {"id": "observed_response", "usage": counts, "error": {"code": "test"}},
+        }
+        cases = (
+            ("before first event", [RuntimeError("test stream failed")], "stream_error", RuntimeError),
+            ("after response identity", [created, RuntimeError("test stream failed")], "stream_error", RuntimeError),
+            ("deadline", [created, asyncio.Event()], "stream_error", TimeoutError),
+            ("cancelled", [created, asyncio.Event()], "cancelled", asyncio.CancelledError),
+            ("exhausted", [created], "stream_error", DecisionRejected),
+            ("broken stream", [created, BrokenStreamError("test cutoff")], "stream_error", DecisionRejected),
+            ("failed terminal", [created, failed], "response.failed", RuntimeError),
+            ("incomplete terminal", [created, incomplete], "response.incomplete", ValueError),
+            (
+                "completed terminal",
+                [created, *call_events("submit_decision", {"actions": [start("D1")]}, call_id="placed"), completed],
+                "response.completed",
+                None,
+            ),
+        )
+        for name, script, terminal, error in cases:
+            with self.subTest(ending=name):
+                model = ScriptedProvider(script)
+                conductor = conductor_on(model, **({"timeout_seconds": 0.02} if name == "deadline" else {}))
+                request = replace(
+                    given(a_request("D1", "A generic request.")), attempt=2, conversation_ref="trace_probe"
+                )
+                expected_payload = conductor.payload(request, DecisionRound(round_input(request)))
+                del expected_payload["parallel_tool_calls"]
+                task = asyncio.create_task(conductor.decide(request, FakeDecisionTarget().place))
+                with logged("DEBUG") as lines:
+                    try:
+                        if name == "cancelled":
+                            while not model.payloads:
+                                await asyncio.sleep(0)
+                            task.cancel()
+                        if error is None:
+                            await task
+                        else:
+                            with self.assertRaises(error):
+                                await task
+                        usage = [line for line in lines if line.startswith("conductor.round.usage")]
+                        self.assertEqual(len(usage), 1)
+                        row = usage[0]
+                        for field in (
+                            "backend=llm-agent role=conductor",
+                            "round=1 attempt=2",
+                            f"terminal={terminal}",
+                            "conversation_ref=trace_probe",
+                            "delegation_ids=['D1']",
+                        ):
+                            self.assertIn(field, row)
+                        if name == "before first event":
+                            self.assertIn("model=test/model model_source=configured_model", row)
+                            self.assertIn("response_id=None", row)
+                        else:
+                            self.assertIn("model=reported/model model_source=translated_request", row)
+                            self.assertIn("reported_model=None", row)
+                            self.assertIn("response_id=observed_response", row)
+                        if terminal in ("response.completed", "response.incomplete", "response.failed"):
+                            self.assertIn(f"usage={counts} usage_missing=False", row)
+                        else:
+                            self.assertIn("usage=None usage_missing=True", row)
+                        # Telemetry does not alter authored requests, placement-attempt identity or provider behavior.
+                        self.assertEqual(model.payloads, [expected_payload])
+                        self.assertEqual(conductor.model, ENDPOINT.model)
+                    finally:
+                        if not task.done():
+                            task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                        await conductor.close()
+
+    async def test_provider_setup_failure_does_not_invent_a_model_round_or_usage(self):
+        lines = self.enterContext(logged("DEBUG"))
+        model = ScriptedProvider()
+        conductor = conductor_on(model)
+        conductor.make_provider = mock.Mock(side_effect=RuntimeError("provider setup failed"))
+        with self.assertRaisesRegex(RuntimeError, "provider setup failed"):
+            await conductor.decide(given(a_request("D1", "A request.")), FakeDecisionTarget().place)
+        self.assertEqual((conductor.round, model.payloads), (0, []))
+        self.assertFalse(any(line.startswith("conductor.round.usage") for line in lines))
+
+    async def test_one_model_call_per_decide_with_one_complete_tool(self):
         model = ScriptedProvider(decisions(start("D1", "D2")))
         ended = a_work("W0", state="answered")
         requests = (a_request("D1", "Teas?"), a_request("D2", "Hours?"))
         placed = await decide(conductor_on(model), given(*requests, works=(ended,)))
-        self.assertEqual(placed, [Start(("D1", "D2"))])
+        self.assertEqual(placed, [Start(("D1", "D2"), (TaskSpec("Caller request."),))])
         [payload] = model.payloads
         self.assertEqual([work["state"] for work in round_data(payload)["works"]], ["answered"])
         self.assertEqual(payload["instructions"], TEXTS.conductor_prompt.format(max_running=3))
         self.assertEqual([tool["name"] for tool in payload["tools"]], list(TEXTS.control_tools))
-        self.assertEqual((payload["tool_choice"], payload["parallel_tool_calls"]), ("required", False))
+        self.assertEqual(payload["tool_choice"], "required")
+        self.assertNotIn("parallel_tool_calls", payload)
         self.assertNotIn("max_output_tokens", payload)
         self.assertEqual((payload["reasoning"], payload["model"]), ({"effort": "none"}, ENDPOINT.model))
         self.assertEqual(await decide(conductor_on(model), given()), [])
-        unset = ScriptedProvider(decisions(start("D1")))
+        unset = ScriptedProvider(decisions(start("D1")), endpoint=OTHER)
         await decide(conductor_on(unset, reasoning_effort=None), given(a_request("D1", "Teas?")))
         self.assertEqual((len(model.payloads), "reasoning" in unset.payloads[0]), (1, False))
+        self.assertIs(unset.payloads[0]["parallel_tool_calls"], False)
         capped = ScriptedProvider(decisions(start("D1", "D2")))
         await decide(conductor_on(capped, max_output_tokens_per_request=128), given(*requests))
         self.assertEqual(capped.payloads[0]["max_output_tokens"], 2 * 128)
@@ -344,18 +484,19 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
         call = {"type": "function_call", "call_id": "x", "name": "get_menu", "arguments": "{}"}
         conversation = ({"type": "message", "role": "user", "content": "Hi."}, said, call)
         model, works = ScriptedProvider(decisions(steer("W1", "D2"))), (a_work("W1", "running", "answered"),)
-        request = a_request("D2", "Green.")
+        line = {"source_message_id": "D2", "sequence": 2, "text": "Green."}
+        request = replace(a_request("D2", "Green."), caller_lines=(line,))
         await decide(conductor_on(model), given(request, works=works, conversation=conversation, new_from=1))
         data = round_data(model.payloads[0])
         self.assertEqual(data["conversation"], [{"role": "assistant", "text": "Tea is $3."}])
-        green = [{"delegation_id": "D2", "messages": [{"role": "user", "text": "Green."}]}]
+        green = [{"delegation_id": "D2", "messages": [{"role": "user", "text": "Green."}], "caller_lines": [line]}]
         self.assertEqual(data["new_requests"], green)
         [work] = data["works"]
         self.assertEqual([work[key] for key in ("work_id", "state", "seconds")], ["W1", "running", 3.0])
         teas = [{"delegation_id": "D1", "messages": [{"role": "user", "text": "Find teas."}]}]
         self.assertEqual(work["requests"], teas)
         task = {"task_id": "W1.2", "state": "answered", "brief": None, "steps": ["get_menu: done"], "acted": True}
-        self.assertEqual(work["tasks"][1], {**task, "progress": "Looking.", "seconds": 2.2})
+        self.assertEqual(work["tasks"][1], {**task, "progress": "Looking.", "seconds": 2.2, "stop": "none"})
 
     async def test_a_tasks_open_question_is_read_only_while_it_holds_one(self):
         model = ScriptedProvider(decisions(steer("W1", "D2", task_id="W1.2")))
@@ -368,7 +509,7 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_work_that_outlives_the_call_is_read_with_its_mark_and_answers(self):
         result = "The suppliers, ranked by price."
-        model = ScriptedProvider(decisions(answer_status("D2", f"Yes: {result}")))
+        model = ScriptedProvider(decisions(answer_status("D2", "W1")))
         work = a_work("W1", state="answered")
         kept = replace(work, after_call=True, tasks=(replace(work.tasks[0], answer=result),))
         await decide(conductor_on(model), given(a_request("D2", "Is my research ready?"), works=(kept,)))
@@ -380,27 +521,39 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
             start("D1", tasks=["teas", "hours"]),
             steer("W1", "D2", task_id="W1.2"),
             cancel("W1", "W1.1"),
-            answer_status("D3", "Still looking at the teas."),
+            answer_status("D3", "W1"),
             start("D1"),
             steer("W9", "D2"),
         )
         requests = (a_request("D1", "Teas and hours."), a_request("D2", "Green only."), a_request("D3", "How long?"))
         placed = await decide(conductor_on(ScriptedProvider(round_)), given(*requests, works=(a_work("W1"),)))
-        expected = [Start(("D1",), ("teas", "hours")), Steer("W1", ("D2",), "W1.2"), Cancel("W1", "W1.1")]
-        expected += [Answer("D3", "Still looking at the teas."), Start(("D1",)), Steer("W9", ("D2",))]
+        expected = [
+            Start(("D1",), (TaskSpec("teas"), TaskSpec("hours"))),
+            Steer(("D2",), (WorkTarget("W1", ("W1.2",)),)),
+            Cancel(("D2",), (WorkTarget("W1", ("W1.1",)),)),
+        ]
+        expected += [
+            CallerMessage(("D3",), "status", targets=(WorkTarget("W1"),)),
+            Start(("D1",), (TaskSpec("Caller request."),)),
+            Steer(("D2",), (WorkTarget("W9"),)),
+        ]
         self.assertEqual(placed, expected)
 
     async def test_a_round_that_fails_places_nothing(self):
         cut = a_round(message_events("start_work start_work"))
         cut[-1] = {"type": "response.incomplete", "response": {"incomplete_details": {"reason": "max_output_tokens"}}}
-        malformed = (("steer_work", {"delegations": ["D2"]}), ("book_table", {}), ("start_work", {"delegations": "D2"}))
+        malformed = (
+            {"action": "steer", "delegations": ["D2"]},
+            {"action": "book_table"},
+            {"action": "start", "delegations": "D2"},
+        )
         text_none = [{"type": "input_text", "text": None}]
         cases = {
             "a model that is down": ([RuntimeError("model down")], {}),
             "a round past its limit": ([asyncio.Event()], {"timeout_seconds": 0.05}),
             "an answer with no call": (text_round("I would start it."), {}),
             "a round its output cap cut": (cut, {}),
-            "malformed calls": (decisions(*malformed), {}),
+            "malformed calls": (decisions(start("D2"), *malformed), {}),
             "a request that cannot be written out": (None, {}),
         }
         for name, (round_, settings) in cases.items():
@@ -408,23 +561,32 @@ class ConductorTests(unittest.IsolatedAsyncioTestCase):
                 model = ScriptedProvider(*([round_] if round_ else []))
                 content = text_none if round_ is None else "Also this."
                 request = Request("D2", ({"type": "message", "role": "user", "content": content},))
-                placed = await decide(conductor_on(model, **settings), given(request, works=(a_work("W1"),)))
-                self.assertEqual(placed, [])
+                target = FakeDecisionTarget()
+                with self.assertRaises((RuntimeError, TimeoutError, TypeError, ValueError)):
+                    await conductor_on(model, **settings).decide(given(request, works=(a_work("W1"),)), target.place)
+                self.assertEqual(target.decisions, [])
                 self.assertEqual(len(model.payloads), int(round_ is not None))
 
-    async def test_the_next_round_reads_each_outcome_and_error(self):
-        first = decisions(("steer_work", {"delegations": ["D1"]}), start("D1"))
-        model = ScriptedProvider(first, [RuntimeError("model down")], decisions(start("D3")))
-        conductor = conductor_on(model)
-        for delegation_id in ("D1", "D2", "D3"):
-            await decide(conductor, given(a_request(delegation_id, "Teas?")))
-        first, failed, third = model.payloads
-        message, malformed, call, error, outcome, failed_input, new = third["input"]
-        self.assertEqual((message, failed_input), (first["input"][0], failed["input"][-1]))
-        self.assertEqual((malformed["type"], outcome["call_id"]), ("function_call", call["call_id"]))
-        self.assertEqual(json.loads(error["output"]), {"error": "steer_work: missing work_id"})
-        self.assertEqual(outcome["output"], "Started W1 with 1 task(s).")
-        self.assertEqual(round_data(third)["new_requests"][0]["delegation_id"], "D3")
+        decision = json.dumps({"actions": [start("D2")]})
+        calls = [
+            chunk(tool_calls=[tool_fragment(0, "first", "submit_decision", decision)]),
+            chunk(tool_calls=[tool_fragment(1, "second", "submit_decision", decision)]),
+        ]
+        for ending, rejection in (
+            ([], "stream ended without a completed decision"),
+            ([chunk(finish="tool_calls")], "must contain one complete decision call"),
+        ):
+            with self.subTest(rejection=rejection):
+                client = FakeChat([*calls, *ending])
+                provider = ChatCompletionsBackend(ENDPOINT, NO_RETRY, client)
+                conductor = conductor_on(provider)
+                self.addAsyncCleanup(conductor.close)
+                target = FakeDecisionTarget()
+                with self.assertRaisesRegex(DecisionRejected, rejection):
+                    await conductor.decide(given(a_request("D2", "Also this.")), target.place)
+                self.assertEqual(target.decisions, [])
+                self.assertEqual(len(client.requests), 1)
+                self.assertNotIn("parallel_tool_calls", client.requests[0])
 
     async def test_memory_keeps_whole_rounds_within_its_budget(self):
         # With a budget of 1, every round is over it alone, so only the newest stays.
@@ -451,48 +613,174 @@ class AgentTests(IMCase):
     def agent(self, conductor, workers, **kwargs):
         return source(conductor, workers, **kwargs).new()
 
+    async def test_only_capacity_one_interprets_an_update_during_an_app_wait(self):
+        updated = "Look for decaf too."
+        settings = {"tools": [MENU]}
+        for capacity in (1, 3):
+            with self.subTest(capacity=capacity):
+                conductor = ScriptedProvider(decisions(start("D1")), decisions(steer("W1", "D2")))
+                rounds = [call_round("get_menu", {}, "call_menu")]
+                if capacity == 1:
+                    rounds.append(text_round("Still waiting for the menu."))
+                workers = ScriptedProvider(*rounds, text_round("The menu has decaf."))
+                im = self.session(
+                    self.agent(conductor, workers, settings=SETTINGS.model_copy(update={"max_running": capacity}))
+                )
+                first = await read(im.admit(ask("Find a coffee."), delegation_id="D1", settings=settings).stream)
+                im.admit(ask(updated), delegation_id="D2")
+                await self.until(lambda im=im: not im.waits_for_decision, "placed caller update")
+                if capacity == 1:
+                    await self.until(lambda workers=workers: len(workers.payloads) == 2, "isolated control round")
+                    tool_names = {tool["name"] for tool in workers.payloads[-1]["tools"]}
+                    assert tool_names == {"cancel_work", "set_work_state", "caller_message", "resolve_questions"}
+                    self.assertIn(updated, texts_of(workers.payloads[-1]))
+                    self.assertFalse(conductor.payloads)
+                else:
+                    await self.turns()
+                    self.assertEqual(len(workers.payloads), 1)
+                    self.assertEqual(len(conductor.payloads), 2)
+
+                outputs = app_outputs(first, output='{"decaf": true}')
+                resumed_index = len(workers.payloads)
+                im.admit_client_request(outputs, settings=settings)
+                await self.until(
+                    lambda workers=workers, start=resumed_index: len(workers.payloads) > start,
+                    "normal business continuation",
+                )
+                self.assertIn(updated, texts_of(workers.payloads[resumed_index]))
+                self.assertIn(outputs[0], workers.payloads[resumed_index]["input"])
+
+    async def test_usage_correlation_is_stable_across_attachments_and_does_not_log_kept_authority(self):
+        lines = self.enterContext(logged("DEBUG"))
+        refs, authorities = [], []
+        for _ in range(2):
+            conductor = ScriptedProvider(decisions(start("D1")), decisions(start("D2")))
+            workers = ScriptedProvider(text_round("One."), text_round("Two."))
+            im = self.session(self.agent(conductor, workers))
+            refs.append(im.conversation_ref)
+            authorities.append(im.ledger.session.id)
+            await read(im.admit(ask("Teas?"), delegation_id="D1").stream)
+            await im.set_attachment(False)
+            await im.set_attachment(True)
+            await read(im.admit(ask("Hours?"), delegation_id="D2").stream)
+            self.assertEqual(im.conversation_ref, refs[-1])
+            self.assertTrue(all(refs[-1] not in json.dumps(payload) for payload in conductor.payloads))
+        self.assertNotEqual(*refs)
+        usage = self.traced("backend.round.usage")
+        self.assertEqual([row["conversation_ref"] for row in usage], [refs[0], refs[0], refs[1], refs[1]])
+        logged_usage = "\n".join(line for line in lines if line.startswith("conductor.round.usage"))
+        for ref in refs:
+            self.assertEqual(logged_usage.count(ref), 2)
+        for authority in authorities:
+            self.assertNotIn(authority, logged_usage)
+            self.assertNotIn(authority, json.dumps(usage))
+
+    async def test_reported_usage_is_correlated_on_every_worker_terminal(self):
+        for terminal, tokens in (("failed", 7), ("incomplete", 7), ("completed", 0)):
+            with self.subTest(terminal=terminal):
+                self.traces.clear()
+                kind = f"response.{terminal}"
+                reply = "The teas are available."
+                events = text_round(reply, response_id="observed_response")
+                envelope = events[-1]["response"]
+                envelope["usage"] = {"output_tokens": tokens}
+                if terminal != "completed":
+                    envelope.update(
+                        error={"code": "server_error", "message": "failed"},
+                        incomplete_details={"reason": "max_output_tokens"},
+                    )
+                events[-1]["type"] = kind
+                backend = self.agent(
+                    ScriptedProvider(),
+                    ScriptedProvider(events),
+                    settings=SETTINGS.model_copy(update={"max_running": 1}),
+                )
+                im = self.session(backend)
+                result = await read(im.admit(ask("Teas?"), delegation_id="D1").stream)
+                self.assertEqual(answers(result), [reply] if terminal == "completed" else [])
+                [mirror] = self.traced("backend.round.usage")
+                [attempt] = self.traced("backend.provider_attempt.ended")
+                for row in (mirror, attempt):
+                    self.assertEqual(row["usage"], {"output_tokens": tokens})
+                    self.assertFalse(row["usage_missing"])
+                    assert (row["conversation_ref"], row["response_id"]) == (im.conversation_ref, "observed_response")
+                self.assertEqual((mirror["terminal"], mirror["round"]), (kind, 1))
+                self.assertEqual(attempt["provider_terminal"], kind)
+                self.assertIsNone(attempt["cost"])
+
     async def test_a_steer_into_one_task_reaches_that_task_only(self):
+        for correction in (False, True):
+            with self.subTest(correction=correction):
+                self.traces.clear()
+                await self.check_scoped_task_usage(correction)
+
+    async def check_scoped_task_usage(self, correction):
         teas, hours = asyncio.Event(), asyncio.Event()
         decided = (decisions(start("D1", tasks=["teas", "hours"])), decisions(steer("W1", "D2", task_id="W1.2")))
         conductor = ScriptedProvider(*decided)
-        later = text_round("Ten to four on Sundays.")
-        workers = two_tasks([gated(teas, text_round("Green and black."))], [gated(hours, text_round("Nine.")), later])
+        later = text_round("Ten to four on Sundays.", response_id="round_hours")
+        base = text_round("Green and black.", response_id="round_teas")
+        base[-1]["response"]["usage"] = {"output_tokens": 4}
+        hours_rounds = [gated(hours, text_round("Nine.")), later] if correction else [later]
+        workers = two_tasks([gated(teas, base)], hours_rounds)
         im = self.session(self.agent(conductor, workers))
         first = im.admit(ask("Which teas, and when are you open?"), delegation_id="D1")
         await self.turns()
-        second = im.admit(ask("And on Sundays?"), delegation_id="D2")
-        await self.turns()
-        self.assertEqual([work["tasks"][1]["task_id"] for work in round_data(conductor.payloads[1])["works"]], ["W1.2"])
+        streams = [first.stream]
+        if correction:
+            streams.append(im.admit(ask("And on Sundays?"), delegation_id="D2").stream)
+            await self.turns()
+            seen = round_data(conductor.payloads[1])["works"]
+            self.assertEqual([work["tasks"][1]["task_id"] for work in seen], ["W1.2"])
         teas.set()
-        events = [*await read(first.stream), *await read(second.stream)]
+        events = [event for stream in streams for event in await read(stream)]
         self.assertEqual(sorted(answers(events)), ["Green and black.", "Ten to four on Sundays."])
         # The hours task's streaming round was redone with the newer request; the teas task never read it.
         read_it = [any("And on Sundays?" in text for text in texts_of(payload)) for payload in workers.payloads]
-        self.assertEqual(sorted(read_it), [False, False, True])
+        self.assertEqual(sorted(read_it), [False, False, True] if correction else [False, False])
+        completed = {
+            row["task_id"]: row for row in self.traced("backend.round.usage") if row["terminal"] == "response.completed"
+        }
+        self.assertEqual(set(completed), {"W1.1", "W1.2"})
+        for task_id, response, usage in (
+            ("W1.1", "round_teas", {"output_tokens": 4}),
+            ("W1.2", "round_hours", None),
+        ):
+            row = completed[task_id]
+            self.assertEqual((row["backend"], row["role"], row["model"]), ("llm-agent", "worker", ENDPOINT.model))
+            self.assertEqual((row["work_id"], row["conversation_ref"]), ("W1", im.conversation_ref))
+            self.assertEqual((row["delegation_id"], row["response_id"]), ("D2" if correction else "D1", response))
+            if not correction:
+                self.assertEqual(row["round"], 1)
+            self.assertEqual((row["usage"], row["usage_missing"]), (usage, usage is None))
 
     async def test_a_cancel_of_one_task_lets_the_other_answer(self):
         teas, hours = asyncio.Event(), asyncio.Event()
-        stopped = decisions(cancel("W1", "W1.2"), answer_status("D2", "Stopped looking up the hours."))
+        stopped = decisions(cancel("W1", "W1.2"))
         conductor = ScriptedProvider(decisions(start("D1", tasks=["teas", "hours"])), stopped)
-        workers = two_tasks([gated(teas, text_round("Green and black."))], [gated(hours, text_round("Nine to five."))])
+        workers = two_tasks(
+            [gated(teas, text_round("Green and black."))],
+            [gated(hours, text_round("Nine to five.")), text_round("The hours lookup stopped; no booking changed.")],
+        )
         im = self.session(self.agent(conductor, workers))
         first = im.admit(ask("Which teas, and when are you open?"), delegation_id="D1")
         await self.turns()
         second = im.admit(ask("Skip the hours."), delegation_id="D2")
-        self.assertEqual(answers(await read(second.stream)), ["Stopped looking up the hours."])
+        self.assertEqual(answers(await read(second.stream)), [TEXTS.control_requested_line])
         await self.turns()
         teas.set()
-        self.assertEqual(answers(await read(first.stream)), [TEXTS.cancelled_line, "Green and black."])
+        first_answers = answers(await read(first.stream))
+        self.assertIn("Green and black.", first_answers)
+        self.assertNotIn("The hours lookup stopped; no booking changed.", first_answers)
         self.assertEqual(len(workers.payloads), 2)
 
-    async def test_an_answer_with_no_open_work_is_refused(self):
-        # No records stand behind it, so the IM refuses the answer; the request is left, and the IM's fallback rule
-        # starts it.
-        conductor = ScriptedProvider(decisions(answer_status("D1", "Your table is booked.")))
+    async def test_an_unknown_target_does_not_start_unrelated_work(self):
+        conductor = ScriptedProvider(decisions(steer("W9", "D1")))
         workers = ScriptedProvider(text_round("Friday at seven is free; shall I book it?"))
         im = self.session(self.agent(conductor, workers))
         events = await read(im.admit(ask("A table, Friday."), delegation_id="D1").stream)
-        self.assertEqual(answers(events), ["Friday at seven is free; shall I book it?"])
+        self.assertEqual(events[-1]["type"], "response.failed")
+        self.assertEqual((workers.payloads, im.ledger.works), ([], {}))
 
     async def test_with_one_task_at_a_time_the_steer_rule_places(self):
         gate, conductor = asyncio.Event(), ScriptedProvider()

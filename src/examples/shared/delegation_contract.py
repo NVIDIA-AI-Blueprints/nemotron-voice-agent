@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, TypedDict
 
 TERMINALS: Final = frozenset({"response.completed", "response.failed", "response.incomplete"})
 # The request options besides the model, the instructions, the tools, the tool choice and the output limit.
@@ -14,11 +14,21 @@ OPTIONS = ("parallel_tool_calls", "reasoning", "text", "service_tier")
 # Metadata keys: the delegation a request starts or continues, the mark of a typed run, valued "true", and a
 # conversation's opt-in to keep work after its call, valued "true" (a Live session's store: true).
 DELEGATION_ID = "live_delegation_id"
+CALLER_EXCERPT = "live_caller_excerpt"
+CALLER_EXCERPT_CHARS = 300
+CALLER_CONTEXT = "_nva_caller_context"
 TYPED_RUN = "live_typed_run"
 STORE = "live_store"
 PROGRESS_PHASE = "commentary"
 # The API a model endpoint speaks when its services.yaml entry names none: chat completions.
 CHAT_COMPLETIONS: Final = "chat-completions"
+
+
+class CallerContext(TypedDict):
+    """Caller text and playback evidence carried between the frontend and Core."""
+
+    caller_turns: list[tuple[int, str]]
+    playback: list[dict]
 
 
 def is_progress(item: dict) -> bool:
@@ -32,7 +42,7 @@ class ModelEndpoint:
 
     model: str
     base_url: str
-    api_key: str = "not-needed"
+    api_key: str = field(default="not-needed", repr=False)
     extra_params: dict = field(default_factory=dict)
     # The API its server speaks: the entry's ``api``, a provider name of the delegation core's ``BACKENDS``.
     api: str = CHAT_COMPLETIONS
