@@ -24,7 +24,6 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 import websockets
-from benchmark_diagnostics import DIAGNOSTICS_TYPE
 
 DEFAULT_OUTPUT_RATE = 24_000
 DEFAULT_AUTH_SCHEME = "Bearer"
@@ -179,6 +178,8 @@ class RealtimeTransport:
         self.on_event = on_event
         self.ws: Any = None
         self.events: list[dict[str, Any]] = []
+        self.received_monotonic_ns: int | None = None
+        self.received_unix_s: float | None = None
         self._send_lock = asyncio.Lock()
 
     async def connect(self) -> None:
@@ -218,6 +219,8 @@ class RealtimeTransport:
         if self.ws is None:
             raise RuntimeError("realtime socket is not connected")
         raw = await asyncio.wait_for(self.ws.recv(), timeout=timeout)
+        self.received_monotonic_ns = time.monotonic_ns()
+        self.received_unix_s = time.time()
         if isinstance(raw, (bytes, bytearray)):
             event = {"type": "_binary", "data": bytes(raw)}
         else:
@@ -229,9 +232,7 @@ class RealtimeTransport:
         if self.on_event is not None:
             self.on_event(event)
         kind = str(event.get("type") or "")
-        if kind == DIAGNOSTICS_TYPE:
-            return event
-        summary: dict[str, Any] = {"type": kind, "received_at": time.monotonic()}
+        summary: dict[str, Any] = {"type": kind, "received_at": self.received_monotonic_ns / 1_000_000_000}
         if kind == "response.output_audio.delta":
             summary["audio_bytes"] = len(parse_output_audio(event))
         elif kind.endswith("input_audio_transcription.completed"):

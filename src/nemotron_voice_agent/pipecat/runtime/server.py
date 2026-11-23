@@ -931,26 +931,6 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                     await _ensure_services_ready_for_connection(config, example)
                 except RuntimeError as exc:
                     logger.warning(f"Rejecting WebSocket start during service readiness check: {exc}")
-                    if parse_env_bool(
-                        "SCALING_PERF_DIAGNOSTICS", False
-                    ) and "websocket.http.response" in websocket.scope.get("extensions", {}):
-                        from pipecat.utils.security.redaction import redact_secrets
-
-                        from nemotron_voice_agent.pipecat.shared.perf_diagnostics import component_name
-
-                        await websocket.send_denial_response(
-                            JSONResponse(
-                                status_code=503,
-                                content={
-                                    "error": {
-                                        "code": "service_not_ready",
-                                        "component": component_name(str(exc)),
-                                        "message": redact_secrets(str(exc)),
-                                    }
-                                },
-                            )
-                        )
-                        return
                     await websocket.close(code=1011, reason=str(exc))
                     return
 

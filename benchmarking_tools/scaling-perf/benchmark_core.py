@@ -14,7 +14,7 @@ import sys
 import time
 import wave
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +123,18 @@ class AudioFrame:
     audio: bytes
     sample_rate: int
     num_channels: int
+    received_monotonic_ns: int | None = None
+    received_unix_s: float | None = None
+    response_id: str | None = None
+
+
+@dataclass
+class _ClientTiming:
+    input_packets_sent: int = 0
+    max_input_pacing_delay_ms: float | None = None
+    max_input_send_ms: float | None = None
+    event_loop_samples: int = 0
+    max_event_loop_lag_ms: float | None = None
 
 
 class EndOfBotUtterance(Exception):
@@ -250,6 +262,7 @@ class PerfClient:
         self.silence_running = False
         self.silence_event: asyncio.Event | None = None
         self.audio_params: tuple[int, int, int] | None = None
+        self._turn_timing: _ClientTiming | None = None
 
     def _set_collecting_metrics(self, collecting: bool) -> None:
         self.collecting_metrics = collecting
@@ -290,12 +303,25 @@ class PerfClient:
                 width = wav_file.getsampwidth()
                 chunk_size = int((rate * channels * CHUNK_DURATION_MS) / 1000) * width
                 self.audio_params = (rate, channels, chunk_size)
+                interval = CHUNK_DURATION_MS / 1000
+                first_send = None
+                timing = self._turn_timing
                 while True:
                     chunk = wav_file.readframes(chunk_size // width)
                     if not chunk:
                         break
+                    send_start = time.monotonic()
+                    if first_send is None:
+                        first_send = send_start
                     await self.protocol_client.send_audio(AudioFrame(chunk, rate, channels))
-                    await asyncio.sleep(CHUNK_DURATION_MS / 1000)
+                    if timing is not None:
+                        expected = first_send + timing.input_packets_sent * interval
+                        pacing_delay = (send_start - expected) * 1000
+                        send_time = (time.monotonic() - send_start) * 1000
+                        timing.max_input_pacing_delay_ms = max(timing.max_input_pacing_delay_ms or 0, pacing_delay)
+                        timing.max_input_send_ms = max(timing.max_input_send_ms or 0, send_time)
+                        timing.input_packets_sent += 1
+                    await asyncio.sleep(interval)
         finally:
             self.input_audio_file_end = dt.datetime.now()
             self.input_audio_file_end_monotonic = time.monotonic()
@@ -319,6 +345,30 @@ class PerfClient:
         except ProtocolConnectionClosed:
             return
 
+    async def _sample_event_loop(self) -> None:
+        loop = asyncio.get_running_loop()
+        interval = 0.1
+        while True:
+            timing = self._turn_timing
+            expected = loop.time() + interval
+            await asyncio.sleep(interval)
+            if timing is not None and timing is self._turn_timing:
+                lag_ms = (loop.time() - expected) * 1000
+                timing.event_loop_samples += 1
+                timing.max_event_loop_lag_ms = max(timing.max_event_loop_lag_ms or 0, lag_ms)
+
+    async def _recv_audio(self, timeout: float | None) -> AudioFrame:
+        frame = await self.protocol_client.recv_audio(timeout=timeout)
+        if frame.received_monotonic_ns is not None and frame.received_unix_s is not None:
+            return frame
+        return replace(
+            frame,
+            received_monotonic_ns=frame.received_monotonic_ns
+            if frame.received_monotonic_ns is not None
+            else time.monotonic_ns(),
+            received_unix_s=frame.received_unix_s if frame.received_unix_s is not None else time.time(),
+        )
+
     async def _drain_utterance(
         self,
         first_frame: AudioFrame,
@@ -332,9 +382,10 @@ class PerfClient:
         chunk_count = 0
         frame = first_frame
         while True:
-            wf, sample_rate, channels, audio_data = self._write_audio_to_wav(frame, wf, create_new_file=(wf is None))
+            sample_rate, channels, audio_data = frame.sample_rate, frame.num_channels, frame.audio
             if audio_data and sample_rate and channels:
-                current_time = time.monotonic()
+                assert frame.received_monotonic_ns is not None and frame.received_unix_s is not None
+                current_time = frame.received_monotonic_ns / 1_000_000_000
                 chunk_count += 1
                 chunk_duration = (len(audio_data) // (channels * 2)) / sample_rate
                 deficit_ms = None
@@ -346,10 +397,11 @@ class PerfClient:
                     nbytes=len(audio_data),
                     sample_rate=sample_rate,
                     channels=channels,
-                    monotonic_ns=time.monotonic_ns(),
-                    unix_s=time.time(),
+                    monotonic_ns=frame.received_monotonic_ns,
+                    unix_s=frame.received_unix_s,
                     deficit_ms=deficit_ms,
                     detect=detect_glitches,
+                    response_id=frame.response_id,
                 )
                 if detect_glitches:
                     if last_update_time is not None:
@@ -363,8 +415,9 @@ class PerfClient:
                             playback_buffer_duration = 0
                     playback_buffer_duration += chunk_duration
                     last_update_time = current_time
+            wf, _, _, _ = self._write_audio_to_wav(frame, wf, create_new_file=(wf is None))
             try:
-                frame = await self.protocol_client.recv_audio(timeout=drain_timeout)
+                frame = await self._recv_audio(drain_timeout)
             except EndOfBotUtterance:
                 return wf, chunk_count
             except TimeoutError:
@@ -374,7 +427,7 @@ class PerfClient:
 
     async def _receive_initial_bot_intro(self, wf):
         try:
-            frame = await self.protocol_client.recv_audio(timeout=self.bot_intro_timeout)
+            frame = await self._recv_audio(self.bot_intro_timeout)
         except FailedBotUtterance as exc:
             await self.protocol_client.recover_turn(timeout=self.turn_response_timeout, failure=exc)
             await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
@@ -394,18 +447,16 @@ class PerfClient:
             await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
         return wf
 
-    async def _await_first_bot_frame(
-        self, send_task: asyncio.Task, recv_task: asyncio.Task
-    ) -> tuple[AudioFrame | None, dt.datetime | None]:
+    async def _await_first_bot_frame(self, send_task: asyncio.Task, recv_task: asyncio.Task) -> AudioFrame | None:
         frame = None
         try:
             done, _ = await asyncio.wait({send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
             if recv_task in done:
-                return recv_task.result(), dt.datetime.now()
+                return recv_task.result()
             await send_task
             try:
                 frame = await asyncio.wait_for(recv_task, timeout=self.turn_response_timeout)
-                return frame, dt.datetime.now()
+                return frame
             except TimeoutError:
                 if self.collecting_metrics:
                     self.failed_turns += 1
@@ -416,7 +467,7 @@ class PerfClient:
                         f"{self.stream_id} turn timed out: no bot response within "
                         f"{self.turn_response_timeout:.1f}s after input audio finished"
                     )
-                return None, None
+                return None
         finally:
             if frame is None and not recv_task.done():
                 recv_task.cancel()
@@ -440,15 +491,31 @@ class PerfClient:
         self.input_audio_file_end_monotonic = None
         marker = self.protocol_client.begin_turn_observation()
         await self.logger.log(f"{self.stream_id} turn start using {audio_file.name}")
+        self.diagnostics.begin_turn(audio_file.name)
+        timing = self._turn_timing = _ClientTiming()
+        error = None
         send_task = asyncio.create_task(self._send_audio_file(audio_file))
-        recv_task = asyncio.create_task(self.protocol_client.recv_audio(timeout=None))
+        recv_task = asyncio.create_task(self._recv_audio(None))
         try:
-            return await self._run_conversation_turn(audio_file, wf, marker, send_task, recv_task)
+            wf, error = await self._run_conversation_turn(audio_file, wf, marker, send_task, recv_task)
+            return wf
+        except asyncio.CancelledError:
+            error = "turn cancelled"
+            raise
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+            raise
         finally:
             if not send_task.done():
                 send_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await send_task
+            self._turn_timing = None
+            self.diagnostics.end_turn(
+                input_end_monotonic_s=self.input_audio_file_end_monotonic,
+                error=bounded_error_message(error) if error else None,
+                client_timing=asdict(timing),
+            )
 
     async def _run_conversation_turn(
         self,
@@ -459,38 +526,41 @@ class PerfClient:
         recv_task: asyncio.Task,
     ):
         try:
-            frame, utterance_start = await self._await_first_bot_frame(send_task, recv_task)
+            frame = await self._await_first_bot_frame(send_task, recv_task)
         except FailedBotUtterance as exc:
             await send_task
             await self.protocol_client.recover_turn(timeout=self.turn_response_timeout, failure=exc)
             await self._record_failed_turn(audio_file, marker, str(exc))
-            return wf
+            return wf, str(exc)
         except EndOfBotUtterance:
             await send_task
-            await self._record_failed_turn(audio_file, marker, "response completed without bot audio")
-            return wf
+            error = "response completed without bot audio"
+            await self._record_failed_turn(audio_file, marker, error)
+            return wf, error
 
-        if frame is None or utterance_start is None:
+        if frame is None:
             try:
                 await self.protocol_client.recover_turn(timeout=self.turn_response_timeout)
             except ProtocolConnectionClosed:
                 raise
             except Exception as exc:
                 await self.logger.log(f"{self.stream_id} timed-out turn could not be synchronized: {exc}")
+                error = f"unable to synchronize timed-out response: {exc}"
                 await self.protocol_client.record_turn_observation(
                     audio_file,
                     marker,
                     self.input_audio_file_end_monotonic,
-                    error=f"unable to synchronize timed-out response: {exc}",
+                    error=error,
                 )
-                return wf
+                return wf, error
+            error = f"no bot response within {self.turn_response_timeout:.1f}s"
             await self.protocol_client.record_turn_observation(
                 audio_file,
                 marker,
                 self.input_audio_file_end_monotonic,
-                error=f"no bot response within {self.turn_response_timeout:.1f}s",
+                error=error,
             )
-            return wf
+            return wf, error
 
         try:
             wf, _ = await self._drain_utterance(frame, wf, detect_glitches=True)
@@ -498,13 +568,14 @@ class PerfClient:
             await send_task
             await self.protocol_client.recover_turn(timeout=self.turn_response_timeout, failure=exc)
             await self._record_failed_turn(audio_file, marker, str(exc))
-            return wf
+            return wf, str(exc)
         await send_task
         await self.protocol_client.record_turn_observation(audio_file, marker, self.input_audio_file_end_monotonic)
 
+        assert frame.received_monotonic_ns is not None
         latency = (
-            (utterance_start - self.input_audio_file_end).total_seconds()
-            if self.input_audio_file_end is not None
+            frame.received_monotonic_ns / 1_000_000_000 - self.input_audio_file_end_monotonic
+            if self.input_audio_file_end_monotonic is not None
             else None
         )
         if self.collecting_metrics and latency is not None:
@@ -518,7 +589,7 @@ class PerfClient:
             else:
                 self.valid_latency_values.append(latency)
                 await self.logger.log(f"{self.stream_id} turn complete latency={latency:.3f}s")
-        return wf
+        return wf, None
 
     async def _continuous_audio_loop(self, wf):
         turn_index = 0
@@ -559,9 +630,13 @@ class PerfClient:
         self.silence_event = asyncio.Event()
         self.silence_event.set()
         silence_task = asyncio.create_task(self._silence_sender_loop())
+        lag_task = asyncio.create_task(self._sample_event_loop())
         try:
             wf = await self._continuous_audio_loop(wf)
         finally:
+            lag_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await lag_task
             self.silence_running = False
             self.silence_event.set()
             silence_task.cancel()

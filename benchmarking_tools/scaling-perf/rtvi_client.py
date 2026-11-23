@@ -21,8 +21,7 @@ from benchmark_core import (
     ProtocolConnectionClosed,
     RunLogger,
 )
-from benchmark_diagnostics import DIAGNOSTICS_TYPE
-from rtvi_transport import RTVIAudioFrame, RTVIStartupError, RTVITransport, RTVITransportClosed
+from rtvi_transport import RTVIAudioFrame, RTVITransport, RTVITransportClosed
 
 
 def categorize_processor(processor: str) -> str:
@@ -97,15 +96,6 @@ class RTVIClient(ProtocolClient):
             await self.transport.__aenter__()
         except RTVITransportClosed as exc:
             raise ProtocolConnectionClosed from exc
-        except RTVIStartupError as exc:
-            if self.diagnostics is not None:
-                self.diagnostics.add_error(
-                    str(exc),
-                    source="handshake",
-                    component=exc.detail.get("component", "unknown"),
-                    code=exc.detail.get("code"),
-                )
-            raise
         await self.logger.log(f"{self.stream_id} websocket connected")
         await self.logger.log(f"{self.stream_id} sent RTVI client-ready")
         return self
@@ -130,18 +120,36 @@ class RTVIClient(ProtocolClient):
             except RTVITransportClosed as exc:
                 raise ProtocolConnectionClosed from exc
             if isinstance(payload, RTVIAudioFrame):
-                return AudioFrame(payload.audio, payload.sample_rate, payload.num_channels)
-            await self.process_server_message(payload)
+                return AudioFrame(
+                    payload.audio,
+                    payload.sample_rate,
+                    payload.num_channels,
+                    received_monotonic_ns=self.transport.received_monotonic_ns,
+                    received_unix_s=self.transport.received_unix_s,
+                )
+            await self.process_server_message(
+                payload,
+                received_monotonic_ns=self.transport.received_monotonic_ns,
+                received_unix_s=self.transport.received_unix_s,
+            )
 
-    async def process_server_message(self, message: dict) -> None:
+    async def process_server_message(
+        self,
+        message: dict,
+        *,
+        received_monotonic_ns: int | None = None,
+        received_unix_s: float | None = None,
+    ) -> None:
         if not isinstance(message, dict):
             return
         if self.diagnostics is not None:
-            self.diagnostics.ingest(message)
+            self.diagnostics.ingest(
+                message,
+                received_monotonic_ns=received_monotonic_ns,
+                received_unix_s=received_unix_s,
+            )
         message_type = str(message.get("type", "unknown"))
         nested = message.get("data") if message_type == "server-message" else None
-        if message_type == DIAGNOSTICS_TYPE or (isinstance(nested, dict) and nested.get("type") == DIAGNOSTICS_TYPE):
-            return
         self.rtvi_messages.append({"timestamp": dt.datetime.now().isoformat(), "type": message_type, "data": message})
         await self.logger.log(f"{self.stream_id} RTVI message: {json.dumps(message, sort_keys=True)}")
         if isinstance(nested, dict) and isinstance(nested.get("type"), str):

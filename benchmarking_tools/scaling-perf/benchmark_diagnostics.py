@@ -12,10 +12,32 @@ from typing import Any
 
 from pipecat.utils.security.redaction import redact_secrets
 
-DIAGNOSTICS_TYPE = "nva.perf.diagnostics"
-GAP_CLASSES = ("within_sentence", "between_sentences", "tool_wait", "interruption", "unknown")
+GAP_CLASSES = ("tool_wait", "unknown")
+LEGACY_GAP_CLASSES = ("within_sentence", "between_sentences", "interruption")
 NO_VALID_TURNS = "No valid benchmark turns completed"
 MAX_ERROR_MESSAGE_CHARS = 2048
+
+_NATIVE_MARKERS = {
+    "bot-llm-started": "llm_start",
+    "bot-llm-stopped": "llm_end",
+    "bot-tts-started": "tts_start",
+    "bot-tts-stopped": "tts_end",
+    "bot-started-speaking": "speech_start",
+    "bot-stopped-speaking": "speech_end",
+    "bot-interrupted": "interruption",
+    "user-started-speaking": "user_start",
+    "user-stopped-speaking": "user_end",
+    "llm-function-call-started": "tool_announced",
+    "llm-function-call-in-progress": "tool_start",
+    "llm-function-call-stopped": "tool_end",
+    "bot-output": "text_segment",
+    "nvidia.tool.started": "tool_start",
+    "nvidia.tool.completed": "tool_end",
+    "response.created": "response_start",
+    "response.done": "response_end",
+    "input_audio_buffer.speech_started": "user_start",
+    "input_audio_buffer.speech_stopped": "user_end",
+}
 
 
 def bounded_error_message(message: str) -> str:
@@ -25,14 +47,24 @@ def bounded_error_message(message: str) -> str:
 
 def _component(name: str) -> str:
     name = name.lower()
-    for category, parts in (("asr", ("asr", "stt", "transcri")), ("tts", ("tts",)), ("llm", ("llm",))):
+    for category, parts in (("asr", ("asr", "stt", "transcri")), ("tts", ("tts", "texttospeech")), ("llm", ("llm",))):
         if any(part in name for part in parts):
             return category
     return "unknown"
 
 
+def _ms(start_ns: int | None, end_ns: int | None) -> float | None:
+    if start_ns is None or end_ns is None:
+        return None
+    return (end_ns - start_ns) / 1_000_000
+
+
+def _string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 class SessionDiagnostics:
-    """Collect metadata independently of the valid-turn latency population."""
+    """Collect bounded playback and native protocol evidence on the client."""
 
     def __init__(self, *, max_events: int = 50000):
         """Bound per-session storage and report any evidence loss explicitly."""
@@ -46,16 +78,57 @@ class SessionDiagnostics:
         self.start: float | None = None
         self.duration: float | None = None
         self.local_dropped = 0
-        self.server_dropped = 0
-        self.server_session: str | None = None
-        self.last_sequence = 0
-        self.sequence_gaps = 0
         self.audio_discontinuity_after_sequence: int | None = None
+        self._current_turn: dict | None = None
+        self._turns: list[dict] = []
+        self._turn_sequence = 0
 
     def mark_audio_discontinuity(self) -> None:
         """Mark a point where received Realtime PCM was discarded outside playback."""
         if self.audio_discontinuity_after_sequence is None:
             self.audio_discontinuity_after_sequence = self.audio_sequence
+
+    def begin_turn(self, audio_file: str, *, monotonic_ns: int | None = None, unix_s: float | None = None) -> None:
+        """Start one benchmark input/response observation window."""
+        if self._current_turn is not None:
+            self.end_turn(error="turn ended before diagnostic completion")
+        self._turn_sequence += 1
+        unix_s = time.time() if unix_s is None else unix_s
+        self._current_turn = {
+            "turn": self._turn_sequence,
+            "input_file": audio_file,
+            "started_unix_s": unix_s,
+            "started_monotonic_ns": time.monotonic_ns() if monotonic_ns is None else monotonic_ns,
+            "phase": self.phase(unix_s),
+            "event_start": len(self.events),
+            "audio_start": len(self.audio_packets),
+        }
+
+    def end_turn(
+        self,
+        *,
+        input_end_monotonic_s: float | None = None,
+        error: str | None = None,
+        client_timing: dict | None = None,
+    ) -> None:
+        """Close a turn, including one with an error or missing audio."""
+        if self._current_turn is None:
+            return
+        self._append(
+            self._turns,
+            {
+                **self._current_turn,
+                "input_end_monotonic_ns": round(input_end_monotonic_s * 1e9)
+                if input_end_monotonic_s is not None
+                else None,
+                "ended_monotonic_ns": time.monotonic_ns(),
+                "event_end": len(self.events),
+                "audio_end": len(self.audio_packets),
+                "error": bounded_error_message(error) if error else None,
+                "client_timing": client_timing or {},
+            },
+        )
+        self._current_turn = None
 
     def phase(self, unix_s: float) -> str:
         """Preserve warmup and reply-drain evidence outside the measurement."""
@@ -82,101 +155,101 @@ class SessionDiagnostics:
             "phase": self.phase(now) if now is not None else "unknown",
             **fields,
         }
-        # RTVI emits the same ErrorFrame independently of the diagnostic observer.
-        # A tool error remains separate from a provider error with identical text.
-        for old in reversed(self.errors):
-            if now is None or old.get("received_unix_s") is None or abs(now - old["received_unix_s"]) > 2:
-                break
-            duplicate_frame = {old["source"], source} == {"protocol", "pipecat_frame"} and (
-                old["component"] == component or "unknown" in (old["component"], component)
-            )
-            duplicate_terminal = (
-                source == "client"
-                and entry.get("code") == "session_error"
-                and old["source"] in {"handshake", "protocol", "pipecat_frame"}
-            )
-            if (
-                len(entry["message"]) < MAX_ERROR_MESSAGE_CHARS
-                and old["message"] == entry["message"]
-                and (duplicate_frame or duplicate_terminal)
-                and source not in old.get("also_reported_by", [])
-            ):
-                if source == "pipecat_frame":
-                    previous_source = old["source"]
-                    old.update({**entry, "received_unix_s": old["received_unix_s"], "phase": old["phase"]})
-                else:
-                    previous_source = source
-                old["also_reported_by"] = sorted(set(old.get("also_reported_by", []) + [previous_source]))
-                return
+        # An exception at teardown can repeat a protocol/handshake error just observed.
+        if source == "client" and entry.get("code") == "session_error":
+            for old in reversed(self.errors):
+                old_time = old.get("received_unix_s")
+                if now is None or old_time is None or abs(now - old_time) > 2:
+                    break
+                if (
+                    len(entry["message"]) < MAX_ERROR_MESSAGE_CHARS
+                    and old["message"] == entry["message"]
+                    and old["source"] in {"handshake", "protocol", "pipecat_frame"}
+                    and source not in old.get("also_reported_by", [])
+                ):
+                    old["also_reported_by"] = sorted(set(old.get("also_reported_by", []) + [source]))
+                    return
         self._append(self.errors, entry)
 
-    def ingest(self, message: dict[str, Any]) -> None:
-        """Consume RTVI envelopes, native Realtime errors, and diagnostic batches."""
+    def ingest(
+        self,
+        message: dict[str, Any],
+        *,
+        received_monotonic_ns: int | None = None,
+        received_unix_s: float | None = None,
+    ) -> None:
+        """Record existing RTVI and Realtime protocol events as metadata."""
         kind = str(message.get("type") or "")
         if kind == "server-message" and isinstance(message.get("data"), dict):
-            self.ingest(message["data"])
+            self.ingest(
+                message["data"],
+                received_monotonic_ns=received_monotonic_ns,
+                received_unix_s=received_unix_s,
+            )
             return
-        if kind == DIAGNOSTICS_TYPE:
-            if message.get("schema_version") != 1:
-                self.local_dropped += 1
-                return
-            session = message.get("session_id")
-            if self.server_session is not None and session != self.server_session:
-                self.local_dropped += 1
-                return
-            self.server_session = session
-            self.server_dropped = max(self.server_dropped, int(message.get("dropped_events") or 0))
-            for event in message.get("events", []):
-                if not isinstance(event, dict) or not isinstance(event.get("seq"), int):
-                    self.local_dropped += 1
-                    continue
-                seq = event["seq"]
-                if seq <= self.last_sequence:
-                    continue
-                self.sequence_gaps += max(0, seq - self.last_sequence - 1)
-                self.last_sequence = seq
-                event = dict(event)
-                if event.get("kind") == "error":
-                    event["message"] = bounded_error_message(event.get("message", "Pipecat error"))
-                    self.add_error(
-                        event["message"],
-                        source="pipecat_frame",
-                        component=event.get("component", "unknown"),
-                        frame_id=event.get("frame_id"),
-                        processor=event.get("processor"),
-                        fatal=event.get("fatal"),
-                        category=event.get("category"),
-                        exception_type=event.get("exception_type"),
-                        server_time_ns=event.get("server_time_ns"),
-                    )
-                elif event.get("kind") == "tool_end" and event.get("error"):
-                    event["error"] = bounded_error_message(event["error"])
-                    self.add_error(
-                        event["error"], source="tool", component="tool", tool_call_id=event.get("tool_call_id")
-                    )
-                self._append(self.events, event)
+        marker = _NATIVE_MARKERS.get(kind)
+        if not marker and kind != "error" and not kind.endswith(".failed"):
             return
+        unix_s = time.time() if received_unix_s is None else received_unix_s
+        mono_ns = time.monotonic_ns() if received_monotonic_ns is None else received_monotonic_ns
+        data = message.get("data")
+        data = data if isinstance(data, dict) else {}
+        response = message.get("response")
+        response = response if isinstance(response, dict) else {}
+        response_status = response.get("status")
+
         if kind == "error" or kind.endswith(".failed"):
-            detail = message.get("error", message.get("data", {}))
+            detail = message.get("error", data)
             if isinstance(detail, dict):
                 text = detail.get("error") or detail.get("message") or str(detail)
-                component = _component(str(detail.get("processor", "")) + str(text))
                 self.add_error(
                     str(text),
                     source="protocol",
-                    component=component,
+                    component=_component(str(detail.get("processor", "")) + str(text)),
                     fatal=detail.get("fatal"),
                     code=detail.get("code"),
                     event_type=kind,
+                    received_unix_s=unix_s,
                 )
             else:
-                self.add_error(str(detail), source="protocol", component=_component(str(detail)), event_type=kind)
-        elif kind == "response.done":
-            response = message.get("response", {})
-            if response.get("status") in {"failed", "incomplete"}:
                 self.add_error(
-                    str(response.get("status_details") or response.get("status")), source="protocol", event_type=kind
+                    str(detail),
+                    source="protocol",
+                    component=_component(str(detail)),
+                    event_type=kind,
+                    received_unix_s=unix_s,
                 )
+        elif kind == "response.done" and response_status in ("failed", "incomplete"):
+            self.add_error(
+                str(response.get("status_details") or response_status),
+                source="protocol",
+                event_type=kind,
+                received_unix_s=unix_s,
+            )
+
+        if marker is None:
+            return
+        event = {
+            "kind": marker,
+            "protocol_event": kind,
+            "received_monotonic_ns": mono_ns,
+            "received_unix_s": unix_s,
+            "audio_sequence": self.audio_sequence,
+        }
+        if marker.startswith("tool_"):
+            event.update(
+                tool_call_id=_string(data.get("tool_call_id") or message.get("tool_call_id")),
+                tool_name=_string(data.get("function_name") or message.get("name")),
+                cancelled=bool(data.get("cancelled") or message.get("cancelled")),
+            )
+        elif marker.startswith("response_"):
+            event.update(
+                response_id=_string(response.get("id") or message.get("response_id")),
+                status=_string(response_status),
+            )
+        elif marker == "text_segment":
+            event.update(segment_id=_string(data.get("segment_id")), output_type=_string(data.get("output_type")))
+        self._append(self.events, event)
 
     def audio(
         self,
@@ -188,8 +261,11 @@ class SessionDiagnostics:
         unix_s: float,
         deficit_ms: float | None,
         detect: bool,
+        response_id: str | None = None,
     ) -> None:
         """Record PCM arrival and the detector's actual cumulative deficit."""
+        if not nbytes:
+            return
         if sample_rate <= 0 or channels <= 0:
             self.local_dropped += 1
             return
@@ -205,129 +281,229 @@ class SessionDiagnostics:
             "duration_ms": duration,
             "audio_ms_before": self.audio_ms,
             "phase": self.phase(unix_s),
+            "playback_deficit_ms": deficit_ms,
         }
+        if response_id is not None:
+            packet["response_id"] = response_id
         self._append(self.audio_packets, packet)
         if detect and deficit_ms is not None and deficit_ms > 20:
             self._append(self.gaps, {**packet, "deficit_ms": deficit_ms})
         self.audio_ms += duration
 
-    def _classify(self, gap: dict, starts: list[dict], ends: dict, boundaries: dict) -> dict:
-        result = {**gap, "classification": "unknown", "confidence": "unavailable", "evidence": []}
-        if self.local_dropped or self.server_dropped or self.sequence_gaps:
-            result["evidence"].append("diagnostic_capture_incomplete")
-            return result
-        seq = gap["audio_sequence"]
-        discontinuity = self.audio_discontinuity_after_sequence
-        if discontinuity is not None and seq > discontinuity:
-            result["evidence"].append("realtime_audio_discontinuity")
-            return result
-        preceding = [e for e in starts if e["audio_sequence"] < seq]
-        if not preceding:
-            result["evidence"].append("no_audio_epoch")
-            return result
-        epoch = preceding[-1]
-        identifier = epoch.get("epoch")
-        result["epoch"] = identifier
-        baseline = next(
-            (p["audio_ms_before"] for p in self.audio_packets if p["audio_sequence"] == epoch["audio_sequence"] + 1),
-            None,
-        )
-        if baseline is None or identifier not in ends:
-            result["evidence"].append("epoch_start_or_end_missing")
-            return result
-        end = ends[identifier]
-        if discontinuity is not None and end["audio_sequence"] > discontinuity:
-            result["evidence"].append("realtime_audio_discontinuity")
-            return result
-        if seq > end["audio_sequence"]:
-            result["evidence"].append("outside_completed_audio_epoch")
-            return result
-        packets = [
-            p for p in self.audio_packets if epoch["audio_sequence"] < p["audio_sequence"] <= end["audio_sequence"]
+    def _turn_report(self, raw: dict, attributed: dict[int, dict]) -> dict:
+        events = self.events[raw["event_start"] : raw["event_end"]]
+        packets = self.audio_packets[raw["audio_start"] : raw["audio_end"]]
+        packet_by_seq = {p["audio_sequence"]: p for p in packets}
+        first_audio = packets[0]["received_monotonic_ns"] if packets else None
+        rounds: list[dict] = []
+        tools: dict[str, dict] = {}
+        fences: list[int] = []
+        resumed: list[tuple[int, int]] = []
+        response_starts: list[tuple[int, str]] = []
+        stopped_at = None
+
+        for index, event in enumerate(events):
+            kind = event["kind"]
+            sequence = event["audio_sequence"]
+            timestamp = event["received_monotonic_ns"]
+            if kind == "llm_start":
+                rounds.append(
+                    {
+                        "round_trip": len(rounds) + 1,
+                        "event_index": index,
+                        "started_monotonic_ns": timestamp,
+                        "ended_monotonic_ns": None,
+                        "first_pcm_after_start": packet_by_seq.get(sequence + 1),
+                    }
+                )
+            elif kind == "llm_end" and rounds and rounds[-1]["ended_monotonic_ns"] is None:
+                rounds[-1]["ended_monotonic_ns"] = timestamp
+            elif kind in {"tool_start", "tool_end"} and isinstance(event.get("tool_call_id"), str):
+                tool_id = event["tool_call_id"]
+                tool = tools.setdefault(tool_id, {"tool_call_id": tool_id, "tool_name": None})
+                tool["tool_name"] = tool["tool_name"] or event.get("tool_name")
+                tool.setdefault(kind, (index, timestamp, bool(event.get("cancelled"))))
+            elif kind == "speech_end":
+                stopped_at = sequence
+            elif kind == "speech_start":
+                if stopped_at == sequence and sequence in packet_by_seq and sequence + 1 in packet_by_seq:
+                    resumed.append((index, sequence + 1))
+                stopped_at = None
+            elif kind == "response_start" and isinstance(event.get("response_id"), str):
+                response_starts.append((index, event["response_id"]))
+            elif kind in {"interruption", "user_start"} or (
+                kind == "response_end" and event.get("status") in {"cancelled", "failed", "incomplete"}
+            ):
+                fences.append(index)
+                stopped_at = None
+
+        for position, llm_round in enumerate(rounds):
+            pcm = llm_round["first_pcm_after_start"]
+            if pcm is None:
+                continue
+            next_round = rounds[position + 1]["event_index"] if position + 1 < len(rounds) else len(events)
+            next_fence = next((fence for fence in fences if fence > llm_round["event_index"]), len(events))
+            boundary = min(next_round, next_fence)
+            if boundary < len(events) and pcm["received_monotonic_ns"] >= events[boundary]["received_monotonic_ns"]:
+                llm_round["first_pcm_after_start"] = None
+
+        followups = [
+            self._tool_report(tool, packets, packet_by_seq, rounds, response_starts, fences, resumed, attributed)
+            for tool in tools.values()
         ]
-        client_ms = sum(p["duration_ms"] for p in packets)
-        server_ms = end.get("output_audio_ms", -1) - epoch.get("output_audio_ms", 0)
-        if abs(client_ms - server_ms) > 1 or len(packets) != end["audio_sequence"] - epoch["audio_sequence"]:
-            result["evidence"].append("client_server_audio_alignment_mismatch")
-            return result
-        offset = gap["audio_ms_before"] - baseline
-        result["epoch_audio_offset_ms"] = offset
-        units = sorted(boundaries.get(identifier, []), key=lambda e: e["source_audio_ms"])
-        # First packet after a tool-driven LLM followup belongs to a separate wait,
-        # rather than a claim that audio stalled inside the following sentence.
-        if seq == epoch["audio_sequence"] + 1 and epoch.get("tool_call_ids"):
-            result.update(
-                classification="tool_wait",
-                confidence="frame_evidence",
-                evidence=["first_audio_of_tool_followup", "not_proof_of_tool_execution_duration"],
-            )
-            return result
-        previous_seq = seq - 1
-        if any(
-            e.get("kind") == "interruption" and previous_seq <= e.get("audio_sequence", -1) < seq for e in self.events
-        ):
-            result.update(
-                classification="interruption",
-                confidence="frame_evidence",
-                evidence=["interruption_near_playback_boundary"],
-            )
-            return result
-        if not units or not all(e.get("sentence_aligned") for e in units):
-            result["evidence"].append("sentence_audio_alignment_unavailable")
-            return result
-        first_packet = seq == epoch["audio_sequence"] + 1
-        if first_packet:
-            previous = next(
-                (
-                    e
-                    for e in reversed(preceding[:-1])
-                    if ends.get(e.get("epoch"), {}).get("audio_sequence") == epoch["audio_sequence"]
-                ),
-                None,
-            )
-            previous_units = boundaries.get(previous.get("epoch"), []) if previous else []
-            if not previous_units or not all(e.get("sentence_aligned") for e in previous_units):
-                result["evidence"].append("preceding_sentence_alignment_unavailable")
-                return result
-        if any(abs(e["source_audio_ms"] - offset) <= 1 for e in units):
-            result.update(
-                classification="between_sentences",
-                confidence="audio_offset",
-                evidence=["sentence_boundary_at_playback_cursor"],
-            )
-        elif seq != epoch["audio_sequence"] + 1 and any(e["source_audio_ms"] < offset for e in units):
-            result.update(
-                classification="within_sentence",
-                confidence="audio_offset",
-                evidence=["playback_cursor_inside_aligned_sentence_unit"],
-            )
+        return {
+            **{k: v for k, v in raw.items() if k not in {"event_start", "event_end", "audio_start", "audio_end"}},
+            "first_audio_received_monotonic_ns": first_audio,
+            "first_audio_latency_ms": _ms(raw["input_end_monotonic_ns"], first_audio),
+            "audio_packets_observed": len(packets),
+            "llm_round_trips": len(rounds) if rounds else None,
+            "llm_round_trips_completed": sum(r["ended_monotonic_ns"] is not None for r in rounds) if rounds else None,
+            "tool_calls_observed": len(tools),
+            "tool_announcements_observed": sum(e["kind"] == "tool_announced" for e in events),
+            "round_trips": [
+                {
+                    "round_trip": r["round_trip"],
+                    "started_monotonic_ns": r["started_monotonic_ns"],
+                    "ended_monotonic_ns": r["ended_monotonic_ns"],
+                    "first_pcm_after_start_monotonic_ns": (r["first_pcm_after_start"] or {}).get(
+                        "received_monotonic_ns"
+                    ),
+                }
+                for r in rounds
+            ],
+            "tool_followups": followups,
+        }
+
+    def _tool_report(
+        self,
+        tool: dict,
+        packets: list[dict],
+        packet_by_seq: dict[int, dict],
+        rounds: list[dict],
+        response_starts: list[tuple[int, str]],
+        fences: list[int],
+        resumed: list[tuple[int, int]],
+        attributed: dict[int, dict],
+    ) -> dict:
+        started = tool.get("tool_start")
+        completed = tool.get("tool_end")
+        start_ns = started[1] if started else None
+        end_ns = completed[1] if completed else None
+        cancelled = bool(completed and completed[2])
+        evidence = ["matched_tool_markers"] if started and completed else ["incomplete_tool_markers"]
+
+        following_round = None
+        candidate_audio = None
+        boundary_audio = None
+        response_id = None
+        if started and completed and not cancelled and started[0] < completed[0]:
+            fence = next((i for i in fences if i > started[0]), math.inf)
+            following_round = next((r for r in rounds if completed[0] < r["event_index"] < fence), None)
+            if following_round:
+                evidence.append("later_native_llm_start")
+                next_round = next(
+                    (r["event_index"] for r in rounds if r["event_index"] > following_round["event_index"]),
+                    math.inf,
+                )
+                candidate_audio = following_round["first_pcm_after_start"]
+                resume_sequence = next(
+                    (
+                        sequence
+                        for index, sequence in resumed
+                        if following_round["event_index"] < index < min(next_round, fence)
+                    ),
+                    None,
+                )
+                # Require the first subsequent PCM at the bracketed boundary.
+                # Another segment later in the response cannot establish it.
+                if candidate_audio and candidate_audio["audio_sequence"] == resume_sequence:
+                    boundary_audio = candidate_audio
+            else:
+                for index, candidate_id in response_starts:
+                    if completed[0] < index < fence:
+                        response_id = candidate_id
+                        candidate_audio = next((p for p in packets if p.get("response_id") == response_id), None)
+                        evidence.append("later_realtime_response")
+                        break
+        elif cancelled:
+            evidence.append("tool_cancelled")
+
+        audio = boundary_audio or candidate_audio
+        audio_seq = audio["audio_sequence"] if audio else None
+        prior = packet_by_seq.get(audio_seq - 1) if audio_seq is not None else None
+        observed_audio_ns = audio["received_monotonic_ns"] if audio else None
+        previous_audio_ns = prior["received_monotonic_ns"] if prior else None
+        playback_gap_ms = None
+        if boundary_audio:
+            evidence.append("native_speech_stop_start_before_pcm")
+            discontinuity = self.audio_discontinuity_after_sequence
+            if self.local_dropped or (discontinuity is not None and audio_seq > discontinuity):
+                evidence.append("incomplete_audio_evidence")
+            elif boundary_audio["playback_deficit_ms"] is not None:
+                playback_gap_ms = max(0.0, boundary_audio["playback_deficit_ms"])
+                tagged = attributed.setdefault(audio_seq, {"tool_call_ids": []})
+                tagged["tool_call_ids"].append(tool["tool_call_id"])
+        elif candidate_audio:
+            evidence.append("pcm_observed_after_marker_without_speech_alignment")
         else:
-            result["evidence"].append("no_bracketing_sentence_boundary")
-        return result
+            evidence.append("no_followup_audio_observed")
+
+        llm_start_ns = following_round["started_monotonic_ns"] if following_round else None
+        return {
+            "tool_call_id": tool["tool_call_id"],
+            "tool_name": tool["tool_name"],
+            "tool_started_monotonic_ns": start_ns,
+            "tool_completed_monotonic_ns": end_ns,
+            "tool_observed_ms": _ms(start_ns, end_ns) if started and completed and started[0] < completed[0] else None,
+            "cancelled": cancelled,
+            "next_llm_round_trip": following_round["round_trip"] if following_round else None,
+            "next_llm_started_monotonic_ns": llm_start_ns,
+            "tool_completion_to_llm_start_ms": _ms(end_ns, llm_start_ns),
+            "realtime_response_id": response_id,
+            "previous_audio_received_monotonic_ns": previous_audio_ns,
+            "followup_audio_received_monotonic_ns": observed_audio_ns,
+            "tool_completion_to_followup_audio_ms": _ms(end_ns, observed_audio_ns),
+            "llm_start_to_followup_audio_ms": _ms(llm_start_ns, observed_audio_ns),
+            "previous_to_followup_audio_received_ms": _ms(previous_audio_ns, observed_audio_ns),
+            "playback_gap_ms": playback_gap_ms,
+            "evidence": evidence,
+        }
 
     def finish(self) -> dict:
-        """Classify after delayed semantic markers have been received."""
-        starts = sorted(
-            (e for e in self.events if e.get("kind") == "audio_epoch_start"), key=lambda e: e["audio_sequence"]
-        )
-        ends = {e.get("epoch"): e for e in self.events if e.get("kind") == "audio_epoch_end"}
-        boundaries = collections.defaultdict(list)
-        for event in self.events:
-            if event.get("kind") == "sentence_boundary":
-                boundaries[event.get("epoch")].append(event)
-        classified = [self._classify(g, starts, ends, boundaries) for g in self.gaps]
+        """Compute diagnostics from native event and audio receive order after the benchmark."""
+        attributed: dict[int, dict] = {}
+        turns = [self._turn_report(turn, attributed) for turn in self._turns]
+        classified = []
+        for gap in self.gaps:
+            if tool := attributed.get(gap["audio_sequence"]):
+                classified.append(
+                    {
+                        **gap,
+                        **tool,
+                        "classification": "tool_wait",
+                        "confidence": "native_marker_context",
+                        "evidence": ["later_llm_round_and_native_playback_boundary", "client_receive_order_only"],
+                    }
+                )
+            else:
+                classified.append(
+                    {
+                        **gap,
+                        "classification": "unknown",
+                        "confidence": "unavailable",
+                        "evidence": ["native_markers_do_not_align_sentences"],
+                    }
+                )
         return {
-            "schema_version": 1,
-            "server_session_id": self.server_session,
+            "schema_version": 2,
             "coverage": {
-                "server_events_available": self.server_session is not None,
-                "server_dropped_events": self.server_dropped,
+                "native_event_counts": dict(collections.Counter(e["protocol_event"] for e in self.events)),
                 "local_dropped_events": self.local_dropped,
-                "sequence_gaps": self.sequence_gaps,
                 "audio_discontinuity_after_sequence": self.audio_discontinuity_after_sequence,
             },
             "events": self.events,
             "audio_packets": self.audio_packets,
+            "turns": turns,
             "glitch_events": classified,
             "glitch_summary": {
                 label: {
@@ -403,11 +579,21 @@ def write_diagnostic_reports(directory, clients: list[dict]) -> dict:
     gaps = []
     errors = []
     qualities = []
+    turn_timing = []
+    tool_followups = []
     for client in clients:
         identifier = client.get("stream_id", "unknown")
         diagnostics = client.get("diagnostics") or {}
         for gap in diagnostics.get("glitch_events", []):
             gaps.append({"client": identifier, **gap})
+        for turn in diagnostics.get("turns", []):
+            turn_timing.append(
+                {"client": identifier, **{key: value for key, value in turn.items() if key != "tool_followups"}}
+            )
+            for followup in turn.get("tool_followups", []):
+                tool_followups.append(
+                    {"client": identifier, "turn": turn["turn"], "phase": turn.get("phase"), **followup}
+                )
         reported_errors = session_errors(client)
         status = quality_status(client, reported_errors)
         for error in reported_errors:
@@ -424,7 +610,14 @@ def write_diagnostic_reports(directory, clients: list[dict]) -> dict:
                 "diagnostic_coverage": diagnostics.get("coverage", {}),
             }
         )
-    for filename, items in (("glitch_events", gaps), ("session_errors", errors), ("session_quality", qualities)):
+    reports = (
+        ("glitch_events", gaps),
+        ("session_errors", errors),
+        ("session_quality", qualities),
+        ("turn_timing", turn_timing),
+        ("tool_followups", tool_followups),
+    )
+    for filename, items in reports:
         (directory / f"{filename}.json").write_text(json.dumps(items, indent=2), encoding="utf-8")
         columns = list(dict.fromkeys(key for item in items for key in item)) or ["client"]
         with (directory / f"{filename}.csv").open("w", encoding="utf-8", newline="") as file:
@@ -435,19 +628,21 @@ def write_diagnostic_reports(directory, clients: list[dict]) -> dict:
             )
     measured = [gap for gap in gaps if gap.get("phase") == "measurement"]
     total_ms = sum(gap["deficit_ms"] for gap in measured)
+    observed_labels = {gap["classification"] for gap in measured}
+    labels = (*GAP_CLASSES, *(label for label in LEGACY_GAP_CLASSES if label in observed_labels))
     summary = {
         label: {
             "events": sum(g["classification"] == label for g in measured),
             "deficit_ms": sum(g["deficit_ms"] for g in measured if g["classification"] == label),
         }
-        for label in GAP_CLASSES
+        for label in labels
     }
     legacy_flagged = sum(q["raw_glitch_flag"] and not q["captured_glitch_events"] for q in qualities)
     lines = [
         f"Clients flagged without captured gap events: {legacy_flagged} (event count/duration unavailable).",
         "Measurement-window buffer deficits (>20ms), not listening-confirmed audio defects.",
-        "Unknown means insufficient or unaligned sentence evidence, not a clean pass.",
-        "Boundary classifications describe context, not proven root cause.",
+        "Unknown indicates insufficient evidence to identify the context of a detected gap.",
+        "Native boundary classifications describe the order observed by the client.",
         "Classification       Events  Event share  Deficit(ms)  Duration share",
     ]
     for label, values in summary.items():
@@ -464,4 +659,7 @@ def write_diagnostic_reports(directory, clients: list[dict]) -> dict:
         "reported_errors": len(errors),
         "clients_with_errors": sum(q["reported_errors"] > 0 for q in qualities),
         "flagged_clients_without_event_evidence": legacy_flagged,
+        "turn_timing_rows": len(turn_timing),
+        "turns_with_llm_round_trip_evidence": sum(t.get("llm_round_trips") is not None for t in turn_timing),
+        "tool_followup_rows": len(tool_followups),
     }

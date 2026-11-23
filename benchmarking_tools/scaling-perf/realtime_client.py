@@ -99,7 +99,15 @@ class RealtimeFrameAdapter:
                 raise EndOfBotUtterance
             pcm = parse_output_audio(event)
             if pcm:
-                return AudioFrame(pcm, self.realtime.output_sample_rate, 1)
+                response_id = event.get("response_id")
+                return AudioFrame(
+                    pcm,
+                    self.realtime.output_sample_rate,
+                    1,
+                    received_monotonic_ns=self.realtime.received_monotonic_ns,
+                    received_unix_s=self.realtime.received_unix_s,
+                    response_id=response_id if isinstance(response_id, str) and response_id else None,
+                )
 
 
 class RealtimeClient(ProtocolClient):
@@ -149,7 +157,11 @@ class RealtimeClient(ProtocolClient):
             return
         if self._diagnostic_drain is not None and kind == "response.output_audio.delta" and event.get("delta"):
             self.diagnostics.mark_audio_discontinuity()
-        self.diagnostics.ingest(event)
+        self.diagnostics.ingest(
+            event,
+            received_monotonic_ns=self.realtime.received_monotonic_ns if self.realtime else None,
+            received_unix_s=self.realtime.received_unix_s if self.realtime else None,
+        )
 
     @property
     def ready_log(self) -> str:

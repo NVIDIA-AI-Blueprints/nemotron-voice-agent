@@ -74,45 +74,10 @@ Useful flags (passed through to `simulate_concurrency.sh`):
 ./simulate_concurrency.sh --clients "4" --no-save-audio
 ```
 
-## Diagnose Individual Sessions
-
-The `generic-assistant/server-perf` recipe enables `SCALING_PERF_DIAGNOSTICS=true` by default. Other Compose recipes leave it disabled. The observer sends bounded frame metadata to scaling clients without changing synthesis or audio pacing policy.
-
-For a host-native server, enable capture from the repository root.
-
-```bash
-SCALING_PERF_DIAGNOSTICS=true uv run nva-pipecat
-```
-
-To compare the performance recipe without server markers, run this command from the repository root.
-
-```bash
-SCALING_PERF_DIAGNOSTICS=false \
-docker compose --profile generic-assistant/server-perf up -d
-```
-
-After a `simulate_concurrency.sh` run, inspect the artifacts in each concurrency directory. Direct `benchmark.py` results retain the underlying diagnostics in client JSON; use run aggregation to generate the CSV and text reports:
-
-1. Open `session_quality.csv` for every client's completion status, raw glitch flag, captured event count, and diagnostic coverage.
-2. Open `session_errors.json` for reported errors, including nonfatal errors from clients that returned valid responses.
-3. Open `glitch_events.csv` for individual deficit durations, phases, classifications, confidence, and evidence.
-4. Open `glitch_summary.txt` for measurement-window event and duration shares.
-
-`Successful` describes error-free completion. Refer to the gap reports for audio continuity. `Degraded` retains valid-response sessions with recorded errors, failed turns, or a hard deadline. Use diagnostic coverage to distinguish missing evidence from a measured result.
-
-`tool_wait` marks a detected gap before the first audio of a tool-triggered follow-up. Its duration measures the playback deficit and can include time for the tool, the follow-up response, synthesis, and delivery. When Realtime recovery discards audio and breaks alignment, affected epochs remain `unknown`.
-
-The metadata extension is supported by the repository's RTVI endpoint and Realtime gateway. Other endpoints can omit it. Lifecycle markers contain identifiers, timing, PCM offsets, and boundary information. They omit spoken text, tool arguments/results, and PCM payloads. Error messages are captured separately with credential redaction. Standard transcript logs and optional WAV capture remain separate.
-
-When supported, diagnostics-enabled RTVI readiness rejections include an HTTP 503 `service_not_ready` reason in the handshake report. This distinguishes a rejected startup from a later provider error; other endpoints can supply less detail.
-
-Refer to [Session Diagnostics](../../benchmarking_tools/scaling-perf/README.md#session-diagnostics) for enable/disable behavior, completion definitions, privacy scope, classification limits, and reaggregation commands. Compare diagnostics-enabled and diagnostics-disabled runs when measuring observer overhead.
-
 ## Outputs
 
 - Single-level run: `results_<timestamp>/` with `benchmark_summary.json`, `results.txt`, `results.tsv`, `results.json`, plus per-client logs and audio dumps.
 - Sweep: `perf_suite_<timestamp>/` with suite-level `results.txt`, `results.tsv`, `results.json`, and one `run_<N>_clients/` directory per concurrency level.
-- Run aggregation also writes `session_quality`, `session_errors`, and `glitch_events` files in JSON/CSV formats, plus `glitch_summary.txt`. These remain available for completed sessions with reported errors.
 
 See the perf README for the full output layout and per-flag reference:
 
