@@ -860,6 +860,8 @@ class Voice:
         entry, self.progress_due = self.progress_due, None
         if not self.worknote.quiet(entry.id):
             return None
+        if self.worknote.steps_ended(entry):
+            return self._still_working(entry)
         update = self.worknote.offer(entry.id)
         self.observe("progress.offered", delegation_id=entry.id)
         note = self.layout.note(self.spoken.told_text(entry.id))
@@ -867,6 +869,22 @@ class Voice:
         progress = self.layout.progress("\n\n".join(self.instructions), update, note)
         plan = Progress(entry, self.version, [dict(message) for message in self.context.get_messages()])
         return TalkerCall(spec=self.progress_spec, request=progress, format=self.talker.response_format, plan=plan)
+
+    def _still_working(self, entry: OpenWork) -> TalkerCall | None:
+        """Return the fixed line for work whose tool calls all ended, once per delegation.
+
+        No model words it, since only the backend knows what those calls did. An empty ``still_working`` line keeps
+        the voice silent.
+        """
+        self.worknote.worded(entry.id)
+        text = self.lines.still_working.strip()
+        if entry.still_said or not text:
+            self.observe("progress.silent", delegation_id=entry.id)
+            return None
+        entry.still_said = True
+        entry.lines_said += 1
+        self.observe("progress.said", delegation_id=entry.id, fixed=True)
+        return self.saying(Line(LineKind.STATUS, text, (entry.id,), tells=(entry.id,), again=False))
 
     def speaking(self, call: TalkerCall, text: str) -> None:
         """Add a routing ``speak``'s words to this response's line as they go to speech."""

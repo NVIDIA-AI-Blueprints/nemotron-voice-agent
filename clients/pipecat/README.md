@@ -15,6 +15,7 @@ It is a React and TypeScript single-page app built with [Vite](https://vite.dev/
 - **Metrics dashboard**: latency charts for time to first byte (TTFB) and time to first answer token (TTFAT), token usage, and connection status.
 - **Conversation transcript**: live ASR and bot-response display.
 - **Webcam vision panel**: live webcam input for the multimodal Omni Subagents example.
+- **Event log**: an **EVENT LOG** tab in the developer view that prints the requests and events of the Frontend/Backend Live backend, for an example that lists the `event_log` capability.
 
 The **TTFAT Metrics** section of the **METRICS** tab shows the latest TTFAT value and a chart of the last 10 values for each large language model (LLM) processor. TTFAT runs from the LLM request to the first answer token, or to the start of a tool call. It equals the LLM TTFB plus the time the model thinks before it answers. With reasoning off, TTFAT is almost the same as TTFB. A turn that calls a tool makes two LLM requests, so it reports two TTFAT values. TTFAT does not include speech synthesis time.
 
@@ -49,6 +50,35 @@ npm run lint
 ```
 
 ESLint runs the TypeScript, React Hooks, and React Refresh rules defined in `eslint.config.js`.
+
+## Event log
+
+An example whose entry in [`examples_registry.yaml`](../../examples_registry.yaml) lists the `event_log` capability gets an **EVENT LOG** tab in the developer view. With that capability, the Frontend/Backend Live UI bot relays the OpenAI-format events of its backend to the browser as RTVI server messages of type `live-event`. Refer to [Event Relay](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#event-relay) for the message and its limits.
+
+The tab is a console of requests and events:
+
+- Filter by type: **Requests**, **Lifecycle**, **Tools**, **Text**, and **Errors**.
+- Follow the newest event, and select **Jump to latest** after you scroll away.
+- Select **Copy JSON** to copy the events, or **Clear** to empty the list.
+- Select a row to see its whole JSON.
+
+The tab keeps the newest 2,000 events. Its code and styles load only for an example that lists the capability, so other examples show nothing of them and do not download their code. The center panel (`src/components/content/CenterPanel.tsx`) loads `src/components/events/EventLogScreen.tsx` lazily after `src/liveEvents/gate.ts` allows it. A small store outside React (`src/liveEvents/store.ts`) holds the current call's events, so the log of a call that just ended stays on screen until the next call starts.
+
+The tests feed the log a call recorded from the real airline tools (`tests/airline-recorded-call.ts`). The file is generated, and a unit test fails when it is out of date. Run this command from the repository root after you change an airline tool, and add `--check` to verify without writing:
+
+```bash
+uv run python scripts/export_airline_demo.py      # writes clients/pipecat/tests/airline-recorded-call.ts
+```
+
+### Test
+
+The client has no `npm test` script. With Node.js 22.18 or newer, run the tests with `node --test` from `clients/pipecat`:
+
+```bash
+node --test tests/*.test.ts
+```
+
+The event log tests are in `live-events`. For the Python tests and the scripted caller check, refer to [Verify the Desk](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#verify-the-desk).
 
 ## Backend endpoints
 

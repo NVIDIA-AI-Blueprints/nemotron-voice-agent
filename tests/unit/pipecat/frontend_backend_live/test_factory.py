@@ -42,7 +42,16 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.models.endpoint
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.prompts import load_prompts
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import ProtocolError, SessionConfig
 from nemotron_voice_agent.pipecat.shared.delegation_contract import ModelEndpoint
-from tests.unit.pipecat.core_helpers import CORE_BLOCK, CORE_TEXTS, EXAMPLE_SETTINGS, FakeChat, chunk, core_block
+from tests.unit.pipecat.core_helpers import (
+    CAFE_UI_BOT,
+    CORE_BLOCK,
+    CORE_TEXTS,
+    EXAMPLE_SETTINGS,
+    FakeChat,
+    chunk,
+    core_block,
+    example_settings,
+)
 from tests.unit.pipecat.frontend_helpers import (
     CATALOG,
     RootCase,
@@ -501,15 +510,25 @@ class DefaultPromptTests(RootCase, unittest.IsolatedAsyncioTestCase):
         defaults = factory.backend_defaults(state.core, endpoints, instructions)
         return build_core(state.core, endpoints=endpoints, defaults=defaults)
 
-    async def test_no_instructions_get_the_generic_or_the_cafe_prompt(self):
+    async def check_domain(self, domain: str, *, banned: str):
+        """The live core gets the generic prompt, and the UI bot's core the prompt and channel of ``domain``."""
         groups = yaml.safe_load(Path(factory.__file__).with_name("prompts.yaml").read_text(encoding="utf-8"))
         groups = groups["agent_prompts"]
-        channel, core = groups["Channel"]["cafe"]["content"].strip(), groups["Core"]
+        channel, core = groups["Channel"][domain]["content"].strip(), groups["Core"]
         notes = (core["texts.caller_note"]["content"], core["texts.voice_note"]["content"])
         live = await self.system_message(factory.delegation_core)
         self.assertEqual(live, compose(groups["Backend"]["generic"]["content"].strip(), *notes))
         self.assertNotIn(channel, live)
-        self.assertNotIn("Bluebird", live)
+        self.assertNotIn(banned, live)
         ui_bot = await self.system_message(self.ui_bot_core)
-        cafe = f"{groups['Backend']['cafe']['content'].strip()}\n\n{channel}"
-        self.assertEqual(ui_bot, compose(cafe, *notes, core["texts.result_formats.speak_display"]["content"]))
+        text = f"{groups['Backend'][domain]['content'].strip()}\n\n{channel}"
+        self.assertEqual(ui_bot, compose(text, *notes, core["texts.result_formats.speak_display"]["content"]))
+
+    async def test_no_instructions_get_the_generic_or_the_airline_prompt(self):
+        # The registry's own ui_bot: the Demo Air desk.
+        await self.check_domain("airline", banned="Demo Air")
+
+    async def test_the_cafe_is_one_ui_bot_block_away(self):
+        settings = ExampleConfig.model_validate(example_settings(CAFE_UI_BOT))
+        self.enterContext(patch.object(pipeline, "example_config", lambda: settings))
+        await self.check_domain("cafe", banned="Bluebird")

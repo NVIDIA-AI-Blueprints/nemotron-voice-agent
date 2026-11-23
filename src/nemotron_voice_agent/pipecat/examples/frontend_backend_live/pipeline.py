@@ -24,6 +24,7 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import message_text
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.tables import pick
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.factory import (
+    EXAMPLE_KEY,
     adapter_block,
     backend_defaults,
     core_client,
@@ -39,6 +40,11 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.frontend import
     FrontendEdges,
     FrontendSpec,
     build_frontend,
+)
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.live_events import (
+    RtviLiveEvents,
+    relays_events,
+    tapped,
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.services import build_stt, build_tts
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.task_cards import RtviTaskCards
@@ -135,7 +141,10 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     defaults = backend_defaults(core_settings, endpoints, backend_instructions)
     core = build_core(core_settings, endpoints=endpoints, defaults=defaults)
-    delegation = ServerDelegation(core_client(core))
+    # The delegation's requests and the OpenAI-format events of its responses also go to the UI, when the example's
+    # registry entry has the event_log capability (the UI's Event log tab prints them).
+    live_events = RtviLiveEvents() if relays_events(EXAMPLE_KEY) else None
+    delegation = ServerDelegation(tapped(core_client(core), live_events))
     audio_recorder = create_audio_recorder()
 
     latency_observer = UserBotLatencyObserver()
@@ -231,6 +240,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         await send_rtvi_payloads(task, finalized_turn_payloads(None, message))
 
     async def _on_session_start() -> None:
+        if live_events is not None:
+            # The events so far (the conversation the bot opened) go first, and every later one goes out at once.
+            live_events.start(task.queue_frame)
         if audio_recorder:
             await audio_recorder.start_recording()
 
@@ -283,4 +295,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             try:
                 await delegation.close()
             finally:
-                await core.aclose()
+                try:
+                    await core.aclose()
+                finally:
+                    if live_events is not None:
+                        live_events.close()

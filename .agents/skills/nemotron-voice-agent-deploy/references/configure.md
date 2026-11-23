@@ -7,7 +7,7 @@ Open this file only to change the configuration of a deployed agent. Edit the sm
 | File | Owns |
 | --- | --- |
 | `.env` | Feature flags, tracing, chat history, audio debugging, buffering, supported vLLM memory overrides |
-| `examples_registry.yaml` | `pipecat.selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `pipecat.transports`, and per example under `pipecat.examples.<example>`: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, and, on `frontend-backend-live` only, `live` and `config` (below) |
+| `examples_registry.yaml` | `pipecat.selection` (`all` or one example id, overridden by the `EXAMPLE_SELECTION` env var that each Compose app service sets), `pipecat.transports`, and per example under `pipecat.examples.<example>`: `services` (offered keys per slot, first available is the default), `settings.<slot>.<key>` (setting defaults), `categories.<slot>` (slot reads another catalog category), `defaults.prompt`, `agent_prompt_keys` (talker prompts that the UI selector hides), `capabilities` (UI features, such as `event_log` for `frontend-backend-live`), and, on `frontend-backend-live` only, `live` and `config` (below) |
 | `services.yaml` | Built-in LLM, ASR, and TTS entries under `server` (NIM) and `single-gpu` (vLLM and NeMo-Speech.cpp). An entry with `nvcf` is also served by NVIDIA Cloud |
 | `settings.yaml` | Editable LLM setting profiles referenced by `settings: <profile>` in `services.yaml` |
 | `src/nemotron_voice_agent/pipecat/examples/<package>/prompts.yaml` | Built-in prompts for that example |
@@ -18,7 +18,7 @@ The `frontend-backend-live` entry also has the following blocks:
 - `config`: the Live example's own settings. Their defaults live in the example's settings models.
   - `frontend`: the talker and the voice. `frontend.cascade.talker_style` names the talker's style for each `llm` services key: `json` by default, or `tools`.
   - `core`: the delegation core. `core.backend.adapter` is `llm`, `llm-agent`, or `harness`. With `llm-agent` or `harness`, also set `core.delegation.result_format: speak_display`. The core's texts are the `agent_prompts.Core` entries of the example's `prompts.yaml`.
-  - `ui_bot`: the UI bot's channel and its core, with `ui_bot.core` merged over `core`.
+  - `ui_bot`: the UI bot's channel and its core, with `ui_bot.core` merged over `core`. The shipped entry sets `ui_bot.channel: airline`, `core.backend.prompt: airline`, and `core.backend.tools: {airline: {}}`, which run the Demo Air travel desk. For the Bluebird Cafe, set them to `cafe` and `{cafe: {}}`, and also set `defaults.prompt: [cafe]` and `agent_prompt_keys: [airline]`.
 
 Example ids map to packages under `src/nemotron_voice_agent/pipecat/examples/`: `generic-assistant` → `generic`, `multilingual-assistant` → `multilingual`, `omni-assistant` → `omni_assistant`, `omni-assistant-subagents` → `omni_assistant_subagents`, `frontend-backend-live` → `frontend_backend_live`.
 

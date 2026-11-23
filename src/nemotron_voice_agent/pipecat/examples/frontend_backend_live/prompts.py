@@ -30,6 +30,8 @@ class FixedLines(StrictSettings):
     refusal: StrictStr
     app_wait_line: StrictStr
     holding: StrictStr
+    # A prompt file written before this line existed gets the shipped text.
+    still_working: StrictStr = "Still working on that, one moment."
     intro: StrictStr
     greeting: StrictStr
 

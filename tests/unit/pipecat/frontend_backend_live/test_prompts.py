@@ -15,6 +15,12 @@ from unittest.mock import patch
 import yaml
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live import prompts
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.tools.airline.schemas import (
+    AIRLINE_TOOLS,
+)
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.tools.airline.store import (
+    SAMPLE_ACCOUNTS,
+)
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.prompts import load_prompts
 
 PROMPTS_PATH = Path(prompts.__file__).with_name("prompts.yaml")
@@ -34,7 +40,7 @@ class PromptFileTests(unittest.TestCase):
     def test_a_named_prompt_is_read_stripped_or_refused(self):
         self.assertEqual(LOADED.text("Channel", "cafe"), GROUPS["Channel"]["cafe"]["content"].strip())
         where = re.escape(str(PROMPTS_PATH))
-        unknown = rf"agent_prompts\.Backend\.kiosk was not found in {where}; known: cafe, generic"
+        unknown = rf"agent_prompts\.Backend\.kiosk was not found in {where}; known: cafe, airline, generic"
         with self.assertRaisesRegex(KeyError, unknown):
             LOADED.text("Backend", "kiosk")
         blank = replace(LOADED, agent_prompts={"Channel": {"cafe": {"content": " \n"}}})
@@ -59,6 +65,10 @@ class PromptFileTests(unittest.TestCase):
                 self.load(yaml.safe_dump({"agent_prompts": {**GROUPS, "Lines": given}}, sort_keys=False))
         silent = {**lines, "holding": {"content": ""}}
         self.assertEqual(self.load(yaml.safe_dump({"agent_prompts": {**GROUPS, "Lines": silent}})).lines.holding, "")
+        # A file written before the still_working line existed keeps loading, with the shipped text.
+        older = {k: v for k, v in lines.items() if k != "still_working"}
+        loaded = self.load(yaml.safe_dump({"agent_prompts": {**GROUPS, "Lines": older}})).lines
+        self.assertEqual(loaded.still_working, LOADED.lines.still_working)
 
     def test_a_file_may_omit_only_the_tools_style_texts_and_add_none(self):
         tools = ["tool_frame_before", "tool_routing", "tool_rules", "tools.delegate", "tools.wait"]
@@ -107,3 +117,74 @@ class PromptFileTests(unittest.TestCase):
                 load_prompts()
         with self.assertRaisesRegex(KeyError, r"agent_prompts\.Cascade was not found in .*other\.yaml"):
             self.load("custom:\n  content: not the talker prompt\n")
+
+
+REAL_CARRIERS = re.compile(
+    r"\b(american|delta|united|southwest|jetblue|alaska|spirit|frontier|lufthansa|emirates|british airways|"
+    r"air canada|qantas|air france|klm|ryanair|easyjet|indigo|g force)\b",
+    re.IGNORECASE,
+)
+CITIES = (
+    "Atlanta",
+    "Boston",
+    "Chicago",
+    "Dallas",
+    "Denver",
+    "Las Vegas",
+    "Los Angeles",
+    "Miami",
+    "New York",
+    "Phoenix",
+)
+
+
+class AirlinePromptTests(unittest.TestCase):
+    """The Demo Air prompts say the same as the tool pack does, and name nothing real."""
+
+    @staticmethod
+    def talker() -> dict:
+        return yaml.safe_load(PROMPTS_PATH.read_text(encoding="utf-8"))["airline"]
+
+    def whole(self) -> dict[str, str]:
+        return {
+            "talker": self.talker()["content"],
+            "backend": GROUPS["Backend"]["airline"]["content"],
+            "channel": GROUPS["Channel"]["airline"]["content"],
+        }
+
+    def test_the_talker_lists_exactly_the_tools_of_the_pack(self):
+        self.assertEqual(self.talker()["tools_available"], [tool["name"] for tool in AIRLINE_TOOLS])
+
+    def test_the_prompts_name_the_one_made_up_airline_and_no_real_one(self):
+        for name, text in self.whole().items():
+            with self.subTest(name):
+                self.assertIn("Demo Air", text)
+                self.assertIsNone(REAL_CARRIERS.search(text), REAL_CARRIERS.search(text))
+        self.assertNotIn("airlines worldwide", self.whole()["talker"])
+        self.assertNotIn("names are real", self.whole()["talker"].lower())
+
+    def test_the_talker_and_the_backend_state_the_scope_and_the_window(self):
+        for name in ("talker", "backend"):
+            text = self.whole()[name]
+            with self.subTest(name):
+                self.assertIn("twelve U.S. cities", text)
+                self.assertIn("60 days ahead", text)
+                for city in CITIES:
+                    self.assertIn(city, text)
+        backend = self.whole()["backend"]
+        for word in ("not_served", "where_we_fly", "cancelled"):
+            self.assertIn(word, backend)
+
+    def test_the_shared_lines_name_no_one_so_the_domain_the_registry_picks_decides_who_greets(self):
+        for name, line in GROUPS["Lines"].items():
+            with self.subTest(name):
+                for persona in ("Remy", "Bluebird", "Ava", "Demo Air"):
+                    self.assertNotIn(persona, line["content"])
+        self.assertIn("the person and business your instructions describe", GROUPS["Lines"]["intro"]["content"])
+
+    def test_every_sample_account_the_prompts_say_aloud_is_in_the_store(self):
+        accounts = {account.user_id.rsplit("_", 1)[0].replace("_", " "): account for account in SAMPLE_ACCOUNTS}
+        for name, text in self.whole().items():
+            for said in re.findall(r'"([a-z]+ [a-z]+) zero zero (?:one|two)"', text):
+                with self.subTest(name, said=said):
+                    self.assertIn(said, accounts)
