@@ -33,9 +33,6 @@ livekit = [
     "livekit-agents>=1.8.11,<2",
     "livekit-plugins-silero>=1.8.11,<2",
     "livekit-plugins-openai>=1.8.11,<2",
-    # TEMPORARY git pin: the NVIDIA Speech STT/TTS changes of livekit/agents#6706 are merged on main (Nov 12, 2026)
-    # but not yet in a PyPI release (livekit-plugins-nvidia 1.8.11 predates them). Replace this with
-    # "livekit-plugins-nvidia>=1.8.12" and remove [tool.uv.sources] when the next release ships.
     "livekit-plugins-nvidia",
 ]
 dev = [
@@ -81,7 +78,8 @@ override-dependencies = [
     "protobuf>=6.33.6",
     "langchain-core>=1.4.1",
     "uuid-utils>=0.16.0",
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
+    "dnspython>=2.9.2",
     "nvidia-riva-client>=2.27.0,<3",
     "multidict>=6.9.1,<7",
     "urllib3>=2.8.0",
