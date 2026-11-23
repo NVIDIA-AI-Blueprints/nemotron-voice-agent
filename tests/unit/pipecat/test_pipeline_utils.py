@@ -28,11 +28,14 @@ from nemotron_voice_agent.pipecat.shared.pipeline_utils import (
 class GenericASRSelectionTest(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_type_selects_stt_and_vad_independently_of_http_url(self):
         transcribe = {"asr_type": "transcribe"}
+        single_gpu = {**transcribe, "vad_stop_secs": 0.8}
         prompted = {**transcribe, "transcription_prompt": "Produce a verbatim transcript of the audio."}
         spanish = {**transcribe, "language_code": "es-ES"}
         english = {"language_code": "en-US"}
         for asr_id, default, selected, expected, prompt, language, expected_language in (
             ("self-hosted:transcribe", {}, transcribe, True, None, "en-US", "en-US"),
+            ("self-hosted:transcribe", {}, single_gpu, True, None, "en-US", "en-US"),
+            ("", single_gpu, {}, True, None, "en-US", "en-US"),
             ("self-hosted:transcribe", {}, prompted, True, prompted["transcription_prompt"], "en-US", "en-US"),
             ("", transcribe, {}, True, None, "en-US", "en-US"),
             ("self-hosted:streaming", transcribe, {}, False, None, "en-US", "en-US"),
@@ -74,7 +77,9 @@ class GenericASRSelectionTest(unittest.IsolatedAsyncioTestCase):
                 await generic_pipeline.bot(SimpleNamespace(body=body))
             self.assertEqual(transcribe_stt.call_count, int(expected))
             self.assertEqual(streaming_stt.call_count, int(not expected))
-            params.assert_called_once_with(True, vad_only=expected)
+            params.assert_called_once_with(
+                True, vad_only=expected, vad_stop_secs=(selected if asr_id else default).get("vad_stop_secs", 0.5)
+            )
             if expected:
                 transcribe_stt.Settings.assert_called_once_with(
                     model="test-asr", language=expected_language, prompt=prompt
@@ -91,6 +96,12 @@ class GenericASRSelectionTest(unittest.IsolatedAsyncioTestCase):
 
 
 class UserAggregatorParamsTest(unittest.TestCase):
+    def test_catalog_vad_default_and_env_override(self):
+        for override, expected in (("", 0.8), ("0.3", 0.3)):
+            with self.subTest(override=override), patch.dict(os.environ, {"SILERO_VAD_STOP_SECS": override}):
+                params = build_user_aggregator_params(False, vad_only=True, vad_stop_secs=0.8)
+                self.assertEqual(params.vad_analyzer.params.stop_secs, expected)
+
     def test_vad_only_forces_the_pure_vad_branch(self):
         for override, expected in (("", 0.5), ("0.8", 0.8)):
             with (

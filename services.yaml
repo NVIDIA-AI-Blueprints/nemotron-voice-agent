@@ -192,3 +192,13 @@ single-gpu:
       model: "nemotron-3.5-asr-streaming-0.6b"
       settings: nemo-speech-asr
       language_code: "auto"
+    nemotron-transcribe:
+      name: Nemotron 3.5 Transcribe
+      asr_type: transcribe
+      supported_languages: [cs, nl, en, fr, de, hi, it, ko, pl, pt, ru, sk, es, bg, hr, da, et, fi, hu, ja, lv, lt, ro, sl, sv, th, tr, uk, ar, bn, zh, el, he, id, mt, fil, hy, ta, nn, vi]
+      server: http://nemotron-transcribe:9000/v1
+      health_path: "/ready"
+      model: nvidia-nemotron-3p5-transcribe
+      language_code: en-US
+      speaker_diarization_supported: false
+      vad_stop_secs: 0.8

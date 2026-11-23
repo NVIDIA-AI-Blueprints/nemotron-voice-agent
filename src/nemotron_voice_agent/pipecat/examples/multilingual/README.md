@@ -77,7 +77,7 @@ After deploying, validate the session language with the steps in [Testing](#test
 
 ## Transcribe ASR
 
-Optional. Transcribe runs self-hosted with the server recipe only. Start it with `docker compose --profile multilingual-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-multilingual=0`. The scale option keeps the NIM ASR sidecar from using GPU memory. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting, then choose the session language in **Voice Settings**. Transcribe writes the transcript in the spoken language. The session language does not change it. Refer to [Configure ASR](../../../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment and language compatibility.
+Optional. Transcribe runs self-hosted with the server or single-GPU recipe. Start the server NIM with `docker compose --profile multilingual-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-multilingual=0`. The scale option keeps the NIM ASR sidecar from using GPU memory. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting, then choose the session language in **Voice Settings**. Transcribe writes the transcript in the spoken language. The session language does not change it. Refer to [Configure ASR](../../../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment, including single-GPU setup, and language compatibility.
 
 ## Customization
 

@@ -721,6 +721,51 @@ class RepositoryCatalogTests(unittest.TestCase):
             "nemotron-asr-streaming-multilingual",
         )
 
+    def test_single_gpu_transcribe_matches_server_capabilities_with_its_own_readiness_and_vad(self) -> None:
+        catalog = load_yaml_file(REPO_ROOT / "services.yaml")
+        nim = catalog["server"]["asr"]["nemotron-transcribe"]
+        cpp = catalog["single-gpu"]["asr"]["nemotron-transcribe"]
+        for field in (
+            "name",
+            "asr_type",
+            "supported_languages",
+            "model",
+            "language_code",
+            "speaker_diarization_supported",
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(cpp[field], nim[field])
+        self.assertEqual(cpp["server"], "http://nemotron-transcribe:9000/v1")
+        self.assertEqual(cpp["health_path"], "/ready")
+        self.assertEqual(cpp["vad_stop_secs"], 0.8)
+        self.assertEqual(nim["health_path"], "/v1/health/ready")
+        self.assertEqual(nim.get("vad_stop_secs", 0.5), 0.5)
+
+    def test_single_gpu_transcribe_compose_profile_health_and_lightning_dependency(self) -> None:
+        compose = load_yaml_file(REPO_ROOT / "docker" / "sidecars" / "docker-compose.nemotron-transcribe.yaml")
+        service = compose["services"]["nemotron-transcribe-single-gpu"]
+        self.assertEqual(service["profiles"], ["transcribe-asr-single-gpu"])
+        self.assertEqual(service["image"].split(":-", 1)[1].rstrip("}"), "nvcr.io/nvidia/nemo-speech.cpp:26.10")
+        self.assertEqual(
+            service["healthcheck"]["test"],
+            ["CMD", "/opt/nemo-speech/bin/nemo-speech", "health", "--url", "http://127.0.0.1:9000/ready", "--quiet"],
+        )
+        # Compose resolves a relative bind source from docker/sidecars/. It must match the downloader default.
+        default_source = service["volumes"][0]["source"].split(":-", 1)[1].rstrip("}")
+        self.assertEqual(
+            (REPO_ROOT / "docker" / "sidecars" / default_source).resolve(),
+            (REPO_ROOT / "models" / "transcribe").resolve(),
+        )
+        lightning = load_yaml_file(REPO_ROOT / "docker" / "sidecars" / "docker-compose.nemotron35-lightning.yaml")
+        self.assertEqual(
+            lightning["services"]["nvidia-llm-vllm-lightning"]["depends_on"]["nemotron-transcribe-single-gpu"],
+            {"condition": "service_healthy", "required": False},
+        )
+        # The shared anchor must not carry it: LiveKit has no Transcribe sidecar, and its service resets the dependency.
+        self.assertNotIn("depends_on", lightning["x-vllm-lightning"])
+        livekit = (REPO_ROOT / "docker" / "livekit" / "docker-compose.yaml").read_text()
+        self.assertIn("depends_on: !reset []", livekit)
+
     def test_transcribe_languages_match_nim_support_matrix(self) -> None:
         catalog = load_yaml_file(REPO_ROOT / "services.yaml")
         self.assertCountEqual(
