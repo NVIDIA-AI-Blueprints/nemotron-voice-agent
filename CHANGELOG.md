@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Experimental NVIDIA Dynamo recipes for the Generic and Multilingual Assistants.** The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` profiles serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the Server ASR and TTS NIMs, including **Streaming Input** in the Generic Assistant. You can add Dynamo workers on other GPUs.
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
 - **Frontend/Backend Live example.** A talker replies, delegates to a backend LLM, LLM agent, or harness such as Hermes, or waits. Cloud, `/server`, and `/single-gpu` recipes serve the Bluebird Cafe assistant.
-- **Live gateway.** Live session clients reach the Frontend/Backend Live example at `/v1/live` over WebRTC or WebSocket. Set `LIVE_API_TOKEN` or `LIVE_ENABLED=true` to serve it.
+- **Live gateway.** The Frontend/Backend Live example serves `/v1/live` over WebRTC and WebSocket, with backend task controls and opt-in WebSocket reconnect for Responses-mode clients. Set `LIVE_API_TOKEN` or `LIVE_ENABLED=true` to serve it.
 - **Nemotron 3.5 Super VL on NVIDIA Cloud.** `nemotron-super` is served from NVIDIA Cloud with a **Reasoning Effort** setting, and it is the Frontend/Backend Live backend default on the Cloud and `/server` recipes. On `/server`, it needs GPUs `1` and `2`.
 
 ### Changed

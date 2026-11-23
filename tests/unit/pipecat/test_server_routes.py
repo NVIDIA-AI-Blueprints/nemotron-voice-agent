@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import tempfile
@@ -72,6 +73,21 @@ class ServerRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "application/json")
         self.assertEqual(response.json(), {"status": "ok"})
 
+    def test_tools_catalog_includes_configured_browser_backend_tools(self) -> None:
+        selection = examples_registry.Selection("all", False, tuple(examples_registry.EXAMPLES), "generic-assistant")
+        with patch.object(examples_registry, "_SELECTION", selection), TestClient(server.create_app()) as client:
+            cafe = client.get("/api/tools", params={"pipeline_mode": "frontend-backend-live"})
+            generic = client.get("/api/tools", params={"pipeline_mode": "generic-assistant"})
+
+        self.assertEqual(cafe.status_code, 200)
+        tools = {tool["name"]: tool for tool in cafe.json()}
+        self.assertEqual(set(tools), {"get_menu", "manage_cart", "place_order"})
+        self.assertEqual({tool["scope"] for tool in tools.values()}, {"backend"})
+        self.assertEqual(tools["place_order"]["parameters"]["properties"]["confirmed"]["type"], "boolean")
+        self.assertEqual(generic.status_code, 200)
+        self.assertTrue(any(tool["name"] == "calculate_bmi" for tool in generic.json()))
+        self.assertTrue(all("scope" not in tool for tool in generic.json()))
+
     def test_session_config_rejects_non_string_service_ids(self) -> None:
         with TestClient(server.create_app()) as client:
             for field, value in (("llm_id", {"bad": "value"}), ("asr_id", 123), ("tts_id", True)):
@@ -80,6 +96,49 @@ class ServerRouteTests(unittest.TestCase):
 
                     self.assertEqual(response.status_code, 400)
                     self.assertEqual(response.json(), {"detail": f"{field} must be a string"})
+
+    def test_prompt_layout_and_overrides_are_opt_in(self) -> None:
+        selection = examples_registry.Selection("all", False, tuple(examples_registry.EXAMPLES), "generic-assistant")
+        groups = [{"id": "route", "label": "Routing", "parts": [{"key": "Example.policy", "editable": True}]}]
+
+        def load_layout(*, llm_id):
+            with self.assertRaises(RuntimeError):
+                asyncio.get_running_loop()
+            return groups
+
+        layout = MagicMock(side_effect=load_layout)
+        resolve_hook = examples_registry.resolve_hook
+
+        def resolve(spec, name):
+            return layout if name == "ui_prompt_layout" else resolve_hook(spec, name)
+
+        with (
+            patch.object(examples_registry, "_SELECTION", selection),
+            patch.object(examples_registry, "resolve_hook", side_effect=resolve),
+            patch.object(server, "_ensure_services_ready_for_connection", return_value=None),
+            patch.object(server, "_store_session_config", return_value="test") as store,
+            TestClient(server.create_app()) as client,
+        ):
+            live = {"pipeline_mode": "frontend-backend-live", "llm_id": "self-hosted:nemotron-lightning"}
+            generic = {"pipeline_mode": "generic-assistant"}
+            self.assertEqual(client.get("/api/prompt-layout", params=generic).json(), [])
+            self.assertEqual(client.get("/api/prompt-layout", params=live).json(), groups)
+            layout.assert_called_once_with(llm_id=live["llm_id"])
+
+            overrides = {"Example.policy": "A new policy."}
+            self.assertEqual(client.post("/api/start", json={**live, "prompt_overrides": overrides}).status_code, 200)
+            self.assertEqual(store.call_args.args[0]["prompt_overrides"], overrides)
+            self.assertEqual(
+                client.post("/api/session-config", json={**generic, "prompt_overrides": overrides}).status_code, 200
+            )
+            self.assertNotIn("prompt_overrides", store.call_args.args[0])
+            self.assertEqual(client.post("/api/start", json={**live, "prompt_overrides": [42]}).status_code, 400)
+            for route in ("/api/start", "/api/session-config"):
+                rejected = client.post(route, json={**live, "prompt_overrides": {"Example.readonly": "New text"}})
+                self.assertEqual(rejected.status_code, 400)
+                self.assertEqual(
+                    rejected.json()["detail"], "Prompt 'Example.readonly' is not editable for this session"
+                )
 
     def test_transcribe_language_endpoint_uses_static_catalog_without_grpc(self) -> None:
         transcribe = {"asr_type": "transcribe", "supported_languages": ["de", "hi", "es"]}

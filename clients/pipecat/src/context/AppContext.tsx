@@ -9,14 +9,25 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { useDeployment, useDefaultLLMs, useDefaultPrompts, useDefaultASR, useDefaultTTS, useDefaultTools, type DeploymentOption, type LLMService, type Prompt, type ServiceSettingValues, type SimpleService, type Tool, type TransportOption, type TransportType } from "../api";
-import { isSelectablePrompt, readLSArray, writeLSJson } from "../utils";
+import { useDeployment, useDefaultLLMs, useDefaultPrompts, useDefaultASR, useDefaultTTS, useDefaultTools, usePromptLayout, type DeploymentOption, type LLMService, type Prompt, type PromptLayoutGroup, type ServiceSettingValues, type SimpleService, type Tool, type TransportOption, type TransportType } from "../api";
+import { isRecord, isSelectablePrompt, readLSArray, writeLSJson } from "../utils";
 import { AppContext } from "./app-context";
 
 const ASR_STORAGE = "nvidia-voice-agent-asr-custom";
 const TTS_STORAGE = "nvidia-voice-agent-tts-custom";
 const LLM_STORAGE = "nvidia-voice-agent-llm-custom";
 const PROMPT_STORAGE = "nvidia-voice-agent-prompts-custom";
+const PROMPT_OVERRIDE_STORAGE = "nvidia-voice-agent-prompt-overrides";
+const EMPTY_PROMPT_LAYOUT: PromptLayoutGroup[] = [];
+
+type PromptOverride = { example: string; key: string; content: string };
+
+function readPromptOverrides(): PromptOverride[] {
+  return readLSArray<unknown>(PROMPT_OVERRIDE_STORAGE, []).filter((entry): entry is PromptOverride =>
+    isRecord(entry) && typeof entry.example === "string" && typeof entry.key === "string" &&
+    typeof entry.content === "string" && Boolean(entry.content.trim()),
+  );
+}
 
 /** Fallback session language when an example declares none. */
 export const DEFAULT_SESSION_LANGUAGE = "en-US";
@@ -181,6 +192,10 @@ export interface AppState {
 
   prompts: Prompt[];
   promptsLoading: boolean;
+  promptLayout: PromptLayoutGroup[];
+  promptOverrides: ReadonlyMap<string, string>;
+  promptEditsStatus: "ready" | "loading" | "unavailable";
+  setPromptOverride: (key: string, content: string | null) => void;
   selectedPromptKey: string;
   selectPrompt: (key: string) => void;
   addPrompt: (key: string, description: string, content: string) => string | null;
@@ -349,12 +364,21 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   }, [customTTS, persistTTS]);
 
   // --- Prompt state ---
-  const { data: defaultPrompts = [], isLoading: promptsLoading } = useDefaultPrompts(
+  const { data: defaultPrompts = [], isLoading: promptsLoading, isError: promptsUnavailable } = useDefaultPrompts(
     serviceCatalogKey,
     effectiveSelectedASRId,
   );
+  const { data: promptLayout = EMPTY_PROMPT_LAYOUT, isPending: layoutLoading, isError: layoutUnavailable } =
+    usePromptLayout(serviceCatalogKey, effectiveSelectedLLMId);
   const [customPrompts, setCustomPrompts] = useState<Prompt[]>(() => readLSArray<Prompt>(PROMPT_STORAGE, []).map((p) => ({ ...p, builtIn: false })));
+  const [savedPromptOverrides, setSavedPromptOverrides] = useState(readPromptOverrides);
   const [selectedPromptKey, setSelectedPromptKey] = useState("");
+
+  let promptEditsStatus: AppState["promptEditsStatus"] = "ready";
+  if (savedPromptOverrides.some(({ example }) => example === serviceCatalogKey)) {
+    if (promptsLoading || llmsLoading || layoutLoading) promptEditsStatus = "loading";
+    else if (promptsUnavailable || layoutUnavailable) promptEditsStatus = "unavailable";
+  }
 
   const prompts = useMemo(() => [...defaultPrompts, ...customPrompts], [defaultPrompts, customPrompts]);
 
@@ -389,7 +413,36 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     [prompts, effectiveSelectedPromptKey],
   );
 
-  // --- Tools (read-only catalog from active example's tools.yaml) ---
+  const editablePromptKeys = useMemo(() => {
+    const builtInKeys = new Set(prompts.filter((prompt) => prompt.builtIn).map((prompt) => prompt.key));
+    const editable = new Set<string>();
+    for (const { parts } of promptLayout) {
+      for (const part of parts) {
+        const key = part.active ? selectedPrompt?.key : part.key;
+        if (part.editable && key && builtInKeys.has(key)) editable.add(key);
+      }
+    }
+    return editable;
+  }, [promptLayout, prompts, selectedPrompt]);
+
+  const promptOverrides = useMemo(() => new Map(
+    savedPromptOverrides
+      .filter(({ example, key }) => example === serviceCatalogKey && editablePromptKeys.has(key))
+      .map(({ key, content }) => [key, content]),
+  ), [savedPromptOverrides, serviceCatalogKey, editablePromptKeys]);
+
+  const setPromptOverride = useCallback((key: string, content: string | null) => {
+    if (!editablePromptKeys.has(key)) return;
+    setSavedPromptOverrides((previous) => {
+      const next = previous.filter((entry) => entry.example !== serviceCatalogKey || entry.key !== key);
+      if (content?.trim()) next.push({ example: serviceCatalogKey, key, content });
+      return next;
+    });
+  }, [editablePromptKeys, serviceCatalogKey]);
+
+  useEffect(() => writeLSJson(PROMPT_OVERRIDE_STORAGE, savedPromptOverrides), [savedPromptOverrides]);
+
+  // --- Tools (read-only catalog for the active example) ---
   const { data: tools = [], isLoading: toolsLoading } = useDefaultTools(serviceCatalogKey);
 
   const value = useMemo<AppState>(() => ({
@@ -405,7 +458,8 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     selectedVoiceId, setSelectedVoiceId,
     speakerDiarizationEnabled, setSpeakerDiarizationEnabled,
     selectedSessionLanguage, setSelectedSessionLanguage,
-    prompts, promptsLoading, selectedPromptKey: effectiveSelectedPromptKey, selectPrompt: setSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
+    prompts, promptsLoading, promptLayout, promptOverrides, promptEditsStatus, setPromptOverride,
+    selectedPromptKey: effectiveSelectedPromptKey, selectPrompt: setSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
     tools, toolsLoading,
   }), [selectedExample, selectExample, deploymentOptions, deploymentSelectable, availableTransports, effectiveTransport, setTransport, currentSessionId,
        llms, llmsLoading, effectiveSelectedLLMId, selectLLM, addLLM, updateLLM, removeLLM, selectedLLM,
@@ -414,7 +468,8 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
        ttsServices, ttsLoading, effectiveSelectedTTSId, selectTTS, addTTS, updateTTS, removeTTS, selectedTTS,
        speakerDiarizationEnabled, setSpeakerDiarizationEnabled,
        selectedVoiceId, selectedSessionLanguage, setSelectedSessionLanguage,
-       prompts, promptsLoading, effectiveSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
+       prompts, promptsLoading, promptLayout, promptOverrides, promptEditsStatus, setPromptOverride,
+       effectiveSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
        tools, toolsLoading]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

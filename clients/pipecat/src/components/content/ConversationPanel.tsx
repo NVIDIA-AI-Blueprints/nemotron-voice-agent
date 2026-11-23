@@ -42,10 +42,18 @@ type LocalAttachment = {
   error?: string;
 };
 
+type AgentWorker = {
+  id: string;
+  label: string;
+  status: string;
+  statusLabel: string;
+};
+
 type AgentTask = {
   id: string;
   agent: string;
   status: string;
+  statusLabel?: string;
   stage: string;
   detail: string;
   query: string;
@@ -55,6 +63,7 @@ type AgentTask = {
   updatedAt: string;
   attachmentName: string;
   anchorCreatedAt: string;
+  workers?: AgentWorker[];
 };
 
 type AssistantTurn = {
@@ -118,24 +127,68 @@ function attachmentNameFromMessage(message: Record<string, unknown>) {
   return stringField(attachment, "name");
 }
 
+function workersFromMessage(message: Record<string, unknown>): AgentWorker[] | undefined {
+  if (!Array.isArray(message.workers)) return undefined;
+  return message.workers.flatMap((worker) => {
+    if (!isRecord(worker)) return [];
+    const id = stringField(worker, "id");
+    const status = stringField(worker, "status");
+    return id && status ? [{
+      id,
+      label: stringField(worker, "label") || id,
+      status,
+      statusLabel: stringField(worker, "status_label") || status,
+    }] : [];
+  });
+}
+
 function AgentTaskCard({ task }: Readonly<{ task: AgentTask }>) {
   const status = task.status || task.stage || "running";
-  const statusTone =
-    status === "done" || status === "cancelled" ? "done" : status === "failed" || status === "error" ? "failed" : "running";
+  const statusTone = status === "queued" ? "queued"
+    : status === "done" || status === "cancelled" ? "done"
+    : status === "failed" || status === "error" ? "failed" : "running";
+  const workerAnnouncement = useRef<HTMLSpanElement>(null);
+  const previousWorkers = useRef(new Map<string, AgentWorker>());
+
+  useEffect(() => {
+    const workers = task.workers ?? [];
+    const changed = workers.filter((worker) => {
+      const previous = previousWorkers.current.get(worker.id);
+      return previous?.status !== worker.status || previous.statusLabel !== worker.statusLabel;
+    });
+    previousWorkers.current = new Map(workers.map((worker) => [worker.id, worker]));
+    if (workerAnnouncement.current && changed.length) {
+      workerAnnouncement.current.textContent = changed
+        .map((worker) => `${worker.label} ${worker.statusLabel}.`)
+        .join(" ");
+    }
+  }, [task.workers]);
+
   return (
     <li className={`agent-task-card agent-task-card-${statusTone}`}>
+      <span ref={workerAnnouncement} className="agent-task-worker-announcement" role="status" aria-atomic="true" />
       <details open={task.status !== "done"}>
         <summary>
-          <span className={`agent-task-indicator agent-task-indicator-${statusTone}`} aria-label={`Task ${statusTone}`} />
+          <span className={`agent-task-indicator agent-task-indicator-${statusTone}`} aria-hidden="true" />
           <span className="agent-task-title">Agent task</span>
           <span className="agent-task-agent">{task.agent || "agent"}</span>
-          <span className="agent-task-status">{status}</span>
+          <span className="agent-task-status" role="status">{task.statusLabel || status}</span>
         </summary>
         <div className="agent-task-body">
           {task.attachmentName && <p><strong>Attachment:</strong> {task.attachmentName}</p>}
           {task.query && <p><strong>Query:</strong> {task.query}</p>}
           {task.stage && <p><strong>Stage:</strong> {task.stage}</p>}
           {task.detail && <p>{task.detail}</p>}
+          {task.workers && task.workers.length > 0 && (
+            <ul className="agent-task-workers" aria-label="Backend jobs">
+              {task.workers.map((worker) => (
+                <li key={worker.id}>
+                  <span>{worker.label}</span>
+                  <span className="agent-task-worker-status">{worker.statusLabel}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           {task.reasoning && (
             <div className="agent-task-stream">
               <strong>Reasoning</strong>
@@ -302,15 +355,20 @@ export function ConversationPanel() {
         if (!taskId) return;
         const now = new Date().toISOString();
         const spokenResponse = stringField(message, "spoken_response");
+        const workers = workersFromMessage(message);
         const existing = agentTasksRef.current.find((task) => task.id === taskId);
         const anchorCreatedAt =
           existing?.anchorCreatedAt ?? (visibleMessagesRef.current.at(-1)?.createdAt ?? "");
         setAgentTasks((prev) => {
           const previous = prev.find((task) => task.id === taskId);
+          const status = stringField(message, "status") || previous?.status || "running";
+          const statusLabel =
+            stringField(message, "status_label") || (previous?.status === status ? previous.statusLabel : undefined);
           const next: AgentTask = {
             id: taskId,
             agent: stringField(message, "agent") || previous?.agent || "agent",
-            status: stringField(message, "status") || previous?.status || "running",
+            status,
+            statusLabel,
             stage: stringField(message, "stage") || previous?.stage || "",
             detail: stringField(message, "detail") || previous?.detail || "",
             query: stringField(message, "query") || previous?.query || "",
@@ -324,6 +382,7 @@ export function ConversationPanel() {
             createdAt: previous?.createdAt || now,
             updatedAt: now,
             anchorCreatedAt: previous?.anchorCreatedAt || anchorCreatedAt,
+            workers: workers ?? previous?.workers,
           };
           return [...prev.filter((task) => task.id !== taskId), next].slice(-20);
         });

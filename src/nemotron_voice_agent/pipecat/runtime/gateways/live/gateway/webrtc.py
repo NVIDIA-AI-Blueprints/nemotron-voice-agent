@@ -52,6 +52,9 @@ async def create_webrtc_session(
     try:
         async with asyncio.timeout(SDP_TIMEOUT_SECONDS):
             await connection.initialize(sdp, "offer")
+    except asyncio.CancelledError:
+        await session.close("connection_lost", asked_by="the gateway: SDP negotiation was cancelled")
+        raise
     except Exception as exc:
         await session.close("connection_lost", asked_by="the gateway: the SDP offer could not be answered")
         raise HTTPException(400, "WebRTC SDP negotiation failed") from exc
@@ -72,8 +75,14 @@ async def create_webrtc_session(
     async def start() -> None:
         try:
             await session.start()
-        except Exception:
-            logger.exception(f"session={session.id} WebRTC startup failed")
+        except Exception as exc:
+            # Startup may fail after lifecycle.start's guarded open. Keep a diagnostic, but never re-log its
+            # authority-bearing message, cause, context or locals, even when the inner failure was unmarked.
+            reference = getattr(exc, "_live_attachment_reference", None)
+            logger.error(
+                f"session={session.id} WebRTC startup failed: error_type={type(exc).__name__} "
+                f"attachment_reference={reference}"
+            )
 
     session.spawn(start(), "start")
 

@@ -222,4 +222,10 @@ ASR entries can set `speaker_diarization_supported: true` to show the **Diarizat
 
 `streaming_url` is an optional self-hosted LLM field that points at an OpenAI Realtime text session WebSocket. The Services tab shows a **Streaming Input** toggle for it when the example lists `streaming_input` under `capabilities`. For details, refer to [Configure LLM](configure-llm.md).
 
-`api` is an optional LLM field that names the API that the Frontend/Backend Live delegation core uses to call the model: `chat-completions`, the default, or `openai-responses`. A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant, unless the `nvcf` block sets `api: chat-completions`. An `api` in the `nvcf` block applies to the NVIDIA Cloud variant only. For the servers that support `openai-responses`, refer to [Configuration](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) in the Frontend/Backend Live README.
+## Frontend/Backend Live Backend Endpoints
+
+For the Live backend model, `api` defaults to `chat-completions`. Keep that default for the bundled NIM and vLLM recipes and for model profiles that require a reasoning budget or seed. Backend requests to the Responses API do not carry those two settings.
+
+Use `api: openai-responses` with an endpoint that honors `parallel_tool_calls: false`, streams the round's events, and reports output cutoffs with `response.incomplete`. The worker's default timeout is 45 seconds for the first event and 30 seconds between events. You can configure these limits under `core.backend.llm` or `core.backend.llm-agent.worker`.
+
+A top-level `api` on a `server` entry also applies to its NVIDIA Cloud variant. Set `api` inside `nvcf` to override it for that variant. The backend uses `NVIDIA_API_KEY` by default. For a catalog endpoint with its own credentials, set `api_key_env` to the name of the variable that holds the key.

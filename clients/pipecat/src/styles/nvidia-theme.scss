@@ -925,6 +925,10 @@ body {
   border-radius: var(--radius-full);
 }
 
+.agent-task-indicator-queued {
+  border: 2px solid var(--text-muted);
+}
+
 .agent-task-indicator-running {
   border: 2px solid rgba(118, 185, 0, 0.25);
   border-top-color: var(--nvidia-green);
@@ -998,6 +1002,35 @@ body {
 
 .agent-task-body p + p {
   margin-top: var(--space-1);
+}
+
+.agent-task-workers {
+  display: grid;
+  gap: var(--space-1);
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.agent-task-workers li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.agent-task-worker-status {
+  font-size: var(--text-xs);
+}
+
+.agent-task-worker-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .agent-task-stream {
@@ -2313,6 +2346,57 @@ body {
     word-break: normal;
     max-height: 180px;
     overflow-y: auto;
+  }
+}
+
+.prompt-part {
+  &__group {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  &__list {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding-inline-start: 1.4rem;
+
+    > li::marker {
+      color: var(--text-muted);
+      font-size: var(--text-sm);
+    }
+  }
+
+  &__summary,
+  &__catalog > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+  }
+
+  &__summary > .prompt-card__badge {
+    margin-inline-start: var(--space-2);
+  }
+
+  &__body {
+    display: grid;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  &__runtime {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 14px;
+  }
+
+  &__action {
+    width: auto;
+    padding-inline: var(--space-2);
+  }
+
+  &__catalog > .prompts-list {
+    margin-top: var(--space-2);
   }
 }
 

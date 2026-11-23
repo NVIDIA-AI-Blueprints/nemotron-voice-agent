@@ -23,11 +23,16 @@ from starlette.websockets import WebSocketDisconnect
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.adapter.connection import LivePeer
 from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway import LiveGateway, LiveSettings
-from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway.webrtc import expire_unconnected
-from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway.websocket import run_primary_websocket
+from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway.webrtc import create_webrtc_session, expire_unconnected
+from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway.websocket import (
+    MAX_EVENT_BYTES,
+    run_primary_websocket,
+    validate_event_size,
+)
 from nemotron_voice_agent.pipecat.runtime.gateways.live.mount import mount_live
 from nemotron_voice_agent.pipecat.runtime.gateways.live.ports import SessionParts
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import ProtocolError, SessionConfig
+from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation import passthrough
 from tests.unit.pipecat.live_helpers import Collector, FakeAdapter, FakeWebSocket, Stream, response, responses_config
 
 SESSIONS, DELEGATE = "/v1/live/sessions", "/v1/live/delegate"
@@ -76,7 +81,14 @@ class WebSocketTests(unittest.TestCase):
             started = ws.receive_json()
             self.assertEqual((started["type"], started["client_event_id"]), ("session.started", "start_1"))
             self.assertEqual(started["session"]["instructions"], "Be brief.")
-            ws.send_json({"type": "session.input_audio.append", "audio": base64.b64encode(b"\x01\x00" * 480).decode()})
+            audio = {"type": "session.input_audio.append", "audio": base64.b64encode(b"\x01\x00" * 480).decode()}
+            for command, event_id in ((MUTE, "\ud800"), (audio, "\ud800"), (NOTE, {"id": "not text"})):
+                ws.send_text(json.dumps({**command, "event_id": event_id}))
+                refused = ws.receive_json()
+                self.assertEqual((refused["type"], refused["error"]["param"]), ("error", "event_id"))
+                self.assertNotIn("client_event_id", refused)
+                self.assertNotIn("client_event_id", refused["error"])
+            ws.send_json({**audio, "event_id": None})
             ws.send_text("not json")
             self.assertEqual(ws.receive_json()["error"]["message"], "Invalid JSON event")
             ws.send_bytes(b"\x00\x01")
@@ -91,7 +103,8 @@ class WebSocketTests(unittest.TestCase):
             self.assertEqual((closed["type"], closed["reason"]), ("session.closed", "close_requested"))
         engine = engines[0]
         appended = [("thinking", "note", "t1", None)]
-        self.assertEqual((len(engine.audio[0]), engine.appended, engine.closed), (960, appended, True))
+        self.assertEqual([len(chunk) for chunk in engine.audio], [960])
+        self.assertEqual((engine.appended, engine.closed, engine.muted), (appended, True, False))
 
     def test_a_refused_start_gets_an_error_event_then_a_policy_close(self):
         async def refuse(config, transport, connection):
@@ -101,6 +114,7 @@ class WebSocketTests(unittest.TestCase):
         for frame, hooks, code, param, event_id, words in (
             ({"type": "session.input_audio.mute"}, {}, "invalid_value", None, None, first),
             (b"{}", {}, "invalid_value", None, None, first),
+            ({**START, "event_id": "\ud800"}, {}, "invalid_value", "event_id", None, "UTF-8"),
             ({**START, "event_id": "s9", "session": {"model": ""}}, {}, "invalid_value", "session.model", "s9", ""),
             ({**START, "session": {"model": "m", "client": {}}}, {}, "invalid_value", "session.client", "start_1", ""),
             (START, {"factory": refuse}, "server_error", None, "start_1", ""),
@@ -110,7 +124,7 @@ class WebSocketTests(unittest.TestCase):
             with self.subTest(code=code, param=param, words=words, binary=isinstance(frame, bytes)):
                 app, _, engines = make_app(**hooks)
                 with TestClient(app) as client, client.websocket_connect(SESSIONS) as ws:
-                    ws.send_bytes(frame) if isinstance(frame, bytes) else ws.send_json(frame)
+                    ws.send_bytes(frame) if isinstance(frame, bytes) else ws.send_text(json.dumps(frame))
                     error = ws.receive_json()
                     self.assertEqual((error["error"]["code"], error["error"].get("param")), (code, param))
                     self.assertEqual(error.get("client_event_id"), event_id)
@@ -129,15 +143,34 @@ class WebSocketTests(unittest.TestCase):
                 closed = [event["reason"] for event in ws.from_server if event["type"] == "session.closed"]
                 self.assertEqual((closed, engines[0].closed), ([reason], True))
 
-    def test_an_oversized_frame_gets_its_error_then_ends_the_session(self):
-        _, gateway, engines = make_app()
-        ws = run_socket(gateway, START, {**NOTE, "content": "x" * 2**20}, MUTE)
-        self.assertEqual(ws.sent_at_close, ["session.started", "error", "session.closed"])
-        self.assertEqual(ws.kinds(), ws.sent_at_close)
-        error, closed = ws.from_server[1:]
-        self.assertEqual(error["error"]["message"], "WebSocket event exceeds 1 MiB")
-        self.assertIsNone(error.get("client_event_id"))
-        self.assertEqual((closed["reason"], engines[0].muted, engines[0].closed), ("connection_lost", False, True))
+    def test_rejects_oversized_or_invalid_utf8_frames_and_ends_the_session(self):
+        count, remaining = divmod(MAX_EVENT_BYTES, 3)
+        validate_event_size("界" * count + "x" * remaining)
+        for padding, message in (("界" * count, "exceeds 1 MiB"), ("\ud800", "Invalid UTF-8")):
+            for active in (False, True):
+                with self.subTest(message=message, active=active):
+                    _, gateway, engines = make_app()
+                    config = NOTE if active else START
+                    raw = json.dumps({**config, "padding": padding}, ensure_ascii=False)
+                    socket = FakeWebSocket()
+                    if active:
+                        socket.send(START)
+                    socket.to_server.put_nowait(raw)
+                    socket.send(MUTE)
+                    asyncio.run(run_primary_websocket(gateway, socket))
+
+                    [error] = [event for event in socket.from_server if event["type"] == "error"]
+                    self.assertIn(message, error["error"]["message"])
+                    self.assertIsNone(error.get("client_event_id"))
+                    if active:
+                        self.assertEqual(socket.kinds(), ["session.started", "error", "session.closed"])
+                        self.assertEqual(socket.kinds(), socket.sent_at_close)
+                        self.assertFalse(engines[0].muted)
+                        self.assertTrue(engines[0].closed)
+                        self.assertEqual(socket.from_server[-1]["reason"], "connection_lost")
+                    else:
+                        self.assertEqual(socket.kinds(), ["error"])
+                        self.assertEqual(engines, [])
 
     def test_a_failed_start_gets_one_error_then_session_closed(self):
         def core():
@@ -200,6 +233,11 @@ class RouteTests(unittest.TestCase):
             with TestClient(app) as client:
                 info = client.get("/v1/live/info").json()
             self.assertIn("marin", info.pop("voices"))
+            reconnect = info.pop("reconnect")
+            self.assertEqual(reconnect["transports"], ["websocket"])
+            self.assertEqual(reconnect["delegation"], ["responses"])
+            self.assertEqual(reconnect["default_grace_seconds"], 0)
+            self.assertTrue(reconnect["requires_negotiation"])
             self.assertEqual(info, {"max_sessions": 3, **extra})
 
     def test_an_http_session_needs_a_webrtc_offer_it_can_answer(self):
@@ -219,9 +257,7 @@ class RouteTests(unittest.TestCase):
                     self.assertEqual(client.post(SESSIONS, **sent).status_code, status)
             unknown = client.post(SESSIONS, json={"transport": webrtc, "session": {"model": "m", "voice": "x"}})
             error = unknown.json()["error"]
-            self.assertEqual(
-                (unknown.status_code, error["code"], error["param"]), (400, "unknown_parameter", "session.voice")
-            )
+            assert (unknown.status_code, error["code"], error["param"]) == (400, "unknown_parameter", "session.voice")
         self.assertEqual(engines, [])
         app, _, _ = make_app(factory=mock.AsyncMock(side_effect=ProtocolError("No session for you", "server_error")))
         with TestClient(app) as client:
@@ -427,6 +463,102 @@ class MountTests(unittest.TestCase):
                 self.assertEqual(client.get("/somewhere").json(), {"page": "index.html"})
 
 
+def diagnostic_peer():
+    return mock.Mock(
+        initialize=mock.AsyncMock(),
+        close_after_drain=mock.AsyncMock(),
+        get_answer=mock.Mock(return_value={"sdp": OFFER}),
+        event_handler=mock.Mock(side_effect=lambda name: lambda callback: callback),
+    )
+
+
+class ConversationDiagnosticTests(unittest.IsolatedAsyncioTestCase):
+    async def test_attachment_and_delete_failures_never_log_the_authority(self):
+        for transport in ("websocket", "webrtc"):
+            phases = ("refused", "coded", "uncoded", "timeout", "delete")
+            for fault in (*phases, "late-start") if transport == "webrtc" else phases:
+                with self.subTest(transport=transport, fault=fault):
+                    await self.check_diagnostic(transport, fault)
+
+    async def check_diagnostic(self, transport, fault):
+        secret = f"conv_private_{transport}_{fault}"
+        config = CLIENT if fault == "late-start" else responses_config(conversation=secret, store=True)
+        core, frontend = FakeAdapter(), FakeAdapter()
+        core.kept = {secret}
+        failure = (LookupError if fault == "refused" else RuntimeError)(f"request failed for {secret}")
+        failure.__cause__ = OSError(f"cause contains {secret}")
+        failure.__context__ = ValueError(f"context contains {secret}")
+        failure.add_note(f"diagnostic note contains {secret}")
+        if fault == "coded":
+            failure.code = "conversation_busy"
+        if fault == "timeout":
+            core.hold["update"] = asyncio.Event()
+        elif fault != "late-start":
+            core.fail["delete" if fault == "delete" else "update"] = failure
+        peer = diagnostic_peer()
+
+        async def factory(config, transport, ice_servers):
+            return SessionParts(frontend=frontend, connection=peer if transport == "webrtc" else None)
+
+        gateway = LiveGateway(factory, LiveSettings(), core=core.core)
+        self.addAsyncCleanup(gateway.close_all)
+        logged = []
+        sink = logger.add(logged.append, format="{message}", diagnose=True, backtrace=True)
+        try:
+            with mock.patch.object(passthrough, "CONVERSATION_SECONDS", 0.01):
+                async with asyncio.timeout(3):
+                    if fault == "late-start":
+                        session = await gateway.register(config, transport, None)
+                        original_emit = session.emit
+
+                        async def emit(kind, **fields):
+                            if kind == "session.started":
+                                raise failure
+                            await original_emit(kind, **fields)
+
+                        session.emit = emit
+                        gateway.register = mock.AsyncMock(return_value=session)
+                        await create_webrtc_session(gateway, config, OFFER, mock.Mock())
+                        [startup] = [task for task in session.tasks if task.get_name().endswith(":start")]
+                        await startup
+                        await gateway.close_all()
+                    elif transport == "websocket":
+                        ws = FakeWebSocket()
+                        ws.send({**START, "session": config.model_dump(mode="json")})
+                        if fault == "delete":
+                            ws.send({"type": "session.close"})
+                        await run_primary_websocket(gateway, ws)
+                        events = ws.from_server
+                    else:
+                        reply = await create_webrtc_session(gateway, config, OFFER, mock.Mock())
+                        self.assertEqual(reply.status_code, 201)
+                        [session] = gateway.sessions.values()
+                        if fault == "delete":
+                            await session.ready.wait()
+                            await session.close("close_requested")
+                        await session.closed.wait()
+                        events = [call.args[0] for call in peer.send_app_message.call_args_list]
+        finally:
+            logger.remove(sink)
+        text = "".join(logged)
+        self.assertNotIn(secret, text)
+        self.assertEqual(gateway.sessions, {})
+        if fault == "late-start":
+            self.assertIn("WebRTC startup failed: error_type=RuntimeError attachment_reference=None", text)
+            self.assertTrue(frontend.started)
+            return
+        self.assertEqual(events[-1]["type"], "session.closed")
+        errors = [event["error"]["code"] for event in events if event["type"] == "error"]
+        self.assertEqual(
+            errors, [] if fault == "delete" else ["invalid_value" if fault == "refused" else "pipeline_error"]
+        )
+        if fault == "delete":
+            self.assertIn("conversation_delete_failed reference=delete_", text)
+            self.assertIn("cleanup failed: attachment_reference=delete_", text)
+        elif fault != "refused":
+            self.assertIn("conversation_attach_failed reference=attach_", text)
+
+
 class WebRTCTests(unittest.IsolatedAsyncioTestCase):
     async def connect(self, **hooks):
         app, _, self.engines = make_app(**hooks)
@@ -474,14 +606,19 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
         started = (await self.event("session.started"))["session"]
         self.assertEqual((started["id"], started["instructions"]), (body["session"]["id"], "Be brief."))
         self.channel.send(json.dumps(SIGNALLING))
-        self.channel.send(json.dumps({"type": "session.input_audio.mute", "event_id": "mute"}))
-        self.assertEqual((await self.event("session.input_audio.muted"))["client_event_id"], "mute")
+        self.channel.send(json.dumps({**MUTE, "event_id": "\ud800"}))
+        refused = await self.event("error")
+        self.assertEqual(refused["error"]["param"], "event_id")
+        self.assertNotIn("client_event_id", refused)
+        self.assertFalse(self.engines[-1].muted)
+        self.channel.send(json.dumps({**MUTE, "event_id": "mute-茶"}))
+        self.assertEqual((await self.event("session.input_audio.muted"))["client_event_id"], "mute-茶")
         self.channel.send(json.dumps({"type": "session.close", "event_id": "close"}))
         await self.gone()
         await self.until(lambda: self.seen_at_close is not None)
         self.assertIn("session.closed", self.seen_at_close)
         self.assertEqual(self.seen_at_close.count("session.input_audio.muted"), 1)
-        self.assertNotIn("error", self.seen_at_close)
+        self.assertEqual(self.seen_at_close.count("error"), 1)
         self.assertEqual((self.engines[-1].muted, self.engines[-1].closed), (True, True))
 
     async def test_a_peer_that_leaves_ends_its_session_as_a_hang_up(self):
@@ -517,7 +654,7 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
         errors = [(event["error"]["code"], event.get("client_event_id")) for event in self.seen[:2]]
         self.assertEqual(errors, [("pipeline_error", None), ("session_closed", "m")])
 
-    async def test_a_peer_that_never_connects_is_closed_at_the_deadline(self):
+    async def test_an_unconnected_peer_is_closed_at_the_deadline_or_when_setup_is_cancelled(self):
         for status, connected, reasons in (
             ("active", False, ["connection_lost"]),
             ("active", True, []),
@@ -526,6 +663,26 @@ class WebRTCTests(unittest.IsolatedAsyncioTestCase):
             session = mock.Mock(status=status, close=mock.AsyncMock())
             await expire_unconnected(session, mock.Mock(is_connected=mock.Mock(return_value=connected)), timeout=0)
             self.assertEqual([call.args[0] for call in session.close.await_args_list], reasons, (status, connected))
+
+        negotiating = asyncio.Event()
+
+        async def wait_for_offer(sdp, kind):
+            negotiating.set()
+            await asyncio.Future()
+
+        peer = diagnostic_peer()
+        peer.initialize.side_effect = wait_for_offer
+        factory = mock.AsyncMock(return_value=SessionParts(frontend=FakeAdapter(), connection=peer))
+        gateway = LiveGateway(factory, LiveSettings(max_sessions=1))
+        self.addAsyncCleanup(gateway.close_all)
+        setup = asyncio.create_task(create_webrtc_session(gateway, CLIENT, OFFER, mock.Mock()))
+        await asyncio.wait_for(negotiating.wait(), 2)
+        setup.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await setup
+        self.assertEqual(gateway.sessions, {})
+        peer.close_after_drain.assert_awaited_once()
+        await gateway.register(CLIENT, "webrtc", None)
 
 
 async def adapter_factory(config, transport, connection):
@@ -567,6 +724,11 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hook.builds, 1)
         self.assertIs(first.delegation.client, second.delegation.client)
         self.assertEqual(first.delegation.conversation, FakeAdapter.CONVERSATION)
+        settle = mock.Mock()
+        hook.core.begin_caller_turn = mock.Mock(return_value=settle)
+        first.delegation_port.begin_caller_turn()()
+        hook.core.begin_caller_turn.assert_called_once_with(first.delegation.conversation)
+        settle.assert_called_once_with()
 
     async def test_a_stored_session_attaches_to_its_conversation_through_the_one_core(self):
         hook = CountingCore()

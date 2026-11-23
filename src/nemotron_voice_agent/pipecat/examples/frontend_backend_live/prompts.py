@@ -9,9 +9,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import reduce
 from pathlib import Path
+from string import Formatter
 from typing import Any
 
-from pydantic import StrictStr, ValidationError
+from pydantic import StrictStr, ValidationError, field_validator
 
 from nemotron_voice_agent.core.catalog import load_yaml_file
 from nemotron_voice_agent.pipecat.runtime.utils import resolve_prompt_catalog_path
@@ -60,6 +61,7 @@ class WorkTexts(StrictSettings):
     """The words of one open delegation's line in the work note."""
 
     item: StrictStr
+    progress_item: StrictStr
     running: StrictStr
     ended: StrictStr
     ended_call: StrictStr
@@ -97,6 +99,10 @@ class PromptSet(StrictSettings):
     typed_request_label: StrictStr
     work_texts: WorkTexts
     update_label: StrictStr
+    answer_cue: StrictStr | None = None
+    routing_question: StrictStr | None = None
+    notice_update: StrictStr
+    attachment_note: StrictStr | None = None
     result_label: StrictStr
     context_label: StrictStr
     cut_mark: StrictStr
@@ -118,9 +124,35 @@ class PromptSet(StrictSettings):
     tools: RoutingTools = RoutingTools()
     empty_turn_note: StrictStr
 
-    def writer_framed(self, instructions: str) -> str:
-        """Return the client's instructions as the writer reads them: word for word, inside the writer frame."""
-        return self.writer_frame_before + instructions + self.writer_frame_after
+    @field_validator("notice_update")
+    @classmethod
+    def check_notice_update(cls, template: str) -> str:
+        """Check the template with the same fields supplied by the frontend."""
+        try:
+            template.format(request="request", text="text")
+        except (ValueError, KeyError, IndexError, AttributeError) as exc:
+            raise ValueError("notice_update must format with {request} and {text}") from exc
+        return template
+
+    def reconnect_note(self) -> str:
+        """Require supplied uncertainty context only when a frontend claims reconnect capability."""
+        note = self.attachment_note
+        try:
+            fields = [
+                (field, spec, conversion)
+                for _, field, spec, conversion in Formatter().parse(note or "")
+                if field is not None
+            ]
+            if (
+                not note
+                or not note.strip()
+                or not fields
+                or any(field != "text" or spec or conversion for field, spec, conversion in fields)
+            ):
+                raise ValueError("reconnect context requires plain {text} placeholders")
+        except (ValueError, KeyError, IndexError, AttributeError) as exc:
+            raise ValueError("Reconnect requires a usable Cascade.attachment_note containing {text}") from exc
+        return note
 
     def missing(self, entries: Iterable[str]) -> list[str]:
         """Return the entries among ``entries`` (dotted: ``tools.delegate``) that the prompt file lacks."""
@@ -150,6 +182,24 @@ class Prompts:
             raise KeyError(f"agent_prompts.{group}.{name} in {self.path} has no text")
         return content.strip()
 
+    def with_overrides(self, overrides: Mapping[str, str], *, editable: set[str]) -> Prompts:
+        """Apply the browser's edits to this session's prompt snapshot, retaining catalog separators."""
+        groups = dict(self.agent_prompts)
+        for key, content in overrides.items():
+            if key not in editable:
+                raise ValueError(f"Prompt {key!r} is not editable for this session")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError(f"Prompt {key!r} needs non-empty text")
+            group, _, name = key.partition(".")
+            entries = dict(groups[group])
+            entry = entries[name]
+            original = entry["content"]
+            start = original[: len(original) - len(original.lstrip("\n"))]
+            end = original[len(original.rstrip("\n")) :]
+            entries[name] = {**entry, "content": start + content.strip("\n") + end}
+            groups[group] = entries
+        return _loaded(self.path, groups)
+
 
 def _texts(agent_prompts: Mapping[str, Any], group: str, path: Path) -> dict[str, str]:
     """Return each entry's ``content`` in ``agent_prompts.<group>`` by its name, as written."""
@@ -172,7 +222,18 @@ def _group[T: StrictSettings](model: type[T], groups: Mapping[str, Any], group: 
     try:
         return model.model_validate(nested)
     except ValidationError as error:
-        raise ValueError(f"{where}: {error}") from None
+        raise ValueError(f"{where}: {error}{catalog_migration_hint(path)}") from None
+
+
+def catalog_migration_hint(path: Path) -> str:
+    """Point custom catalog users to the current prompt and tool contracts."""
+    shipped = Path(__file__).with_name("prompts.yaml").resolve()
+    if path.resolve() == shipped:
+        return ""
+    return (
+        "\nTo update a custom Live catalog, start from the shipped prompts.yaml and reapply your custom text "
+        "using the current Cascade, Lines, and Core entries and tool schemas."
+    )
 
 
 def load_prompts() -> Prompts:
@@ -180,5 +241,9 @@ def load_prompts() -> Prompts:
     path = resolve_prompt_catalog_path(__file__)
     groups = load_yaml_file(path, required=True).get("agent_prompts")
     groups = groups if isinstance(groups, Mapping) else {}
+    return _loaded(path, groups)
+
+
+def _loaded(path: Path, groups: Mapping[str, Any]) -> Prompts:
     cascade, lines = _group(PromptSet, groups, "Cascade", path), _group(FixedLines, groups, "Lines", path)
     return Prompts(path, groups, cascade, lines, _texts(groups, "Core", path))

@@ -12,7 +12,7 @@ worker sessions. :class:`AdapterSource` is one per core, :class:`BackendAdapter`
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, runtime_checkable
 
 from nemotron_voice_agent.pipecat.shared.delegation_contract import is_progress
@@ -25,12 +25,24 @@ if TYPE_CHECKING:
 Route = Literal["app", "backend", "refused"]
 # ``unclear``: the call may have taken effect, so the IM answers it with texts.owed_output and the backend checks first.
 Outcome = Literal["done", "failed", "unclear"]
-Delivery = Literal["applied", "not_applied"]
+Delivery = Literal["applied", "not_applied", "unknown"]
 StopOutcome = Literal["stopped", "unconfirmed"]
-OpenState = Literal["queued", "running", "waiting_client"]
+OpenState = Literal["queued", "running", "waiting_client", "pausing", "paused"]
 EndedState = Literal["answered", "failed", "cancelled"]
 WorkState = OpenState | EndedState
 Phase = Literal["commentary", "final_answer"]
+
+
+class DecisionRejected(ValueError):
+    """An invalid or incomplete decision attempt that failed before Core admitted an action."""
+
+
+class PlacementExpired(str):
+    """A placement callback has lost its authority without admitting this decision."""
+
+
+class ToolNotExecuted(ValueError):
+    """A trusted tool owner rejects an operation before its effectful callback starts."""
 
 
 def function_call_item(raw: dict) -> dict | None:
@@ -55,9 +67,10 @@ class ToolSource(Protocol):
         """Return the function tools it offers, in the Responses shape."""
 
     async def execute(self, call_id: str, name: str, arguments: str) -> str:
-        """Run one call and return its output; an unknown name returns an error output instead of raising.
+        """Run one call and return its output; a known pre-effect refusal can raise ``ToolNotExecuted``.
 
         A repeated ``call_id`` adds nothing a second time.
+        Other exceptions after dispatch preserve uncertainty about effects already started.
         """
 
 
@@ -103,6 +116,24 @@ class Steering:
 
 
 @dataclass(frozen=True)
+class RefusalDetails:
+    """One refused call's immutable gate snapshot; it is not permission or an input-delivery receipt."""
+
+    work_id: str
+    task_id: str
+    call_id: str
+    generation: int
+    reason: str
+    input_scope: Literal["owned", "global", "none"]
+    caller_attached: bool
+
+    @property
+    def owned_input_pending(self) -> bool:
+        """Whether this refusal saw actual owned input, rather than global placement or another restriction."""
+        return self.reason == "not_run" and self.input_scope == "owned"
+
+
+@dataclass(frozen=True)
 class BoundaryInput:
     """What a safe point takes: the app's outputs, joined and in call order, and at most one steering batch."""
 
@@ -115,9 +146,16 @@ class TaskContext(Protocol):
 
     work_id: str
     task_id: str
+    # Opaque correlation and native-owner namespace; never authority to attach a kept conversation.
+    conversation_ref: str
+    # Private execution ownership can differ for an isolated control invocation of the same logical task.
+    execution_ref: str
+    context_budget: int
+    business_access: Literal["full", "read_only", "core_only"]
     texts: Texts
     continues: str | None
     after_call: bool
+    history_mode: Literal["shared", "focused"]
 
     def request(self) -> dict:
         """Return the settings of the task's next model call: model, composed instructions and the app's functions.
@@ -126,33 +164,74 @@ class TaskContext(Protocol):
         worker session's system prompt for a harness.
         """
 
-    def history(self) -> list[dict]:
+    def history(self, extra: Sequence[dict] = ()) -> list[dict]:
         """Return this task's view of the conversation, as Responses input items within the IM's budget.
 
-        The shared conversation, the Work's input, the task's brief, then its own rounds, outputs and steering. An ended
-        Work's items join the shared conversation in order, so a later task's view begins with the view of that Work's
-        first task, unless the budget trimmed it or other items joined in between. Each message carries an id, and each
-        call and its output a call_id, the same in every task's view: a request's messages carry ids from its
-        delegation's id, except a one-shot session's, which are as sent.
+        A focused task receives its exact thread, assigned sources and current responsibility. A shared task also
+        receives the bounded conversation. Items retain actual message and call identities across views; private host
+        bookkeeping describes current ownership and applied input independently of those conversation items.
+        Required extra items count against the same budget without joining history or becoming applied input.
         """
+
+    def refresh_history(self, *, unconfirmed_calls: Sequence[str] = ()) -> None:
+        """Reconcile recorded ancestry and actual late tool results before a delayed native prompt.
+
+        Preserve the task's own items, history mode, starting settings, and applied-input receipts. Publish exact
+        thread execution facts through backend_state(), including calls absent from a failed model response and
+        owned unconfirmed_calls whose results might not have reached the native model. This does not admit newer
+        conversation input or grant permission; adapters still check the dispatch gate. Native display IDs without
+        a Core execution receipt add no fact; known calls belonging to another thread are rejected.
+        """
+
+    def backend_state(self, extra: Sequence[dict] = ()) -> tuple[dict, ...]:
+        """Return private host state with budget reserved for the same extra items as :meth:`history`."""
+
+    def can_dispatch(self) -> bool:
+        """Whether the task's current lifecycle permits a native prompt handoff."""
 
     def tools(self) -> ToolSource:
-        """Return the IM's work tools for this task, such as ``show``, ``cancel_work`` and ``ask_caller``.
+        """Return this task's display, cancellation, caller-message and question-resolution tools."""
 
-        A backend asks the caller only through ``ask_caller`` or the task's answer.
-        """
+    def tool_sources(self, sources: Sequence[ToolSource]) -> tuple[ToolSource, ...]:
+        """Restrict trusted source capabilities for this execution before offering or running tools."""
 
     def route(self, call: dict) -> Route:
         """Return who runs ``call``; the IM decides once per call, before it runs."""
 
+    def dispatch(self, call: dict, *, suspended: bool = False) -> Route:
+        """Recheck execution permission, recording a refusal when the owning invocation suspended before dispatch."""
+
+    def placement_pending(self, call: dict) -> bool:
+        """Whether a tool call awaits frontend routing or global placement.
+
+        Owned input and higher-priority refusals do not wait here. Recheck after
+        ``wait_for_placement()`` and before routing or dispatching an unpublished call.
+        """
+
+    async def wait_for_placement(self) -> None:
+        """Wait for the existing placement barrier without requiring attachment or consuming owned input.
+
+        This grants no permission: the adapter must recheck the preflight and then ask ``route()``. Its existing
+        stop and retirement lifecycle still owns any pending wait.
+        """
+
     def refusal(self, call_id: str) -> str:
         """Return the output the IM gave a call it refused, which says why."""
+
+    def refusal_details(self, call_id: str) -> RefusalDetails:
+        """Return that refused call's original typed gate snapshot, without rechecking or rerouting it."""
+
+    def pending_input_ready(self) -> bool:
+        """Whether owned input still waits on a live, nonstopping task with current or eligible after-call access."""
 
     def tool_started(self, call: dict, source: str) -> None:
         """Report a call the backend runs as it starts; ``source`` is the label of the source that runs it.
 
         A call that started with no ``route()`` asked, such as an agent's own tool, is the backend's.
         """
+
+    def tool_observed(self, call: dict, source: str) -> None:
+        """Record an adapter-observed tool outside Core dispatch; this reports activity and grants no permission."""
 
     def tool_outcome(self, call_id: str, output: str, outcome: Outcome) -> None:
         """Report that a call the backend ran ended; an ``unclear`` call's ``output`` says why, for the logs only."""
@@ -170,11 +249,18 @@ class TaskContext(Protocol):
         """Report what became of a steering batch the adapter took, once per batch.
 
         ``applied``: the IM joins it to the conversation, and its newest request carries the Work. ``not_applied``: the
-        IM keeps it for the next safe point, or for a follow-up Work once the task ends.
+        IM keeps it for the next safe point, or for a follow-up Work once the task ends. ``unknown`` records an
+        uncertain handoff without automatic reapplication or an applied-input receipt.
         """
 
     def trace(self, kind: str, **fields: Any) -> None:
         """Note a trace of this task for the logs; the IM adds the Work, the task and the carrier."""
+
+
+class ControlContext(TaskContext, Protocol):
+    """An invocation-bound Core-only view and its canonical business context, without native implementation data."""
+
+    original_context: TaskContext
 
 
 class BackendRun(Protocol):
@@ -201,13 +287,33 @@ class BackendRun(Protocol):
         """
 
     async def resume(self) -> None:
-        """Take the app's outputs with ``take_boundary_input()``; then ``events()`` goes on."""
+        """Continue after real application outputs or a confirmed suspension; then ``events()`` goes on."""
+
+    async def suspend(self) -> StopOutcome:
+        """Quiesce this invocation without ending its logical task or inventing application results.
+
+        Return ``stopped`` only after its model/tool activity is quiescent. Retain context and genuine pending
+        application ownership for resumption; ``unconfirmed`` keeps the Core's business-effect fence closed.
+        """
 
     async def stop(self) -> StopOutcome:
         """Stop the task: return once nothing of it runs, or ``unconfirmed`` at the adapter's stop limit.
 
         It never cuts a running call that changes things, and nothing is dispatched after it.
         """
+
+    def on_quiescent(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to positive late resource settlement; return an unsubscribe function.
+
+        The callback does not revise a stop outcome or establish an external business result. It runs only after
+        this invocation's reader and tracked physical activity have settled, without polling or another stop.
+        """
+
+
+class ControlRun(BackendRun, Protocol):
+    """A control invocation that can retain or lazily establish its logical task's owning business run."""
+
+    parent: BackendRun | None
 
 
 @dataclass(frozen=True)
@@ -216,6 +322,10 @@ class Request:
 
     delegation_id: str
     input: tuple[dict, ...]
+    # A placed steering request remains pending even after an adapter takes it, until it reports application.
+    delivery: Literal["landed", "pending"] = "landed"
+    caller_excerpt: str | None = None
+    caller_lines: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -233,6 +343,19 @@ class TaskSummary:
     seconds: float
     question: str | None = None
     answer: str | None = None
+    # A bounded ending of an ordinary answered task, bound to this exact task for continuation routing.
+    answer_end: str | None = None
+    questions: tuple[dict, ...] = ()
+    stop: Literal["none", "stop_requested", "stopped", "unconfirmed"] = "none"
+    answer_publication: Literal["none", "pending", "written", "superseded"] = "none"
+    tool_results: tuple[dict, ...] = ()
+    tool_results_omitted: int = 0
+    continues: str | None = None
+    successor_task_id: str | None = None
+    successor_work_id: str | None = None
+    steering: Literal["active", "continuable", "continued", "unavailable"] | None = None
+    verifies: str | None = None
+    stop_initial: Literal["none", "stop_requested", "stopped", "unconfirmed"] | None = None
 
 
 @dataclass(frozen=True)
@@ -260,6 +383,28 @@ class ConductorInput:
     conversation: tuple[dict, ...]
     # The index in ``conversation`` of the first item this conductor was not given before.
     new_from: int = 0
+    # Thread identity survives a zero-length presentation records window.
+    last_ended_work: str | None = None
+    clarifications: tuple[dict, ...] = ()
+    attempt: int = 1
+    # Private telemetry correlation, never part of the model's conversation or placement authority.
+    conversation_ref: str | None = None
+    last_ended_task: str | None = None
+    control_actions: tuple[dict, ...] = ()
+    # Proven pre-admission rejection from the previous bounded attempt; not a provider failure or new caller input.
+    decision_rejection: str | None = None
+    available_worker_slots: int | None = None
+
+    def routing_targets(self) -> dict:
+        """List the currently presented work that accepts a steer or can be continued."""
+        steer = []
+        continues = []
+        for work in self.works:
+            tasks = [task.task_id for task in work.tasks if task.steering in ("active", "continuable")]
+            if tasks:
+                steer.append({"work_id": work.work_id, "task_ids": tasks})
+            continues.extend(task.task_id for task in work.tasks if task.steering == "continuable")
+        return {"steer": steer, "continues": continues}
 
 
 class DecisionTarget(Protocol):
@@ -278,10 +423,38 @@ class DecisionTarget(Protocol):
         """
 
     async def cancel(self, decision: Cancel) -> str:
-        """Stop a Work, or one task of it, through the stop door; return once the stop is requested."""
+        """Cancel queued requests and request a stop for selected Work or tasks."""
 
-    async def answer(self, decision: Answer) -> str:
-        """End a delegation with this answer from the records; no Work changes."""
+    async def pause(self, decision: Pause) -> str:
+        """Fence selected tasks and retain them while their active invocation becomes quiescent."""
+
+    async def resume_work(self, decision: Resume) -> str:
+        """Authorize selected paused tasks to resume through their existing capacity and input boundaries."""
+
+    async def caller_message(self, decision: CallerMessage) -> str:
+        """Publish a routing question or factual status for its selected sources."""
+
+    async def submit(self, decision: CompleteDecision) -> str:
+        """Validate and apply a complete decision, returning its per-action receipts."""
+
+
+@dataclass(frozen=True)
+class CallerLine:
+    """Select a stored caller line with an optional conductor-supplied excerpt."""
+
+    source_message_id: str
+    sequence: int
+    excerpt: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    """One model-placed task's brief and optional exact ended thread."""
+
+    brief: str
+    continues: str | None = None
+    verifies: str | None = None
+    caller_lines: tuple[CallerLine, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -290,7 +463,8 @@ class Start:
 
     delegations: tuple[str, ...]
     # The conductor's brief for each task, which run in parallel; () is one task on the requests as they came.
-    tasks: tuple[str, ...] = ()
+    tasks: tuple[TaskSpec, ...] = ()
+    clarifications: tuple[str, ...] = ()
 
     async def apply(self, target: DecisionTarget) -> str:
         """Apply this decision to ``target``."""
@@ -298,12 +472,30 @@ class Start:
 
 
 @dataclass(frozen=True)
-class Steer:
-    """These requests join an open Work: one task of it, or every open task when ``task_id`` is ``None``."""
+class WorkTarget:
+    """One exact Work and selected tasks; ``None`` selects the whole Work."""
 
     work_id: str
+    task_ids: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class TaskUpdate:
+    """The conductor's scoped reading of an update for one exact task."""
+
+    task_id: str
+    text: str
+    caller_lines: tuple[CallerLine, ...] = ()
+
+
+@dataclass(frozen=True)
+class Steer:
+    """Send selected sources to the exact Work/task sets in one action."""
+
     delegations: tuple[str, ...]
-    task_id: str | None = None
+    targets: tuple[WorkTarget, ...]
+    clarifications: tuple[str, ...] = ()
+    updates: tuple[TaskUpdate, ...] = ()
 
     async def apply(self, target: DecisionTarget) -> str:
         """Apply this decision to ``target``."""
@@ -312,10 +504,12 @@ class Steer:
 
 @dataclass(frozen=True)
 class Cancel:
-    """Stop a Work, or one task of it when ``task_id`` names one; the other tasks keep running."""
+    """Cancel queued requests or stop selected Work/task sets."""
 
-    work_id: str
-    task_id: str | None = None
+    delegations: tuple[str, ...]
+    targets: tuple[WorkTarget, ...]
+    clarifications: tuple[str, ...] = ()
+    scope: Literal["all"] | None = None
 
     async def apply(self, target: DecisionTarget) -> str:
         """Apply this decision to ``target``."""
@@ -323,18 +517,62 @@ class Cancel:
 
 
 @dataclass(frozen=True)
-class Answer:
-    """End this delegation with ``text`` as its answer, from the records; it touches no Work."""
+class Pause:
+    """Pause the selected logical tasks without cancelling their goals, questions, or recorded effects."""
 
-    delegation_id: str
-    text: str
+    delegations: tuple[str, ...]
+    targets: tuple[WorkTarget, ...]
+    clarifications: tuple[str, ...] = ()
 
     async def apply(self, target: DecisionTarget) -> str:
-        """Apply this decision to ``target``."""
-        return await target.answer(self)
+        """Apply the Core-owned suspension request."""
+        return await target.pause(self)
 
 
-Decision = Start | Steer | Cancel | Answer
+@dataclass(frozen=True)
+class Resume:
+    """Resume selected paused tasks with their retained parameters and actual pending input."""
+
+    delegations: tuple[str, ...]
+    targets: tuple[WorkTarget, ...]
+    clarifications: tuple[str, ...] = ()
+
+    async def apply(self, target: DecisionTarget) -> str:
+        """Apply through normal capacity and dispatch admission."""
+        return await target.resume_work(self)
+
+
+@dataclass(frozen=True)
+class CallerMessage:
+    """Publish one routing question or factual status for selected source obligations."""
+
+    delegations: tuple[str, ...]
+    kind: Literal["question", "status"]
+    message: str = ""
+    clarifications: tuple[str, ...] = ()
+    targets: tuple[WorkTarget, ...] = ()
+
+    async def apply(self, target: DecisionTarget) -> str:
+        """Publish through the owning Core session."""
+        return await target.caller_message(self)
+
+
+DecisionAction = Start | Steer | Cancel | Pause | Resume | CallerMessage
+
+
+@dataclass(frozen=True)
+class CompleteDecision:
+    """All actions selected for one admitted placement request."""
+
+    actions: tuple[DecisionAction, ...]
+    model_authored: bool = field(default=False, compare=False, repr=False)
+
+    async def apply(self, target: DecisionTarget) -> str:
+        """Submit all obligations before the Core releases placement admission."""
+        return await target.submit(self)
+
+
+Decision = DecisionAction | CompleteDecision
 Place = Callable[[Decision], Awaitable[str]]
 
 
@@ -351,14 +589,14 @@ class ControlTools(Protocol):
         """Return the conductor's instructions: ``prompt`` with the tasks its backend runs at once filled in."""
 
     def conductor_tools(self) -> list[dict]:
-        """Return the four control tools, as Responses function tools."""
+        """Return the complete-decision function tool."""
 
-    def decision(self, name: str, arguments: str) -> Decision:
-        """Return the decision one control call makes; ``ValueError`` for a malformed call, which is skipped."""
+    def decision(self, name: str, arguments: str) -> CompleteDecision:
+        """Validate one complete control envelope before any action is applied."""
 
 
 class Conductor(Protocol):
-    """Places the IM session's requests: start Works and their tasks, steer, cancel, or answer from the records."""
+    """Selects placement actions while the Core owns their admission and execution."""
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
         """Place decisions through ``place``, each awaited for its outcome text, then return.
@@ -366,8 +604,8 @@ class Conductor(Protocol):
         The IM calls it one at a time within a call; an arrival may cancel it once before it placed anything, and the
         conductor may let its agent finish that turn before it ends. A call's end cancels it without waiting, so a later
         call's ``decide()`` calls may start while it still runs. Concurrent ``place()`` calls apply in order, and one
-        after it ended is refused. What it leaves unplaced, also on a timeout or an error, the IM places by its fallback
-        rule. The conductor never runs work itself.
+        after it ended is refused. Core owns bounded recovery and truthful failure of unresolved obligations.
+        The conductor never runs work itself.
         """
 
 
@@ -381,6 +619,13 @@ class BackendAdapter(Protocol):
 
     def start(self, task: TaskContext) -> BackendRun:
         """Return one task's run, before any model call; the run starts with ``events()``."""
+
+    def start_control(self, task: ControlContext, *, parent: BackendRun | None = None) -> ControlRun:
+        """Return an isolated invocation of the same logical worker offering only Core controls.
+
+        The Core supplies focused context, an immutable execution reference, and its inference permit. No business
+        ToolSource or application function is offered; this neither resumes nor retires a pending business run.
+        """
 
     def release_idle(self) -> None:
         """Release every session that no running task holds, and keep none until a task starts: the caller left."""

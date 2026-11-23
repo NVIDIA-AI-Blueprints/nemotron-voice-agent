@@ -40,7 +40,8 @@ class AcpProtocol:
         if unknown:
             raise ValueError(f"backend.harness.agents names no known agent: {', '.join(sorted(map(str, unknown)))}")
         name = block["agent"]
-        agent = pick(AGENTS, name, "harness agent")().from_settings(blocks.get(name) or {})
+        agent_class = pick(AGENTS, name, "harness agent")()
+        agent = agent_class.from_settings(blocks.get(name) or {})
         return cls(transport, agent)
 
     def client(
@@ -59,4 +60,5 @@ class AcpProtocol:
             permission=permission,
             start_timeout_seconds=start_timeout_seconds,
             stop_grace_seconds=stop_grace_seconds,
+            transport_name=self.transport.name,
         )

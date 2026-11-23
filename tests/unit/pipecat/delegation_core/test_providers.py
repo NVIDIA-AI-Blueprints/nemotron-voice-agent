@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import httpx
 from openai import APIError, APITimeoutError, BadRequestError
+from openai.types.completion_usage import CompletionUsage
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.providers import (
     BrokenStreamError,
@@ -29,6 +30,8 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.tools.cafe.schemas import (
     CAFE_TOOLS,
 )
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.im.input import is_user_message
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import WorkerData
 from nemotron_voice_agent.pipecat.shared.delegation_contract import ModelEndpoint
 from tests.unit.pipecat.core_helpers import FakeChat, FakeStream, Sleep, _timeout, chunk, tool_fragment
 from tests.unit.pipecat.delegation_core.helpers import (
@@ -40,6 +43,7 @@ from tests.unit.pipecat.delegation_core.helpers import (
     call_round,
     finished_items,
     kinds,
+    logged,
     read_all,
     text_round,
 )
@@ -122,8 +126,13 @@ class TranslationTests(unittest.TestCase):
             responses_items_to_messages(None, [{"type": "function_call_output", "call_id": "call_1"}])
 
     def test_hosted_tools_are_dropped_and_functions_converted(self):
-        function = {"name": "get_menu", "description": "The menu", "parameters": {"type": "object", "properties": {}}}
-        tools, dropped = to_chat_tools([{"type": "web_search"}, {"type": "function", **function, "strict": False}])
+        function = {
+            "name": "get_menu",
+            "description": "The menu",
+            "parameters": {"type": "object", "properties": {}},
+            "strict": False,
+        }
+        tools, dropped = to_chat_tools([{"type": "web_search"}, {"type": "function", **function}])
         self.assertEqual((tools, dropped), ([{"type": "function", "function": function}], ["web_search"]))
 
     def test_a_text_reply_streams_the_lifecycle_with_its_usage(self):
@@ -138,6 +147,61 @@ class TranslationTests(unittest.TestCase):
         created, completed = events[0]["response"], events[-1]["response"]
         self.assertEqual((completed["id"], completed["status"]), (created["id"], "completed"))
         self.assertEqual(completed["usage"], {"input_tokens": 7, "output_tokens": 5, "total_tokens": 12})
+
+    def test_usage_reports_preserve_partial_optional_and_zero_counters_on_each_terminal(self):
+        for finish, terminal in (("stop", "completed"), ("length", "incomplete")):
+            for supplied, expected in (
+                ({"prompt_tokens": 11}, {"input_tokens": 11}),
+                (
+                    {
+                        "prompt_tokens": 17,
+                        "completion_tokens": 9,
+                        "total_tokens": 26,
+                        "prompt_tokens_details": {"cached_tokens": 5},
+                        "completion_tokens_details": {"reasoning_tokens": 4},
+                    },
+                    {
+                        "input_tokens": 17,
+                        "output_tokens": 9,
+                        "total_tokens": 26,
+                        "input_tokens_details": {"cached_tokens": 5},
+                        "output_tokens_details": {"reasoning_tokens": 4},
+                    },
+                ),
+                (
+                    {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "prompt_tokens_details": SimpleNamespace(cached_tokens=0),
+                        "completion_tokens_details": SimpleNamespace(reasoning_tokens=0),
+                    },
+                    {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                    },
+                ),
+                ({"prompt_tokens": True, "completion_tokens": -1, "total_tokens": "12"}, None),
+                ({}, None),
+                (None, None),
+            ):
+                with self.subTest(finish=finish, usage=supplied):
+                    # The SDK can construct models from compatible endpoint responses without strict validation.
+                    # Keep absent and invalid observations intact at the translator boundary.
+                    report = None if supplied is None else CompletionUsage.model_construct(**supplied)
+                    usage_chunk = chunk().model_copy(update={"usage": report})
+                    event = translated(chunk("Answer."), chunk(finish=finish), usage_chunk)[-1]
+                    self.assertEqual(event["type"], f"response.{terminal}")
+                    self.assertEqual(event["response"].get("usage"), expected)
+
+    def test_a_partial_last_usage_report_does_not_reuse_stale_earlier_totals(self):
+        earlier = {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
+        last = chunk().model_copy(update={"usage": CompletionUsage.model_construct(prompt_tokens=11)})
+        events = translated(chunk("Answer.", usage=earlier), chunk(finish="stop"), last)
+        self.assertEqual(events[-1]["response"]["usage"], {"input_tokens": 11})
 
     def test_call_fragments_become_calls_with_our_own_ids(self):
         menu = [tool_fragment(0, "call_abc", "get_menu", ""), tool_fragment(0, arguments='{"cate')]
@@ -170,19 +234,42 @@ class TranslationTests(unittest.TestCase):
 
 
 class RequestTests(unittest.TestCase):
+    def test_restricted_requests_refuse_endpoint_tool_overrides(self):
+        for provider in (ChatCompletionsBackend, OpenAIResponsesBackend):
+            for params in ({"tools": []}, {"extra_body": {"tool_choice": "required"}}):
+                with self.subTest(provider=provider, params=params):
+                    model = provider(endpoint(**params), NO_RETRY, client=object())
+                    with self.assertRaisesRegex(ValueError, "cannot override the restricted invocation's tools"):
+                        model.request({**payload(), "_restricted_tools": True})
+
     def test_every_round_sends_the_whole_history_unstored(self):
+        app_text, caller_text = "Use only verified prices.", "Yes."
+        data = json.dumps({"conductor_routing_context": {"source_excerpts": [{"text": caller_text}]}})
+        evidence = text_of(data)
+        scope = WorkerData({**evidence, "id": "scoped_input_worker"})
+        app_message = {**text_of(app_text), "role": "developer"}
+        caller_message = text_of(caller_text)
+        instructions = {**app_message, "id": "scoped_input_app"}
+        caller = {**caller_message, "id": "scoped_input_caller"}
+        self.assertTrue(is_user_message(caller))
+        self.assertFalse(is_user_message(scope))
+        round_ = payload(input=[instructions, caller, scope, *HISTORY[1:]])
         provider = OpenAIResponsesBackend(endpoint(), NO_RETRY, client=object())
-        first, second = provider.request(payload()), provider.request(payload())
-        sent = ChatCompletionsBackend(endpoint(), NO_RETRY, client=object()).request(payload())
-        self.assertEqual((first["input"], first["store"], second["input"]), (HISTORY, False, HISTORY))
-        self.assertEqual([message["role"] for message in sent["messages"]], ["system", "user", "assistant", "tool"])
+        first, second = provider.request(round_), provider.request(round_)
+        sent = chat().request(round_)
+        expected = [app_message, caller_message, evidence, *HISTORY[1:]]
+        self.assertEqual((first["input"], first["store"], second["input"]), (expected, False, expected))
+        messages = sent["messages"]
+        self.assertEqual([m["role"] for m in messages], ["system", "system", "user", "assistant", "tool"])
+        self.assertEqual([m["content"] for m in messages[1:3]], [app_text, f"{caller_text}\n{data}"])
+        self.assertEqual(scope["id"], "scoped_input_worker")
         for request, field in ((first, "previous_response_id"), (sent, "previous_response_id"), (sent, "store")):
             self.assertNotIn(field, request)
         self.assertEqual(first["prompt_cache_key"], second["prompt_cache_key"])
-        other = OpenAIResponsesBackend(endpoint(), NO_RETRY, client=object()).request(payload())
+        other = OpenAIResponsesBackend(endpoint(), NO_RETRY, client=object()).request(round_)
         self.assertNotEqual(other["prompt_cache_key"], first["prompt_cache_key"])
 
-    def test_the_responses_provider_sends_input_messages_without_their_ids(self):
+    def test_the_responses_provider_prepares_history_for_the_wire(self):
         provider = OpenAIResponsesBackend(endpoint(), NO_RETRY, client=object())
         said = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking."}]}
         notes = [{"type": "message", "role": role, "content": "Be brief."} for role in ("system", "developer")]
@@ -193,6 +280,16 @@ class RequestTests(unittest.TestCase):
         kept = [{**said, "id": "msg_1", "status": "completed"}, {**HISTORY[1], "id": "fc_call_1"}]
         kept.append({"type": "reasoning", "id": "rs_1", "summary": []})
         self.assertEqual(provider.request(payload(input=kept))["input"], kept)
+        parts = [{"type": "input_text", "text": "Tea."}, {"type": "input_file", "file_id": "file-menu"}]
+        data = [{"drink": "tea"}, 3]
+        for output, sent in (
+            (parts, parts),
+            ([{**parts[0], "type": "output_text"}, parts[1]], parts),
+            (data, json.dumps(data)),
+        ):
+            with self.subTest(output=output):
+                item = {"type": "function_call_output", "call_id": "c1", "output": output}
+                self.assertEqual(provider.request(payload(input=[item]))["input"], [{**item, "output": sent}])
 
     def test_the_responses_provider_maps_the_round_settings(self):
         defaults = endpoint(
@@ -292,11 +389,16 @@ class RequestTests(unittest.TestCase):
 class StreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_chat_round_sends_tools_and_history_and_gets_a_call(self):
         fragments = [tool_fragment(0, "call_1", "get_menu", '{"category":'), tool_fragment(0, arguments='"tea"}')]
-        client = FakeChat([chunk(tool_calls=fragments[:1]), chunk(tool_calls=fragments[1:], finish="tool_calls")])
+        usage = chunk(usage={"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}).model_copy(
+            update={"choices": []}
+        )
+        client = FakeChat(
+            [chunk(tool_calls=fragments[:1]), chunk(tool_calls=fragments[1:], finish="tool_calls"), usage, Sleep(1)]
+        )
         tools = CAFE_TOOLS + [{"type": "web_search"}]
         request = {"model": "test/model", "instructions": "Use tools.", "tools": tools, "tool_choice": "auto"}
         events = await read_all(
-            ChatCompletionsBackend(ENDPOINT, LIMITS, client).stream({**request, "input": [text_of("teas?")]})
+            ChatCompletionsBackend(ENDPOINT, QUICK, client).stream({**request, "input": [text_of("teas?")]})
         )
         request = client.requests[0]
         self.assertEqual((request["temperature"], request["max_tokens"], request["tool_choice"]), (0.7, 1024, "auto"))
@@ -305,6 +407,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         (call,) = [item for item in finished_items(events) if item["type"] == "function_call"]
         self.assertEqual((call["name"], json.loads(call["arguments"])), ("get_menu", {"category": "tea"}))
         self.assertEqual(events[-1]["type"], "response.completed")
+        self.assertEqual(events[-1]["response"]["usage"], {"input_tokens": 7, "output_tokens": 2, "total_tokens": 9})
 
     async def test_the_responses_provider_reads_text_and_call_rounds(self):
         for round_, item_type in ((text_round("Hello."), "message"), (call_round("get_menu", {}), "function_call")):
@@ -351,7 +454,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         steady = ScriptedProvider([step for event in text_round("Done.") for step in (Sleep(0.1), event)], limits=QUICK)
         pieces = ("Let me", " think", " it", " over.")
         thinking = [step for piece in pieces for step in (Sleep(0.1), chunk(None, reasoning_content=piece))]
-        client = FakeChat([*thinking, chunk("A latte is $4.50."), chunk(finish="stop")])
+        client = FakeChat([*thinking, chunk("A latte is $4.50."), chunk(finish="stop"), Sleep(1)])
         for provider in (steady, ChatCompletionsBackend(endpoint(**THINKING), QUICK, client)):
             events = await read_all(provider.stream(payload()))
             self.assertEqual(events[-1]["type"], "response.completed")
@@ -359,12 +462,34 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message["content"][0]["text"], "A latte is $4.50.")
 
     async def test_a_refused_request_is_never_retried(self):
-        request = httpx.Request("POST", "http://localhost:1/v1/chat/completions")
-        refused = BadRequestError("bad request", response=httpx.Response(400, request=request), body=None)
-        provider = ScriptedProvider([refused], text_round("Done."), limits=QUICK)
-        with self.assertRaises(BadRequestError):
-            await read_all(provider.stream({}, retries=QUICK.provider_retries))
-        self.assertEqual(provider.opened, 1)
+        request = httpx.Request(
+            "POST", "http://localhost:1/v1/chat/completions", headers={"authorization": "Bearer private-request"}
+        )
+        configured = ModelEndpoint(ENDPOINT.model, ENDPOINT.base_url, api_key="private-request")
+        valid = ("req_ab-12", "invalid_schema", "tools[0].parameters")
+        for (request_id, code, param), (safe_id, safe_code, safe_param) in (
+            (valid, valid),
+            (("Bearer private-request", 400, "request contained private caller words"), (None, None, None)),
+            (("a" * 129, "private-request", "tools"), (None, None, "tools")),
+        ):
+            with self.subTest(safe_id=safe_id, safe_param=safe_param):
+                response = httpx.Response(
+                    400, request=request, headers={"x-request-id": request_id, "set-cookie": "private-header"}
+                )
+                body = {"code": code, "param": param, "message": "private-response-body"}
+                refused = BadRequestError("private-response-text", response=response, body=body)
+                provider = ScriptedProvider([refused], text_round("Done."), limits=QUICK, endpoint=configured)
+                with logged() as lines, self.assertRaises(BadRequestError) as caught:
+                    await read_all(provider.stream({}, retries=QUICK.provider_retries))
+                self.assertIs(caught.exception, refused)
+                self.assertEqual(provider.opened, 1)
+                self.assertEqual(
+                    lines,
+                    [
+                        "provider.open_failed status_code=400 "
+                        f"request_id={safe_id} error_code={safe_code} error_param={safe_param}"
+                    ],
+                )
         with self.assertRaises(BrokenStreamError):
             await read_all(ScriptedProvider([], text_round("Done."), limits=QUICK).stream({}, retries=1))
         provider = ScriptedProvider([*text_round("Done."), RuntimeError("after the terminal")], limits=QUICK)
@@ -394,7 +519,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("parallel_tool_calls", client.requests[0])
                 self.assertNotIn("p0", [item["call_id"] for item in finished_items(events)])
 
-    async def test_a_cut_reply_never_gives_its_call(self):
+    async def test_a_cut_reply_never_completes_or_gives_its_call(self):
         for finish, arguments, reason in (
             ("length", '{"item_id": "la', "max_output_tokens"),
             ("content_filter", '{"item_id": "lat"}', "content_filter"),
@@ -404,11 +529,17 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
                     chunk("Adding"),
                     chunk(tool_calls=[tool_fragment(0, "c1", "manage_cart", arguments)]),
                     chunk(finish=finish),
+                    Sleep(1),
                 ]
-                events = await read_all(chat(cut).stream(payload()))
+                events = await read_all(chat(cut, limits=QUICK).stream(payload()))
                 self.assertEqual([item["type"] for item in finished_items(events)], ["message"])
                 self.assertEqual(events[-1]["response"]["incomplete_details"], {"reason": reason})
-        with self.assertRaises(BrokenStreamError):
-            await read_all(
-                chat([chunk(tool_calls=[tool_fragment(0, "c1", "manage_cart", '{"item_id": ')])]).stream(payload())
-            )
+        for chunk_without_finish in (
+            chunk("The replacement costs $149"),
+            chunk(tool_calls=[tool_fragment(0, "c1", "manage_cart", '{"item_id": ')]),
+        ):
+            with self.subTest(chunk=chunk_without_finish), self.assertRaisesRegex(BrokenStreamError, "finish reason"):
+                await read_all(chat([chunk_without_finish]).stream(payload()))
+        extra_call = chunk(tool_calls=[tool_fragment(1, "c2", "manage_cart", "{}")])
+        with self.assertRaisesRegex(BrokenStreamError, "more output after its finish reason"):
+            await read_all(chat([chunk("Done.", finish="stop"), extra_call]).stream(payload()))

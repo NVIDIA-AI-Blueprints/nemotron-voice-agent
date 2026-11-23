@@ -41,8 +41,10 @@ def unusable_decision(metadata: dict, reason: str) -> TalkerDecision:
     return TalkerDecision("delegate", "", {**metadata, "recovery": reason})
 
 
-def decision_from_output_text(text: str, metadata: dict) -> TalkerDecision:
+def decision_from_output_text(text: str, metadata: dict, *, finish_reason: str | None) -> TalkerDecision:
     """Return the decision in completed output: its first JSON object, whatever text follows it."""
+    if finish_reason == "length":
+        return unusable_decision(metadata, "incomplete_output")
     if not (text or "").strip():
         return unusable_decision(metadata, "empty_output")
     data = extract_json_object(text)

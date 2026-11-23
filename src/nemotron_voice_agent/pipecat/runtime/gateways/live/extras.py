@@ -15,6 +15,10 @@ from pydantic import ValidationError
 
 from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway import LiveGateway
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import LIVE_VOICES, BackendConfig, ProtocolError
+from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol.config import (
+    DEFAULT_RECONNECT_GRACE_SECONDS,
+    MAX_RECONNECT_GRACE_SECONDS,
+)
 
 Describe = Callable[[], Awaitable[dict]]
 
@@ -94,7 +98,20 @@ def add_extras(app: FastAPI, gateway: LiveGateway, describe: Describe | None = N
         """Describe the server: the voices, the session limit and what the serving example's ``describe`` adds."""
         gateway.authorize(request)
         described = await describe() if describe is not None else {}
-        return {"voices": sorted(LIVE_VOICES), "max_sessions": gateway.settings.max_sessions, **described}
+        return {
+            "voices": sorted(LIVE_VOICES),
+            "max_sessions": gateway.settings.max_sessions,
+            "reconnect": {
+                "version": 1,
+                "transports": ["websocket"],
+                "delegation": ["responses"],
+                "default_grace_seconds": DEFAULT_RECONNECT_GRACE_SECONDS,
+                "max_grace_seconds": MAX_RECONNECT_GRACE_SECONDS,
+                "process_local": True,
+                "requires_negotiation": True,
+            },
+            **described,
+        }
 
     @app.post("/v1/live/delegate")
     async def delegate(request: Request) -> dict:

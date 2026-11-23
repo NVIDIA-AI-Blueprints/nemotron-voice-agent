@@ -11,6 +11,7 @@ Routes:
   WebSocket /v1/realtime     - OpenAI Realtime–shaped JSON (session + pipeline handoff)
   GET       /api/deployment  - Active example metadata
   GET       /api/prompts     - Prompt catalog
+  GET       /api/prompt-layout - Optional prompt groups for the active example
   GET       /api/services    - Service catalog (LLM, TTS, ASR)
   GET       /api/tts-config  - TTS voices & languages (optional ASR params for ASR∩TTS intersection)
   GET       /                - Built client UI (from clients/pipecat/dist/)
@@ -240,6 +241,14 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
     if "session_languages" in capabilities and not config.get("asr_language_code"):
         config["asr_language_code"] = examples_registry.default_session_language(example["key"])
     config = filter_session_config(config)
+    if not example["ui_prompt_layout"]:
+        config.pop("prompt_overrides", None)
+    elif "prompt_overrides" in config:
+        overrides = config["prompt_overrides"]
+        if not isinstance(overrides, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) and value.strip() for key, value in overrides.items()
+        ):
+            raise ValueError("prompt_overrides must map prompt keys to non-empty text")
     prompt = load_prompt_catalog(examples_registry.example_module_file(example)).get(config.get("prompt_key", ""), {})
     multi_speaker_prompt = isinstance(prompt, dict) and prompt.get("multi_speaker_support") is True
     diarization_disabled = not speaker_diarization_requested(config)
@@ -264,6 +273,13 @@ def _bind_example_context_by_key(example_key: str = "") -> dict:
     example = examples_registry.find(example_key)
     set_service_context(example)
     return example
+
+
+def _ui_prompt_layout(example: dict, llm_id: str) -> list[dict]:
+    if spec := example["ui_prompt_layout"]:
+        layout = examples_registry.resolve_hook(spec, "ui_prompt_layout")
+        return layout(llm_id=llm_id)
+    return []
 
 
 def _activate_example_catalog_by_key(example_key: str = "") -> dict:
@@ -728,6 +744,18 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         """Return the active registry entry. ``examples_registry.find()`` honors any selection lock."""
         return examples_registry.find(config.get("pipeline_mode", ""))
 
+    async def _read_session_config(request: Request) -> dict:
+        config = _sanitize_session_config(await request.json(), fallback_example_key=fallback_example_key)
+        if overrides := config.get("prompt_overrides"):
+            layout = await asyncio.to_thread(_ui_prompt_layout, _resolve_example(config), config.get("llm_id", ""))
+            editable = {
+                part["key"] for group in layout for part in group["parts"] if "key" in part and part.get("editable")
+            }
+            invalid = sorted(overrides.keys() - editable)
+            if invalid:
+                raise ValueError(f"Prompt {invalid[0]!r} is not editable for this session")
+        return config
+
     async def _readiness_check_or_503(config: dict, log_label: str) -> JSONResponse | None:
         """Return a 503 response if any selected service is not ready, else ``None``."""
         try:
@@ -751,7 +779,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         if _multi_worker_mode_enabled():
             return _multi_worker_session_config_response()
         try:
-            config = _sanitize_session_config(await request.json(), fallback_example_key=fallback_example_key)
+            config = await _read_session_config(request)
         except ValueError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         if (failure := await _readiness_check_or_503(config, "session config")) is not None:
@@ -764,7 +792,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         if _multi_worker_mode_enabled():
             return _multi_worker_session_config_response()
         try:
-            config = _sanitize_session_config(await request.json(), fallback_example_key=fallback_example_key)
+            config = await _read_session_config(request)
         except ValueError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         if (failure := await _readiness_check_or_503(config, "WebRTC start")) is not None:
@@ -1085,9 +1113,14 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                     )
         return prompts
 
+    @app.get("/api/prompt-layout")
+    def get_prompt_layout(pipeline_mode: str = Query(default=""), llm_id: str = Query(default="")):
+        example = _bind_example_context_by_key(pipeline_mode or fallback_example_key)
+        return _ui_prompt_layout(example, llm_id)
+
     @app.get("/api/tools")
-    async def get_tools(pipeline_mode: str = Query(default="")):
-        _, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
+    def get_tools(pipeline_mode: str = Query(default="")):
+        example, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
         catalog = load_tools_catalog(module_file)
         tools: list[dict] = []
         for name, entry in catalog.items():
@@ -1100,6 +1133,17 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                     "description": fn.get("description", ""),
                     "parameters": fn.get("parameters", {}),
                 }
+            )
+        if spec := example["ui_backend_tools"]:
+            backend_tools = examples_registry.resolve_hook(spec, "ui_backend_tools")
+            tools.extend(
+                {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {}),
+                    "scope": "backend",
+                }
+                for tool in backend_tools()
             )
         return tools
 

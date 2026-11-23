@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -23,7 +25,9 @@ def item_key(item: Mapping[str, Any]) -> tuple:
     carry ids from its delegation's id (``with_ids``), and every other message has its own.
     """
     kind = item.get("type", "message")
-    return kind, item.get("call_id") if kind in ("function_call", "function_call_output") else item.get("id")
+    identity = item.get("call_id") if kind in ("function_call", "function_call_output") else item.get("id")
+    revision = hashlib.sha256(json.dumps(dict(item), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return kind, identity, revision
 
 
 def keys(items: Sequence[Mapping[str, Any]]) -> list[tuple]:
@@ -48,6 +52,9 @@ def unread(read: Sequence[tuple], history: Sequence[dict]) -> Unread:
     history's order.
     """
     seen, held = set(read), keys(history)
+    revisions = {key[:2]: key[2:] for key in read}
+    if any(key[:2] in revisions and revisions[key[:2]] != key[2:] for key in held):
+        return Unread(None, why="a previously shown history item changed")
     if not read or read[-1] not in held:
         return Unread(None, why="its last answer not in the history")
     items = [item for item, key in zip(history, held, strict=True) if key not in seen]
@@ -67,12 +74,12 @@ class KeptSession:
     mailbox: Mailbox
     instructions: str
     shown: list[tuple]
-    total: int | None
     usage: Mapping[str, Any] | None
     tool_rows: bool
     served: list[str]
     last_task: str
     idle_since: float
+    history_mode: str = "shared"
 
     def retire(self, bridge: Any) -> bool:
         """Retire the session and close its door on ``bridge``; return whether a close went out (it holds no call)."""
@@ -95,8 +102,23 @@ class SessionPool:
 
         While the pool is closed, it returns ``kept`` itself.
         """
-        if self.closed:
+        door, session = kept.door, kept.session
+        if (
+            self.closed
+            or not session.capabilities.continuation
+            or not session.alive
+            or not kept.runtime.client.alive
+            or not session.quiescent
+            or not door.admission_open
+            or door.held
+            or door.admitting
+            or door.app_admissions
+            or door.pending_calls
+            or not door.task.can_dispatch()
+        ):
             return kept
+        if any(each.session is session for each in self.idle):
+            raise RuntimeError("The native session is already in the idle pool")
         self.idle.append(kept)
         if len(self.idle) <= self.bound:
             return None

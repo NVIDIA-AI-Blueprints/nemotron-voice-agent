@@ -12,12 +12,16 @@ import traceback
 import unittest
 from unittest import mock
 
+from loguru import logger
+
 from nemotron_voice_agent.pipecat.runtime.gateways.live.client_delegation import ClientDelegation
 from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway.websocket import PrimarySocketView
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import ProtocolError, SessionConfig
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol.config import TOOL_TYPES
 from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation import ServerDelegation, passthrough
+from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation.sender import Request
 from nemotron_voice_agent.pipecat.runtime.gateways.live.session import LiveProtocolSession, lifecycle
+from nemotron_voice_agent.pipecat.shared.delegation_contract import CALLER_CONTEXT, CALLER_EXCERPT
 from tests.unit.pipecat.live_helpers import ClientSocket, Collector, FakeAdapter, Stream, response, responses_config
 
 HI = [{"role": "user", "content": [{"type": "input_text", "text": "Hi."}]}]
@@ -70,23 +74,32 @@ class View:
     async def emit(self, kind, **fields):
         self.events.append((kind, fields))
 
-    emit_paced = emit
+    async def emit_paced(self, kind, *, before_publish=None, **fields):
+        if before_publish is not None and not before_publish():
+            return False
+        await self.emit(kind, **fields)
+        return True
 
 
 class Case(unittest.IsolatedAsyncioTestCase):
-    def build(self, *streams, config=None, client=None):
+    def build(self, *streams, config=None, client=None, transport="websocket"):
         self.core = FakeAdapter(streams=streams)
         config = (config or responses_config()).with_wire_format()
         self.client, self.sideband = client or Collector(), Collector()
-        self.socket = PrimarySocketView(ClientSocket(self.client), config.audio.format)
+        self.socket = (
+            PrimarySocketView(ClientSocket(self.client), config.audio.format) if transport == "websocket" else None
+        )
         parts, core = self.core.parts(), self.core.core
-        self.session = LiveProtocolSession(config, "websocket", parts, core=core, socket=self.socket)
-        self.socket.attach(self.session)
-        self.key = self.socket.connection
+        self.session = LiveProtocolSession(config, transport, parts, core=core, socket=self.socket)
+        if self.socket is not None:
+            self.socket.attach(self.session)
+            self.key = self.socket.connection
+        else:
+            self.key = self.session.subscribe(self.client.send, "primary")
         self.addAsyncCleanup(self.session.close)
 
-    async def start(self, *streams, config=None, client=None):
-        self.build(*streams, config=config, client=client)
+    async def start(self, *streams, config=None, client=None, transport="websocket"):
+        self.build(*streams, config=config, client=client, transport=transport)
         await self.session.start("start_1")
         self.sideband_key = self.session.subscribe(self.sideband.send, "sideband")
 
@@ -124,6 +137,29 @@ class Case(unittest.IsolatedAsyncioTestCase):
 
 
 class ConversationTests(Case):
+    async def test_a_delete_failure_keeps_the_original_exception_and_its_chain(self):
+        class TransportFailure(Exception):
+            def __init__(self, operation, detail):
+                super().__init__(operation, detail)
+
+        await self.start(config=responses_config(store=True))
+        failure = TransportFailure("DELETE", f"Transport lost for {self.core.CONVERSATION}")
+        cause, context = OSError("original transport cause"), ValueError("original context")
+        failure.__cause__, failure.__context__ = cause, context
+        failure.add_note("original diagnostic note")
+        self.core.fail["delete"] = failure
+        logged = []
+        self.addCleanup(logger.remove, logger.add(logged.append, format="{message}", diagnose=True))
+        with self.assertRaises(TransportFailure) as raised:
+            await self.session.delegation.close()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(failure.args, ("DELETE", f"Transport lost for {self.core.CONVERSATION}"))
+        self.assertIs(failure.__cause__, cause)
+        self.assertIs(failure.__context__, context)
+        self.assertEqual(failure.__notes__, ["original diagnostic note"])
+        self.assertIn("conversation_delete_failed reference=delete_", "".join(logged))
+        self.assertNotIn(self.core.CONVERSATION, "".join(logged))
+
     async def test_a_start_that_fails_or_times_out_closes_the_session(self):
         for step, fault, log in (
             ("create", RuntimeError("the core cannot create a conversation"), ["create", "close"]),
@@ -170,18 +206,38 @@ class ConversationTests(Case):
             ("close", hung),
             ("delete", ConnectionError()),
             ("delete", hung),
+            ("stream", hung),
         ):
             with self.subTest(step=step, fault=fault):
                 await self.start()
                 self.core.close_seconds = 0.1
-                self.core.streams.append(Stream(until=self.core.deleted))
+                stream = Stream(response("resp_1", end=None), until=hung if step == "stream" else self.core.deleted)
+                release_stream = asyncio.Event()
+                if step == "stream":
+                    started, close_stream = asyncio.Event(), stream.aclose
+
+                    async def delayed_close(started=started, release=release_stream, close_stream=close_stream):
+                        started.set()
+                        await release.wait()
+                        await close_stream()
+
+                    stream.aclose = delayed_close
+                self.core.streams.append(stream)
                 await self.core.delegation.delegate(HI)
-                if fault is hung:
+                await self.client.wait_for("response.event")
+                if step != "stream" and fault is hung:
                     self.core.hold[step] = hung
-                else:
+                elif fault is not hung:
                     self.core.fail[step] = fault
-                async with asyncio.timeout(5):
-                    await self.session.close("close_requested")
+                try:
+                    async with asyncio.timeout(5):
+                        await self.session.close("close_requested")
+                        if step == "stream":
+                            await started.wait()
+                            self.assertFalse(stream.closed)
+                finally:
+                    release_stream.set()
+                await self.until(lambda stream=stream: stream.closed)
                 self.assertEqual(self.core.log[-2:], ["close", "delete"])
                 self.assertEqual((self.session.status, self.client.kinds()[-1]), ("closed", "session.closed"))
 
@@ -285,9 +341,11 @@ class RelayTests(Case):
             ("a terminal", Stream(response("resp_1")), False, 2),
         ):
             with self.subTest(name):
+                stream.aclose = mock.AsyncMock(wraps=stream.aclose)
                 await self.start(stream)
                 delegation_id = await self.core.delegation.delegate(HI)
-                await asyncio.sleep(0.1)
+                await self.until(lambda: not self.session.delegation.readers)
+                stream.aclose.assert_awaited_once()
                 lost_heard = [heard for heard in self.core.heard if heard[1] == "lost"]
                 self.assertEqual(lost_heard, [(delegation_id, "lost")] * lost)
                 self.assertEqual((len(self.relayed()), self.session.status), (relayed, "active"))
@@ -353,6 +411,97 @@ class ContinuationTests(Case):
         [request] = await self.create("rc2")
         self.assertEqual(sent(request), (delegation_id, [output("c1"), output("c2"), typed()]))
 
+    async def test_a_pending_app_call_respects_caller_control_and_close(self):
+        for transport in ("websocket", "webrtc"):
+            with self.subTest(transport=transport):
+                await self.check_pending_app_call(transport)
+                await self.session.close("close_requested")
+                await self.check_closing_app_call(transport)
+
+    async def check_closing_app_call(self, transport):
+        await self.start(response("closing", call("unsent")), transport=transport)
+        paced, release = asyncio.Event(), asyncio.Event()
+
+        async def pace():
+            if "unsent" in self.session.delegation.routes.routes:
+                paced.set()
+                await release.wait()
+
+        with mock.patch.object(self.session.fanout, "wait_for_room", pace):
+            await self.session.delegation.delegate(HI)
+            await asyncio.wait_for(paced.wait(), 2)
+            release.set()
+            await self.session.close("close_requested")
+        self.assertFalse(any(frame.get("item", {}).get("call_id") == "unsent" for frame in self.relayed()))
+
+    async def check_pending_app_call(self, transport):
+        await self.start(
+            response("original", call("c1"), call("c2")), response("typed"), response("continued"), transport=transport
+        )
+        pending, resume_pacing, check_queued = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        admit_typed, sending_typed = asyncio.Event(), asyncio.Event()
+        part = self.session.delegation
+        original_create = self.core.create_response
+
+        async def pace():
+            if "c2" in part.routes.routes and not pending.is_set():
+                pending.set()
+                await resume_pacing.wait()
+                check_queued.set()
+
+        async def create_request(params):
+            if params["input"] == [typed()]:
+                sending_typed.set()
+                await admit_typed.wait()
+            return await original_create(params)
+
+        def check_call(conversation, call_id):
+            if call_id == "c2":
+                self.assertTrue(admit_typed.is_set())
+                return "withhold", None
+            return "publish", None
+
+        with (
+            mock.patch.object(self.session.fanout, "wait_for_room", pace),
+            mock.patch.object(self.core, "create_response", create_request),
+            mock.patch.object(self.core, "wait_for_retained_app_calls", mock.AsyncMock(), create=True),
+            mock.patch.object(self.core, "check_retained_app_call", check_call, create=True),
+        ):
+            try:
+                delegation_id = await part.delegate(HI)
+                await asyncio.wait_for(pending.wait(), 2)
+                await self.send({"type": "response.item.create", "item": output("c1")})
+                await self.send({"type": "response.item.create", "item": output("c2"), "event_id": "unsent"})
+                await self.send({"type": "response.create", "event_id": "premature"})
+                await self.until(lambda: len(self.errors()) == 2)
+                self.assertEqual(
+                    [error["code"] for error in self.errors()], ["invalid_value", "function_call_outputs_required"]
+                )
+                self.assertNotIn("c2", self.errors()[-1]["message"])
+
+                await self.send({"type": "response.item.create", "item": typed()})
+                await self.send({"type": "response.create", "event_id": "control"})
+                await asyncio.wait_for(sending_typed.wait(), 2)
+                resume_pacing.set()
+                await asyncio.wait_for(check_queued.wait(), 2)
+                self.assertEqual(len(self.core.requests), 1)
+                self.assertIn("c2", part.routes.routes)
+                self.assertFalse(part.routes.routes["c2"].queued)
+            finally:
+                resume_pacing.set()
+                admit_typed.set()
+            await self.until(lambda: "c2" not in part.routes.routes)
+            await self.until(lambda: ("response.completed", delegation_id) in self.ends())
+            [continued] = await self.create("continue")
+            self.assertEqual(sent(continued), (delegation_id, [output("c1")]))
+            self.assertEqual(self.core.requests[1]["input"], [typed()])
+            calls = [
+                frame["item"]["call_id"]
+                for frame in self.relayed()
+                if frame["type"] == "response.output_item.done" and frame["item"]["type"] == "function_call"
+            ]
+            self.assertEqual(calls, ["c1"])
+
     async def test_results_pass_and_unknown_or_bad_items_are_refused(self):
         await self.start(response("resp_a", call("k0"), {"type": "custom_tool_call", "call_id": "k1", "name": "draw"}))
         delegation_id = await self.delegate()
@@ -361,15 +510,18 @@ class ContinuationTests(Case):
             output("c404"),
             {"type": "custom_tool_call_output", "call_id": "k0", "output": "{}"},
             {**typed(), "content": [{"type": "input_text", "text": "Hi."}, {"type": "input_audio"}]},
+            {**typed(), "content": [{"type": [], "text": "Hi."}]},
             *({**typed(), "content": [part]} for part in ({"type": "input_text", "text": 5}, {"type": "input_text"})),
+            {**typed(), CALLER_CONTEXT: {"caller_turns": [[1, "Approved."]], "playback": []}},
+            {**typed(), CALLER_EXCERPT: "Approved."},
         ):
             await self.send({"type": "response.item.create", "event_id": "i1", "item": item})
-        await self.until(lambda: len(self.errors()) >= 5)
+        params = ("call_id", "type", *["content"] * 4, CALLER_CONTEXT, CALLER_EXCERPT)
+        await self.until(lambda: len(self.errors()) >= len(params))
         [request] = await self.create("rc1")
         self.assertEqual(sent(request), (delegation_id, [output("k0")]))
         [typed_run] = await self.create("rc2")
         self.assertEqual(typed_run["input"], [])
-        params = ("call_id", "type", *["content"] * 3)
         errors = [(error["code"], error["param"], error["client_event_id"]) for error in self.errors()]
         self.assertEqual(errors, [("invalid_value", f"item.{param}", "i1") for param in params])
         self.assertEqual(self.core.typed_texts, [])
@@ -492,6 +644,27 @@ class SenderTests(Case):
                 await caller
         self.assertEqual(len(self.core.requests), 1)
 
+    async def test_queued_requests_stay_ordered_when_a_ready_attachment_leaves(self):
+        await self.start()
+        part = self.session.delegation
+        words = ("first", "second")
+        first, second = (Request([typed(word)], word, offset_ms=0, starts=True) for word in words)
+        first.returned.set()
+        second.returned.set()
+        with mock.patch.object(self.core, "set_attachment", new=mock.AsyncMock(return_value={}), create=True):
+            await part.suspend_attachment()
+            part.sender.put(first, second)
+            await self.until(lambda: part.sender.batch == [first, second])
+            await part.resume_attachment()
+            await part.suspend_attachment()
+            await asyncio.sleep(0)
+            self.assertEqual(self.core.requests, [])
+            self.assertFalse(first.outcome.done() or second.outcome.done())
+            await part.resume_attachment()
+            accepted = await asyncio.wait_for(asyncio.gather(first.outcome, second.outcome), 2)
+            self.assertEqual(accepted, list(words))
+        self.assertEqual([sent(request) for request in self.core.requests], [(word, [typed(word)]) for word in words])
+
 
 class SettingsCheckTests(Case):
     async def update(self, responses, event_id="u1", key=None):
@@ -569,8 +742,11 @@ class PartTests(Case):
         with self.assertRaisesRegex(RuntimeError, "listen"):
             await part.delegate(HI)
         part.listen(core)
-        delegation_id = await part.delegate(HI)
-        self.assertEqual([request["metadata"] for request in core.requests], [{"live_delegation_id": delegation_id}])
+        context = {"caller_turns": [(1, "Hi.")], "playback": []}
+        delegation_id = await part.delegate([{**HI[0], CALLER_EXCERPT: "Hi.", CALLER_CONTEXT: context}])
+        [request] = core.requests
+        self.assertEqual(request["metadata"], {"live_delegation_id": delegation_id, CALLER_EXCERPT: "Hi."})
+        self.assertEqual(request["input"], HI)
         self.assertEqual(core.heard, [])
         await self.until(lambda: len(core.heard) == 2)
 

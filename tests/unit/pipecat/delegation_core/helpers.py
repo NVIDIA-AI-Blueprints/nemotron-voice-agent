@@ -13,16 +13,23 @@ import unittest
 from collections import deque
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from unittest import mock
 
+from loguru import logger
+
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.conductors import SteerOpenWork
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.control import (
+    ControlVocabulary,
+)
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.llm import (
     LlmSettings,
     LlmSource,
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import (
     BoundaryInput,
+    Cancel,
+    CompleteDecision,
     Request,
     Start,
     Steering,
@@ -80,8 +87,9 @@ def call_item(name, arguments, call_id):
     return {**item, "arguments": json.dumps(arguments)}
 
 
-async def read_all(stream):
-    return [event async for event in stream]
+async def read_all(stream, *, timeout=None):
+    async with asyncio.timeout(timeout):
+        return [event async for event in stream]
 
 
 def kinds(events):
@@ -258,6 +266,11 @@ class FakeTaskContext:
         task_id="W1.1",
     ):
         self.work_id, self.task_id, self.model, self.texts = work_id, task_id, model, TEXTS
+        self.continues, self.after_call, self.history_mode = None, False, "shared"
+        self.conversation_ref = "test-conversation"
+        self.execution_ref = task_id
+        self.context_budget = CORE_SETTINGS.delegation.context_tokens
+        self.business_access = "full"
         self.instructions, self.declared = instructions, list(declared)
         self.items = list(history or [{"type": "message", "role": "user", "content": "Do the task."}])
         self.work_tools = tools or NoTools()
@@ -286,16 +299,44 @@ class FakeTaskContext:
         )
         return self.requests[-1]
 
-    def history(self):
-        return list(self.items)
+    def history(self, extra=()):
+        return [*self.items, *extra]
+
+    def refresh_history(self, *, unconfirmed_calls=()):
+        pass
 
     def tools(self):
         return self.work_tools
+
+    def tool_sources(self, sources):
+        return tuple(sources)
 
     def route(self, call):
         if call.get("call_id") in self.refused:
             return "refused"
         return "app" if call.get("name") in {tool.get("name") for tool in self.declared} else "backend"
+
+    def dispatch(self, call, *, suspended=False):
+        if suspended and self.route(call) != "refused":
+            call_id = call["call_id"]
+            self.refused.add(call_id)
+            self._owed[call_id] = self.texts.paused_output
+        return self.route(call)
+
+    def can_dispatch(self):
+        return True
+
+    def backend_state(self, extra=()):
+        return ()
+
+    def placement_pending(self, call):
+        return False
+
+    async def wait_for_placement(self):
+        return None
+
+    def pending_input_ready(self):
+        return bool(self._steering)
 
     def refusal(self, call_id):
         return self.texts.not_run_output
@@ -303,6 +344,9 @@ class FakeTaskContext:
     def tool_started(self, call, source):
         self.started.append((call.get("call_id", ""), source))
         self.order.append(f"started:{call.get('call_id')}")
+
+    def tool_observed(self, call, source):
+        self.tool_started(call, source)
 
     def tool_outcome(self, call_id, output, outcome):
         self.outcomes[call_id] = (output, outcome)
@@ -341,15 +385,22 @@ class FakeDecisionTarget:
 
     async def steer(self, decision):
         self.decisions.append(decision)
-        return f"Sent to {decision.work_id}; it applies at the next step."
+        return f"Sent to {decision.targets}; it applies at the next step."
 
     async def cancel(self, decision):
         self.decisions.append(decision)
-        return f"Stopping {decision.work_id}."
+        return f"Stopping {decision.targets}."
 
     async def answer(self, decision):
         self.decisions.append(decision)
         return f"Answered {decision.delegation_id}."
+
+    async def submit(self, decision):
+        receipts = []
+        for index, action in enumerate(decision.actions, 1):
+            self.decisions.append(action)
+            receipts.append({"id": f"test-decision.{index}", "state": "applied"})
+        return json.dumps({"actions": receipts})
 
     async def place(self, decision):
         return await decision.apply(self)
@@ -506,10 +557,11 @@ class Attempt(ScriptStep):
     raises: Exception | None = None
     usage: dict | None = None
     ends: bool = True
+    boundary: bool = True
 
     async def play(self, run):
         items = [run.message(text, "final_answer") for text in self.answers]
-        for event in run.round_events(items, usage=self.usage, terminal=self.terminal):
+        for event in run.round_events(items, usage=self.usage, terminal=self.terminal, boundary=self.boundary):
             yield event
         if self.raises is not None:
             raise self.raises
@@ -583,7 +635,15 @@ MARK = WorkTool("continue_after_call", {"message": MESSAGE})
 
 def asking(question=QUESTION):
     """Return a round that asks the caller ``question`` with the ``ask_caller`` work tool."""
-    return WorkTool("ask_caller", {"question": question})
+    return WorkTool("caller_message", {"kind": "question", "message": question})
+
+
+def resolving(task):
+    """The selected Task resolves its own question using its actual applied reply receipt."""
+    return WorkTool(
+        "resolve_questions",
+        {"resolutions": [{"question_id": f"{task}.Q1", "disposition": "answered", "input_ref": f"{task}.I2"}]},
+    )
 
 
 def marks(session):
@@ -615,8 +675,8 @@ class Fail(ScriptStep):
         yield {}
 
 
-def answer(text="Done.", usage=None):
-    return Attempt((text,), usage=usage)
+def answer(text="Done.", usage=None, *, boundary=True):
+    return Attempt((text,), usage=usage, boundary=boundary)
 
 
 def say(text):
@@ -756,8 +816,7 @@ class StartEach:
     """A conductor that starts a Work of its own for every arrival, which waits its turn for a slot."""
 
     async def decide(self, given, place):
-        for arrival in given.arrivals:
-            await place(Start((arrival.delegation_id,)))
+        await place(CompleteDecision(tuple(Start((arrival.delegation_id,)) for arrival in given.arrivals)))
 
 
 @dataclass
@@ -779,21 +838,61 @@ class ScriptedConductor:
 
 
 def planned(*plans):
-    waiting = list(plans)
+    """Play one bound decision or callback at each conductor turn."""
+    waiting = deque(step if callable(step) else placing(step) for step in plans)
 
     async def plan(given, place):
-        await waiting.pop(0)(given, place)
+        await waiting.popleft()(given, place)
 
     return ScriptedConductor(plan)
+
+
+def wire_decision(*actions):
+    """Decode a conductor action envelope through the production vocabulary."""
+    vocabulary = ControlVocabulary(TEXTS.control_tools, TEXTS.conductor_prompt, "idle", "failed")
+    return vocabulary.decision("submit_decision", json.dumps({"actions": actions}))
+
+
+def steer_action(source, *targets, updates=None, clarifications=None):
+    """Build the model's steer payload, including optional scoped updates and clarification IDs."""
+    action = {"action": "steer", "delegations": [source], "targets": list(targets)}
+    if updates is not None:
+        action["updates"] = [{"task_id": task, "text": text} for task, text in updates.items()]
+    if clarifications is not None:
+        action["clarifications"] = clarifications
+    return action
 
 
 def placing(*decisions):
 
     async def plan(given, place):
-        for decision in decisions:
-            await place(decision)
+        if not decisions:
+            return
+        actions = tuple(
+            action
+            for decision in decisions
+            for action in (decision.actions if isinstance(decision, CompleteDecision) else (decision,))
+        )
+        bound = tuple(
+            replace(action, delegations=tuple(r.delegation_id for r in given.arrivals))
+            if isinstance(action, Cancel) and not action.delegations
+            else action
+            for action in actions
+        )
+        await place(CompleteDecision(bound))
 
     return plan
+
+
+@contextmanager
+def logged(level="WARNING"):
+    """Capture the text of test log records at the specified minimum level."""
+    lines = []
+    sink = logger.add(lambda message: lines.append(message.record["message"]), level=level)
+    try:
+        yield lines
+    finally:
+        logger.remove(sink)
 
 
 class Wire:
@@ -854,6 +953,11 @@ class IMCase(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(im.close)
         return im
 
+    def scripted_session(self, *scripts, **adapter_settings):
+        """Return a session and its scripted backend when the checks need both."""
+        backend = ScriptedAdapter(*scripts, **adapter_settings)
+        return self.session(backend), backend
+
     def traced(self, kind):
         """Return the fields of each trace of ``kind``, in order."""
         return [fields for each, fields in self.traces if each == kind]
@@ -879,6 +983,10 @@ class IMCase(unittest.IsolatedAsyncioTestCase):
             streams.append(im.admit(ask(text), delegation_id=f"D{number}", settings=settings).stream)
             await self.turns()
         return streams
+
+    async def request(self, im, text, delegation_id, *, timeout=None, **settings):
+        """Admit and drain one text request through the real IM session."""
+        return await read_all(im.admit(ask(text), delegation_id=delegation_id, **settings).stream, timeout=timeout)
 
     async def answer_calls(self, im, events, output="{}", **admission):
         """Answer each call ``events`` ended with by ``output``, as D1's continuation unless told; return its events."""

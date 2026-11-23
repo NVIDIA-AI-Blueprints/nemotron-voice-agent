@@ -21,7 +21,7 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
     provider_class,
     provider_for,
 )
-from nemotron_voice_agent.pipecat.shared.delegation_contract import ModelEndpoint
+from nemotron_voice_agent.pipecat.shared.delegation_contract import CHAT_COMPLETIONS, ModelEndpoint
 
 from .adapter import AgentAdapter
 from .settings import AgentSettings
@@ -77,6 +77,10 @@ class AgentSource:
             raise ValueError(
                 f"backend.llm-agent.conductor.model {conductor.model!r} is not in the model catalog"
             ) from None
+        if conductor.strict_tool_arguments and endpoint.api != CHAT_COMPLETIONS:
+            raise ValueError(
+                "backend.llm-agent.conductor.strict_tool_arguments requires a Chat Completions conductor endpoint"
+            )
         if conductor.temperature is None:
             return endpoint
         return replace(endpoint, extra_params={**endpoint.extra_params, "temperature": conductor.temperature})

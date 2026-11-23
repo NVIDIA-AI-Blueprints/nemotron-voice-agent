@@ -64,7 +64,7 @@ class OneShotSession(IMSession):
         stream = ResponseStream()
         self.book.open(delegation.id, stream, *self.response_settings(settings), running=True)
         self.incoming[delegation.id] = Incoming(None)
-        self._start_work([delegation.id], ())
+        self.start_work([delegation.id], ())
         return Admission(delegation.id, stream)
 
     def admit_client_request(

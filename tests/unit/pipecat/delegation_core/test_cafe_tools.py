@@ -33,19 +33,43 @@ class CafeToolTests(unittest.IsolatedAsyncioTestCase):
         line = added["cart"]["lines"][0]
         self.assertEqual((line["size"], line["quantity"]), ("medium", 1))
         self.assertEqual((await self.run_tool(tools, "v", "manage_cart", action="view"))["cart"]["item_count"], 1)
+        for call_id, options in (
+            ("u1", {"size": "large", "modifiers": ["unknown"]}),
+            ("u2", {"size": "unknown", "modifiers": ["oat_milk"]}),
+            ("u3", {}),
+        ):
+            with self.subTest(options=options):
+                failed = await self.run_tool(
+                    tools, call_id, "manage_cart", action="update_options", line_id=line["line_id"], **options
+                )
+                self.assertEqual(failed["status"], "error")
+                self.assertEqual(tools.snapshot(), added["cart"])
 
     async def test_the_menu_filters_and_the_total_adds_size_and_tax(self):
         tools = CafeTools()
-        self.assertEqual(
-            (await self.run_tool(tools, "m", "get_menu", query=None, category=None))["items"][0]["id"], "esp"
-        )
+        assert (await self.run_tool(tools, "m", "get_menu", query=None, category=None))["items"][0]["id"] == "esp"
         tea = await self.run_tool(tools, "t", "get_menu", category="tea")
         self.assertEqual([item["name"] for item in tea["items"]], ["Matcha Latte", "Earl Grey"])
         added = await self.run_tool(
-            tools, "1", "manage_cart", action="add", item_id="lat", size="large", modifiers=["oat_milk"]
+            tools, "1", "manage_cart", action="add", item_id="lat", quantity=2, size="large", modifiers=["oat_milk"]
         )
         cart = added["cart"]
-        self.assertEqual((cart["subtotal"], cart["tax"], cart["total"]), (6.25, 0.53, 6.78))
+        self.assertEqual((cart["subtotal"], cart["tax"], cart["total"]), (12.5, 1.06, 13.56))
+        original = cart["lines"][0]
+        line_id = original["line_id"]
+        for call_id, options, expected in (
+            ("2", {"size": "small"}, ("small", ["oat_milk"], 11.39)),
+            ("3", {"modifiers": ["extra_shot"]}, ("small", ["extra_shot"], 11.94)),
+            ("4", {"size": "medium", "modifiers": []}, ("medium", [], 10.85)),
+        ):
+            with self.subTest(options=options):
+                updated = await self.run_tool(
+                    tools, call_id, "manage_cart", action="update_options", line_id=line_id, **options
+                )
+                self.assertEqual(updated["status"], "updated")
+                [line] = updated["cart"]["lines"]
+                self.assertEqual((line["line_id"], line["item_id"], line["quantity"]), (line_id, "lat", 2))
+                self.assertEqual((line["size"], line["modifiers"], updated["cart"]["total"]), expected)
 
     async def test_an_order_needs_confirmation_and_runs_once(self):
         tools = CafeTools()

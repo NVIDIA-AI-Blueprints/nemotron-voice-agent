@@ -8,9 +8,11 @@
 import json
 import unittest
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from nemotron_voice_agent.pipecat.runtime.gateways.live.events import error_event
+from nemotron_voice_agent.pipecat.runtime.gateways.live.extras import delegate_request
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import (
     AudioFormat,
     ProtocolError,
@@ -61,11 +63,13 @@ class ProtocolTests(unittest.TestCase):
         server_events = "session.client.data_channel.allowed_server_events"
         unnested = {"data_channel": {"allowed_server_events": [{"type": "response.event"}]}}
         misnested = {"data_channel": {"allowed_server_events": [{"type": "session.started", "response_event": "x"}]}}
+        bad_tools = [{"type": []}]
         bad_items = (
             {**USER, "role": "system", "content": [TEXT]},
             {"role": [], "content": []},
             {**USER, "content": [TEXT, TEXT]},
             {**USER, "content": [{"type": "input_text", "text": 5}]},
+            {**USER, "content": [{**TEXT, "type": {}}]},
             "text",
         )
         for session, code, param in (
@@ -75,11 +79,14 @@ class ProtocolTests(unittest.TestCase):
             ({"audio": {"output": {"voice": {"id": "   "}}}}, "invalid_value", "session.audio.output"),
             ({"audio": {"format": {"type": "audio/pcm", "rate": 8000}}}, "invalid_value", "session.audio.format"),
             ({"audio": {"format": {"type": "audio/pcmu", "rate": 24000}}}, "invalid_value", "session.audio.format"),
+            ({"audio": {"format": {"type": []}}}, "invalid_value", "session.audio.format.type"),
             ({"delegation": {"responses": {"model": "x"}}}, "unknown_parameter", "session.delegation.responses"),
             ({"delegation": {"type": "responses"}}, "invalid_value", "session.delegation.responses"),
             ({"delegation": responses(tools=[{"type": "teleport"}])}, "invalid_value", "session.delegation.responses"),
+            ({"delegation": responses(tools=bad_tools)}, "invalid_value", "session.delegation.responses"),
             ({"delegation": {"acknowledgement_delay_ms": -1}}, "invalid_value", "session.delegation.acknowledgement"),
             ({"delegation": {"type": "decisions", "decisions": {}}}, "invalid_value", "session.delegation"),
+            ({"delegation": {"type": {}}}, "invalid_value", "session.delegation"),
             ({"triggers": [{"type": "decisions"}]}, "invalid_value", "session.triggers"),
             ({"client": unnested}, "invalid_value", server_events),
             ({"client": misnested}, "invalid_value", server_events),
@@ -93,6 +100,15 @@ class ProtocolTests(unittest.TestCase):
                     self.assertEqual(str(error), f"Unknown parameter: '{error.param}'.")
         self.assertIn("'decisions'", str(start_error(delegation={"type": "decisions"})))
         self.assertIn("Decisions triggers are not supported", str(start_error(triggers=[{"type": "decisions"}])))
+
+        config = SessionConfig(model="live-1", delegation=responses())
+        with self.assertRaises(ProtocolError) as updated:
+            config.updated({"delegation": {"responses": {"tools": bad_tools}}})
+        self.assertEqual(updated.exception.code, "invalid_value")
+        self.assertTrue(updated.exception.param.startswith("session.delegation.responses"))
+        with self.assertRaises(HTTPException) as stateless:
+            delegate_request({"input": [{**USER, "content": [TEXT]}], "tools": bad_tools})
+        self.assertEqual(stateless.exception.status_code, 400)
 
     def test_the_acknowledgement_delay_is_at_most_800_ms(self):
         param = "session.delegation.acknowledgement_delay_ms"

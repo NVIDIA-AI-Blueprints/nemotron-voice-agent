@@ -129,23 +129,6 @@ class PipelineHost:
         self.recorder: AudioBufferProcessor | None = None
         self.task: PipelineWorker | None = None
         self.runner_task: asyncio.Task | None = None
-        self.background: set[asyncio.Task] = set()
-
-    def _spawn(self, coro) -> None:
-        """Run a command in the background; a failure is reported to the client without ending the session."""
-        task = asyncio.create_task(coro)
-        self.background.add(task)
-
-        def done(finished: asyncio.Task) -> None:
-            self.background.discard(finished)
-            if not finished.cancelled() and finished.exception():
-                logger.error(f"Live command failed: {finished.exception()!r}")
-                report = asyncio.create_task(self.session.report_error("A command could not be processed."))
-                self.background.add(report)
-                report.add_done_callback(self.background.discard)
-                report.add_done_callback(lambda done: done.cancelled() or done.exception())
-
-        task.add_done_callback(done)
 
     def edges(self, *, transport: str, connection, audio_in_rate: int, stt) -> FrontendEdges:
         """Return the session's edges around the frontend: its transport, the input gate and the output transcript."""
@@ -194,9 +177,7 @@ class PipelineHost:
             raise RuntimeError(f"Processors that could not set up: {', '.join(failed)}")
 
     async def stop_pipeline(self) -> None:
-        """Cancel the background commands and the pipeline."""
-        for background in tuple(self.background):
-            background.cancel()
+        """Cancel the pipeline and wait for its runner."""
         if self.task is not None:
             await self.task.cancel()
         if self.runner_task is not None:

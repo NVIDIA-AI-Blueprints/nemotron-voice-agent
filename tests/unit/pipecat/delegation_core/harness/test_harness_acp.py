@@ -9,6 +9,8 @@ import asyncio
 import json
 import socket
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from loguru import logger
 
@@ -43,6 +45,7 @@ from tests.unit.pipecat.delegation_core.harness.doubles import (
     hermes,
     plain,
     scratch,
+    settings,
     until,
     wire,
 )
@@ -73,7 +76,66 @@ def drain(mailbox):
     return [mailbox.get_nowait() for _ in range(mailbox.qsize())]
 
 
+def modern_tool_wire():
+    """Read synthetic wire serialized by pinned Hermes 0.22.7, including its editor server mapping."""
+    return json.loads((Path(__file__).parent / "fixtures" / "hermes_022_tool_cards.json").read_text())
+
+
 class UpdateTests(unittest.TestCase):
+    def test_modern_editor_direct_and_pure_mcp_batch_cards_belong_to_the_exact_assigned_server(self):
+        recorded = modern_tool_wire()
+        for kind, exchange in recorded["cases"].items():
+            with self.subTest(kind=kind):
+                reader = SessionUpdates(hermes(), recorded["assigned_server"])
+                card = reader.read(exchange["start"])
+                ended = reader.read(exchange["end"])
+                self.assertIsInstance(card, ToolCard)
+                self.assertTrue(card.bridged)
+                self.assertEqual(card.call_id, ended.call_id)
+                self.assertEqual(ended.output, "synthetic menu result")
+                self.assertFalse(SessionUpdates(hermes(), "w10").read(exchange["start"]).bridged)
+        # The old direct prefix and plain ACP's existing policy remain unchanged.
+        self.assertTrue(hermes().bridged_call("mcp__w1__get_menu", {}, "w1"))
+        self.assertTrue(AcpAgent().bridged_call("tool_call", None, "w1"))
+
+    def test_modern_mcp_classification_does_not_hide_foreign_mixed_native_or_malformed_wrappers(self):
+        own = modern_tool_wire()["cases"]["batch"]["start"]["rawInput"]["calls"][0]
+        foreign = {**own, "name": own["name"].replace("editor_w1_", "editor_w10_")}
+        native = {"name": "terminal", "arguments": {"command": "date"}}
+        shapes = (
+            None,
+            {},
+            {"calls": []},
+            {"calls": [own], "extra": "metadata"},
+            {"calls": [own, foreign]},
+            {"calls": [own, native]},
+            {"calls": ["not a call"]},
+            {"calls": [{"name": own["name"], "arguments": "{}"}]},
+            {"calls": [{"name": own["name"]}]},
+            {"calls": [{**own, "extra": True}]},
+        )
+        for arguments in shapes:
+            with self.subTest(arguments=arguments):
+                card = SessionUpdates(hermes(), "w1").read(
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "outer",
+                        "title": "tool_call: mcp__w1__get_menu",  # The title is not target evidence.
+                        "rawInput": arguments,
+                    }
+                )
+                self.assertFalse(card.bridged)
+        for name in (
+            "mcp__editor_w10_abcdef12__get_menu",
+            "mcp__editor_w1evil_abcdef12__get_menu",
+            "mcp__editor_w1_ABCDEF12__get_menu",
+            "mcp__editor_w1_abcdef1__get_menu",
+            "other_mcp__editor_w1_abcdef12__get_menu",
+            "mcp__editor_w1_abcdef12__",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hermes().bridged(name, "w1"))
+
     def test_the_recorded_hermes_wire_reads_into_events(self):
         events = hermes_events("tool_then_cancel_in_tool")
         kinds = {type(event).__name__ for event in events if event is not None}
@@ -87,8 +149,8 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual([end.failed for end in ends], [False, True])
         self.assertIn("14:07", ends[0].output)
         self.assertIn("MCP call interrupted", ends[1].output)
-        acks = [chunk.text for chunk in of(hermes_events("redirect_and_steer"), MessageChunk) if not chunk.message_id]
-        self.assertEqual(acks, ["Redirected the active turn with your correction."] * 2)
+        ack = SessionUpdates(hermes(), "client").read(chunk("Queued."))
+        self.assertEqual(ack, MessageChunk(None, "Queued."))
         pong = hermes_events("pong")
         [answer] = of(pong, MessageChunk)
         self.assertEqual(
@@ -123,18 +185,19 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((card.name, card.bridged), ("Looking up ABC: ABC", True))
         self.assertNotEqual(reader.read(chunk("Found it.")).message_id, first.message_id)
         self.assertEqual(reader.read(chunk("x", "given-id")).message_id, "given-id")
+        reader.begin_prompt()
+        self.assertNotEqual(reader.read(chunk("A later invocation.")).message_id, first.message_id)
 
-    def test_hermes_pins_its_folder_and_guards_a_steer(self):
+    def test_hermes_pins_its_folder_and_guards_a_prompt(self):
         agent, folder = hermes(), scratch("hermes-session-")
         # No instructions: only the pin, so that no parent's file is read.
         self.assertEqual(agent.prepare(folder, ""), ())
         self.assertEqual([path.name for path in folder.iterdir()], [".git"])
         hermes(instructions_file="AGENTS.md").prepare(folder, "Hi.")
         self.assertEqual((folder / "AGENTS.md").read_text(), "Hi.\n")
-        # On an idle session Hermes runs a steer's text as a prompt of its own: it gets a prompt's guard.
-        self.assertEqual(agent.steer_text("/reset the order to tea"), "/steer Request: /reset the order to tea")
-        custom = HermesAgent.from_settings({"steer_command": "/queue ", "command_guard": "Asked: "})
-        self.assertEqual((custom.steer_text("x"), custom.prompt_text("/x")), ("/queue x", "Asked: /x"))
+        self.assertEqual(agent.prompt_text("/reset the order to tea"), "Request: /reset the order to tea")
+        custom = HermesAgent.from_settings({"command_guard": "Asked: "})
+        self.assertEqual(custom.prompt_text("/x"), "Asked: /x")
         self.assertEqual(agent.tool_name("mcp__w1__lookup: ABC123"), "mcp__w1__lookup")
         bridged = [agent.bridged(name, "w1") for name in ("mcp__w1__lookup", "web_search", "mcp__w12__lookup")]
         self.assertEqual(bridged, [True, False, False])
@@ -146,7 +209,9 @@ class Replay:
     With ``capabilities``, its initialize answer advertises them, as an agent other than Hermes may.
     """
 
-    def __init__(self, scenario, *, answered=True, ask_permission=False, refuse=None, capabilities=None):
+    def __init__(
+        self, scenario, *, answered=True, ask_permission=False, refuse=None, capabilities=None, drop_new_reply=False
+    ):
         self.answered = answered
         self.steps = [step for step in wire(scenario) if answered or "end" not in step]
         self.session = next(step["session"] for step in self.steps if "session" in step)
@@ -156,6 +221,8 @@ class Replay:
         self.received: list[dict] = []
         self.closed = asyncio.Event()
         self.permission_answer = None
+        self.runtime_stopped = False
+        self.drop_new_reply = drop_new_reply
 
     async def open(self):
         ours, theirs = socket.socketpair()
@@ -168,15 +235,24 @@ class Replay:
         self.their_writer.write(json.dumps(message).encode() + b"\n")
         await self.their_writer.drain()
 
+    async def send_record(self, writer, data, submitted):
+        writer.write(data)
+        submitted()
+        await writer.drain()
+
     async def _serve(self):
         prompts = iter([step for step in self.steps if "prompt" in step])
         initialized = {"protocolVersion": 1, **({"agentCapabilities": self.capabilities} if self.capabilities else {})}
-        results = {"initialize": initialized, "session/new": {"sessionId": self.session}, "session/close": {}}
+        session = {"sessionId": self.session}
+        results = {"initialize": initialized, "session/new": session, "session/close": {}}
         try:
             while line := await self.their_reader.readline():
                 message = json.loads(line)
                 self.received.append(message)
                 method = message.get("method")
+                if method == "session/new" and self.drop_new_reply:
+                    self.their_writer.close()
+                    return
                 if method in self.refuse:
                     await self.send({"jsonrpc": "2.0", "id": message["id"], "error": self.refuse[method]})
                 elif method in results:
@@ -217,6 +293,10 @@ class Replay:
         self.their_writer.close()
         self.writer.close()
         self.closed.set()
+        self.runtime_stopped = True
+
+    async def wait_closed(self):
+        await self.closed.wait()
 
     def sent(self, method):
         return [message for message in self.received if message.get("method") == method]
@@ -227,14 +307,37 @@ class Replay:
 
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):
-    async def connect(self, replay, agent=None):
+    async def open_client(self, replay, agent=None):
         self.replay, self.mailbox = replay, asyncio.Queue()
         self.client = AcpClient(
             replay, agent or hermes(), permission=Reject(), start_timeout_seconds=5, stop_grace_seconds=5
         )
         self.addAsyncCleanup(self.client.close)
         await self.client.open()
-        return await self.client.new_session("/work/w1", SERVER, self.mailbox)
+
+    async def connect(self, replay, agent=None):
+        await self.open_client(replay, agent)
+        return await self.client.new_session(Path("/work/w1"), SERVER, self.mailbox)
+
+    async def test_abandoned_session_creation_closes_the_created_session(self):
+        await self.open_client(Replay("pong", capabilities=CLOSE))
+        open_session = self.client.conn.new_session
+        received = asyncio.Event()
+
+        async def delay_after_reply(**kwargs):
+            await open_session(**kwargs)
+            received.set()
+            await asyncio.Future()
+
+        with patch.object(self.client.conn, "new_session", delay_after_reply):
+            pending = asyncio.create_task(self.client.new_session(Path("/work/w1"), SERVER, self.mailbox))
+            await received.wait()
+            pending.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await pending
+
+        await self.client.close()
+        self.assertEqual(self.replay.closes(), [self.replay.session])
 
     async def test_every_update_of_a_turn_comes_before_its_end(self):
         session = await self.connect(Replay("pong"))
@@ -251,10 +354,121 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((init["protocolVersion"], capabilities.get("terminal", False)), (1, False))
         self.assertFalse(any((capabilities.get("fs") or {}).values()))
 
+    async def test_late_and_unattributed_updates_do_not_change_the_next_prompts_answer(self):
+        replay = Replay("cancel_then_prompt", answered=False)
+        replay.steps = [step for step in replay.steps if "prompt" in step]
+        session = await self.connect(replay, AcpAgent())
+
+        async def send_update(update):
+            await replay.send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {"sessionId": session.id, "update": update},
+                }
+            )
+
+        async def end(prompt):
+            request = replay.sent("session/prompt")[-1]
+            await replay.send({"jsonrpc": "2.0", "id": request["id"], "result": {"stopReason": "end_turn"}})
+            await session.ended(prompt)
+
+        start = {"sessionUpdate": "tool_call", "title": "Look up the booking"}
+        complete = {"sessionUpdate": "tool_call_update", "status": "completed", "rawOutput": "Found the booking"}
+        first = session.prompt("Check the booking.")
+        await until(lambda: len(replay.sent("session/prompt")) == 1)
+        await send_update({**start, "toolCallId": "old-tool"})
+        await end(first)
+        with patch.object(session, "read", wraps=session.read) as read:
+            await send_update(chunk("An unowned update.", "unowned"))
+            await until(lambda: read.called)
+
+        second = session.prompt("Move it to eight.")
+        await until(lambda: len(replay.sent("session/prompt")) == 2)
+        await send_update({**start, "toolCallId": "new-tool"})
+        await send_update({**complete, "toolCallId": "new-tool"})
+        await send_update(chunk("The booking "))
+        await send_update({**complete, "toolCallId": "old-tool"})
+        await send_update({**complete, "toolCallId": "unknown-tool"})
+        await send_update(chunk("More text from the unowned update.", "unowned"))
+        await send_update(chunk("is updated."))
+        await end(second)
+
+        events = drain(self.mailbox)
+        self.assertEqual(
+            [(event.call_id, event.prompt) for event in of(events, ToolCardEnd)],
+            [("new-tool", second), ("old-tool", first)],
+        )
+        self.assertEqual([event.text for event in of(events, MessageChunk)], ["The booking ", "is updated."])
+        self.assertEqual({event.prompt for event in of(events, MessageChunk)}, {second})
+        self.assertEqual(len({event.message_id for event in of(events, MessageChunk)}), 1)
+
+    async def test_a_fenced_prompt_never_reaches_the_agent_and_does_not_poison_the_next_prompt(self):
+        session = await self.connect(Replay("pong"))
+        refused = session.prompt("Do not dispatch this.", may_dispatch=lambda: False)
+        await session.ended(refused)
+        self.assertEqual(self.replay.sent("session/prompt"), [])
+        [terminal] = of(drain(self.mailbox), PromptEnded)
+        self.assertEqual(terminal.dispatch, "not_dispatched")
+        self.assertFalse(session.prompt_state(refused).dispatched)
+        self.assertTrue(session.quiescent)
+        self.assertTrue(self.client.alive)
+        accepted = session.prompt("pong")
+        await session.ended(accepted)
+        self.assertEqual(len(self.replay.sent("session/prompt")), 1)
+
+    async def test_retirement_before_native_dispatch_fences_the_scheduled_prompt(self):
+        session = await self.connect(Replay("pong"))
+        pending = session.prompt("Do not dispatch this.")
+        session.retire()
+        await session.ended(pending)
+        self.assertEqual(self.replay.sent("session/prompt"), [])
+        [terminal] = of(drain(self.mailbox), PromptEnded)
+        self.assertEqual(terminal.dispatch, "not_dispatched")
+        self.assertFalse(self.client.agent.completion(terminal).model_invoked)
+
+    async def test_cancel_waiting_to_write_does_not_escape_its_original_prompt(self):
+        session = await self.connect(Replay("cancel_then_prompt", answered=False))
+        prompt = session.prompt("First turn.")
+        await until(lambda: self.replay.sent("session/prompt"))
+        request = self.replay.sent("session/prompt")[0]
+        sender = self.client.conn._conn._sender
+        async with sender._writing:
+            cancel = asyncio.create_task(session.cancel())
+            await until(lambda: session.cancelled)
+            await self.replay.send({"jsonrpc": "2.0", "id": request["id"], "result": {"stopReason": "end_turn"}})
+            await session.ended(prompt)
+        receipt = await cancel
+
+        next_prompt = session.prompt("Continue on this session.")
+        await until(lambda: len(self.replay.sent("session/prompt")) == 2)
+        request = self.replay.sent("session/prompt")[1]
+        await self.replay.send({"jsonrpc": "2.0", "id": request["id"], "result": {"stopReason": "end_turn"}})
+        await session.ended(next_prompt)
+        self.assertEqual(self.replay.sent("session/cancel"), [])
+        self.assertEqual(receipt, "not_dispatched")
+
+    async def test_hermes_viewer_exit_does_not_claim_daemon_or_workspace_cleanup(self):
+        for got_session_id in (False, True):
+            with self.subTest(got_session_id=got_session_id):
+                replay = Replay("pong", drop_new_reply=not got_session_id)
+                if got_session_id:
+                    session = await self.connect(replay)
+                else:
+                    with self.assertRaises(ConnectionError):
+                        await self.connect(replay)
+                receipt = await self.client.wait_closed()
+                self.assertEqual(len(replay.sent("session/new")), 1)
+                if got_session_id:
+                    self.assertTrue(session.retired)
+                self.assertEqual(
+                    (receipt.scope, receipt.confirmed, receipt.workspace_safe), ("connection", True, False)
+                )
+
     async def test_a_cancel_goes_only_to_a_running_turn(self):
         session = await self.connect(Replay("cancel_then_prompt", answered=False, ask_permission=True))
         # Never while idle: it would poison the next prompt.
-        self.assertFalse(await session.cancel())
+        self.assertEqual(await session.cancel(), "not_dispatched")
 
         async def answered(prompt, stop):
             await until(lambda: self.replay.permission_answer is not None)
@@ -265,21 +479,21 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             return answer
 
         first = session.prompt("/count to 400")
-        self.assertTrue(await session.cancel())
-        self.assertEqual(await answered(first, "cancelled"), {"outcome": {"outcome": "cancelled"}})
-        second = session.steer("Make it two.")
-        self.assertEqual(
-            await answered(second, "end_turn"), {"outcome": {"outcome": "selected", "optionId": "reject-1"}}
-        )
+        await until(lambda: self.replay.sent("session/prompt"))
+        self.assertEqual(await session.cancel(), "dispatched")
+        assert await answered(first, "cancelled") == {"outcome": {"outcome": "selected", "optionId": "reject-1"}}
+        second = session.prompt("Make it two.")
+        assert await answered(second, "end_turn") == {"outcome": {"outcome": "selected", "optionId": "reject-1"}}
         self.assertEqual(len(self.replay.sent("session/cancel")), 1)
         texts = [message["params"]["prompt"][0]["text"] for message in self.replay.sent("session/prompt")]
-        self.assertEqual(texts, ["Request: /count to 400", "/steer Make it two."])
+        self.assertEqual(texts, ["Request: /count to 400", "Make it two."])
 
     async def test_a_retired_sessions_running_turn_is_still_cancelled(self):
         session = await self.connect(Replay("cancel_then_prompt", answered=False))
         prompt = session.prompt("/count to 400")
+        await until(lambda: self.replay.sent("session/prompt"))
         session.retire()
-        self.assertTrue(await session.cancel())
+        self.assertEqual(await session.cancel(), "dispatched")
         await until(lambda: self.replay.sent("session/prompt") and self.replay.sent("session/cancel"))
         request = self.replay.sent("session/prompt")[-1]
         await self.replay.send({"jsonrpc": "2.0", "id": request["id"], "result": {"stopReason": "cancelled"}})
@@ -312,15 +526,21 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         for name, lose in losses.items():
             with self.subTest(name):
                 session = await self.connect(Replay("cancel_then_prompt", answered=False))
+                losses_seen = []
+                self.client.on_lost(lambda losses_seen=losses_seen: losses_seen.append(LOST))
                 waiting = session.prompt("Count to 400.")
                 await asyncio.sleep(0.1)
                 await lose(self.replay, session)
                 await until(lambda: not self.client.alive)
-                later = [session.steer("Make it two."), session.prompt("Count to 600.")]
+                later = [session.prompt("Make it two."), session.prompt("Count to 600.")]
                 await asyncio.wait_for(asyncio.gather(*(session.ended(prompt) for prompt in (waiting, *later))), 2)
                 ended = {event.prompt: event.error for event in drain(self.mailbox) if isinstance(event, PromptEnded)}
                 self.assertEqual([ended[prompt] for prompt in (waiting, *later)], [LOST] * 3)
                 await asyncio.wait_for(self.replay.closed.wait(), 2)
+                self.assertEqual(losses_seen, [LOST])
+                late_listener = asyncio.Event()
+                self.client.on_lost(late_listener.set)
+                self.assertTrue(late_listener.is_set())
                 with self.assertRaisesRegex(ConnectionError, LOST):
                     await self.client.new_session("/work/w2", SERVER, asyncio.Queue())
 
@@ -336,12 +556,46 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 await self.connect(Replay("pong", refuse={method: refusal}))
         session = await self.connect(Replay("pong", refuse={"session/prompt": refusal}))
         await session.ended(session.prompt("pong"))
-        error = self.mailbox.get_nowait().error
+        error = next(event.error for event in drain(self.mailbox) if isinstance(event, PromptEnded))
         self.assertIn("RequestError: Internal error", error)
         self.assertIn(details, error)
 
+    async def test_an_rpc_error_after_prompt_dispatch_does_not_prove_the_native_turn_ended(self):
+        refusal = {
+            "code": -32603,
+            "message": "Internal error",
+            "data": {"details": "Gateway disconnected; turn outcome is unknown."},
+        }
+        for agent in (AcpAgent(), hermes()):
+            with self.subTest(agent=agent.name):
+                session = await self.connect(Replay("pong", answered=False), agent=agent)
+                prompt = session.prompt("Check the requested appointment.")
+                await until(lambda: self.replay.sent("session/prompt"))
+                [request] = self.replay.sent("session/prompt")
+                await self.replay.send({"jsonrpc": "2.0", "id": request["id"], "error": refusal})
+                await session.ended(prompt)
+                terminal = session.prompt_state(prompt).terminal
+                self.assertEqual(terminal.dispatch, "dispatched")
+                self.assertIn("turn outcome is unknown", terminal.error)
+                self.assertFalse(terminal.terminal_confirmed)
+                self.assertFalse(session.quiescent)
+                self.assertEqual(agent.completion(terminal).outcome, "unknown")
+                self.assertIsNone(agent.completion(terminal).model_invoked)
+
+                followup = session.prompt("Make it eight instead.")
+                await session.ended(followup)
+                denied = session.prompt_state(followup).terminal
+                self.assertEqual(denied.dispatch, "not_dispatched")
+                self.assertEqual(self.replay.sent("session/prompt"), [request])
+                self.assertFalse(session.quiescent)
+
     async def test_a_cancelled_turns_batch_goes_to_the_same_session(self):
-        host, replay = FakeHost(plain()), Replay("cancel_then_prompt")
+        for harness in (plain(), settings()):
+            with self.subTest(agent=harness.agent.name):
+                await self.check_cancel_and_followup(harness)
+
+    async def check_cancel_and_followup(self, harness):
+        host, replay = FakeHost(harness), Replay("cancel_then_prompt")
         client = AcpClient(
             replay, host.settings.agent, permission=Reject(), start_timeout_seconds=5, stop_grace_seconds=5
         )
@@ -354,7 +608,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await anext(events))["type"], "response.created")
         steering = task.steer_with(STEERING)
         run.steer()
-        rest = await asyncio.wait_for(read_all(events), 5)
+        rest = await read_all(events, timeout=5)
         prompts, cancels = replay.sent("session/prompt"), replay.sent("session/cancel")
         self.assertEqual(len(replay.sent("session/new")), 1)
         self.assertEqual([sent["params"]["sessionId"] for sent in (*cancels, *prompts)], [replay.session] * 3)
@@ -402,12 +656,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 self.addCleanup(logger.remove, logger.add(logged.append, level="DEBUG", format="{message}"))
                 session.retire()
                 await until(lambda: self.replay.closes() and not self.client.closes)
-                self.assertEqual(
-                    [each.split()[0] for each in logged if each.startswith("harness.session_close")], [line]
-                )
+                assert [each.split()[0] for each in logged if each.startswith("harness.session_close")] == [line]
                 self.assertTrue(self.client.alive)
 
     async def test_the_clients_close_closes_each_session_before_the_stream_ends(self):
         session = await self.connect(Replay("pong", capabilities=CLOSE))
+        lost = asyncio.Event()
+        self.client.on_lost(lost.set)
         await self.client.close()
         self.assertEqual((self.replay.closes(), self.client.closes), ([session.id], set()))
+        self.assertFalse(lost.is_set())

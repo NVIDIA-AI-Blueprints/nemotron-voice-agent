@@ -78,8 +78,123 @@ function PromptRow({ prompt, isActive, canRemove, disabled }: Readonly<{ prompt:
   );
 }
 
+function PromptPart({ prompt, name, active, editable, locked }: Readonly<{
+  prompt: Prompt;
+  name: string;
+  active: boolean;
+  editable: boolean;
+  locked: boolean;
+}>) {
+  const { promptOverrides, setPromptOverride } = useApp();
+  const override = promptOverrides.get(prompt.key);
+  const content = override ?? prompt.content;
+  const [draft, setDraft] = useState<string | null>(null);
+  const canEdit = editable && prompt.builtIn && !locked;
+
+  const save = () => {
+    if (!canEdit || !draft?.trim()) return;
+    setPromptOverride(prompt.key, draft === prompt.content ? null : draft);
+    setDraft(null);
+  };
+
+  return (
+    <details className="prompt-card">
+      <summary className="prompt-part__summary">
+        <span className="prompt-card__name">{name}</span>
+        {active && <span className="prompt-card__badge">Active</span>}
+        {override !== undefined && <span className="prompt-card__badge">Edited</span>}
+      </summary>
+      <div className="prompt-part__body">
+        {prompt.description && <p className="prompt-card__desc">{prompt.description}</p>}
+        {draft !== null && canEdit ? (
+          <>
+            <textarea
+              className="svc-input prompt-content-input"
+              aria-label={name}
+              value={draft}
+              rows={8}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setDraft(null); }}
+              autoFocus
+            />
+            <div className="svc-edit-actions">
+              <button className="btn-primary svc-add-btn" onClick={save} disabled={!draft.trim()}>Save</button>
+              <button className="svc-icon-btn prompt-part__action" onClick={() => setDraft(null)}>Cancel</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <pre className="prompt-card__content">{content}</pre>
+            {canEdit && (
+              <div className="svc-edit-actions">
+                <button className="svc-icon-btn prompt-part__action" onClick={() => setDraft(content)}>Edit</button>
+                {override !== undefined && (
+                  <button className="svc-icon-btn prompt-part__action" onClick={() => setPromptOverride(prompt.key, null)}>Reset</button>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function OrderedPrompts({ locked }: Readonly<{ locked: boolean }>) {
+  const { promptLayout, prompts, selectedPrompt } = useApp();
+  const catalog = new Map(prompts.filter((prompt) => prompt.builtIn).map((prompt) => [prompt.key, prompt]));
+  const arrangedKeys = new Set(promptLayout.flatMap(({ parts }) => parts.map((part) =>
+    part.active ? selectedPrompt?.key : part.key,
+  )));
+  const otherPrompts = Array.from(catalog.values()).filter((prompt) => !arrangedKeys.has(prompt.key));
+
+  return (
+    <>
+      {promptLayout.map(({ id, label, parts }) => (
+        <section key={id} className="prompt-part__group" aria-label={label}>
+          <h4 className="prompts-section-label">{label}</h4>
+          <ol className="prompt-part__list">
+            {parts.map((part, index) => {
+              const prompt = part.active ? selectedPrompt : part.key ? catalog.get(part.key) : undefined;
+              if (!prompt && !part.label) return null;
+              return (
+                <li key={`${index}:${prompt?.key ?? part.label}`}>
+                  {prompt ? (
+                    <PromptPart
+                      prompt={prompt}
+                      name={part.label ?? prompt.promptName ?? prompt.key}
+                      active={Boolean(part.active)}
+                      editable={Boolean(part.editable)}
+                      locked={locked}
+                    />
+                  ) : (
+                    <div className="prompt-part__runtime">
+                      <span className="prompt-card__name">{part.label}</span>
+                      <span className="prompt-card__badge">Runtime</span>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ))}
+      {otherPrompts.length > 0 && (
+        <details className="prompt-part__catalog">
+          <summary className="prompts-section-label">Other templates</summary>
+          <div className="prompts-list">
+            {otherPrompts.map((prompt) => (
+              <PromptRow key={prompt.key} prompt={prompt} isActive={false} canRemove={false} />
+            ))}
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+
 export function PromptsPanel() {
-  const { prompts, promptsLoading, selectedPromptKey, addPrompt } = useApp();
+  const { prompts, promptsLoading, promptLayout, selectedPromptKey, addPrompt } = useApp();
   const { isLocked } = useConnectionState();
   const [adding, setAdding] = useState(false);
   const [key, setKey] = useState("");
@@ -165,6 +280,8 @@ export function PromptsPanel() {
         </div>
       )}
 
+      {promptLayout.length > 0 && <OrderedPrompts locked={isLocked} />}
+
       {customPrompts.length > 0 && (
         <>
           <p className="prompts-section-label">Custom Prompts</p>
@@ -176,7 +293,7 @@ export function PromptsPanel() {
         </>
       )}
 
-      {defaultPrompts.length > 0 && (
+      {promptLayout.length === 0 && defaultPrompts.length > 0 && (
         <>
           <p className="prompts-section-label">Default Prompts</p>
           <div className="prompts-list">
@@ -187,7 +304,7 @@ export function PromptsPanel() {
         </>
       )}
 
-      {Object.entries(agentPromptsByAgent).map(([agent, agentPrompts]) => (
+      {promptLayout.length === 0 && Object.entries(agentPromptsByAgent).map(([agent, agentPrompts]) => (
         <div key={agent}>
           <p className="prompts-section-label">Agent Prompts: {agent}</p>
           <div className="prompts-list">

@@ -9,10 +9,12 @@ import fcntl
 import os
 import shutil
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 # Locked by the process that owns the folder; holds that process's id, as a note.
 MARKER = ".delegation-core-harness-work"
+NATIVE_OWNER = ".native-shutdown-unconfirmed"
 
 # This process's own work folders: a sweep never takes one, even where a process may take its own lock again (NFS).
 _HELD: set[Path] = set()
@@ -64,29 +66,43 @@ class WorkFolder:
             shutil.rmtree(self.path, ignore_errors=True)
         _HELD.discard(self.path.resolve())
 
+    def protect_native_owner(self) -> None:
+        """Retain a native runtime's workspace across an application crash until shutdown is confirmed."""
+        descriptor = os.open(self.path / NATIVE_OWNER, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+
+    def quarantine(self) -> None:
+        """Keep durable native-ownership evidence after cleanup settles, releasing only the application's lock."""
+        if not (self.path / NATIVE_OWNER).exists():
+            self.protect_native_owner()
+        if self._lock is not None:
+            os.close(self._lock)
+            self._lock = None
+        _HELD.discard(self.path.resolve())
+
     @staticmethod
     def sweep(root: Path) -> int:
         """Delete the work folders under ``root`` whose marker no process holds locked; return how many.
 
-        The lock, not the marker's process id, tells a live folder: a restarted container's server often reuses the id.
+        A writable marker descriptor keeps the ownership check and deletion atomic. On NFS, closing
+        that descriptor can be necessary before the otherwise empty folder can be removed.
         """
         if not root.is_dir():
             return 0
         removed = 0
         for child in root.iterdir():
             marker = child / MARKER
-            if child.is_dir() and marker.is_file() and child.resolve() not in _HELD and not _held(marker):
-                shutil.rmtree(child, ignore_errors=True)
-                removed += 1
+            if not child.is_dir() or not marker.is_file() or child.resolve() in _HELD:
+                continue
+            try:
+                with marker.open("r+b") as handle:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if (child / NATIVE_OWNER).exists():
+                        continue
+                    shutil.rmtree(child, ignore_errors=True)
+            except OSError:
+                continue
+            with suppress(OSError):
+                child.rmdir()
+            removed += not child.exists()
         return removed
-
-
-def _held(marker: Path) -> bool:
-    """Return whether a process holds ``marker``'s lock; a marker this side cannot open or lock counts as held."""
-    try:
-        # Opened to write: on some file systems (NFS), an exclusive lock needs a file open for writing.
-        with open(marker, "r+b") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return True
-    return False

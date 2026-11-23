@@ -30,13 +30,22 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.bridge import Door
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.protocol import (
+    CancelDispatch,
+    HarnessCapabilities,
     McpServer,
     MessageChunk,
+    NativeCleanup,
+    PromptDispatched,
     PromptEnded,
+    PromptState,
     Role,
+    SessionBinding,
     ThoughtChunk,
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.render import Renderer
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.retirement import (
+    Retirements,
+)
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.sessions import (
     SessionPool,
 )
@@ -66,7 +75,7 @@ def wire(scenario: str) -> list[dict]:
 
 
 def settings(**block: Any) -> HarnessSettings:
-    """Build settings of the shipped prompts and agents: Hermes, which steers mid-turn, unless ``block`` says so."""
+    """Build settings from the shipped prompts and agent configuration."""
     base = {"prompts": PROMPTS, "agents": AGENT_BLOCKS, "agent": "hermes", "command": ["runtime", "acp"]}
     return HarnessSettings.model_validate({**base, "ready_timeout_seconds": 1, "stop_timeout_seconds": 0.5, **block})
 
@@ -105,6 +114,24 @@ class FakeTaskContext(helpers.FakeTaskContext):
         request = {"id": "D1", "type": "message", "role": "user", "content": "Do the task."}
         super().__init__(history=history or [request], **kwargs)
         self.continues, self.after_call = continues, after_call
+        self.conversation_ref = "conversation_trace_test"
+        self._taken_inputs: set[str] = set()
+
+    def refresh_history(self, *, unconfirmed_calls=()) -> None:
+        """The fake's explicit history is already its canonical current view."""
+
+    def take_boundary_input(self):
+        boundary = super().take_boundary_input()
+        if boundary.steering is not None:
+            self._taken_inputs.add(boundary.steering.id)
+        return boundary
+
+    def pending_input_ready(self):
+        return bool(self._steering or self._taken_inputs)
+
+    def settle(self, steering, delivery):
+        self._taken_inputs.discard(steering.id)
+        super().settle(steering, delivery)
 
     def traced(self, kind: str) -> list[dict]:
         """Return the fields of each trace of ``kind``, in order."""
@@ -127,6 +154,12 @@ class FakeSession:
         self._numbers = itertools.count(1)
         self._outstanding: set[int] = set()
         self._ended: dict[int, asyncio.Event] = {}
+        self.capabilities = HarnessCapabilities()
+        self.binding = SessionBinding("fake-connection", self.id, "acp", 1, "fake", "worker")
+        self._states: dict[int, PromptState] = {}
+        self.reject_next_prompt = False
+        self.hold_next_prompt = False
+        self.dispatch_pending = None
 
     @property
     def outstanding(self) -> frozenset[int]:
@@ -136,24 +169,46 @@ class FakeSession:
     def alive(self) -> bool:
         return not (self.retired or self.lost)
 
-    def prompt(self, text: str) -> int:
-        return self._send("prompt", text)
+    @property
+    def quiescent(self) -> bool:
+        return not self._outstanding
 
-    def steer(self, text: str) -> int:
-        return self._send("steer", text)
+    def prompt(self, text: str, *, may_dispatch=None) -> int:
+        if self.reject_next_prompt:
+            self.reject_next_prompt = False
+            return self._send("prompt", text, lambda: False)
+        return self._send("prompt", text, may_dispatch)
 
-    def _send(self, kind: str, text: str) -> int:
+    def prompt_state(self, prompt: int) -> PromptState:
+        return self._states[prompt]
+
+    def _send(self, kind: str, text: str, may_dispatch=None) -> int:
         number = next(self._numbers)
         self._outstanding.add(number)
         self._ended[number] = asyncio.Event()
-        self.sent.append((number, kind, text))
+        invocation_id = f"fake:{self.id}:{number}"
+        self._states[number] = PromptState(invocation_id)
+        if self.hold_next_prompt:
+            self.hold_next_prompt = False
+            self.dispatch_pending = lambda: self._dispatch(number, kind, text, may_dispatch)
+        else:
+            self._dispatch(number, kind, text, may_dispatch)
         return number
 
-    async def cancel(self) -> bool:
+    def _dispatch(self, number: int, kind: str, text: str, may_dispatch) -> None:
+        self.dispatch_pending = None
+        if may_dispatch is not None and not may_dispatch():
+            self.end(number, error="fenced before native dispatch", dispatch="not_dispatched")
+            return
+        self.sent.append((number, kind, text))
+        self._states[number].phase, self._states[number].dispatched = "dispatched", True
+        self.mailbox.put_nowait(PromptDispatched(number, self._states[number].invocation_id))
+
+    async def cancel(self) -> CancelDispatch:
         if not self._outstanding:
-            return False
+            return "not_dispatched"
         self.cancels += 1
-        return True
+        return "dispatched"
 
     async def ended(self, prompt: int) -> None:
         event = self._ended.get(prompt)
@@ -169,9 +224,31 @@ class FakeSession:
         self.retired = True
         return self.closes
 
-    def end(self, prompt: int, stop: str | None = "end_turn", usage: dict | None = None, error: str | None = None):
+    def end(
+        self,
+        prompt: int,
+        stop: str | None = "end_turn",
+        usage: dict | None = None,
+        error: str | None = None,
+        invocation_usage: dict | None = None,
+        completion_calls: int | None = None,
+        dispatch: str = "dispatched",
+        terminal_confirmed: bool = True,
+    ):
         self._outstanding.discard(prompt)
-        self.mailbox.put_nowait(PromptEnded(prompt, stop, usage, error))
+        ended = PromptEnded(
+            prompt,
+            stop,
+            usage,
+            error,
+            completion_calls=completion_calls,
+            invocation_usage=invocation_usage,
+            invocation_id=self._states[prompt].invocation_id,
+            dispatch=dispatch,
+            terminal_confirmed=terminal_confirmed,
+        )
+        self._states[prompt].phase, self._states[prompt].terminal = "ended", ended
+        self.mailbox.put_nowait(ended)
         self._ended.pop(prompt).set()
 
     def say(self, message_id: str, *chunks: str, thought: bool = True) -> None:
@@ -179,6 +256,11 @@ class FakeSession:
             self.mailbox.put_nowait(ThoughtChunk(message_id))
         for chunk in chunks:
             self.mailbox.put_nowait(MessageChunk(message_id, chunk))
+
+    def answer(self, prompt: int, message_id: str, *chunks: str, **usage) -> None:
+        """Report the assistant's text and successful terminal for one prompt."""
+        self.say(message_id, *chunks)
+        self.end(prompt, **usage)
 
     def put(self, event: Any) -> None:
         self.mailbox.put_nowait(event)
@@ -202,17 +284,34 @@ class FakeClient:
         self.servers: list[McpServer] = []
         self.folders: list[Path] = []
         self.alive = True
+        self._lost = None
+        self.capabilities = HarnessCapabilities()
         # Whether its agent closes each session it retires.
         self.closes = False
 
-    async def new_session(self, cwd: Path, server: McpServer, mailbox: asyncio.Queue) -> FakeSession:
-        self.sessions.append(FakeSession(mailbox, len(self.sessions) + 1, self.closes))
+    def on_lost(self, callback):
+        self._lost = callback
+
+    def lose(self):
+        self.alive = False
+        if self._lost is not None:
+            callback, self._lost = self._lost, None
+            callback()
+
+    async def new_session(self, cwd: Path, server: McpServer, mailbox: asyncio.Queue, *, role="worker") -> FakeSession:
+        session = FakeSession(mailbox, len(self.sessions) + 1, self.closes)
+        session.capabilities = self.capabilities
+        self.sessions.append(session)
         self.servers.append(server)
         self.folders.append(cwd)
         return self.sessions[-1]
 
     async def close(self) -> None:
         self.alive = False
+        self._lost = None
+
+    async def wait_closed(self) -> NativeCleanup:
+        return NativeCleanup("runtime", True, True)
 
 
 class FakeRuntime:
@@ -221,6 +320,7 @@ class FakeRuntime:
         self.closed = False
         self.places = 0
         self.folder = scratch("work-")
+        self.cleanup_receipt = NativeCleanup("connection", False, False)
         self._names: dict[str, int] = {}
 
     def leave(self) -> None:
@@ -238,6 +338,10 @@ class FakeRuntime:
     async def close(self) -> None:
         self.closed = True
 
+    async def wait_closed(self) -> NativeCleanup:
+        self.cleanup_receipt = NativeCleanup("runtime", True, True)
+        return self.cleanup_receipt
+
 
 class FakeBridge:
     """The bridge's door book with no HTTP: opening a door counts as the runtime listing its tools (ready)."""
@@ -254,9 +358,11 @@ class FakeBridge:
         return McpServer(door.name, "http://bridge.test/mcp", door.token)
 
     def close(self, door: Door, text: str) -> None:
-        self.doors.pop(door.token, None)
         self.closed.append((door, text))
         door.retire(text)
+
+    async def forget(self, door: Door) -> None:
+        self.doors.pop(door.token, None)
 
     async def start(self) -> None:
         pass
@@ -275,8 +381,11 @@ class FakeHost:
         self.workers = Role("workers", "w")
         self.conductor_role = Role("conductor", "c")
         self.runtime = FakeRuntime()
+        self.runtime.client.capabilities = self.settings.agent.capabilities
         self.closed = False
         self.pool = SessionPool(self.max_running)
+        self._doors = set()
+        self.retirements = Retirements()
 
     async def shared(self, role: Role) -> FakeRuntime:
         if self.closed:
@@ -297,5 +406,6 @@ class FakeHost:
 
     # The adapter's own methods, so that a session is pooled, tried and taken as the adapter does.
     candidates = HarnessAdapter.candidates
+    own_door = HarnessAdapter.own_door
     take_kept = HarnessAdapter.take_kept
     keep = HarnessAdapter.keep

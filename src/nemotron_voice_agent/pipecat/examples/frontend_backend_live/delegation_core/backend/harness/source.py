@@ -5,23 +5,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Mapping, Sequence
 from importlib.util import find_spec
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.llm.settings import LlmSettings
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.llm.source import LlmSource
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import (
     ControlTools,
     EndpointLookup,
+    ToolSource,
     ToolSources,
 )
 from nemotron_voice_agent.pipecat.shared.delegation_contract import ModelEndpoint
 
 from .adapter import HarnessAdapter
 from .bridge import McpBridge
+from .retirement import Retirements
 from .settings import HarnessSettings
 from .workdir import WorkFolder
 
-# The import names of the packages of the harness dependency group: agent-client-protocol and mcp.
+if TYPE_CHECKING:
+    from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.llm.adapter import (
+        LlmAdapter,
+    )
+
 GROUP_PACKAGES = ("acp", "mcp")
 AUTO_CHOICE = (None, "auto")
 PLAIN_TIERS = (None, "auto", "default")
@@ -43,6 +52,9 @@ class HarnessSource:
         """Hold what each IM session's adapter is made of; nothing starts."""
         self.settings, self.endpoints, self.tools, self.vocabulary = settings, endpoints, tools, vocabulary
         self.bridge = McpBridge(settings.bridge, start_timeout_seconds=settings.start_timeout_seconds)
+        self.retirements = Retirements()
+        self._adapters: set[HarnessAdapter] = set()
+        self._closing: asyncio.Task | None = None
 
     @classmethod
     def from_settings(
@@ -60,7 +72,7 @@ class HarnessSource:
         """
         if missing := [name for name in GROUP_PACKAGES if find_spec(name) is None]:
             raise ValueError(
-                f"backend.adapter harness needs the packages of the harness dependency group (missing: "
+                "backend.adapter harness needs the packages of the harness dependency group (missing: "
                 f"{', '.join(missing)}): install them with `uv sync --group harness`"
             )
         settings = HarnessSettings.model_validate(block)
@@ -71,12 +83,19 @@ class HarnessSource:
         """Return the default model endpoint, whose model name the harness serves."""
         return self.endpoints(None)
 
+    def new_restricted(self, tools: Sequence[ToolSource]) -> LlmAdapter:
+        """Use the configured backend endpoint through the Core-controlled tool loop."""
+        source = LlmSource(LlmSettings(), endpoints=self.endpoints, tools=self.tools)
+        return source.new(tools=tools)
+
     def describe(self) -> dict:
         """Describe what it serves as plain JSON, without credentials or environment values."""
+        bridge_only = self.settings.agent.capabilities.tool_mediation == "bridge_only"
         return {
             "adapter": self.name,
             **self.settings.describe(),
             "model": self.endpoint().model,
+            "restricted_execution": "native" if bridge_only else "llm",
             "tools": [tool for source in self.tools() for tool in source.tools()],
         }
 
@@ -109,8 +128,34 @@ class HarnessSource:
 
     def new(self) -> HarnessAdapter:
         """Return the backend of a new IM session, with a fresh set of its tool sources."""
-        return HarnessAdapter(self, tools=self.tools())
+        if self._closing is not None:
+            raise RuntimeError("The harness source is closing")
+        adapter = HarnessAdapter(self, tools=self.tools(), on_drained=self._adapters.discard)
+        self._adapters.add(adapter)
+        return adapter
 
     async def aclose(self) -> None:
-        """Stop the bridge (each adapter closes its own runtime processes)."""
-        await self.bridge.aclose()
+        """Close and join this source's native owners, then its bridge; cancelled callers leave cleanup running."""
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close(), name="harness-source-close")
+            self._closing.add_done_callback(lambda done: done.cancelled() or done.exception())
+        await asyncio.shield(self._closing)
+
+    async def _close(self) -> None:
+        adapters = tuple(self._adapters)
+        results = []
+        try:
+            results.extend(await asyncio.gather(*(adapter.close() for adapter in adapters), return_exceptions=True))
+            results.extend(
+                await asyncio.gather(*(adapter.wait_closed() for adapter in adapters), return_exceptions=True)
+            )
+        finally:
+            try:
+                await self.bridge.aclose()
+            except BaseException as error:
+                results.append(error)
+            finally:
+                self.retirements.close()
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result

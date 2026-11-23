@@ -5,17 +5,22 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
+from contextlib import suppress
 from copy import deepcopy
 from typing import Any
 
+from httpx import TransportError
 from loguru import logger
-from openai import AsyncOpenAI
+from openai import APIConnectionError, AsyncOpenAI
+from openai.types.chat import ChatCompletionChunk
 
 from nemotron_voice_agent.pipecat.shared.delegation_contract import CHAT_COMPLETIONS, ModelEndpoint
 
-from .base import Backend, ProviderLimits, apply_thinking, client_run, make_client
+from .base import Backend, BrokenStreamError, ProviderLimits, apply_thinking, client_run, make_client
 from .translation import (
+    CHAT_FINISH_REASONS,
     ChatResponseTranslator,
     responses_items_to_messages,
     to_chat_response_format,
@@ -25,6 +30,8 @@ from .translation import (
 
 DEFAULT_SAMPLING = {"temperature": 0.7, "max_tokens": 1024}
 PLAIN_TIERS = (None, "auto", "default")
+# A usage trailer is optional once the provider has finished the choice.
+USAGE_TRAILER_SECONDS = 0.1
 
 
 class ChatCompletionsBackend(Backend):
@@ -66,7 +73,7 @@ class ChatCompletionsBackend(Backend):
         messages = responses_items_to_messages(payload.get("instructions"), payload["input"])
         request = {
             **DEFAULT_SAMPLING,
-            **deepcopy(self.endpoint.extra_params),
+            **deepcopy(self.endpoint_params(payload)),
             "model": payload.get("model") or self.endpoint.model,
             "messages": messages,
             "stream": True,
@@ -92,12 +99,16 @@ class ChatCompletionsBackend(Backend):
         """
         request = self.request(payload)
         translator = ChatResponseTranslator(request["model"], single_call=payload.get("parallel_tool_calls") is False)
+        single_choice = (request.get("extra_body") or {}).get("n", request.get("n")) in (None, 1)
         stream = await self.client.chat.completions.create(**request)
+        opened = transport_ended = False
+        completion_id = None
         try:
-            opened = False
-            async for chunk in stream:
+            chunks = aiter(stream)
+            async for chunk in chunks:
                 if not opened:
                     opened = True
+                    completion_id = getattr(chunk, "id", None)
                     for event in translator.start():
                         yield event
                 events = translator.feed(chunk)
@@ -105,15 +116,54 @@ class ChatCompletionsBackend(Backend):
                     yield event
                 if translator.first_call_whole:
                     break
+                choices = chunk.choices
+                single_choice = single_choice and (not choices or (len(choices) == 1 and choices[0].index == 0))
+                if single_choice and translator.finish_reason in CHAT_FINISH_REASONS:
+                    transport_ended = await self._read_usage_trailer(chunks, translator)
+                    break
                 if not events:
                     yield None
+            else:
+                transport_ended = True
             if not opened:
                 for event in translator.start():
                     yield event
             for event in translator.finish():
                 yield event
         finally:
-            await stream.close()
+            response = getattr(stream, "response", None)
+            logger.debug(
+                "backend.chat_stream.ended request_id={} completion_id={} finish_reason={} transport_ended={}",
+                response.headers.get("x-request-id") if response is not None else None,
+                completion_id,
+                None if translator.first_call_whole else translator.finish_reason,
+                transport_ended,
+            )
+            with suppress(TransportError, APIConnectionError):
+                await stream.close()
+
+    async def _read_usage_trailer(
+        self, chunks: AsyncIterator[ChatCompletionChunk], translator: ChatResponseTranslator
+    ) -> bool:
+        """Collect optional usage and report whether the transport ended within the wait."""
+        seconds = min(USAGE_TRAILER_SECONDS, self.limits.idle_timeout_seconds / 2)
+        try:
+            async with asyncio.timeout(seconds):
+                async for chunk in chunks:
+                    if any(
+                        choice.index != 0
+                        or choice.delta.content
+                        or choice.delta.refusal
+                        or choice.delta.tool_calls
+                        or choice.delta.function_call
+                        or choice.finish_reason not in (None, translator.finish_reason)
+                        for choice in chunk.choices
+                    ):
+                        raise BrokenStreamError("The backend's chat stream sent more output after its finish reason")
+                    translator.record_usage(chunk)
+        except (TimeoutError, TransportError, APIConnectionError):
+            return False
+        return True
 
     async def close(self) -> None:
         """Close the HTTP client."""

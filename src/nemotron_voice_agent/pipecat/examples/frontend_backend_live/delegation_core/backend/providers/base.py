@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from openai import APIError, AsyncOpenAI
+from loguru import logger
+from openai import APIError, APIStatusError, AsyncOpenAI
 
 from nemotron_voice_agent.pipecat.shared.delegation_contract import TERMINALS, ModelEndpoint
 
@@ -28,6 +30,17 @@ class ProviderLimits:
 
 class BrokenStreamError(RuntimeError):
     """A round's stream broke the Responses rules; nothing was delivered or dispatched, so the round may be retried."""
+
+
+def _error_identifier(value: object, api_key: str) -> str | None:
+    """Keep short identifiers and parameter paths, excluding free text and echoed credentials."""
+    if (
+        isinstance(value, str)
+        and re.fullmatch(r"[A-Za-z0-9_.:\[\]-]{1,128}", value)
+        and (not api_key or api_key not in value)
+    ):
+        return value
+    return None
 
 
 def apply_thinking(payload: dict, extra_body: dict | None) -> bool | None:
@@ -103,6 +116,16 @@ class Backend:
         """Bind the model endpoint and the round's limits; nothing connects yet."""
         self.endpoint, self.limits = endpoint, limits
 
+    def endpoint_params(self, payload: Mapping[str, Any]) -> dict:
+        """Reject endpoint tool overrides when Core owns the complete tool surface."""
+        params = self.endpoint.extra_params
+        if payload.get("_restricted_tools"):
+            overrides = {"tools", "tool_choice", "functions", "function_call"}
+            body = params.get("extra_body")
+            if overrides.intersection(params) or (isinstance(body, Mapping) and overrides.intersection(body)):
+                raise ValueError("Endpoint settings cannot override the restricted invocation's tools")
+        return params
+
     @classmethod
     def unsupported(cls, settings: Mapping[str, Any]) -> list[tuple[str, str]]:
         """Return the request settings this provider cannot honor, as ``(param, message)``: each tool the client runs.
@@ -158,6 +181,16 @@ class Backend:
             raise BrokenStreamError("The backend's stream ended before its first event") from None
         except APIError as exc:
             await events.aclose()
+            if isinstance(exc, APIStatusError):
+                key = self.endpoint.api_key
+                body = exc.body if isinstance(exc.body, Mapping) else {}
+                logger.warning(
+                    "provider.open_failed status_code={} request_id={} error_code={} error_param={}",
+                    exc.status_code,
+                    _error_identifier(exc.request_id, key),
+                    _error_identifier(body.get("code"), key),
+                    _error_identifier(body.get("param"), key),
+                )
             # A bare APIError is an error event in the stream: the server's state, not the request.
             if type(exc) is APIError:
                 raise StreamErrorEvent(str(exc)) from exc

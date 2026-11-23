@@ -85,7 +85,7 @@ the supported configuration on Thor.
 
     For the Generic Assistant on LiveKit, refer to its [README](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md). It serves its UI at `http://localhost:3000`, and steps 6 and 7 apply only to the Pipecat examples.
 
-    > **Note:** The `frontend-backend-live/single-gpu` profile serves the Live session routes (`/v1/live`) when you set `LIVE_API_TOKEN` in `.env`, and every route then requires that token. To serve the routes without a token, for example on a trusted network, set `LIVE_ENABLED=true` instead. For details, refer to [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
+    > **Note:** To connect an app to `/v1/live`, follow [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
 
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 

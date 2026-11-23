@@ -18,7 +18,19 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
     IMSession,
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.im.stream import ResponseStream
-from nemotron_voice_agent.pipecat.shared.delegation_contract import DELEGATION_ID, STORE, TYPED_RUN
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import validate_output_content
+from nemotron_voice_agent.pipecat.shared.delegation_contract import (
+    CALLER_EXCERPT,
+    CALLER_EXCERPT_CHARS,
+    DELEGATION_ID,
+    STORE,
+    TYPED_RUN,
+    AppCallDelivery,
+    AppResultWindow,
+    CallerContext,
+    RetainedAppCall,
+    SettleCallerTurn,
+)
 from nemotron_voice_agent.pipecat.shared.ids import approx_tokens
 
 MODEL_OWNER = "delegation_core"
@@ -136,6 +148,40 @@ class ResponsesService:
             self._closed(session)
         return {"id": conversation_id, "object": "conversation.deleted", "deleted": True}
 
+    async def set_attachment(self, conversation_id: str, attached: bool) -> dict:
+        """Fence or restore the listener of a process-local retained call."""
+        if not isinstance(attached, bool):
+            raise InvalidRequest("attached must be a boolean", param="attached")
+        return await self._session(conversation_id).set_attachment(attached)
+
+    def begin_caller_turn(self, conversation_id: str) -> SettleCallerTurn | None:
+        """Start the local dispatch hold if the conversation still serves the caller."""
+        session = self.sessions.get(conversation_id)
+        return session.begin_caller_turn() if session is not None else None
+
+    async def wait_for_retained_app_calls(self, conversation_id: str) -> None:
+        """Wait for routing and placement before the transport rechecks its unsent calls."""
+        await self._session(conversation_id).dispatch_placement()
+
+    def track_app_call_delivery(self, conversation_id: str, on_window: AppResultWindow) -> AppCallDelivery:
+        """Bind a local transport to the result windows of its conversation."""
+        return self._session(conversation_id).track_app_call_delivery(on_window)
+
+    def check_retained_app_call(
+        self, conversation_id: str, call_id: str
+    ) -> tuple[RetainedAppCall, tuple[str, ResponseStream] | None]:
+        """Check an exact unsent call without yielding between the check and wire admission."""
+        disposition, continuation = self._session(conversation_id).check_retained_app_call(call_id)
+        return disposition, (continuation.delegation_id, continuation.stream) if continuation is not None else None
+
+    async def reconcile_tool_outputs(self, conversation_id: str, outputs: list[dict]) -> dict:
+        """Record exact late application evidence without reopening or replaying a generation."""
+        session = self._session(conversation_id)
+        try:
+            return session.reconcile_tool_outputs(outputs)
+        except DelegationError as refused:
+            raise InvalidRequest(str(refused), param="input", code=refused.code) from None
+
     def _room(self, session: IMSession) -> bool:
         """Return whether ``session``'s work may outlive its call by the cap of such conversations.
 
@@ -179,7 +225,9 @@ class ResponsesService:
         await self.backend.check_model(model)
         return {"id": model, "object": "model", "created": self.created_at, "owned_by": MODEL_OWNER}
 
-    async def create_response(self, params: dict) -> ResponseStream | StatelessStream:
+    async def create_response(
+        self, params: dict, *, caller_context: CallerContext | None = None
+    ) -> ResponseStream | StatelessStream:
         """Check a request, admit it, and return its stream (``POST /v1/responses``, streamed).
 
         A request with no conversation is served in a one-shot IM session of its own. A refusal raises before any
@@ -193,7 +241,14 @@ class ResponsesService:
         if clients_own(input_items, metadata):
             admission = im.admit_client_request(input_items, delegation_id=delegation_id, settings=settings)
         else:
-            admission = im.admit(input_items, delegation_id=delegation_id, settings=settings)
+            excerpt = metadata.get(CALLER_EXCERPT)
+            admission = im.admit(
+                input_items,
+                delegation_id=delegation_id,
+                settings=settings,
+                caller_excerpt=excerpt[-CALLER_EXCERPT_CHARS:] if isinstance(excerpt, str) else None,
+                caller_context=caller_context,
+            )
         return admission.stream
 
     async def input_tokens(self, params: dict) -> dict:
@@ -218,6 +273,12 @@ class ResponsesService:
 
     async def _stateless(self, params: dict, input_items: list[dict]) -> StatelessStream:
         """Admit a stateless request in a one-shot IM session kept nowhere, which its stream ends with the response."""
+        for index, item in enumerate(input_items):
+            if item.get("type") == "function_call_output" and isinstance(output := item.get("output"), list):
+                try:
+                    validate_output_content(output)
+                except ValueError as error:
+                    raise InvalidRequest(str(error), param=f"input[{index}].output") from None
         session = self.stateless_session()
         session.start()
         try:
@@ -244,6 +305,28 @@ def checked(params: dict) -> tuple[list[dict], dict]:
     input_items, metadata = params.get("input"), params.get("metadata") or {}
     if not isinstance(input_items, list) or not all(isinstance(item, dict) for item in input_items):
         raise InvalidRequest("A request's input must be a list of input items", param="input")
+    if params.get("conversation") is not None:
+        for index, item in enumerate(input_items):
+            if item.get("type", "message" if "role" in item else None) != "message":
+                continue
+            content = item.get("content")
+            if not isinstance(content, str) and not (
+                isinstance(content, list) and all(isinstance(part, dict) for part in content)
+            ):
+                raise InvalidRequest(
+                    "A message's content must be text or a list of content parts", param=f"input[{index}].content"
+                )
+            if isinstance(content, list):
+                for part_index, part in enumerate(content):
+                    kind = part.get("type")
+                    path = f"input[{index}].content[{part_index}]"
+                    if "type" in part and not isinstance(kind, str):
+                        raise InvalidRequest("A content part's type must be a string", param=f"{path}.type")
+                    if kind in ("input_text", "output_text", "text") and not isinstance(part.get("text"), str):
+                        raise InvalidRequest(
+                            "A text content part's text must be a string",
+                            param=f"{path}.text",
+                        )
     if not isinstance(metadata, dict):
         raise InvalidRequest("A request's metadata must be an object", param="metadata")
     previous = params.get("previous_response_id")

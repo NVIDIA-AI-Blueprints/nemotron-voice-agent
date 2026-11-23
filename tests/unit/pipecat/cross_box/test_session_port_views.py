@@ -122,6 +122,8 @@ class ViewTests(SessionCase):
         self.assertEqual(self.session.status, "active")
         self.assertEqual((await self.primary.wait_for("session.closed"))["reason"], "connection_lost")
         self.assertEqual((port.is_active(), self.adapter.closed), (False, True))
+        await port.advance_input_clock(500)
+        self.assertEqual(port.input_ms, 250)
 
 
 class ObserverTests(SessionCase):

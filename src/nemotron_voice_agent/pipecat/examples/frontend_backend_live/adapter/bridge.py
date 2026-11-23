@@ -49,7 +49,7 @@ class LiveInputGate(FrameProcessor):
         super().__init__(**kwargs)
         self.session = session
         self.muted = False
-        self._seconds = Fraction(0)
+        self._seconds = Fraction(session.input_ms, 1000)
 
     @property
     def input_ms(self) -> int:
@@ -75,7 +75,7 @@ class LiveEventObserver(BaseObserver):
         # Each processor an error frame passes pushes it on: report it at its first push only.
         super().__init__(observe_every_push=False, **kwargs)
         self.session, self.gate, self.stt = session, gate, stt
-        self._speech_started_ms = 0
+        self._speech_started_ms = gate.input_ms
         self._tasks: set[asyncio.Task] = set()
 
     def _emit(self, kind: str, **fields) -> None:

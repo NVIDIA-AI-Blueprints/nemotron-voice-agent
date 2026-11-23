@@ -56,6 +56,8 @@ class ExampleEntry(TypedDict):
     defaults: dict[str, list[str] | str]
     welcome_message: bool
     bot: str
+    ui_backend_tools: str | None  # optional callable that lists the browser bot's configured business tool schemas
+    ui_prompt_layout: str | None
     live: LiveHooks | None
     config: dict[str, Any]  # the example's own settings, which its code validates; {} without a config block
 
@@ -331,6 +333,18 @@ def _parse_config(example_id: str, entry: dict) -> dict[str, Any]:
     return config
 
 
+def _optional_hook(example_id: str, entry: dict, name: str) -> str | None:
+    spec = entry.get(name)
+    if spec is None:
+        return None
+    setting = f"Example {example_id!r} {name}"
+    if not isinstance(spec, str):
+        raise RuntimeError(f"{setting} must be 'module.path:attr'")
+    spec = spec.strip()
+    _split_spec(spec, setting)
+    return spec
+
+
 def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
     if not isinstance(entry, dict):
         raise RuntimeError(f"Example {example_id!r} must be a mapping")
@@ -353,6 +367,8 @@ def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
         "defaults": _parse_defaults(example_id, entry),
         "welcome_message": welcome_message,
         "bot": bot_spec,
+        "ui_backend_tools": _optional_hook(example_id, entry, "ui_backend_tools"),
+        "ui_prompt_layout": _optional_hook(example_id, entry, "ui_prompt_layout"),
         "live": _parse_live(example_id, entry),
         "config": _parse_config(example_id, entry),
     }

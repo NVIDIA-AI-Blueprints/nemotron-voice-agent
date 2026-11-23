@@ -15,6 +15,7 @@ import {
   type Prompt,
   type ServiceCatalog,
   type ServiceSettingValues,
+  type SessionConfig,
   type SimpleService,
 } from "../api";
 import { DevicesSection } from "./status-panel/DevicesSection";
@@ -40,6 +41,7 @@ type SessionConfigOptions = {
   selectedVoiceId: string;
   selectedPrompt?: Prompt;
   selectedPromptKey: string;
+  promptOverrides: ReadonlyMap<string, string>;
   selectedSessionLanguage?: string;
   speakerDiarizationEnabled?: boolean;
 };
@@ -133,9 +135,10 @@ function buildSessionConfig({
   selectedVoiceId,
   selectedPrompt,
   selectedPromptKey,
+  promptOverrides,
   selectedSessionLanguage = "",
   speakerDiarizationEnabled = false,
-}: SessionConfigOptions): Record<string, string> {
+}: SessionConfigOptions): SessionConfig {
   const slots = new Set(selectedExample.slots);
   const config: Record<string, string> = { pipeline_mode: selectedExample.key };
   const sessionLanguagesEnabled = selectedExample.capabilities?.includes("session_languages") ?? false;
@@ -186,8 +189,12 @@ function buildSessionConfig({
   if (selectedPromptKey) {
     config.prompt_key = selectedPromptKey;
     if (selectedPrompt && !selectedPrompt.builtIn) config.prompt_content = selectedPrompt.content;
+    const editedContent = promptOverrides.get(selectedPromptKey);
+    if (editedContent !== undefined) config.prompt_content = editedContent;
   }
 
+  const fragmentOverrides = [...promptOverrides].filter(([key]) => key !== selectedPromptKey);
+  if (fragmentOverrides.length) return { ...config, prompt_overrides: Object.fromEntries(fragmentOverrides) };
   return config;
 }
 
@@ -209,6 +216,8 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
     selectedVoiceId,
     selectedPrompt,
     selectedPromptKey,
+    promptOverrides,
+    promptEditsStatus,
     selectedSessionLanguage,
     speakerDiarizationEnabled,
     setCurrentSessionId,
@@ -255,6 +264,7 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
           selectedVoiceId,
           selectedPrompt,
           selectedPromptKey,
+          promptOverrides,
           selectedSessionLanguage,
           speakerDiarizationEnabled,
         });
@@ -298,7 +308,10 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
     buttonText = "Connecting...";
   } else if (isConnected) {
     buttonText = "Disconnect";
+  } else if (promptEditsStatus === "loading") {
+    buttonText = "Loading prompt edits...";
   }
+  const promptEditsUnavailable = !isConnected && promptEditsStatus === "unavailable";
 
   return (
     <header className="px-4 py-3 border-b">
@@ -311,7 +324,7 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
           <button
             className={isConnected ? "btn-secondary" : "btn-primary"}
             onClick={handleClick}
-            disabled={isConnecting}
+            disabled={isConnecting || (!isConnected && promptEditsStatus !== "ready")}
           >
             {buttonText}
           </button>
@@ -320,6 +333,11 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
       {connectionError && (
         <p className="mt-2 text-xs" style={{ color: "#f87171" }}>
           {connectionError}
+        </p>
+      )}
+      {promptEditsUnavailable && (
+        <p className="mt-2 text-xs" role="alert">
+          Could not load saved prompt edits. Reload the page to try again.
         </p>
       )}
     </header>

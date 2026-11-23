@@ -18,11 +18,15 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregator,
 )
 from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.turns.empty_user_turn import EmptyUserTurnConfig
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.preroll import SpeechPreroll
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.services import speech_mode
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.silent_lines import SilentLines
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.silent_lines import (
+    SentenceAudioPositions,
+    SilentLines,
+)
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.voice import Voice
 
 if TYPE_CHECKING:
@@ -92,7 +96,6 @@ def build_frontend(spec: FrontendSpec, edges: FrontendEdges) -> Frontend:
         empty_turn_note=spec.prompts.empty_turn_note,
         delegation=spec.delegation,
         item_text=spec.item_text,
-        reports_sentences=mode.reports_sentences,
     )
     context = LLMContext(voice.seed(spec.seed))
     empty_turn = EmptyUserTurnConfig(interrupted_prompt=spec.prompts.empty_turn_note, idle_prompt=None)
@@ -100,6 +103,8 @@ def build_frontend(spec: FrontendSpec, edges: FrontendEdges) -> Frontend:
     user, assistant = LLMContextAggregatorPair(context, user_params=user_params)
     voice.bind(spec.talker, context)
     middle = [spec.stt, user, spec.talker, spec.tts, *mode.text_hold(), SpeechPreroll(spec.config.tts_preroll_ms)]
+    if any(isinstance(output, BaseOutputTransport) for output in edges.outputs):
+        middle.append(SentenceAudioPositions())
     processors = [*edges.around(middle, [SilentLines(voice.spoken)]), assistant]
     worker = PipelineWorker(
         Pipeline(processors),

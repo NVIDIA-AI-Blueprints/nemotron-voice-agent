@@ -74,6 +74,10 @@ class PromptFileTests(unittest.TestCase):
                 "work_texts.item\n  Field required",
             ),
             "an unknown entry": ({**json_only, "farewell": entry}, "farewell\n  Extra inputs are not permitted"),
+            "an invalid notice placeholder": (
+                {**json_only, "notice_update": {"content": "Status: {unknown}"}},
+                r"notice_update\n  Value error, notice_update must format with \{request\} and \{text\}",
+            ),
             "an unknown nested entry": (
                 {**json_only, "work_texts.extra": entry, "tools.extra": entry},
                 "work_texts.extra\n  Extra inputs(?s:.*)tools.extra\n  Extra inputs are not permitted",
@@ -107,3 +111,19 @@ class PromptFileTests(unittest.TestCase):
                 load_prompts()
         with self.assertRaisesRegex(KeyError, r"agent_prompts\.Cascade was not found in .*other\.yaml"):
             self.load("custom:\n  content: not the talker prompt\n")
+
+    def test_reconnect_note_requires_plain_text_placeholders(self):
+        for note in (
+            None,
+            "",
+            "No uncertainty placeholder",
+            "Unclosed {text",
+            "{unknown} {text}",
+            "Custom [{text:{text}}]",
+            "Converted {text!r}",
+            "Truncated {text:.5}",
+        ):
+            with self.subTest(note=note), self.assertRaisesRegex(ValueError, r"Cascade\.attachment_note"):
+                LOADED.cascade.model_copy(update={"attachment_note": note}).reconnect_note()
+        note = "Escaped {{literal}} with [{text}]"
+        self.assertEqual(LOADED.cascade.model_copy(update={"attachment_note": note}).reconnect_note(), note)

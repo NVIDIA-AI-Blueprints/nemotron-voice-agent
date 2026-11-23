@@ -14,6 +14,7 @@ class StopReason:
     """Why a task stops, and how that ends it on the wire."""
 
     work_state = "cancelled"
+    discard_pending_requests = False
 
     def answer(self, texts: Texts, outcome: StopOutcome) -> str:
         """Return the stopped task's answer on its Work's open response; empty for none."""
@@ -26,11 +27,27 @@ class StopReason:
 
 
 class ForNewerRequest(StopReason):
-    """A conductor's ``Cancel``: a newer request replaces the work."""
+    """Stop work replaced by a newer request."""
+
+    discard_pending_requests = True
+
+    def __init__(self, *, report_on_work: bool = True) -> None:
+        """Report the outcome on the work when it owns the caller's reply."""
+        self.report_on_work = report_on_work
 
     def answer(self, texts: Texts, outcome: StopOutcome) -> str:
         """Return the line that says whether the stop was confirmed."""
+        if not self.report_on_work:
+            return ""
         return {"stopped": texts.cancelled_line, "unconfirmed": texts.unconfirmed_line}[outcome]
+
+    def end(self, book: ResponseBook, delegation_id: str) -> None:
+        """Mark the original response cancelled when the stop has its own reply."""
+        if self.report_on_work:
+            super().end(book, delegation_id)
+        else:
+            book.start(delegation_id)
+            book.cancelled(delegation_id)
 
 
 class AtDeadline(StopReason):
@@ -62,3 +79,29 @@ class AtClose(StopReason):
 
     def end(self, book: ResponseBook, delegation_id: str) -> None:
         """Write nothing: the close ends every open response itself, in order."""
+
+
+class BeforeStartFailure(StopReason):
+    """A validated logical assignment could not finish setup; its start barrier admitted no backend invocation."""
+
+    work_state = "failed"
+    discard_pending_requests = True
+
+    def __init__(self, message: str):
+        """Retain the configured failure wording without calling this mechanical failure a caller cancellation."""
+        self.message = message
+
+    def end(self, book: ResponseBook, delegation_id: str) -> None:
+        """Fail the owned response truthfully without retrying a never-applied reference batch."""
+        book.start(delegation_id)
+        book.failed(delegation_id, "server_error", self.message)
+
+
+class AtAttachmentLoss(StopReason):
+    """An unqualified native runtime cannot safely keep acting without its caller."""
+
+    work_state = "failed"
+
+    def answer(self, texts: Texts, outcome: StopOutcome) -> str:
+        """Report uncertainty instead of claiming a remote effect was cancelled."""
+        return texts.owed_output

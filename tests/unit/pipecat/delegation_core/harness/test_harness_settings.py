@@ -33,10 +33,6 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.permissions import (
     Reject,
 )
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.steering import (
-    CancelReprompt,
-    NativeCommand,
-)
 from nemotron_voice_agent.pipecat.shared.delegation_contract import ModelEndpoint
 from tests.unit.pipecat.delegation_core.harness.doubles import (
     AGENT_BLOCKS,
@@ -48,7 +44,19 @@ from tests.unit.pipecat.delegation_core.harness.doubles import (
     until,
     vocabulary,
 )
-from tests.unit.pipecat.delegation_core.helpers import CORE_SETTINGS
+from tests.unit.pipecat.delegation_core.helpers import (
+    CORE_SETTINGS,
+    MENU,
+    IMCase,
+    RecordingTools,
+    ScriptedProvider,
+    answers,
+    app_outputs,
+    ask,
+    call_round,
+    read_all,
+    text_round,
+)
 
 EXTRA = "{}\n.*Extra inputs are not permitted"
 ENDPOINT = ModelEndpoint(model="scripted/model", base_url="http://127.0.0.1:1/v1", api_key="secret-key-value")
@@ -76,7 +84,6 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(settings.protocol, AcpProtocol)
         self.assertIs(settings.protocol.transport, StdioTransport)
         self.assertIs(type(settings.agent), AcpAgent)
-        self.assertIsInstance(settings.steering, CancelReprompt)
         self.assertIsInstance(settings.permission, Reject)
         self.assertEqual((settings.max_running, settings.turns_per_process), (3, None))
         self.assertEqual(settings.bridge.url(8791), "http://127.0.0.1:8791")
@@ -94,7 +101,6 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
     def test_the_shipped_harness_block_parses(self):
         settings = HarnessSettings.model_validate(CORE_SETTINGS.backend.blocks["harness"])
         self.assertIsInstance(settings.agent, HermesAgent)
-        self.assertIsInstance(settings.steering, NativeCommand)
         self.assertEqual(settings.command, ("hermes", "acp"))
         self.assertEqual(settings.bridge.advertise, "http://127.0.0.1:8791")
         self.assertEqual(settings.runtime_label, "hermes")
@@ -104,13 +110,24 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         hermes = {"command": ["x"], "agent": "hermes", "agents": AGENT_BLOCKS}
         cases = {
             "an unknown key": ({"command": ["x"], "yolo": True}, EXTRA.format("yolo")),
-            "an unknown agent": ({"command": ["x"], "agent": "hermez"}, "Unknown harness agent 'hermez'"),
-            "a block for no known agent": ({"command": ["x"], "agents": {"hermez": {}}}, "names no known agent"),
+            "an unknown agent": (
+                {"command": ["x"], "agent": "hermes-gateway"},
+                "Unknown harness agent 'hermes-gateway'",
+            ),
+            "a block for no known agent": (
+                {"command": ["x"], "agents": {"hermes-gateway": {}}},
+                "names no known agent",
+            ),
             "an agent block's unknown key": ({**hermes, "agents": {"hermes": {"soul": "x"}}}, EXTRA.format("soul")),
-            "an empty steer": ({**hermes, "agents": {"hermes": {"steer_command": " "}}}, "non-empty text"),
-            "a steer with no space": ({**hermes, "agents": {"hermes": {"steer_command": "/steer"}}}, "with a space"),
+            "a removed steer override": (
+                {**hermes, "agents": {"hermes": {"steer_command": "/steer "}}},
+                EXTRA.format("steer_command"),
+            ),
             "a guard Hermes would run": ({**hermes, "agents": {"hermes": {"command_guard": " /x "}}}, "command_guard"),
-            "no guard": ({**hermes, "agents": {"hermes": {}}}, "agents.hermes: .*\ncommand_guard\n.*Field required"),
+            "no guard": (
+                {**hermes, "agents": {"hermes": {}}},
+                r"backend\.harness\.agents\.hermes: .*\ncommand_guard\n.*Field required",
+            ),
             "a path Hermes never reads": ({**hermes, "agents": {"hermes": {"instructions_file": ".."}}}, "reads"),
             "agents not a mapping": ({"command": ["x"], "agents": ["hermes"]}, "agents\n.*valid dict"),
             "no command to start": ({}, "must name the agent to start"),
@@ -154,6 +171,7 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(hasattr(source, "new_one_shot"))
         adapter = source.new()
         self.assertIsInstance(adapter, HarnessAdapter)
+        self.assertFalse(adapter.can_run_without_attachment())
         self.assertEqual(adapter.max_running, 3)
         self.assertIsNone(source.bridge.base_url)
         self.assertEqual(adapter._shared, {})
@@ -238,6 +256,118 @@ class Opener:
             self.runtimes[role.name] = self.opened[-1]
         return self.runtimes[role.name]
 
+    async def wait_closed(self):
+        pass
+
+
+class RestrictedExecutionTests(IMCase):
+    def harness(self, provider, tools):
+        source = build({**UNSTARTABLE, "agent": "hermes", "max_running": 1, "stop_timeout_seconds": 1})
+        source.tools = lambda: (tools,)
+        native_factory = source.new_restricted
+
+        def with_scripted_provider(tool_sources):
+            restricted = native_factory(tool_sources)
+            restricted.source.make_provider = lambda endpoint: provider
+            return restricted
+
+        source.new_restricted = with_scripted_provider
+        adapter = source.new()
+        adapter.opener, adapter.bridge = Opener(False), FakeBridge()
+        self.addAsyncCleanup(source.aclose)
+        return source, adapter
+
+    async def start_app_wait(self, provider, tools):
+        source, adapter = self.harness(provider, tools)
+        im = self.session(adapter)
+        initial = im.admit(ask("Look up the menu."), delegation_id="D1", settings={"tools": [MENU]})
+        await until(
+            lambda: im.works and (run := im.works["W1"].tasks[0].run) is not None and run.foreground.turn is not None
+        )
+        task = im.works["W1"].tasks[0]
+        return source, im, task, initial
+
+    async def test_held_application_stop_runs_only_core_tools_and_preserves_the_original_result_owner(self):
+        provider = ScriptedProvider(call_round("cancel_work", {}, "stop_control"), endpoint=ENDPOINT)
+        tools = RecordingTools(("lookup", "modify"))
+        source, im, task, first = await self.start_app_wait(provider, tools)
+        run = task.run
+        worker = run.session
+        pending_tool = asyncio.create_task(run.door.call("get_menu", {}))
+        events = await read_all(first.stream, timeout=2)
+        [result] = app_outputs(events, "Menu read completed.")
+        stop = im.admit(ask("Stop that task."), delegation_id="D2")
+        await until(lambda: worker.cancels == 1)
+        self.assertEqual(provider.opened, 0)
+        self.assertIs(task.run, run)
+        worker.end(1, "cancelled")
+        await read_all(stop.stream, timeout=3)
+        await asyncio.wait_for(pending_tool, 2)
+        self.assertEqual(provider.opened, 1)
+        offered = {tool["name"] for tool in provider.payloads[0]["tools"]}
+        self.assertIn("cancel_work", offered)
+        self.assertTrue(offered.isdisjoint({"lookup", "modify", "get_menu"}))
+        self.assertEqual(tools.calls, [])
+        self.assertEqual(worker.cancels, 1)
+        self.assertEqual(task.record.stop.state, "stopped")
+        owner = im.ledger.actions[result["call_id"]].task
+        self.assertEqual(owner, task.task_id)
+        late = im.admit_client_request([result], delegation_id="D1")
+        await read_all(late.stream, timeout=2)
+        action = im.ledger.actions[result["call_id"]]
+        self.assertEqual(action.task, owner)
+        self.assertEqual(action.late_output, "Menu read completed.")
+        self.assertEqual(source.describe()["restricted_execution"], "llm")
+        self.assertTrue(any(row["backend"] == "llm" for row in self.traced("backend.round.usage")))
+
+    async def test_read_only_verification_has_no_native_session_and_refuses_unapproved_tool_calls(self):
+        provider = ScriptedProvider(
+            call_round("modify", {}, "unapproved_write"),
+            call_round("lookup", {}, "permitted_read"),
+            text_round("Verified."),
+            endpoint=ENDPOINT,
+        )
+        tools = RecordingTools(("lookup", "modify"))
+        tools.read_only_tools = frozenset({"lookup"})
+        _, adapter = self.harness(provider, tools)
+        task = FakeTaskContext(declared=(), model=ENDPOINT.model)
+        task.business_access = "read_only"
+        from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.im.access import (
+            read_only_sources,
+        )
+
+        task.tool_sources = lambda tool_sources: read_only_sources(tool_sources)[0]
+        result = await read_all(adapter.start(task).events(), timeout=2)
+        self.assertEqual(answers(result), ["Verified."])
+        self.assertEqual([name for _, name, _ in tools.calls], ["lookup"])
+        self.assertTrue(all("modify" not in {tool["name"] for tool in row["tools"]} for row in provider.payloads))
+        self.assertEqual(adapter.opener.opened, [])
+
+    async def test_status_while_waiting_preserves_the_session_and_feeds_back_the_real_application_result(self):
+        provider = ScriptedProvider(text_round("The request is pending."), endpoint=ENDPOINT)
+        _, im, task, initial = await self.start_app_wait(provider, RecordingTools())
+        run = task.run
+        worker, initial_prompt = run.session, run.foreground.turn.main
+        pending_tool = asyncio.create_task(run.door.call("get_menu", {}))
+        run.door.pending_calls.add(pending_tool)
+        pending_tool.add_done_callback(run.door.pending_calls.discard)
+        [result] = app_outputs(await read_all(initial.stream, timeout=2), "The app found green tea.")
+        status = im.admit(ask("Any update on the menu?"), delegation_id="D2")
+        await until(lambda: worker.cancels == 1)
+        worker.end(initial_prompt, "cancelled")
+        await until(lambda: provider.opened == 1 and task.control_run is None)
+        self.assertFalse(pending_tool.done())
+        self.assertEqual(len(worker.texts("prompt")), 1)
+        resumed = im.admit_client_request([result], delegation_id="D1")
+        await until(lambda: len(worker.texts("prompt")) == 2)
+        self.assertEqual(await asyncio.wait_for(pending_tool, 2), "The app found green tea.")
+        self.assertIs(run.session, worker)
+        self.assertIn("The app found green tea.", worker.texts("prompt")[-1])
+        worker.answer(run.foreground.turn.main, "updated", "The menu includes green tea.")
+        reported = await asyncio.wait_for(asyncio.gather(read_all(status.stream), read_all(resumed.stream)), 2)
+        self.assertTrue(any("The menu includes green tea." in answers(events) for events in reported))
+        self.assertEqual(worker.cancels, 1)
+
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
     """An adapter of the source of ``block``: its opener opens its runtime processes, and a fake bridge its doors."""
@@ -254,42 +384,28 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         (door,) = [door for door in self.adapter.bridge.doors.values() if door.name == "w1"]
         return door
 
-    async def test_the_warm_up_session_serves_nothing_and_retires(self):
-        # The workers' process pays its cold first session/new at the session's start, not in the first task.
-        await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False)
-        self.adapter.conductor()
-        workers = await self.adapter.shared(self.adapter.workers)
-        (session,) = workers.client.sessions
-        door = self.warm_door()
-        self.assertTrue(session.retired)
-        self.assertEqual((workers.client.servers[0].name, door.tools()), ("w1", []))
-        self.assertEqual([path.name for path in workers.client.folders[0].iterdir()], [".git"])
-        self.assertEqual(workers.server_name("w"), "w2")
-        runtimes = self.adapter.opener.runtimes
-        await until(lambda: "conductor" in runtimes and runtimes["conductor"].client.sessions)
-        await asyncio.sleep(0.05)
-        self.assertEqual(len(runtimes["conductor"].client.sessions), 1)
-
-    async def test_the_warm_up_sessions_door_is_served_until_the_adapter_closes(self):
-        # An agent that advertises no close, as Hermes, keeps the session's MCP server and pings it: a refused ping
-        # makes it reconnect, then pause that server. The caller leaving closes only the idle sessions' doors.
-        await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False)
-        self.adapter.conductor()
-        await self.adapter.shared(self.adapter.workers)
-        door = self.warm_door()
-        self.adapter.release_idle()
-        self.assertEqual((door.token in self.adapter.bridge.doors, door.retired), (True, False))
-        await self.adapter.close()
-        self.assertEqual((door.token in self.adapter.bridge.doors, door.retired), (False, True))
-
-    async def test_a_warm_up_session_its_agent_closes_has_its_door_closed_at_once(self):
-        await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False, closes=True)
-        self.adapter.conductor()
-        workers = await self.adapter.shared(self.adapter.workers)
-        (session,) = workers.client.sessions
-        self.assertTrue(session.retired)
-        (door,) = [door for door, _ in self.adapter.bridge.closed if door.name == "w1"]
-        self.assertEqual((door.token in self.adapter.bridge.doors, door.retired), (False, True))
+    async def test_warmup_retires_each_session_and_keeps_an_inert_door_until_close(self):
+        for closes in (False, True):
+            with self.subTest(closes=closes):
+                await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False, closes=closes)
+                self.adapter.conductor()
+                workers = await self.adapter.shared(self.adapter.workers)
+                [session] = workers.client.sessions
+                door = self.warm_door()
+                self.assertTrue(session.retired)
+                self.assertEqual((workers.client.servers[0].name, door.tools()), ("w1", []))
+                self.assertEqual([p.name for p in workers.client.folders[0].iterdir()], [".git"])
+                self.assertEqual(workers.server_name("w"), "w2")
+                runtimes = self.adapter.opener.runtimes
+                await until(lambda runtimes=runtimes: "conductor" in runtimes and runtimes["conductor"].client.sessions)
+                self.assertEqual(len(runtimes["conductor"].client.sessions), 1)
+                self.adapter.release_idle()
+                self.assertTrue(door.retired)
+                self.assertIn(door.token, self.adapter.bridge.doors)
+                self.assertEqual(door.tools(), [])
+                await self.adapter.close()
+                await self.adapter.wait_closed()
+                self.assertNotIn(door.token, self.adapter.bridge.doors)
 
     async def test_a_warm_up_session_that_fails_leaves_the_process_usable(self):
         await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False)
@@ -303,7 +419,6 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_close_during_the_warm_up_closes_the_process(self):
         await self.make({**UNSTARTABLE, "agent": "hermes"}, new_each_open=False)
-        # The warm-up waits for the listing when the session closes.
         self.adapter.bridge = FakeBridge(lists=False)
         self.adapter._warm(self.adapter.workers, first_session=True)
         await until(lambda: "workers" in self.adapter.opener.runtimes)
@@ -312,6 +427,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await self.adapter.close()
         self.assertTrue(workers.closed)
         self.assertTrue(workers.client.sessions[0].retired)
+        with self.assertRaisesRegex(RuntimeError, "harness session is closing"):
+            await self.adapter.shared(self.adapter.workers)
 
     async def test_a_full_process_makes_the_next_session_open_another(self):
         # The IM's max_running counts running tasks only, and a task waiting for the app holds its Hermes turn for the
@@ -336,7 +453,6 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await self.make({"command": ["/nonexistent/runtime"], "max_running": 2, "turns_per_process": 2})
         workers = self.adapter.workers
         process = await self.adapter.shared(workers)
-        # A kept session holds no turn while it waits for a later task.
         process.leave()
         self.assertTrue(self.adapter.take_place(process))
         self.assertIs(await self.adapter.shared(workers), process)
@@ -357,8 +473,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await anext(events)
         [process] = self.adapter.opener.opened
         session, door = process.client.sessions[-1], run.door
-        session.say("m1", "Do", "ne.")
-        session.end(1, usage={"totalTokens": 100})
+        session.answer(1, "m1", "Do", "ne.", usage={"totalTokens": 100})
         [event async for event in events]
         [kept] = self.adapter.pool.idle
         self.assertEqual((kept.session, process.places, session.retired), (session, 0, False))
@@ -375,8 +490,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         async def answer(run, events):
             """Have the run's session answer, and return it."""
             session = run.session
-            session.say("m1", "Do", "ne.")
-            session.end(session.last_prompt(), usage={"totalTokens": next(totals)})
+            session.answer(session.last_prompt(), "m1", "Do", "ne.", usage={"totalTokens": next(totals)})
             [event async for event in events]
             return session
 

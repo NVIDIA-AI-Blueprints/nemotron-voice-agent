@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from starlette.websockets import WebSocketState
 
 AdapterCloseReason = Literal["connection_lost", "remote_hangup"]
+DelegationRequestState = Literal["submitted", "accepted", "failed", "cancelled", "lost"]
 
 
 class SessionPort(Protocol):
@@ -169,8 +170,8 @@ class DelegationView(Protocol):
     async def emit(self, kind: str, **fields: Any) -> None:
         """Send a server event: only ``session.delegation.created`` and ``response.event``."""
 
-    async def emit_paced(self, kind: str, **fields: Any) -> None:
-        """Send a delegation event as :meth:`emit` does, once the primary connection's queue is at most half full."""
+    async def emit_paced(self, kind: str, *, before_publish: Callable[[], bool] | None = None, **fields: Any) -> bool:
+        """Wait for queue room, then publish to the current attachment if the optional callback admits it."""
 
     def report_refusal(self, message: str, code: str, client_event_id: str | None, param: str | None = None) -> None:
         """Report the core's refusal of a request or settings that a client command made; a plain call.

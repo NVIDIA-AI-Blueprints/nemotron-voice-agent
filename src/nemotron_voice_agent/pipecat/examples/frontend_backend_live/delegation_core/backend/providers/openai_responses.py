@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Mapping
 from copy import deepcopy
 from typing import Any
@@ -12,7 +13,10 @@ from typing import Any
 from loguru import logger
 from openai import AsyncOpenAI
 
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import input_item
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import (
+    input_item,
+    is_output_content,
+)
 from nemotron_voice_agent.pipecat.shared.delegation_contract import ModelEndpoint
 from nemotron_voice_agent.pipecat.shared.ids import uid
 
@@ -26,6 +30,21 @@ ENDPOINT_PARAMS = {"temperature": "temperature", "top_p": "top_p", "max_tokens":
 def _named(item: Any) -> tuple:
     """Return what a tool or a ``tool_choice`` names: its type, and an MCP tool's server."""
     return (item.get("type"), item.get("server_label")) if isinstance(item, Mapping) else (None, None)
+
+
+def _responses_input(item: dict) -> dict:
+    output = item.get("output")
+    if item.get("type") != "function_call_output" or not isinstance(output, list):
+        return input_item(item)
+    if not is_output_content(output):
+        return {**item, "output": json.dumps(output, ensure_ascii=False)}
+    return {
+        **item,
+        "output": [
+            {"type": "input_text", "text": part["text"]} if part["type"] in ("text", "output_text") else part
+            for part in output
+        ],
+    }
 
 
 class OpenAIResponsesBackend(Backend):
@@ -48,7 +67,7 @@ class OpenAIResponsesBackend(Backend):
         a ``tool_choice`` that only a tool left out matches becomes ``auto``, as on chat completions. A message other
         than an output message goes without its ``id`` (:func:`input_item`).
         """
-        extra = self.endpoint.extra_params
+        extra = self.endpoint_params(payload)
         request = {name: extra[key] for key, name in ENDPOINT_PARAMS.items() if key in extra}
         if "extra_body" in extra:
             request["extra_body"] = deepcopy(extra["extra_body"])
@@ -70,7 +89,7 @@ class OpenAIResponsesBackend(Backend):
             request["tool_choice"] = "auto" if _named(choice) in gone else choice
         request.update(
             model=payload.get("model") or self.endpoint.model,
-            input=[input_item(item) for item in payload["input"]],
+            input=[_responses_input(item) for item in payload["input"]],
             store=False,
             prompt_cache_key=self.cache_key,
             stream=True,
