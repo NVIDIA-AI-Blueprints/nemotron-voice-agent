@@ -24,6 +24,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 import websockets
+from benchmark_diagnostics import DIAGNOSTICS_TYPE
 
 DEFAULT_OUTPUT_RATE = 24_000
 DEFAULT_AUTH_SCHEME = "Bearer"
@@ -228,6 +229,8 @@ class RealtimeTransport:
         if self.on_event is not None:
             self.on_event(event)
         kind = str(event.get("type") or "")
+        if kind == DIAGNOSTICS_TYPE:
+            return event
         summary: dict[str, Any] = {"type": kind, "received_at": time.monotonic()}
         if kind == "response.output_audio.delta":
             summary["audio_bytes"] = len(parse_output_audio(event))

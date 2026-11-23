@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from benchmark_diagnostics import SessionDiagnostics
+from benchmark_diagnostics import NO_VALID_TURNS, SessionDiagnostics, bounded_error_message
 
 CHUNK_DURATION_MS = 32
 BOT_INTRO_TIMEOUT = 5
@@ -614,12 +614,12 @@ class PerfClient:
             error = str(exc) or exc.__class__.__name__
 
         if error:
+            error = bounded_error_message(error)
             self.diagnostics.add_error(error, source="client", component="client", code="session_error")
             await self.logger.log(f"{self.stream_id} finished with error: {error}")
         elif not self.valid_latency_values:
-            error = "No valid benchmark turns completed"
-            self.diagnostics.add_error(error, source="client", component="client", code="no_valid_turns")
-            await self.logger.log(f"{self.stream_id} finished with error: {error}")
+            error = NO_VALID_TURNS
+            await self.logger.log(f"{self.stream_id} finished without a valid response: {error}")
         else:
             await self.logger.log(f"{self.stream_id} finished successfully")
 

@@ -23,7 +23,7 @@ upstream `TranscriptionFrame` exists for the strategy to await.
 
 Generate the surrounding Pipecat pipeline, transport, context, turn handling, and TTS
 wiring from the Pipecat docs MCP. Use NVIDIA's current
-[`omni_assistant/pipeline.py`](https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent/blob/main/src/examples/omni_assistant/pipeline.py)
+[`omni_assistant/pipeline.py`](https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent/blob/main/src/nemotron_voice_agent/pipecat/examples/omni_assistant/pipeline.py)
 as the behavioral reference. Read the locked model's API reference or Hugging Face model
 card for endpoint settings.
 

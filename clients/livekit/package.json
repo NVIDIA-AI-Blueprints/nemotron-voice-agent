@@ -1,0 +1,38 @@
+{
+  "name": "nemotron-voice-agent-livekit-client",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint .",
+    "test": "node --test tests/*.test.ts",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@livekit/components-react": "2.9.25",
+    "@tanstack/react-query": "5.101.3",
+    "livekit-client": "2.24.1",
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "22.20.5",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "eslint": "9.39.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.4.26",
+    "globals": "16.5.0",
+    "sass": "1.101.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.73.0",
+    "vite": "7.3.8"
+  }
+}

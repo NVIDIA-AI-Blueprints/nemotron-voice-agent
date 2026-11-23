@@ -1,0 +1,1341 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""FastAPI server: serves the client UI and handles WebRTC/WebSocket signaling.
+
+Routes:
+  POST      /api/start       - WebRTC start (TTS readiness gate + session creation)
+  POST      /api/offer       - WebRTC SDP offer
+  PATCH     /api/offer       - WebRTC ICE candidate trickle
+  WebSocket /api/ws          - WebSocket transport (RTVI / Pipecat)
+  WebSocket /v1/realtime     - OpenAI Realtime–shaped JSON (session + pipeline handoff)
+  GET       /api/deployment  - Active example metadata
+  GET       /api/prompts     - Prompt catalog
+  GET       /api/services    - Service catalog (LLM, TTS, ASR)
+  GET       /api/tts-config  - TTS voices & languages (optional ASR params for ASR∩TTS intersection)
+  GET       /                - Built client UI (from clients/pipecat/dist/)
+
+Pipeline / example selection lives in ``examples_registry.yaml`` (the
+``selection`` and ``transports`` fields). To change which examples or
+transports the UI exposes, edit the YAML. ``EXAMPLE_SELECTION`` and
+``TRANSPORT_SELECTION`` env vars exist as compose-profile pinning hooks
+(used by ``docker-compose.yml``) but are intentionally not surfaced in
+``.env.example`` or host-native run instructions — day-to-day deployments
+should configure them via YAML or compose profile.
+
+Run:
+  uv run nva-pipecat                                              # use selection/transports from YAML
+  PIPELINE_TLS=false uv run nva-pipecat                           # plain HTTP
+  uv run nva-pipecat --tls-cert c --tls-key k                     # custom TLS cert/key
+  uv run nva-pipecat --prompt-file benchmarking_tools/scaling-perf/perf_prompts.yaml
+"""
+
+from dotenv import load_dotenv
+
+from nemotron_voice_agent.core.catalog import NVCF_LLM_BASE_URL
+from nemotron_voice_agent.core.paths import REPO_ROOT
+from nemotron_voice_agent.core.service_status import ServiceStatus, probe_http, probe_tcp
+from nemotron_voice_agent.pipecat.runtime.utils import parse_env_bool, parse_env_int
+
+load_dotenv(override=True)
+
+import argparse
+import asyncio
+import contextlib
+import inspect
+import os
+import sys
+import uuid
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Annotated
+
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from loguru import logger
+from pipecat.runner.types import SmallWebRTCRunnerArguments
+from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
+from pipecat.transports.smallwebrtc.request_handler import (
+    SmallWebRTCPatchRequest,
+    SmallWebRTCRequest,
+    SmallWebRTCRequestHandler,
+)
+
+import nemotron_voice_agent.pipecat.runtime.config_store as config_store
+import nemotron_voice_agent.pipecat.runtime.examples_registry as examples_registry
+from nemotron_voice_agent.pipecat.runtime.attachment_store import consume_capture_request, store_attachment
+from nemotron_voice_agent.pipecat.runtime.utils import (
+    _CONNECT_HEALTH_TIMEOUT_SECS,
+    SELF_HOSTED_SOURCE,
+    _llm_health_url,
+    _local_speech_ready_url,
+    _run_blocking,
+    build_services_api_response,
+    default_prompt_key,
+    filter_session_config,
+    is_nvcf,
+    load_prompt_catalog,
+    load_service_entry,
+    load_service_entry_by_id,
+    load_tools_catalog,
+    set_active_services,
+    set_listed_services,
+    set_service_context,
+)
+from nemotron_voice_agent.pipecat.runtime.webcam_frame_store import store_webcam_frame, webcam_client_config
+from nemotron_voice_agent.pipecat.shared.pipeline_utils import (
+    PIPELINE_AUDIO_IN_SAMPLE_RATE,
+    PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+)
+from nemotron_voice_agent.pipecat.shared.prewarm import (
+    build_session_languages,
+    peek_cached_tts_config,
+    prewarm_tts,
+    warmup_tts_synthesis,
+)
+from nemotron_voice_agent.pipecat.shared.speaker import speaker_diarization_requested
+from nemotron_voice_agent.pipecat.shared.subagents import load_subagent_registry
+
+CLIENT_DIST = REPO_ROOT / "clients" / "pipecat" / "dist"
+_session_configs: dict[str, dict] = {}
+_active_session_configs: dict[str, dict] = {}
+_CONNECT_PREWARM_TIMEOUT_SECS = parse_env_int("CONNECT_PREWARM_TIMEOUT_SECS", 45)
+_STATUS_PROBE_TIMEOUT_SECS = 2
+_seen_service_targets: set[str] = set()
+_failed_service_targets: set[str] = set()
+_TURN_LISTEN_PORT = 3478
+# Each LLM slot: the session field that holds its base URL, and its name in readiness messages.
+_LLM_SLOTS = {"llm": ("base_url", "LLM"), "thinker-llm": ("thinker_base_url", "Thinker LLM")}
+_INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+_MULTI_WORKER_SESSION_CONFIG_MESSAGE = (
+    "Session-config based WebRTC and WebSocket flows are disabled when "
+    "UVICORN_WORKERS is greater than 1. Use a single worker, sticky routing, "
+    "or shared session storage."
+)
+
+
+_TRANSPORT_OPTIONS: tuple[dict[str, str], ...] = (
+    {"id": "webrtc", "label": "WebRTC"},
+    {"id": "websocket", "label": "WebSocket"},
+)
+
+
+@dataclass(frozen=True)
+class WorkerAppConfig:
+    """App-factory config reconstructed from server CLI args."""
+
+    host: str = "localhost"
+    prompt_file: str = ""
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> "WorkerAppConfig":
+        """Build a config from an already-parsed argparse namespace."""
+        return cls(host=args.host, prompt_file=args.prompt_file)
+
+    @classmethod
+    def from_argv(cls, argv: list[str]) -> "WorkerAppConfig":
+        """Build a config by parsing a raw argv list (used by worker subprocesses)."""
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--host", type=str, default="localhost")
+        parser.add_argument("--prompt-file", type=str, default="")
+        args, _ = parser.parse_known_args(argv)
+        return cls.from_args(args)
+
+
+def _parse_min_int(value: str, minimum: int = 1) -> int:
+    """Parse an integer CLI argument and enforce a minimum value."""
+    parsed = int(value)
+    if parsed < minimum:
+        raise argparse.ArgumentTypeError(f"must be >= {minimum}")
+    return parsed
+
+
+def _run_single_worker(args: argparse.Namespace, app: FastAPI, ssl_kwargs: dict) -> None:
+    """Run uvicorn with a pre-built app instance."""
+    uvicorn.run(app, host=args.host, port=args.port, **ssl_kwargs)
+
+
+def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) -> None:
+    """Run uvicorn in multi-worker mode via the importable app factory."""
+    uvicorn.run(
+        "nemotron_voice_agent.pipecat.runtime.server:app_factory",
+        host=args.host,
+        port=args.port,
+        workers=workers,
+        factory=True,
+        **ssl_kwargs,
+    )
+
+
+def _multi_worker_mode_enabled() -> bool:
+    """Return whether the server is running with more than one uvicorn worker."""
+    return parse_env_int("UVICORN_WORKERS", 1, min_value=1) > 1
+
+
+def _multi_worker_session_config_response() -> JSONResponse:
+    """Reject routes that rely on process-local session config in multi-worker mode."""
+    return JSONResponse(status_code=503, content={"info": _MULTI_WORKER_SESSION_CONFIG_MESSAGE})
+
+
+def _deployment_response(active: dict, options: list[dict]) -> dict:
+    """Build the metadata payload consumed by the client selector page.
+
+    Visibility (examples, transports) is driven entirely by the YAML
+    registry plus its environment overrides, so this function just packages
+    what the registry has already resolved.
+    """
+    active_deployment = dict(active)
+    active_deployment.setdefault("slots", [])
+    active_deployment.setdefault("capabilities", [])
+    transports = set(examples_registry.visible_transports())
+    return {
+        "active": active_deployment,
+        "selectable": not examples_registry.is_locked(),
+        "options": options,
+        "transports": [option for option in _TRANSPORT_OPTIONS if option["id"] in transports],
+        "audio": {
+            "input_sample_rate": PIPELINE_AUDIO_IN_SAMPLE_RATE,
+            "output_sample_rate": PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+        },
+    }
+
+
+# Session config keys that need an example capability. The session allowlist is
+# shared across examples, so enforce per example features here.
+_CAPABILITY_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
+    "speaker_labels": ("asr_speaker_diarization",),
+}
+
+
+def _asr_supports_diarization(config: dict) -> bool:
+    entry = (
+        load_service_entry_by_id("asr", str(config["asr_id"]))
+        if config.get("asr_id")
+        else load_service_entry("asr", "")
+    )
+    return entry.get("speaker_diarization_supported") is True
+
+
+def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict:
+    """Bind the catalog for the requested pipeline_mode and drop unknown slot keys."""
+    if not isinstance(data, dict):
+        raise ValueError("session config must be a JSON object")
+    example = _bind_example_context_by_key(str(data.get("pipeline_mode", "")) or fallback_example_key)
+    config = dict(data)
+    if not config.get("prompt_key") and not config.get("prompt_content"):
+        prompt_key = examples_registry.prompt_default_key(example["key"])
+        if prompt_key:
+            config["prompt_key"] = prompt_key
+    capabilities = set(example.get("capabilities") or [])
+    for capability, keys in _CAPABILITY_CONFIG_KEYS.items():
+        if capability not in capabilities:
+            for key in keys:
+                config.pop(key, None)
+    if "session_languages" in capabilities and not config.get("asr_language_code"):
+        config["asr_language_code"] = examples_registry.default_session_language(example["key"])
+    config = filter_session_config(config)
+    prompt = load_prompt_catalog(examples_registry.example_module_file(example)).get(config.get("prompt_key", ""), {})
+    multi_speaker_prompt = isinstance(prompt, dict) and prompt.get("multi_speaker_support") is True
+    diarization_disabled = not speaker_diarization_requested(config)
+    if multi_speaker_prompt and (
+        "speaker_labels" not in capabilities or not _asr_supports_diarization(config) or diarization_disabled
+    ):
+        fallback_key = examples_registry.prompt_default_key(example["key"])
+        if fallback_key:
+            config["prompt_key"] = fallback_key
+        config.pop("prompt_content", None)
+    return config
+
+
+def _example_with_module_file(example_key: str = "") -> tuple[dict, Path]:
+    """Return ``(registry_entry, module_file)`` for a registry example key."""
+    selected = examples_registry.find(example_key)
+    return selected, examples_registry.example_module_file(selected)
+
+
+def _bind_example_context_by_key(example_key: str = "") -> dict:
+    """Bind one example's catalog services to the current request without mutating globals."""
+    example = examples_registry.find(example_key)
+    set_service_context(example)
+    return example
+
+
+def _activate_example_catalog_by_key(example_key: str = "") -> dict:
+    """Activate one example's catalog services process-wide for startup defaults."""
+    example = examples_registry.find(example_key)
+    set_active_services(example)
+    return example
+
+
+def _resolve_config(session_id: str = "", fallback_example_key: str = "", **query_params: str) -> dict:
+    """Return the stored session config, or sanitize and hydrate the query params when none is stored."""
+    stored = _session_configs.pop(session_id, None) if session_id else None
+    if stored is not None:
+        _bind_example_context_by_key(str(stored.get("pipeline_mode", "")) or fallback_example_key)
+        return stored
+    query_config = {k: v for k, v in query_params.items() if v}
+    return _sanitize_session_config(query_config, fallback_example_key=fallback_example_key)
+
+
+def _get_default_tts_selection() -> tuple[str, str, str, str]:
+    """Return default TTS ``(server, voice_id, function_id, model)`` from the catalog."""
+    default_tts = load_service_entry("tts", "")
+    return (
+        default_tts.get("server", "grpc.nvcf.nvidia.com:443"),
+        default_tts.get("voice_id", ""),
+        default_tts.get("function_id", ""),
+        default_tts.get("model", ""),
+    )
+
+
+def _resolve_tts_selection(
+    server: str = "",
+    voice_id: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> tuple[str, str, str, str]:
+    """Bind server + metadata as one selection.
+
+    When ``server`` is omitted, fall back to the catalog default for server,
+    voice, function_id, and model together. When ``server`` is explicit, keep
+    empty function_id/model (do not borrow Magpie defaults for another NIM).
+    """
+    default_server, default_voice, default_function_id, default_model = _get_default_tts_selection()
+    if server:
+        return server, voice_id or default_voice, function_id, model
+    return (
+        default_server,
+        voice_id or default_voice,
+        function_id or default_function_id,
+        model or default_model,
+    )
+
+
+def _get_default_asr_selection() -> str:
+    default_asr = load_service_entry("asr", "")
+    return default_asr.get("server", "grpc.nvcf.nvidia.com:443")
+
+
+def _get_default_asr_catalog() -> tuple[str, str, str]:
+    default_asr = load_service_entry("asr", "")
+    return (
+        default_asr.get("server", "grpc.nvcf.nvidia.com:443"),
+        default_asr.get("model", ""),
+        default_asr.get("function_id", ""),
+    )
+
+
+def _get_default_llm_base_url(slot: str = "llm") -> str:
+    """Return the base URL of the default catalog entry of an LLM slot (``llm``, ``thinker-llm``)."""
+    return load_service_entry(slot, "").get("base_url", NVCF_LLM_BASE_URL)
+
+
+def _store_session_config(config: dict) -> str:
+    """Store a sanitized session config and return its session id."""
+    session_id = uuid.uuid4().hex[:12]
+    _session_configs[session_id] = config
+    return session_id
+
+
+def _session_capability_error(session_id: str, capability: str) -> JSONResponse | None:
+    """Return an upload rejection when session/capability validation fails."""
+    cleaned_session_id = session_id.strip()
+    config = _active_session_configs.get(cleaned_session_id) or _session_configs.get(cleaned_session_id)
+    if not cleaned_session_id or config is None:
+        return JSONResponse(status_code=404, content={"detail": "session not found"})
+    example = examples_registry.find(config.get("pipeline_mode", ""))
+    if capability not in set(example.get("capabilities") or []):
+        return JSONResponse(status_code=403, content={"detail": f"session does not support {capability}"})
+    return None
+
+
+async def _read_upload_file_with_limit(file: UploadFile, *, max_bytes: int = _MAX_UPLOAD_BYTES) -> bytes:
+    """Read an upload body while enforcing a hard byte limit."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"Upload exceeds {max_bytes // (1024 * 1024)}MB limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _build_ice_servers(request: Request) -> list[dict]:
+    """Build ICE server config for the WebRTC client.
+
+    Coturn (compose `turn` profile) runs with long-term credentials matching
+    TURN_USERNAME / TURN_PASSWORD. Set TURN_URL when TURN is hosted separately;
+    otherwise derive the host from the request for same-host deployments.
+    """
+    username = os.environ.get("TURN_USERNAME", "").strip()
+    password = os.environ.get("TURN_PASSWORD", "").strip()
+    if not username or not password:
+        return []
+
+    turn_url = (os.environ.get("TURN_URL") or os.environ.get("TURN_SERVER_URL") or "").strip()
+    if turn_url:
+        base = turn_url.split("?", 1)[0].rstrip("/")
+        if not base.startswith(("turn:", "turns:")):
+            base = f"turn:{base}"
+    else:
+        host = request.headers.get("x-forwarded-host", request.url.hostname or "")
+        host = host.split(",")[0].strip().split(":")[0]
+        if not host or host in ("localhost", "127.0.0.1", "::1"):
+            return []
+        base = f"turn:{host}:{_TURN_LISTEN_PORT}"
+
+    return [
+        {
+            "urls": [f"{base}?transport=udp", f"{base}?transport=tcp"],
+            "username": username,
+            "credential": password,
+        }
+    ]
+
+
+def _should_skip_tts_prewarm(example: dict) -> bool:
+    """Skip TTS warm-up for examples without a ``tts`` slot."""
+    return "tts" not in example["services"]
+
+
+def _check_service_port(label: str, server: str) -> None:
+    _raise_unless_ready(label, server, _remembered_status(server, probe_tcp(server, _CONNECT_HEALTH_TIMEOUT_SECS)))
+
+
+def _service_starting_message(label: str) -> str:
+    return f"Selected {label} service is still starting. Wait for it to become ready, then try again."
+
+
+def _remembered_status(target: str, status: ServiceStatus) -> ServiceStatus:
+    """Turn a probe result into the UI status: a service that vanishes after being seen is ``error`` until ready."""
+    if status == "offline":
+        if target not in _seen_service_targets:
+            return "offline"
+        _failed_service_targets.add(target)
+        return "error"
+    _seen_service_targets.add(target)
+    if status == "ready":
+        _failed_service_targets.discard(target)
+        return "ready"
+    return "error" if target in _failed_service_targets else "starting"
+
+
+def _raise_unless_ready(label: str, target: str, status: ServiceStatus) -> None:
+    if status == "starting":
+        raise RuntimeError(_service_starting_message(label))
+    if status != "ready":
+        raise RuntimeError(
+            f"Selected {label} service is not running at {target}. "
+            f"Start it, or pick another {label} in the Services tab."
+        )
+
+
+def _check_http_health(label: str, target: str, health_url: str, expects_ready_json: bool = False) -> None:
+    status = _remembered_status(health_url, probe_http(health_url, expects_ready_json, _CONNECT_HEALTH_TIMEOUT_SECS))
+    if status != "ready":
+        logger.warning(f"{label} health check for {target} via {health_url}: {status}")
+    _raise_unless_ready(label, target, status)
+
+
+def _status_probe(slot: str, entry: dict) -> tuple[str, bool] | None:
+    """Return ``(target, expects_ready_json)`` for a self-hosted entry; targets without a scheme use TCP."""
+    if entry.get("source") != SELF_HOSTED_SOURCE:
+        return None
+    if base_url := entry.get("base_url"):
+        health_url = _llm_health_url(str(base_url))
+        return (health_url, False) if health_url else None
+    if server := entry.get("server"):
+        ready_url = _local_speech_ready_url(slot, str(server))
+        return (ready_url, True) if ready_url else (str(server), False)
+    return None
+
+
+def _probe_status(address: str, expects_ready_json: bool) -> ServiceStatus:
+    timeout = _STATUS_PROBE_TIMEOUT_SECS
+    status = probe_http(address, expects_ready_json, timeout) if "://" in address else probe_tcp(address, timeout)
+    return _remembered_status(address, status)
+
+
+async def _with_service_status(catalog: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Add ``status`` to self-hosted entries and hide offline ones, unless a slot has nothing else to offer."""
+    probes = {
+        (slot, index): probe
+        for slot, entries in catalog.items()
+        for index, entry in enumerate(entries)
+        if (probe := _status_probe(slot, entry))
+    }
+    targets = list(set(probes.values()))
+    results = await asyncio.gather(*(_run_blocking(_probe_status, *target) for target in targets))
+    statuses = dict(zip(targets, results, strict=True))
+    result = {}
+    for slot, entries in catalog.items():
+        annotated = [
+            {**entry, "status": statuses[probes[slot, index]]} if (slot, index) in probes else entry
+            for index, entry in enumerate(entries)
+        ]
+        visible = [entry for entry in annotated if entry.get("status") != "offline"] or annotated
+        result[slot] = [{**entry, "selected": index == 0} for index, entry in enumerate(visible)]
+    return result
+
+
+async def _run_http_readiness_check(
+    label: str,
+    target: str,
+    health_url: str,
+    expects_ready_json: bool = False,
+) -> None:
+    try:
+        await _run_blocking(
+            _check_http_health,
+            label,
+            target,
+            health_url,
+            expects_ready_json,
+            timeout=_CONNECT_HEALTH_TIMEOUT_SECS + 1,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Selected {label} service is still starting. Health check timed out after {_CONNECT_HEALTH_TIMEOUT_SECS}s."
+        ) from exc
+
+
+async def _ensure_llm_ready_for_connection(config: dict, example: dict) -> None:
+    """Run a local readiness check of every LLM slot the example uses, at the base URL the session will use."""
+    for slot, (base_url_field, label) in _LLM_SLOTS.items():
+        if slot not in example["services"]:
+            continue
+        base_url = config.get(base_url_field, "") or _get_default_llm_base_url(slot)
+        health_url = _llm_health_url(base_url)
+        if health_url:
+            await _run_http_readiness_check(label, base_url, health_url)
+
+
+async def _ensure_asr_ready_for_connection(config: dict, example: dict) -> None:
+    """Run an ASR readiness check before starting the session (examples with an ``asr`` slot)."""
+    if "asr" not in example["services"]:
+        return
+
+    asr_server = config.get("asr_server", "") or _get_default_asr_selection()
+    ready_url = _local_speech_ready_url("ASR", asr_server)
+    if ready_url:
+        await _run_http_readiness_check("ASR", asr_server, ready_url, expects_ready_json=True)
+        return
+
+    try:
+        await _run_blocking(
+            _check_service_port,
+            "ASR",
+            asr_server,
+            timeout=_CONNECT_HEALTH_TIMEOUT_SECS + 1,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Selected ASR service is still starting. Health check timed out after {_CONNECT_HEALTH_TIMEOUT_SECS}s."
+        ) from exc
+
+
+async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
+    """Warm up TTS unless the selected pipeline handles it internally."""
+    if _should_skip_tts_prewarm(example):
+        return
+
+    tts_server, voice_id, tts_function_id, tts_model = _resolve_tts_selection(
+        config.get("tts_server", ""),
+        config.get("tts_voice_id", ""),
+        config.get("tts_function_id", ""),
+        config.get("tts_model", ""),
+    )
+
+    ready_url = _local_speech_ready_url("TTS", tts_server)
+    if ready_url:
+        await _run_http_readiness_check("TTS", tts_server, ready_url, expects_ready_json=True)
+        return
+
+    if not is_nvcf(tts_server):
+        try:
+            await _run_blocking(
+                _check_service_port,
+                "TTS",
+                tts_server,
+                timeout=_CONNECT_HEALTH_TIMEOUT_SECS + 1,
+            )
+            return
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Selected TTS service is still starting. Health check timed out after {_CONNECT_HEALTH_TIMEOUT_SECS}s."
+            ) from exc
+
+    try:
+        is_ready = await _run_blocking(
+            warmup_tts_synthesis,
+            tts_server,
+            voice_id,
+            tts_function_id,
+            tts_model,
+            timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Selected TTS service is not available at {tts_server}; "
+            f"health check timed out after {_CONNECT_PREWARM_TIMEOUT_SECS}s."
+        ) from exc
+
+    if not is_ready:
+        raise RuntimeError(
+            f"Selected TTS service is not available at {tts_server}. Check that the TTS service is running and healthy."
+        )
+
+
+async def _select_unnamed_slots(config: dict, example: dict) -> None:
+    """Fill ``config`` in place with the entries ``GET /api/services`` selects for the example's unnamed slots.
+
+    A slot is unnamed when a Realtime ``session.nvidia`` does not take its id key.
+    """
+    from nemotron_voice_agent.pipecat.runtime.gateways.realtime.session import unnamed_slot_ids
+
+    unnamed = unnamed_slot_ids(example["services"])
+    if unnamed:
+        listed = await _with_service_status(build_services_api_response())
+        selected = {id_field: entries[0]["id"] for slot, id_field in unnamed.items() if (entries := listed.get(slot))}
+        config.update(filter_session_config(selected))
+
+
+async def _ensure_services_ready_for_connection(config: dict, example: dict) -> None:
+    """Verify selected services before the UI starts a session."""
+    await _ensure_llm_ready_for_connection(config, example)
+    await _ensure_asr_ready_for_connection(config, example)
+    await _ensure_tts_ready_for_connection(config, example)
+
+
+def _live_served() -> bool:
+    """Return whether to serve the Live API (``/v1/live``).
+
+    ``LIVE_ENABLED`` decides when set (``1``, ``true``, ``yes`` or ``on`` serve it). Otherwise it is served only with a
+    ``LIVE_API_TOKEN``, since without one its routes are open to anyone who can reach the server.
+    """
+    explicit = os.getenv("LIVE_ENABLED", "").strip().lower()
+    if explicit:
+        return explicit in {"1", "true", "yes", "on"}
+    return bool(os.getenv("LIVE_API_TOKEN", "").strip())
+
+
+def _live_listing():
+    """Return a reader of the services as ``GET /api/services`` lists them, which probes them at its first call only.
+
+    The Live hooks share one; their root reads its catalog once per process, so later calls need no probe.
+    """
+    listed: dict | None = None
+
+    async def listing() -> dict:
+        nonlocal listed
+        if listed is None:
+            listed = await _with_service_status(build_services_api_response())
+        return listed
+
+    return listing
+
+
+def _live_hook(example: dict, spec: str, what: str, listing):
+    """Return the Live hook ``spec`` names, imported on its first call and called with ``example``'s services bound.
+
+    The hook reads the catalog as ``GET /api/services`` lists it, so each slot's default is the one the UI selects.
+    """
+
+    async def hook(*args):
+        set_service_context(example)
+        set_listed_services(await listing())
+        result = examples_registry.resolve_hook(spec, what)(*args)
+        return await result if inspect.isawaitable(result) else result
+
+    return hook
+
+
+def _mount_live(app: FastAPI) -> None:
+    """Mount the Live API's routes when the selected example's ``live:`` block names its hooks and they are served.
+
+    Raises:
+        ValueError: ``UVICORN_WORKERS`` is not a whole number of at least 1.
+    """
+    from nemotron_voice_agent.pipecat.runtime.gateways.live.gateway import LiveSettings
+    from nemotron_voice_agent.pipecat.runtime.gateways.live.mount import mount_live
+
+    example = examples_registry.live_example()
+    if example is None or not _live_served():
+        if example is not None:
+            logger.info(
+                "The Live routes under /v1/live are not served. Set LIVE_API_TOKEN to serve them, or LIVE_ENABLED=true "
+                "to serve them without a token on a trusted network; when LIVE_ENABLED is set, it decides."
+            )
+        mount_live(app)
+        return
+    hooks, listing = example["live"], _live_listing()
+    mount_live(
+        app,
+        factory=_live_hook(example, hooks["factory"], "live.factory", listing),
+        core=_live_hook(example, hooks["core"], "live.core", listing),
+        describe=_live_hook(example, hooks["describe"], "live.describe", listing),
+        settings=LiveSettings.from_env(hooks["settings"]),
+        ice_servers=_build_ice_servers,
+    )
+
+
+def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
+    """Build and return the FastAPI application with all routes."""
+    if prompt_file:
+        os.environ["PROMPT_FILE_PATH"] = prompt_file
+
+    selected_example = examples_registry.find()
+    fallback_example_key = selected_example["key"]
+    _activate_example_catalog_by_key(fallback_example_key)
+    logger.info(
+        f"Active selection: {fallback_example_key} "
+        f"(locked={examples_registry.is_locked()}, "
+        f"examples={examples_registry.visible_example_keys()}, "
+        f"transports={examples_registry.visible_transports()})"
+    )
+
+    handler = SmallWebRTCRequestHandler(host=host)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        await handler.close()
+
+    app = FastAPI(lifespan=lifespan)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ---- Live session protocol (/v1/live) ----
+    _mount_live(app)
+
+    def _resolve_example(config: dict) -> dict:
+        """Return the active registry entry. ``examples_registry.find()`` honors any selection lock."""
+        return examples_registry.find(config.get("pipeline_mode", ""))
+
+    async def _readiness_check_or_503(config: dict, log_label: str) -> JSONResponse | None:
+        """Return a 503 response if any selected service is not ready, else ``None``."""
+        try:
+            await _ensure_services_ready_for_connection(config, _resolve_example(config))
+        except RuntimeError as exc:
+            logger.warning(f"Rejecting {log_label} during service readiness check: {exc}")
+            return JSONResponse(status_code=503, content={"info": str(exc)})
+        return None
+
+    @app.get("/api/deployment")
+    async def get_deployment():
+        deployment = examples_registry.metadata(examples_registry.find(fallback_example_key))
+        selector_options = examples_registry.visible_options()
+        return _deployment_response(deployment, selector_options)
+
+    # ---- Session config (avoids long URLs for prompts / system_prompt) ----
+
+    @app.post("/api/session-config")
+    async def create_session_config(request: Request):
+        """Store pipeline config server-side, return a short session_id."""
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        try:
+            config = _sanitize_session_config(await request.json(), fallback_example_key=fallback_example_key)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
+        if (failure := await _readiness_check_or_503(config, "session config")) is not None:
+            return failure
+        return {"session_id": _store_session_config(config)}
+
+    @app.post("/api/start")
+    async def start_bot(request: Request):
+        """Run readiness checks before starting a WebRTC session."""
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        try:
+            config = _sanitize_session_config(await request.json(), fallback_example_key=fallback_example_key)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
+        if (failure := await _readiness_check_or_503(config, "WebRTC start")) is not None:
+            return failure
+        session_id = _store_session_config(config)
+        return {"webrtcUrl": f"/api/offer?session_id={session_id}"}
+
+    @app.post("/api/sessions/{session_id}/attachments")
+    async def upload_attachment(
+        session_id: str,
+        file: Annotated[UploadFile, File()],
+        kind: str = Query(default="image"),
+    ):
+        """Store an uploaded media attachment for a live voice session."""
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        if (failure := _session_capability_error(session_id, "attachments")) is not None:
+            return failure
+        try:
+            data = await _read_upload_file_with_limit(file)
+            attachment = store_attachment(
+                session_id=session_id,
+                kind=kind,
+                name=file.filename or "attachment",
+                content_type=file.content_type or "",
+                data=data,
+            )
+        except ValueError as exc:
+            status_code = 413 if "limit" in str(exc).lower() else 400
+            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
+        logger.debug(
+            "Stored media attachment "
+            f"(session_id={session_id[:8]}..., kind={attachment.kind}, bytes={len(attachment.data)})"
+        )
+        return attachment.metadata()
+
+    @app.get("/api/webcam-config")
+    async def get_webcam_config():
+        """Return browser webcam capture defaults for capability-driven UI."""
+        return webcam_client_config()
+
+    @app.post("/api/sessions/{session_id}/webcam/frames")
+    async def upload_webcam_frame(
+        session_id: str,
+        file: Annotated[UploadFile, File()],
+    ):
+        """Store the latest browser webcam snapshot for a live voice session."""
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        if (failure := _session_capability_error(session_id, "webcam")) is not None:
+            return failure
+        try:
+            data = await _read_upload_file_with_limit(file)
+            frame = store_webcam_frame(
+                session_id=session_id,
+                name=file.filename or "webcam-frame.jpg",
+                content_type=file.content_type or "image/jpeg",
+                data=data,
+            )
+        except ValueError as exc:
+            status_code = 413 if "limit" in str(exc).lower() else 400
+            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
+        logger.debug(
+            "Stored webcam frame "
+            f"(session_id={session_id}, name={frame.name}, bytes={len(frame.data)}, sequence={frame.sequence})"
+        )
+        return frame.metadata()
+
+    @app.post("/api/sessions/{session_id}/webcam/capture")
+    async def upload_webcam_capture(
+        session_id: str,
+        file: Annotated[UploadFile, File()],
+        request_id: Annotated[str, Form()],
+    ):
+        """Store an agent-requested high-resolution webcam snapshot for focused analysis.
+
+        Unlike a streamed webcam frame, this lands in the attachment store (so the media
+        analyzer can read it via get_attachment) tagged source="capture", so it never
+        becomes the Speaker's default visual source.
+        """
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        if (failure := _session_capability_error(session_id, "webcam")) is not None:
+            return failure
+        if not consume_capture_request(session_id, request_id):
+            return JSONResponse(status_code=409, content={"detail": "capture request is missing, stale, or invalid"})
+        try:
+            data = await _read_upload_file_with_limit(file)
+            attachment = store_attachment(
+                session_id=session_id,
+                kind="image",
+                name=file.filename or "focused-capture.jpg",
+                content_type=file.content_type or "image/jpeg",
+                data=data,
+                source="capture",
+            )
+        except ValueError as exc:
+            status_code = 413 if "limit" in str(exc).lower() else 400
+            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
+        logger.debug(f"Stored high-res webcam capture (session_id={session_id[:8]}..., bytes={len(attachment.data)})")
+        return attachment.metadata()
+
+    # ---- WebRTC signaling ----
+
+    @app.post("/api/offer")
+    async def offer(
+        request: SmallWebRTCRequest,
+        background_tasks: BackgroundTasks,
+        session_id: str = Query(default=""),
+        pipeline_mode: str = Query(default=""),
+    ):
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        config = _resolve_config(session_id, fallback_example_key=fallback_example_key, pipeline_mode=pipeline_mode)
+        example = _resolve_example(config)
+        selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
+        bot_fn = examples_registry.resolve_bot(selected)
+        if session_id:
+            _active_session_configs[session_id] = dict(config)
+
+        async def run_bot_session(runner_args: SmallWebRTCRunnerArguments) -> None:
+            try:
+                await bot_fn(runner_args)
+            finally:
+                if session_id:
+                    _active_session_configs.pop(session_id, None)
+
+        async def on_connection(connection: SmallWebRTCConnection):
+            body = dict(request.request_data) if isinstance(request.request_data, dict) else {}
+            body.update(config)
+            body["session_id"] = session_id
+            _bind_example_context_by_key(example["key"])
+            runner_args = SmallWebRTCRunnerArguments(webrtc_connection=connection, body=body)
+            runner_args.pipeline_idle_timeout_secs = parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300)
+            background_tasks.add_task(run_bot_session, runner_args)
+
+        return await handler.handle_web_request(
+            request=request,
+            webrtc_connection_callback=on_connection,
+        )
+
+    @app.patch("/api/offer")
+    async def ice_candidate(request: SmallWebRTCPatchRequest):
+        await handler.handle_patch_request(request)
+        return {"status": "success"}
+
+    # ---- WebSocket transport ----
+
+    @app.websocket("/api/ws")
+    async def websocket_endpoint(
+        websocket: WebSocket,
+        session_id: str = Query(default=""),
+        pipeline_mode: str = Query(default=""),
+    ):
+        if session_id and _multi_worker_mode_enabled():
+            await websocket.close(code=1013, reason=_MULTI_WORKER_SESSION_CONFIG_MESSAGE)
+            return
+        stream_id = session_id or "-"
+        with logger.contextualize(stream_id=stream_id):
+            config = _resolve_config(session_id, fallback_example_key=fallback_example_key, pipeline_mode=pipeline_mode)
+            example = _resolve_example(config)
+            if not session_id:
+                try:
+                    await _ensure_services_ready_for_connection(config, example)
+                except RuntimeError as exc:
+                    logger.warning(f"Rejecting WebSocket start during service readiness check: {exc}")
+                    if parse_env_bool(
+                        "SCALING_PERF_DIAGNOSTICS", False
+                    ) and "websocket.http.response" in websocket.scope.get("extensions", {}):
+                        from pipecat.utils.security.redaction import redact_secrets
+
+                        from nemotron_voice_agent.pipecat.shared.perf_diagnostics import component_name
+
+                        await websocket.send_denial_response(
+                            JSONResponse(
+                                status_code=503,
+                                content={
+                                    "error": {
+                                        "code": "service_not_ready",
+                                        "component": component_name(str(exc)),
+                                        "message": redact_secrets(str(exc)),
+                                    }
+                                },
+                            )
+                        )
+                        return
+                    await websocket.close(code=1011, reason=str(exc))
+                    return
+
+            await websocket.accept()
+            selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
+            bot_fn = examples_registry.resolve_bot(selected)
+            _bind_example_context_by_key(example["key"])
+            if session_id:
+                _active_session_configs[session_id] = dict(config)
+
+            runner_args = SimpleNamespace(
+                websocket=websocket,
+                body={**config, "session_id": session_id},
+                handle_sigint=False,
+                pipeline_idle_timeout_secs=parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300),
+            )
+            try:
+                await bot_fn(runner_args)
+            except Exception as e:
+                logger.error(f"WebSocket session error: {e}")
+            finally:
+                if session_id:
+                    _active_session_configs.pop(session_id, None)
+                with contextlib.suppress(Exception):
+                    await websocket.close()
+
+    # ---- OpenAI Realtime–shaped JSON WebSocket ----
+
+    @app.websocket("/v1/realtime")
+    async def realtime_websocket_endpoint(websocket: WebSocket):
+        """OpenAI Realtime–compatible session endpoint (no REST bootstrap).
+
+        After ``session.update`` + the same readiness checks as ``/api/ws``,
+        hands the socket to the selected example bot (``protocol=realtime``).
+        A slot whose id key ``session.nvidia`` does not take gets the entry
+        that ``GET /api/services`` selects, as the UI sends it, so the
+        readiness checks and the bot use that entry.
+        """
+        from nemotron_voice_agent.pipecat.runtime.gateways.realtime import (
+            DEFAULT_PIPELINE_MODE,
+            handle_realtime_websocket,
+        )
+
+        async def _ensure_ready(config: dict) -> None:
+            example = _resolve_example(config)
+            await _select_unnamed_slots(config, example)
+            await _ensure_services_ready_for_connection(config, example)
+
+        def _resolve_server_tools(config: dict) -> list[str]:
+            _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
+            prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
+            if not isinstance(prompt, dict):
+                return []
+            raw_tools = prompt.get("tools_available")
+            if not isinstance(raw_tools, list):
+                return []
+            return [name for name in raw_tools if isinstance(name, str) and name]
+
+        async def _start_bot(ws: WebSocket, config: dict, session_view: dict) -> None:
+            selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
+            bot_fn = examples_registry.resolve_bot(selected)
+            _bind_example_context_by_key(selected["key"])
+            session_id = str(session_view.get("id") or "")
+            if session_id:
+                _active_session_configs[session_id] = dict(config)
+            runner_args = SimpleNamespace(
+                websocket=ws,
+                body={
+                    **config,
+                    "protocol": "realtime",
+                    "realtime_session_view": session_view,
+                    "session_id": session_id,
+                },
+                handle_sigint=False,
+                pipeline_idle_timeout_secs=parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300),
+            )
+            try:
+                await bot_fn(runner_args)
+            except Exception as e:
+                logger.error(f"Realtime pipeline session error: {e}")
+            finally:
+                if session_id:
+                    _active_session_configs.pop(session_id, None)
+                with contextlib.suppress(Exception):
+                    await ws.close()
+
+        await handle_realtime_websocket(
+            websocket,
+            sanitize_session_config=_sanitize_session_config,
+            ensure_services_ready=_ensure_ready,
+            start_bot=_start_bot,
+            resolve_server_tools=_resolve_server_tools,
+            fallback_example_key=fallback_example_key,
+            default_pipeline_mode=DEFAULT_PIPELINE_MODE,
+        )
+
+    # ---- Prompt catalog (read-only, scoped to the active example) ----
+
+    @app.get("/api/prompts")
+    async def get_prompts(
+        pipeline_mode: str = Query(default=""),
+        asr_id: str = Query(default=""),
+    ):
+        example_key = pipeline_mode or fallback_example_key
+        example = _bind_example_context_by_key(example_key)
+        _, module_file = _example_with_module_file(example_key)
+        catalog = load_prompt_catalog(module_file)
+        diarization_supported = _asr_supports_diarization({"asr_id": asr_id})
+        speaker_labels_supported = "speaker_labels" in set(example.get("capabilities") or [])
+        registry_default_key = examples_registry.prompt_default_key(example_key)
+        default_key = registry_default_key if registry_default_key in catalog else default_prompt_key(catalog)
+        hidden_prompt_keys = examples_registry.agent_prompt_keys(example_key)
+        prompts = [
+            {
+                "key": key,
+                "description": val.get("description", ""),
+                "content": val.get("content", ""),
+                "default": key == default_key,
+                "builtIn": True,
+                "selectable": key not in hidden_prompt_keys,
+                "scope": "agent" if key in hidden_prompt_keys else "session",
+                "tools": [t for t in (val.get("tools_available") or []) if isinstance(t, str)],
+                "multiSpeakerSupport": val.get("multi_speaker_support") is True,
+            }
+            for key, val in catalog.items()
+            if isinstance(val, dict)
+            and "content" in val
+            and val.get("internal") is not True
+            and (val.get("multi_speaker_support") is not True or (speaker_labels_supported and diarization_supported))
+        ]
+        agent_prompts = catalog.get("agent_prompts")
+        if isinstance(agent_prompts, dict):
+            for agent_key, agent_entries in agent_prompts.items():
+                if not isinstance(agent_entries, dict):
+                    continue
+                for prompt_key, val in agent_entries.items():
+                    if not isinstance(val, dict) or "content" not in val:
+                        continue
+                    prompts.append(
+                        {
+                            "key": f"{agent_key}.{prompt_key}",
+                            "description": val.get("description", ""),
+                            "content": val.get("content", ""),
+                            "default": False,
+                            "builtIn": True,
+                            "selectable": False,
+                            "scope": "agent",
+                            "agent": agent_key,
+                            "promptName": prompt_key,
+                            "tools": [],
+                        }
+                    )
+        return prompts
+
+    @app.get("/api/tools")
+    async def get_tools(pipeline_mode: str = Query(default="")):
+        _, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
+        catalog = load_tools_catalog(module_file)
+        tools: list[dict] = []
+        for name, entry in catalog.items():
+            if not isinstance(entry, dict):
+                continue
+            fn = entry.get("function") if isinstance(entry.get("function"), dict) else {}
+            tools.append(
+                {
+                    "name": name,
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters", {}),
+                }
+            )
+        return tools
+
+    @app.get("/api/subagents")
+    async def get_subagents(pipeline_mode: str = Query(default="")):
+        """Subagents the example declares in ``subagents.yaml`` (empty if none)."""
+        _, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
+        registry = load_subagent_registry(Path(module_file).parent / "subagents.yaml")
+        return registry.to_payload()
+
+    # ---- Service catalog (services.yaml) ----
+
+    @app.get("/api/services")
+    async def get_services(pipeline_mode: str = Query(default="")):
+        _bind_example_context_by_key(pipeline_mode or fallback_example_key)
+        return await _with_service_status(build_services_api_response())
+
+    # ---- TTS config (voices & languages from the TTS service) ----
+
+    @app.get("/api/tts-config")
+    async def tts_config(
+        pipeline_mode: str = Query(default=""),
+        llm_id: str = Query(default=""),
+        server: str = Query(default=""),
+        voice_id: str = Query(default=""),
+        function_id: str = Query(default=""),
+        model: str = Query(default=""),
+        asr_id: str = Query(default=""),
+        asr_server: str = Query(default=""),
+        asr_model: str = Query(default=""),
+        asr_function_id: str = Query(default=""),
+    ):
+        _bind_example_context_by_key(pipeline_mode or fallback_example_key)
+        if asr_id or asr_server or asr_model or asr_function_id:
+            asr_entry = load_service_entry_by_id("asr", asr_id) if asr_id else load_service_entry("asr", "")
+            if asr_id and asr_entry:
+                default_asr_server = asr_entry.get("server", "grpc.nvcf.nvidia.com:443")
+                default_asr_model = asr_entry.get("model", "")
+                default_asr_function_id = asr_entry.get("function_id", "")
+            else:
+                default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
+            if llm_id.startswith("custom-"):
+                llm_entry = {}
+            elif llm_id:
+                llm_entry = load_service_entry_by_id("llm", llm_id) or load_service_entry("llm", "")
+            else:
+                llm_entry = load_service_entry("llm", "")
+            llm_supported_languages = llm_entry.get("supported_languages") if llm_entry else None
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
+            try:
+                return await _run_blocking(
+                    build_session_languages,
+                    asr_server or default_asr_server,
+                    asr_model or default_asr_model,
+                    asr_function_id or default_asr_function_id,
+                    tts_server,
+                    tts_voice,
+                    tts_function_id,
+                    tts_model,
+                    llm_supported_languages,
+                    asr_entry.get("supported_languages", []) if asr_entry.get("asr_type") == "transcribe" else None,
+                    timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "tts-config ASR/TTS/LLM intersection timed out after {}s",
+                    _CONNECT_PREWARM_TIMEOUT_SECS,
+                )
+                return JSONResponse(
+                    status_code=504,
+                    content={"detail": f"Language catalog timed out after {_CONNECT_PREWARM_TIMEOUT_SECS}s"},
+                )
+
+        if server:
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
+            # Cache-first (sync): only prewarm_tts when this TTS routing key is cold.
+            cached = peek_cached_tts_config(tts_server, tts_voice, tts_function_id, tts_model)
+            if cached is not None:
+                config_store.set("tts", cached)
+                return cached
+            return await _run_blocking(
+                prewarm_tts,
+                tts_server,
+                tts_voice,
+                tts_function_id,
+                tts_model,
+            )
+        return config_store.get("tts", {"languages": [], "voices": []})
+
+    # ---- WebRTC ICE servers (TURN credentials) ----
+
+    @app.get("/api/ice-servers")
+    async def ice_servers(request: Request):
+        """Return ICE server config for the WebRTC client.
+
+        Empty list when TURN is not configured (client falls back to host-only
+        candidates, which is fine for local/LAN deployments).
+        """
+        return {"iceServers": _build_ice_servers(request)}
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    # ---- Static client UI ----
+
+    if CLIENT_DIST.is_dir():
+        logger.info(f"Serving client UI from {CLIENT_DIST}")
+        index_path = CLIENT_DIST / "index.html"
+
+        @app.get("/")
+        async def root():
+            return FileResponse(index_path, headers=_INDEX_NO_CACHE_HEADERS)
+
+        @app.get("/{path:path}")
+        async def client_files(path: str = ""):
+            if path.startswith("api/"):
+                return
+            file = CLIENT_DIST / path
+            if file.is_file():
+                return FileResponse(file)
+            return FileResponse(index_path, headers=_INDEX_NO_CACHE_HEADERS)
+    else:
+        logger.warning(
+            f"Client build not found at {CLIENT_DIST}. Run 'npm run build' in clients/pipecat/ to enable the UI."
+        )
+
+        @app.get("/")
+        async def root():
+            return {
+                "status": "running",
+                "hint": "Build the client UI: cd clients/pipecat && npm run build",
+            }
+
+    return app
+
+
+def main():
+    """Parse CLI args and start the uvicorn server."""
+    parser = argparse.ArgumentParser(description="Pipeline NVIDIA Server")
+    parser.add_argument("--host", type=str, default="localhost")
+    parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument(
+        "--prompt-file",
+        type=str,
+        default="",
+        help="Optional prompt catalog YAML path to use instead of the active example's local prompts.yaml",
+    )
+    parser.add_argument("--tls-cert", type=str, help="Path to TLS certificate file")
+    parser.add_argument("--tls-key", type=str, help="Path to TLS key file")
+    parser.add_argument(
+        "--workers",
+        type=lambda value: _parse_min_int(value, 1),
+        default=None,
+        help="Number of workers to use for the server",
+    )
+    parser.add_argument("-v", "--verbose", action="count", default=0)
+    args = parser.parse_args()
+
+    logger.remove()
+    logger.configure(extra={"stream_id": "-"})
+    logger.add(
+        sys.stderr,
+        level="TRACE" if args.verbose else "DEBUG",
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "{name}:{function}:{line} - "
+            "[stream_id={extra[stream_id]}] "
+            "<level>{message}</level>"
+        ),
+    )
+
+    workers = args.workers if args.workers is not None else parse_env_int("UVICORN_WORKERS", 1, min_value=1)
+    os.environ["UVICORN_WORKERS"] = str(workers)
+
+    app = None
+    if workers == 1:
+        app = create_app(host=args.host, prompt_file=args.prompt_file)
+
+    tls_enabled = parse_env_bool("PIPELINE_TLS", default=True)
+    ssl_kwargs: dict = {}
+    scheme = "http"
+    if tls_enabled:
+        if args.tls_cert and args.tls_key:
+            ssl_kwargs = {"ssl_certfile": args.tls_cert, "ssl_keyfile": args.tls_key}
+        else:
+            cert_dir = REPO_ROOT / ".certs"
+            from nemotron_voice_agent.pipecat.runtime.utils import ensure_self_signed_cert
+
+            cert_file, key_file = ensure_self_signed_cert(cert_dir)
+            ssl_kwargs = {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
+        scheme = "https"
+
+    ui_url = f"{scheme}://{args.host}:{args.port}/"
+    if CLIENT_DIST.is_dir():
+        logger.info(f"Server ready -> {ui_url} (workers={workers})")
+    else:
+        logger.info(f"Server ready (API only) -> {ui_url} (workers={workers})")
+        logger.info("Build the client: cd clients/pipecat && npm run build")
+
+    if workers > 1:
+        _run_multi_worker(args, workers, ssl_kwargs)
+    else:
+        _run_single_worker(args, app, ssl_kwargs)
+
+
+def app_factory():
+    """Build an app instance for uvicorn multi-worker mode."""
+    config = WorkerAppConfig.from_argv(sys.argv[1:])
+    return create_app(host=config.host, prompt_file=config.prompt_file)
+
+
+if __name__ == "__main__":
+    main()

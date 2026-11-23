@@ -1,6 +1,6 @@
 # Tune Pipeline Performance
 
-This section covers pipeline configurations for optimizing the performance and user experience of the Nemotron Voice Agent.
+This section covers pipeline configurations for optimizing the performance and user experience of the Nemotron Voice Agent. It applies to the Pipecat examples (`nva-pipecat`).
 
 - [Smart Turn Detection](#smart-turn-detection)
 - [Chat History Limit](#chat-history-limit)
@@ -12,7 +12,7 @@ This section covers pipeline configurations for optimizing the performance and u
 
 By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete. If the model still has not finalized after the Smart Turn silence fallback (default **1.0 s**, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
 
-> The [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md#configuration) sets its own turn detection in `frontend.cascade.speech` of its settings, the `config` block of its `examples_registry.yaml` entry: `vad_start_seconds` (0.12 s of speech marks the caller as speaking and starts their turn while the bot is silent), `vad_stop_seconds`, `turn_silence_seconds`, and `interrupt_min_words` (the words that start the caller's turn while the bot speaks). The variables in this section do not apply to it. For how its turns start and end, refer to [Turns and Interruptions](../../src/examples/frontend_backend_live/README.md#turns-and-interruptions).
+> The [Frontend/Backend Live example](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) sets its own turn detection in `frontend.cascade.speech` of its settings, the `config` block of its `examples_registry.yaml` entry: `vad_start_seconds` (0.12 s of speech marks the caller as speaking and starts their turn while the bot is silent), `vad_stop_seconds`, `turn_silence_seconds`, and `interrupt_min_words` (the words that start the caller's turn while the bot speaks). The variables in this section do not apply to it. For how its turns start and end, refer to [Turns and Interruptions](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#turns-and-interruptions).
 
 ### How It Works
 
@@ -31,7 +31,7 @@ Smart Turn.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `USE_SILERO_VAD_TURN_DETECTION` | `false` | Keep `false` for Smart Turn. Set `true` to disable it and use pure Silero VAD end-of-utterance detection instead. |
-| `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance in pure-VAD mode, including Transcribe. |
+| `SILERO_VAD_STOP_SECS` | `0.5`, or `0.8` with single-GPU Transcribe | Silence (seconds) before end-of-utterance in pure-VAD mode, including Transcribe. |
 | `SMART_TURN_STOP_SECS` | `1.0` | Smart Turn silence fallback (seconds) before the turn completes without a `COMPLETE` classification. Applies **only** in Smart Turn mode (`USE_SILERO_VAD_TURN_DETECTION=false`). |
 
 The Generic and Multilingual Assistants always use pure Silero VAD with Nemotron 3.5 Transcribe, regardless of `USE_SILERO_VAD_TURN_DETECTION`.
@@ -46,7 +46,7 @@ The Generic and Multilingual Assistants always use pure Silero VAD with Nemotron
 | [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) (default) | ML end-of-utterance detection for natural turn-taking (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) |
 | `SpeechTimeoutUserTurnStopStrategy` | End-of-turn strategy used **only** in pure-VAD mode. Ends the turn on a VAD silence timeout instead of the Smart Turn model |
 
-The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so no upstream `TranscriptionFrame` exists when Smart Turn completes. They use Pipecat's `TurnAnalyzerUserTurnStopStrategy` with `wait_for_transcript=False` and a `VADUserTurnStartStrategy`. This setting lets the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) finalize the audio-only turn without waiting for a transcript.
+The [Omni examples](../../src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) run ASR inside the model, so no upstream `TranscriptionFrame` exists when Smart Turn completes. They use Pipecat's `TurnAnalyzerUserTurnStopStrategy` with `wait_for_transcript=False` and a `VADUserTurnStartStrategy`. This setting lets the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) finalize the audio-only turn without waiting for a transcript.
 
 ## Chat History Limit
 
@@ -132,7 +132,7 @@ The server supports both WebRTC and WebSocket transports simultaneously on diffe
 
 ### Choosing which transports are exposed
 
-Both transports are exposed by default and the browser UI picks one. To restrict the server to a single transport, set `transports` in [`examples_registry.yaml`](../../examples_registry.yaml) or override it at runtime with the `TRANSPORT_SELECTION` environment variable (the env var wins):
+Both transports are exposed by default and the browser UI picks one. To restrict the server to a single transport, set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) or override it at runtime with the `TRANSPORT_SELECTION` environment variable (the env var wins):
 
 | Value | Exposes |
 |-------|---------|

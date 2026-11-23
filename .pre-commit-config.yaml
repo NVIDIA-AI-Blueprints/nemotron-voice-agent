@@ -12,7 +12,7 @@ repos:
       - id: check-added-large-files
         args: ['--maxkb=1000']
       - id: check-json
-        exclude: '^client/.*tsconfig.*\.json$'
+        exclude: '^clients/pipecat/.*tsconfig.*\.json$'
       - id: check-toml
       - id: check-merge-conflict
       - id: check-case-conflict
@@ -25,17 +25,17 @@ repos:
     hooks:
       - id: ruff-check
         name: uv run ruff check
-        entry: uv run --project . --group dev ruff check
+        entry: uv run --group dev ruff check
         language: system
         types_or: [python, pyi]
       - id: ruff-format
         name: uv run ruff format
-        entry: uv run --project . --group dev ruff format
+        entry: uv run --group dev ruff format
         language: system
         types_or: [python, pyi]
       - id: client-lint
         name: npm run lint
-        entry: npm --prefix client run lint
+        entry: npm --prefix clients/pipecat run lint
         language: system
         pass_filenames: false
-        files: '^client/.*\.(js|jsx|ts|tsx)$'
+        files: '^clients/pipecat/.*\.(js|jsx|ts|tsx)$'

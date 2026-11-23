@@ -134,7 +134,22 @@ class RealtimeClient(ProtocolClient):
         self.realtime_turn_metrics: list[dict[str, Any]] = []
         self.collecting_metrics = False
         self._ready_type = ""
+        self._diagnostic_drain: str | None = None
         self.audio_files = audio_files or []
+
+    def _capture_event(self, event: dict[str, Any]) -> None:
+        if self.diagnostics is None:
+            return
+        kind = event.get("type")
+        if (
+            self._diagnostic_drain == "recovery"
+            and kind == "error"
+            and error_code(event) == "response_cancel_not_active"
+        ):
+            return
+        if self._diagnostic_drain is not None and kind == "response.output_audio.delta" and event.get("delta"):
+            self.diagnostics.mark_audio_discontinuity()
+        self.diagnostics.ingest(event)
 
     @property
     def ready_log(self) -> str:
@@ -155,8 +170,9 @@ class RealtimeClient(ProtocolClient):
             input_sample_rate=REALTIME_INPUT_RATE,
             output_sample_rate=DEFAULT_OUTPUT_RATE,
             verify_tls=self.verify_tls,
-            on_event=self.diagnostics.ingest if self.diagnostics is not None else None,
+            on_event=self._capture_event if self.diagnostics is not None else None,
         )
+        self._diagnostic_drain = "setup"
         try:
             await self.realtime.connect()
             ready = await self.realtime.configure_input(REALTIME_INPUT_RATE, timeout=self.connect_timeout)
@@ -168,6 +184,8 @@ class RealtimeClient(ProtocolClient):
             await self.realtime.close()
             self.realtime = None
             raise
+        finally:
+            self._diagnostic_drain = None
         self._ready_type = str(ready.get("type") or "")
         self.adapter = RealtimeFrameAdapter(self.realtime)
         return self
@@ -203,6 +221,7 @@ class RealtimeClient(ProtocolClient):
 
     async def _cancel_active_response(self, timeout: float) -> None:
         assert self.realtime is not None
+        self._diagnostic_drain = "recovery"
         try:
             await self.realtime.send_event({"type": "response.cancel"})
             deadline = asyncio.get_running_loop().time() + timeout
@@ -221,6 +240,8 @@ class RealtimeClient(ProtocolClient):
             raise ProtocolConnectionClosed from exc
         except Exception as exc:
             raise RuntimeError("Realtime response cancellation barrier failed") from exc
+        finally:
+            self._diagnostic_drain = None
 
     def set_collecting_metrics(self, collecting: bool) -> None:
         self.collecting_metrics = collecting

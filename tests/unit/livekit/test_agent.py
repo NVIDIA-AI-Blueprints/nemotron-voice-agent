@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# ruff: noqa: D100, D103
+
+import importlib
+
+import pytest
+
+pytest.importorskip("livekit.plugins.nvidia")  # the plugins belong to the example's own environment
+
+SOFIA = [{"id": "Sofia", "name": "Sofia"}]
+
+
+@pytest.fixture
+def agent(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")  # the module reads the LiveKit credentials when it loads
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "secret")
+    monkeypatch.setenv("SERVICE_RECIPE", "server")
+    for slot in ("LLM", "ASR", "TTS"):
+        monkeypatch.delenv(f"{slot}_SERVICE", raising=False)
+    return importlib.import_module("nemotron_voice_agent.livekit.examples.generic_assistant.agent")
+
+
+def test_voices_are_asked_only_for_tts_entries_that_run(agent):
+    asked = []
+
+    def discover(cfg):
+        asked.append(cfg.keys["tts"])
+        return SOFIA
+
+    def probe(slot, entry):
+        return "offline" if entry["id"] == "chatterbox-multilingual-tts" else "ready"
+
+    services, voices = agent.service_snapshot("server", {}, probe=probe, discover=discover)
+    assert "chatterbox-multilingual-tts" not in [entry["id"] for entry in services["tts"]]
+    assert asked == ["magpie-multilingual-tts", "magpie-zeroshot-tts"]
+    assert voices["magpie-multilingual-tts"]["default"] == "Sofia"
+
+
+def test_voices_found_before_are_kept_and_not_asked_again(agent):
+    known = {"magpie-multilingual-tts": {"voices": SOFIA, "default": "Sofia"}}
+    asked = []
+    _, voices = agent.service_snapshot(
+        "server", known, probe=lambda slot, entry: None, discover=lambda cfg: asked.append(cfg.keys["tts"]) or []
+    )
+    assert "magpie-multilingual-tts" not in asked
+    assert voices == known  # a server that lists no voices adds nothing
+
+
+def test_a_bad_session_choice_falls_back_to_the_defaults_with_a_reason(agent):
+    cfg, error = agent.session_config({"services": '{"llm": {"custom": {"base_url": "http://x:1/v1"}}}'})
+    assert cfg.keys["llm"] == agent.load_config().keys["llm"]
+    assert "needs model_id" in error
+    assert agent.session_config({})[1] == ""
+
+
+def test_a_fallback_reason_reads_as_one_sentence_each(agent):
+    _, error = agent.session_config({"services": '{"llm": {"key": "does-not-exist"}}'})
+    assert ".." not in error
+    assert error.endswith(". The deployment defaults are used instead.")
+
+
+def test_cloud_slots_without_an_api_key_are_reported(agent):
+    cloud = agent.load_config("cloud")
+    assert agent.missing_api_key(cloud, env={"NVIDIA_API_KEY": "  "}) == ["llm", "asr", "tts"]
+    assert agent.missing_api_key(cloud, env={"NVIDIA_API_KEY": "nvapi-test"}) == []
+    assert agent.missing_api_key(agent.load_config("server"), env={}) == []
+
+
+def test_the_session_log_line_names_the_choices_but_not_the_prompt_text(agent):
+    cfg = agent.load_config("cloud", choices={"llm": {"key": "nemotron-super", "settings": {"temperature": 0.2}}})
+    line = agent.describe_session("voice-1", cfg, "Custom prompt", "Answer in French. Secret plan.", "Mia")
+    assert line.startswith("session voice-1: custom prompt (30 characters), ")
+    assert "LLM=nvidia/nemotron-3.5-super" in line and "voice=Mia" in line and "'temperature': 0.2" in line
+    assert "Secret plan" not in line
+
+
+def test_only_nvidia_cloud_slots_get_the_api_key(agent, monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    custom = {"server": "my-tts:50051"}
+    cfg = agent.load_config("cloud", choices={"tts": {"custom": custom}})
+    assert agent.api_key(cfg, "llm") == "nvapi-test"
+    assert agent.api_key(cfg, "tts") == ""
+
+
+@pytest.mark.parametrize("custom", [{"server": "my-tts:50051"}, {"server": "my-tts:443", "function_id": "f"}])
+def test_a_custom_speech_endpoint_never_gets_the_environment_key(agent, monkeypatch, custom):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    cfg = agent.load_config("cloud", choices={"tts": {"custom": custom}, "asr": {"custom": custom}})
+    assert not agent.build_tts(cfg).nvidia_api_key
+    assert not agent.build_stt(cfg).nvidia_api_key
+
+
+def test_nvidia_cloud_speech_gets_the_key(agent, monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    cfg = agent.load_config("cloud")
+    assert agent.build_tts(cfg).nvidia_api_key == "nvapi-test"
+    assert agent.build_stt(cfg).nvidia_api_key == "nvapi-test"

@@ -16,7 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_core import SERVER_METRIC_KEYS, average_or_none, round3
-from benchmark_diagnostics import quality_status, session_errors, write_diagnostic_reports
+from benchmark_diagnostics import (
+    has_valid_response,
+    is_hard_deadline,
+    quality_status,
+    session_errors,
+    write_diagnostic_reports,
+)
 
 SUITE_HEADERS = (
     "Parallel Streams",
@@ -71,14 +77,6 @@ def _client_valid_turns(client: dict) -> int:
     return _client_int(client, "num_valid_turns")
 
 
-def _has_valid_response(client: dict) -> bool:
-    return client.get("average_latency") is not None and _client_valid_turns(client) > 0
-
-
-def _is_hard_deadline(client: dict) -> bool:
-    return str(client.get("error") or "").startswith("Hard deadline reached")
-
-
 def _has_core_server_metric(client: dict) -> bool:
     counts = (client.get("server_metrics") or {}).get("sample_counts") or {}
     for key in ("asr_ttfb", "llm_ttfb", "tts_ttfb", "tts_ttfa", "llm_ttfat"):
@@ -88,22 +86,6 @@ def _has_core_server_metric(client: dict) -> bool:
         except (TypeError, ValueError):
             continue
     return False
-
-
-def _has_runtime_error(client: dict) -> bool:
-    return bool(client.get("error")) and not _is_hard_deadline(client)
-
-
-def _is_failed(client: dict) -> bool:
-    return _has_runtime_error(client)
-
-
-def _is_no_response(client: dict) -> bool:
-    return not _is_failed(client) and not _has_valid_response(client)
-
-
-def _is_successful(client: dict) -> bool:
-    return quality_status(client) == "successful"
 
 
 def _valid_latencies(client: dict) -> list[float]:
@@ -184,25 +166,26 @@ def aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
     if num_clients is None:
         num_clients = len(clients)
 
-    hard_deadline = [client for client in clients if _is_hard_deadline(client)]
-    latency_clients = [client for client in clients if _has_valid_response(client)]
+    by_status = {status: [] for status in ("failed", "no_response", "successful", "degraded")}
+    for client in clients:
+        by_status[quality_status(client, client["session_errors"])].append(client)
+    hard_deadline = [client for client in clients if is_hard_deadline(client)]
+    latency_clients = [client for client in clients if has_valid_response(client)]
     latency_columns = _average_latency_columns(latency_clients)
     barge_only = [
         client for client in clients if _client_valid_turns(client) == 0 and _client_int(client, "num_turns") > 0
     ]
-    hard_with_valid = [client for client in hard_deadline if _has_valid_response(client)]
-    hard_without_valid = [client for client in hard_deadline if not _has_valid_response(client)]
-    runtime_errors = [client for client in clients if _has_runtime_error(client)]
-    no_response = [client for client in clients if _is_no_response(client)]
-    metric_only_no_response = [
-        client for client in no_response if not _has_valid_response(client) and _has_core_server_metric(client)
-    ]
+    hard_with_valid = [client for client in hard_deadline if has_valid_response(client)]
+    hard_without_valid = [client for client in hard_deadline if not has_valid_response(client)]
+    runtime_errors = by_status["failed"]
+    no_response = by_status["no_response"]
+    metric_only_no_response = [client for client in no_response if _has_core_server_metric(client)]
     failed_ids = {_client_id(client) for client in runtime_errors}
     missing = max(0, num_clients - len(clients))
     failed = len(runtime_errors) + missing
     completed = max(0, num_clients - failed - len(no_response))
-    successful = sum(_is_successful(client) for client in clients)
-    degraded = sum(quality_status(client) == "degraded" for client in clients)
+    successful = len(by_status["successful"])
+    degraded = len(by_status["degraded"])
     diagnostic_summary = write_diagnostic_reports(run_dir, clients)
 
     server_average: dict[str, float | None] = {}
@@ -230,7 +213,7 @@ def aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
             "successful_clients": successful,
             "completed_clients": completed,
             "degraded_clients": degraded,
-            "degraded_client_ids": [_client_id(c) for c in clients if quality_status(c) == "degraded"],
+            "degraded_client_ids": [_client_id(c) for c in by_status["degraded"]],
             "diagnostics": diagnostic_summary,
             "failed_clients": failed,
             "failed_client_ids": sorted(failed_ids),
@@ -313,14 +296,16 @@ def _summary_row(summary: dict[str, Any], num_clients: int) -> dict[str, Any]:
 
 
 def _client_row(client: dict[str, Any]) -> dict[str, Any]:
+    errors = session_errors(client)
+    status = quality_status(client, errors)
     return {
         "client": _client_id(client),
-        "successful_streams": 1 if _is_successful(client) else 0,
-        "degraded_streams": int(quality_status(client) == "degraded"),
-        "reported_errors": len(session_errors(client)),
+        "successful_streams": int(status == "successful"),
+        "degraded_streams": int(status == "degraded"),
+        "reported_errors": len(errors),
         "configured_streams": 1,
-        "failed_streams": 1 if _is_failed(client) else 0,
-        "no_response_streams": 1 if _is_no_response(client) else 0,
+        "failed_streams": int(status == "failed"),
+        "no_response_streams": int(status == "no_response"),
         **_latency_summary(client),
         **{key: _server_average(client, key) for key in SERVER_METRIC_KEYS},
         "audio_glitches": 1 if client.get("glitch_detected") else 0,

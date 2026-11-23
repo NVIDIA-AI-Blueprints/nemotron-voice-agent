@@ -1,12 +1,12 @@
 # Enable a TURN Server for Remote Access
 
-A TURN server is only needed when the browser connects from a different network than the host (NAT, restrictive firewall, cloud deployment). Localhost and same-subnet clients work without it.
+A TURN server is only needed when the browser connects from a different network than the host (NAT, restrictive firewall, cloud deployment). Localhost and same-subnet clients work without it. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 > **Architecture note:** The bundled `turn` profile uses the `instrumentisto/coturn` image, which is supported on **x86_64 (linux/amd64) only**. It is **not** supported on arm64 / aarch64 platforms (for example, NVIDIA Jetson Thor). On arm64 hosts, do not enable `--profile turn`. Instead, point the client at an externally hosted TURN server by setting `TURN_URL`, `TURN_USERNAME`, and `TURN_PASSWORD` in `.env` (see the snippet below).
 
 ## Deploy the bundled coturn service (x86_64)
 
-A Coturn service ships in `docker-compose.yml` behind an opt-in `turn` profile. Add `--profile turn` to any deploy command:
+A Coturn service ships in [`docker/sidecars/docker-compose.coturn.yaml`](../../docker/sidecars/docker-compose.coturn.yaml) behind an opt-in `turn` profile. The root `docker-compose.yml` includes it through `docker/pipecat/docker-compose.yaml`. Add `--profile turn` to any deploy command:
 
 ```bash
 docker compose --profile generic-assistant --profile turn up -d              # cloud-only + TURN

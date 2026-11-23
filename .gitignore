@@ -3,6 +3,7 @@
 .ruff_cache/
 __pycache__/
 *.pyc
+*.egg-info/
 .vscode/
 .env
 .env.jetson
@@ -48,9 +49,9 @@ benchmarking_tools/scaling-perf/results_*/
 benchmarking_tools/scaling-perf/perf_suite_*/
 
 # Frontend
-client/node_modules/
-client/dist/
-client/.env
+clients/pipecat/node_modules/
+clients/pipecat/dist/
+clients/pipecat/.env
 
 # Cursor agent skills install target (created by `npx skills add . -a cursor`)
 .agents/*

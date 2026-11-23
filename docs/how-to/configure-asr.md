@@ -8,11 +8,11 @@ ASR services are declared in the root [`services.yaml`](../../services.yaml), an
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
-| **Nemotron ASR Streaming (English)**: default, low-latency streaming ASR, English only | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
-| **Nemotron ASR Streaming (Multilingual)**: cache-aware streaming multilingual ASR covering 40 language locales | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
-| **Parakeet CTC 1.1B**: English-only ASR, self-hosted only | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
-| **Parakeet 1.1B RNNT Multilingual**: multilingual ASR (25+ languages)  | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) |
-| **Nemotron 3.5 Transcribe**: whole-turn ASR in Generic and Multilingual Assistants, self-hosted only | [`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml) | [model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) |
+| **Nemotron ASR Streaming (English)**: default, low-latency streaming ASR, English only | [`docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
+| **Nemotron ASR Streaming (Multilingual)**: cache-aware streaming multilingual ASR covering 40 language locales | [`docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
+| **Parakeet CTC 1.1B**: English-only ASR, self-hosted only | [`docker-compose.parakeet-asr.yaml`](../../docker/sidecars/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
+| **Parakeet 1.1B RNNT Multilingual**: multilingual ASR (25+ languages)  | [`docker-compose.parakeet-asr.yaml`](../../docker/sidecars/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) |
+| **Nemotron 3.5 Transcribe**: whole-turn ASR in Generic and Multilingual Assistants, self-hosted only | [`docker-compose.nemotron-transcribe.yaml`](../../docker/sidecars/docker-compose.nemotron-transcribe.yaml) | [model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) |
 
 Each model is exposed as a **catalog key** in `services.yaml`:
 
@@ -58,17 +58,30 @@ To use one of these, configure the NIM endpoint to point to the corresponding mo
 ASR runs one of three ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. The simplest starting point.
-- **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
-- **Opt-in local ASR (Transcribe)**: enable the `transcribe-asr` Compose profile with the server recipe of the Generic or Multilingual Assistant ([`docker-compose.nemotron-transcribe.yaml`](../../docker/docker-compose.nemotron-transcribe.yaml), GPU `1`, HTTP port `9002`). Then select **Nemotron 3.5 Transcribe** in **Services > ASR**.
+- **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/sidecars/docker-compose.parakeet-asr.yaml)).
+- **Opt-in local ASR (Transcribe)**: enable the `transcribe-asr` Compose profile with the server recipe of the Generic or Multilingual Assistant. With a single-GPU recipe, enable `transcribe-asr-single-gpu` instead. Both profiles are in [`docker-compose.nemotron-transcribe.yaml`](../../docker/sidecars/docker-compose.nemotron-transcribe.yaml) and publish HTTP port `9002`. The server profile uses GPU `1`. Then select **Nemotron 3.5 Transcribe** in **Services > ASR**.
 
-    Start Transcribe together with the server recipe of your example:
+    Start Transcribe together with the server recipe of your example. The server recipe also starts the NIM ASR sidecar on GPU `0`, and that sidecar uses GPU memory even when you select Transcribe. Scale the sidecar to `0` so that only Transcribe runs:
 
     ```bash
-    docker compose --profile generic-assistant/server --profile transcribe-asr up -d
-    docker compose --profile multilingual-assistant/server --profile transcribe-asr up -d
+    docker compose --profile generic-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-english=0
+    docker compose --profile multilingual-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-multilingual=0
     ```
 
-    Pass the same profiles to `docker compose down`. Transcribe is available only with the server recipe. The cloud and single-GPU recipes, including DGX Spark and Jetson Thor, do not include it.
+    Pass the same profiles to `docker compose down`, without `--scale`.
+
+    Before you start `transcribe-asr-single-gpu`, run `bash scripts/download-transcribe-models.sh`. It downloads about 22 GB from the public [NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF) repository. It picks the NVFP4 decoder on Blackwell GPUs, including DGX Spark and Jetson Thor, and IQ4_NL on other GPUs. The profile runs the public `nvcr.io/nvidia/nemo-speech.cpp:26.10` image.
+
+    Run the single-GPU commands below on a stopped stack. If the recipe is running, stop it first with `docker compose down` and the profiles that you started it with. On a workstation GPU, the Lightning LLM sizes its memory when it starts, so Compose starts it after Transcribe is healthy.
+
+    Start Transcribe together with the single-GPU recipe of your example. The streaming ASR keeps running, and you can select either ASR in **Services > ASR**:
+
+    ```bash
+    docker compose --profile generic-assistant/single-gpu --profile transcribe-asr-single-gpu up -d
+    docker compose --profile multilingual-assistant/single-gpu --profile transcribe-asr-single-gpu up -d
+    ```
+
+    Pass the same profiles to `docker compose down`. The cloud recipes do not include Transcribe.
 
     Transcribe writes the transcript in the spoken language. The session language does not change it.
 
@@ -83,11 +96,11 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 
 ### VRAM & hardware support
 
-The streaming ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. Standard `*/server` deployments let NIM select the LLM profile automatically, so its memory footprint depends on the detected GPU and selected precision. Confirm the selected profile before assuming ASR (~15 GB), TTS (~14 GB), and the LLM fit on one ~80 GB GPU. If they don't fit, move the speech sidecars separately: update the ASR `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) and the selected TTS service's `device_ids` in its Compose file. See the [Server NIM device-placement guidance](../../.agents/skills/nemotron-voice-agent-deploy/references/server.md#precision) and [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the complete multi-GPU layout.
+The streaming ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. Standard `*/server` deployments let NIM select the LLM profile automatically, so its memory footprint depends on the detected GPU and selected precision. Confirm the selected profile before assuming ASR (~15 GB), TTS (~14 GB), and the LLM fit on one ~80 GB GPU. If they don't fit, move the speech sidecars separately: update the ASR `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml) and the selected TTS service's `device_ids` in its Compose file. See the [Server NIM device-placement guidance](../../.agents/skills/nemotron-voice-agent-deploy/references/server.md#precision) and [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the complete multi-GPU layout.
 
-Transcribe runs on its own GPU (GPU 1 by default). Refer to the [Transcribe NIM support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#nemotron-transcribe) for supported GPUs and memory.
+With the server recipe, Transcribe runs on its own GPU (GPU 1 by default). Refer to the [Transcribe NIM support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#nemotron-transcribe) for supported GPUs and memory. With a single-GPU recipe, Transcribe shares GPU `0` and needs about 26 GiB in addition to the LLM and the speech sidecar.
 
-The Transcribe NIM support matrix does not list Jetson Thor. It lists DGX Spark only as a planned tier without measured settings, so this blueprint does not support Transcribe on DGX Spark.
+The Transcribe NIM support matrix does not list Jetson Thor. It lists DGX Spark only as a planned tier without measured settings, so the server NIM recipe does not support Transcribe on these devices.
 
 ### Performance
 
@@ -97,7 +110,7 @@ For ASR latency and throughput across GPUs and WER for different models, see the
 
 - **Word boosting (streaming ASR only)**: bias recognition toward domain terms (product names, acronyms, jargon) at request time, without retraining. NIM ASR also supports profanity filtering, automatic punctuation, inverse text normalization, custom vocabularies, and fine-tuned models. See [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html).
 
-  *Enable it in an example:* streaming ASR uses Pipecat's `NvidiaSTTService`, which exposes boosting through `NvidiaSTTSettings`. Add `boosted_lm_words` / `boosted_lm_score` where that settings object is constructed in the example's `pipeline.py` (e.g. [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py)).
+  *Enable it in an example:* streaming ASR uses Pipecat's `NvidiaSTTService`, which exposes boosting through `NvidiaSTTSettings`. Add `boosted_lm_words` / `boosted_lm_score` where that settings object is constructed in the example's `pipeline.py` (e.g. [`src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py`](../../src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py)).
 
   ```python
   asr_kwargs["settings"] = NvidiaSTTSettings(
@@ -118,9 +131,9 @@ For ASR latency and throughput across GPUs and WER for different models, see the
 
   This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing independently returns an `is_final` transcript after its trailing-silence window. Stock `NvidiaSTTService` response handling emits `TranscriptionFrame(finalized=True)` for that result, and Pipecat's turn analyzer combines the finalized transcript with Smart Turn's decision before closing the semantic user turn. Refer to [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html) for the endpoint parameter semantics and defaults.
 
-  The [Frontend/Backend Live example](../../src/examples/frontend_backend_live/README.md#configuration) sets `stop_history` in `build_stt` in [`media/services.py`](../../src/examples/frontend_backend_live/media/services.py).
+  The [Frontend/Backend Live example](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) sets `stop_history` in `build_stt` in [`media/services.py`](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/media/services.py).
 
-- **Transcribe**: in Generic Assistant, use `transcription_prompt` for expected words. Multilingual Assistant sends no prompt. Both assistants rely on [Silero VAD](tune-pipeline-performance.md#smart-turn-detection) for turn ends.
+- **Transcribe**: in Generic Assistant, use `transcription_prompt` for expected words. Multilingual Assistant sends no prompt. Both assistants rely on [Silero VAD](tune-pipeline-performance.md#smart-turn-detection) for turn ends. The server NIM ends a turn after 0.5 s of silence. The single-GPU entry waits 0.8 s, because its faster transcripts would otherwise split a sentence at a short pause. `SILERO_VAD_STOP_SECS` overrides both values.
 
 - **Language**: the multilingual example locks each session to a single locale, selectable per connection in the UI (any locale the ASR, TTS, and selected LLM support, default `de-DE`) and fixed for that session. Different sessions can use different languages. The streaming ASR also accepts `language_code: auto` for per-turn detection, but this blueprint does not use it, since a pinned locale is more reliable. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
 - **Punctuation**: the single-GPU NeMo-Speech.cpp entries reference the `nemo-speech-asr` profile in [`settings.yaml`](../../settings.yaml), so their card in the Services tab has a **Punctuation** toggle that defaults to on. NeMo-Speech.cpp ignores `profanity_filter` and does not apply inverse text normalization, so the profile exposes only punctuation.
@@ -141,6 +154,6 @@ server:
 
 - [Troubleshooting guide → ASR](../06-troubleshooting.md#asr-speech-to-text): Out of Memory, wrong language, model not found for language, no transcription.
 - [Configure Services](configure-services.md): how the catalog is loaded, switched, and overridden.
-- [Multilingual example](../../src/examples/multilingual/README.md): multilingual ASR/TTS behavior and example-specific troubleshooting.
+- [Multilingual example](../../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md): multilingual ASR/TTS behavior and example-specific troubleshooting.
 - [NVIDIA NIM for Speech — ASR](https://docs.nvidia.com/nim/speech/latest/asr/index.html): [customization / word boosting](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html), [support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html), [performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/asr/performance.html), [ASR troubleshooting](https://docs.nvidia.com/nim/speech/latest/troubleshooting/asr.html).
 - [Pipecat NVIDIA ASR service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/stt.py): `NvidiaSTTService`.

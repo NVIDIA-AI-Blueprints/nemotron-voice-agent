@@ -1,6 +1,6 @@
 # Enable the Audio Recorder
 
-The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each conversation turn is saved as a separate WAV file for easy analysis.
+The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each conversation turn is saved as a separate WAV file for easy analysis. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 ## Configuration
 
@@ -24,12 +24,12 @@ For Docker Compose runs, recreate the app service so that it reads the new `.env
 docker compose --profile <recipe> up -d <app-service>
 ```
 
-The shipped examples already create and wire the shared recorder, so the `.env` settings are enough to enable capture for those examples. To add the recorder to a **new custom example**, mirror [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
+The shipped examples already create and wire the shared recorder, so the `.env` settings are enough to enable capture for those examples. To add the recorder to a **new custom example**, mirror [`src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py`](../../src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
 
 1. Import the helper:
 
     ```python
-    from examples.shared.audio_recorder import create_audio_recorder
+    from nemotron_voice_agent.pipecat.shared.audio_recorder import create_audio_recorder
     ```
 
 2. Create the recorder and add it to the pipeline. `create_audio_recorder()` returns `None` when both ASR and TTS dump flags are off, so it stays a no-op until enabled:
@@ -72,7 +72,7 @@ The `<stream_id>` is a unique 8-character hex ID per session, so files from conc
 
 The recorder's `INFO` log line at a session's start names that session's `<stream_id>`. The Frontend/Backend Live example records its live sessions, over WebRTC and WebSocket, each from its start.
 
-> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker-compose.yml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
+> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker/pipecat/docker-compose.yaml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
 >
 > ```bash
 > docker compose --profile <recipe> cp <app-service>:/app/audio_dumps ./

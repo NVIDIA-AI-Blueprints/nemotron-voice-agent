@@ -8,9 +8,9 @@ TTS services are declared in the root [`services.yaml`](../../services.yaml), an
 
 | Model | Catalog key | Self-hosted compose service | Modelcard |
 |-------|-------------|-----------------------------|-----------|
-| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
-| **Magpie TTS Zeroshot**: multilingual streaming TTS that supports zero-shot voice cloning and includes built-in female and male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
-| **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
+| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/sidecars/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
+| **Magpie TTS Zeroshot**: multilingual streaming TTS that supports zero-shot voice cloning and includes built-in female and male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/sidecars/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
+| **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/sidecars/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
 > Magpie Multilingual is the registry default and the TTS sidecar started by local recipes. Chatterbox and Magpie Zeroshot are opt-in: select their catalog key in the Services tab (or move it to the front of the example's `services.tts` in [`examples_registry.yaml`](../../examples_registry.yaml)). For local NIM, also enable the matching Compose profile (see [Hardware requirements](#hardware-requirements-and-deployment-configs)).
 
@@ -39,13 +39,13 @@ For NVIDIA's current model and deployment support details, see the [TTS support 
 TTS runs one of these ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU. Magpie Multilingual and Chatterbox appear in the Services tab (no Compose change). Magpie Zeroshot has no cloud function.
-- **Magpie TTS Multilingual (default server recipe)**: started by `*/server` recipes as `magpie-multilingual-tts-service` ([`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)). Universal `*/single-gpu` recipes use NeMo-Speech.cpp.
+- **Magpie TTS Multilingual (default server recipe)**: started by `*/server` recipes as `magpie-multilingual-tts-service` ([`docker-compose.magpie-tts.yaml`](../../docker/sidecars/docker-compose.magpie-tts.yaml)). Universal `*/single-gpu` recipes use NeMo-Speech.cpp.
 - **Opt-in local TTS (Chatterbox or Magpie Zeroshot)**: both are listed in Compose but do **not** start with the default recipe. Each publishes its own host ports (Chatterbox `50251` / `9100`, Zeroshot `50351` / `9200`), so it can run beside Magpie Multilingual (`50151` / `9000`) and you can switch between them in the Services tab. Enable the opt-in profile, and scale Magpie off only when the GPU has no room for both:
 
   | Alternate | Compose profile | Catalog key | Compose file |
   |-----------|-----------------|-------------|--------------|
-  | Chatterbox | `chatterbox-tts` | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) |
-  | Magpie Zeroshot | `magpie-zeroshot-tts` | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) |
+  | Chatterbox | `chatterbox-tts` | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/sidecars/docker-compose.chatterbox-tts.yaml) |
+  | Magpie Zeroshot | `magpie-zeroshot-tts` | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/sidecars/docker-compose.magpie-zeroshot-tts.yaml) |
 
   ```bash
   # Example: Magpie Zeroshot on the server recipe (same pattern for Chatterbox)
@@ -62,7 +62,7 @@ TTS runs one of these ways, and the repo wires the right one per profile:
 
 | Model | Typical VRAM | Notes |
 |-------|--------------|-------|
-| Magpie TTS Multilingual | **12.58 GiB** GPU / 5.182 GiB host memory at `batch_size=8` | Can share a single ~80 GB GPU with ASR (~15 GB) and the LLM (~30 GB FP8). Split across GPUs with `device_ids` in [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support). |
+| Magpie TTS Multilingual | **12.58 GiB** GPU / 5.182 GiB host memory at `batch_size=8` | Can share a single ~80 GB GPU with ASR (~15 GB) and the LLM (~30 GB FP8). Split across GPUs with `device_ids` in [`docker-compose.magpie-tts.yaml`](../../docker/sidecars/docker-compose.magpie-tts.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support). |
 | Magpie TTS Zeroshot | **13.06 GB** GPU / 4.00 GB CPU memory at `batch_size=8` | The default Compose selector is `name=magpie-tts-zeroshot,batch_size=8`. This profile fits the shared H100 layout when Magpie Multilingual is scaled off. |
 | Chatterbox TTS | **44.61 GiB** GPU / 4.86 GiB host memory at `batch_size=8` | The default Compose selector is `name=chatterbox-tts-multilingual,batch_size=8` on GPU `0`. This profile supports A100 80 GB, H100, L40S, and DGX Spark. The A100 40 GB variant does not have enough memory. Chatterbox does **not** fit the Magpie single-80-GB shared layout with LLM + ASR. |
 
@@ -162,7 +162,7 @@ Magpie Multilingual and Magpie Zeroshot reference the `magpie-tts` profile in [`
 
 > **NIM only.** `NvidiaWordTTSService` supports Magpie served by NVIDIA NIM. It does not support the GGML/GGUF-based NeMo-Speech.cpp backend used by `*/single-gpu` profiles.
 
-All examples use Pipecat's `NvidiaTTSService` by default, which keeps Magpie Multilingual, Magpie Zeroshot, and Chatterbox switchable through the service catalog. For Magpie TTS Multilingual NIM 1.10.0 or newer, [`NvidiaWordTTSService`](../../src/examples/shared/nvidia_word_tts.py) is an optional drop-in subclass that adds word-level input streaming and timestamp-based LLM context commits. It requires `nvidia-riva-client>=2.27.0,<3`.
+All Pipecat examples use Pipecat's `NvidiaTTSService` by default, which keeps Magpie Multilingual, Magpie Zeroshot, and Chatterbox switchable through the service catalog. For Magpie TTS Multilingual NIM 1.10.0 or newer, [`NvidiaWordTTSService`](../../src/nemotron_voice_agent/pipecat/shared/nvidia_word_tts.py) is an optional drop-in subclass that adds word-level input streaming and timestamp-based LLM context commits. It requires `nvidia-riva-client>=2.27.0,<3`.
 
 To opt in for a custom example, change only the service import and constructor:
 
@@ -173,7 +173,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService
 tts = NvidiaTTSService(**tts_kwargs)
 
 # Opt in to Magpie 1.10.0+ word streaming and timestamp commits
-from examples.shared.nvidia_word_tts import NvidiaWordTTSService
+from nemotron_voice_agent.pipecat.shared.nvidia_word_tts import NvidiaWordTTSService
 
 tts = NvidiaWordTTSService(**tts_kwargs)
 ```
@@ -207,7 +207,7 @@ Example dictionary:
 
 The dictionary loads at session start and applies to every TTS request. Restart the server (or re-apply the active Compose profile) after changing the file. For the dictionary format and the phonemes Magpie supports, see [TTS customization](https://docs.nvidia.com/nim/speech/latest/tts/customization.html) and [phoneme support](https://docs.nvidia.com/nim/speech/latest/tts/phoneme-support.html).
 
-> **Check the wiring.** `TTS_IPA_FILE_PATH` only takes effect if the pipeline loads the dictionary and passes it to the `NvidiaTTSService`. The shipped examples do this with `custom_dictionary=load_ipa_dictionary()` where they construct the service (see the `NvidiaTTSService(...)` call in [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py)). If you build a custom pipeline, confirm your `NvidiaTTSService(...)` is created with `custom_dictionary=load_ipa_dictionary()`, or the env var has no effect.
+> **Check the wiring.** `TTS_IPA_FILE_PATH` only takes effect if the pipeline loads the dictionary and passes it to the `NvidiaTTSService`. The shipped examples do this with `custom_dictionary=load_ipa_dictionary()` where they construct the service (see the `NvidiaTTSService(...)` call in [`src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py`](../../src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py)). If you build a custom pipeline, confirm your `NvidiaTTSService(...)` is created with `custom_dictionary=load_ipa_dictionary()`, or the env var has no effect.
 
 ### TTS Text Filter
 
@@ -217,15 +217,15 @@ LLM output frequently contains Markdown emphasis and characters the Magpie prepr
 - **`{` and `}`**: ARPAbet phoneme tokens such as `{@AW1}`.
 - **`<tag>`**: SSML tags parsed by the TTS engine.
 
-These appear naturally in code, JSON, Markdown, or HTML output. The transforms live in [`src/examples/shared/nemotron_speech_text_filter.py`](../../src/examples/shared/nemotron_speech_text_filter.py):
+These appear naturally in code, JSON, Markdown, or HTML output. The transforms live in [`src/nemotron_voice_agent/pipecat/shared/nemotron_speech_text_filter.py`](../../src/nemotron_voice_agent/pipecat/shared/nemotron_speech_text_filter.py):
 
 #### `nemotron_speech_text_transform` (default)
 
 A single regex pass that strips `*`, `{`, `}`, and tag-opening `<`. Everything else passes through unchanged: comparison operators (`5 < 7`), currency, emoji, and non-Latin scripts. Use it for plain or lightly formatted prose.
 
 ```python
-# src/examples/generic/pipeline.py
-from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
+# src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py
+from nemotron_voice_agent.pipecat.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 
 tts = NvidiaTTSService(
     ...
@@ -238,8 +238,8 @@ tts = NvidiaTTSService(
 Strips Markdown with Pipecat's `strip_markdown`, then applies the same reserved-character cleanup. Use it when the LLM streams Markdown.
 
 ```python
-# src/examples/generic/pipeline.py
-from examples.shared.nemotron_speech_text_filter import nemotron_speech_markdown_text_transform
+# src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py
+from nemotron_voice_agent.pipecat.shared.nemotron_speech_text_filter import nemotron_speech_markdown_text_transform
 
 tts = NvidiaTTSService(
     ...

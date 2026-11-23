@@ -14,6 +14,13 @@ from pipecat.utils.security.redaction import redact_secrets
 
 DIAGNOSTICS_TYPE = "nva.perf.diagnostics"
 GAP_CLASSES = ("within_sentence", "between_sentences", "tool_wait", "interruption", "unknown")
+NO_VALID_TURNS = "No valid benchmark turns completed"
+MAX_ERROR_MESSAGE_CHARS = 2048
+
+
+def bounded_error_message(message: str) -> str:
+    """Redact credential values before limiting the report text."""
+    return redact_secrets(str(message)).strip()[:MAX_ERROR_MESSAGE_CHARS]
 
 
 def _component(name: str) -> str:
@@ -43,6 +50,12 @@ class SessionDiagnostics:
         self.server_session: str | None = None
         self.last_sequence = 0
         self.sequence_gaps = 0
+        self.audio_discontinuity_after_sequence: int | None = None
+
+    def mark_audio_discontinuity(self) -> None:
+        """Mark a point where received Realtime PCM was discarded outside playback."""
+        if self.audio_discontinuity_after_sequence is None:
+            self.audio_discontinuity_after_sequence = self.audio_sequence
 
     def phase(self, unix_s: float) -> str:
         """Preserve warmup and reply-drain evidence outside the measurement."""
@@ -62,7 +75,7 @@ class SessionDiagnostics:
         """Keep reported errors even when later turns finish successfully."""
         now = fields.pop("received_unix_s", time.time())
         entry = {
-            "message": redact_secrets(str(message)),
+            "message": bounded_error_message(message),
             "source": source,
             "component": component,
             "received_unix_s": now,
@@ -70,17 +83,27 @@ class SessionDiagnostics:
             **fields,
         }
         # RTVI emits the same ErrorFrame independently of the diagnostic observer.
+        # A tool error remains separate from a provider error with identical text.
         for old in reversed(self.errors):
             if now is None or old.get("received_unix_s") is None or abs(now - old["received_unix_s"]) > 2:
                 break
+            duplicate_frame = {old["source"], source} == {"protocol", "pipecat_frame"} and (
+                old["component"] == component or "unknown" in (old["component"], component)
+            )
+            duplicate_terminal = (
+                source == "client"
+                and entry.get("code") == "session_error"
+                and old["source"] in {"handshake", "protocol", "pipecat_frame"}
+            )
             if (
-                old["message"] == entry["message"]
-                and old["source"] != source
+                len(entry["message"]) < MAX_ERROR_MESSAGE_CHARS
+                and old["message"] == entry["message"]
+                and (duplicate_frame or duplicate_terminal)
                 and source not in old.get("also_reported_by", [])
             ):
                 if source == "pipecat_frame":
                     previous_source = old["source"]
-                    old.update(entry)
+                    old.update({**entry, "received_unix_s": old["received_unix_s"], "phase": old["phase"]})
                 else:
                     previous_source = source
                 old["also_reported_by"] = sorted(set(old.get("also_reported_by", []) + [previous_source]))
@@ -112,10 +135,11 @@ class SessionDiagnostics:
                     continue
                 self.sequence_gaps += max(0, seq - self.last_sequence - 1)
                 self.last_sequence = seq
-                self._append(self.events, dict(event))
+                event = dict(event)
                 if event.get("kind") == "error":
+                    event["message"] = bounded_error_message(event.get("message", "Pipecat error"))
                     self.add_error(
-                        event.get("message", "Pipecat error"),
+                        event["message"],
                         source="pipecat_frame",
                         component=event.get("component", "unknown"),
                         frame_id=event.get("frame_id"),
@@ -126,9 +150,11 @@ class SessionDiagnostics:
                         server_time_ns=event.get("server_time_ns"),
                     )
                 elif event.get("kind") == "tool_end" and event.get("error"):
+                    event["error"] = bounded_error_message(event["error"])
                     self.add_error(
                         event["error"], source="tool", component="tool", tool_call_id=event.get("tool_call_id")
                     )
+                self._append(self.events, event)
             return
         if kind == "error" or kind.endswith(".failed"):
             detail = message.get("error", message.get("data", {}))
@@ -191,6 +217,10 @@ class SessionDiagnostics:
             result["evidence"].append("diagnostic_capture_incomplete")
             return result
         seq = gap["audio_sequence"]
+        discontinuity = self.audio_discontinuity_after_sequence
+        if discontinuity is not None and seq > discontinuity:
+            result["evidence"].append("realtime_audio_discontinuity")
+            return result
         preceding = [e for e in starts if e["audio_sequence"] < seq]
         if not preceding:
             result["evidence"].append("no_audio_epoch")
@@ -206,6 +236,9 @@ class SessionDiagnostics:
             result["evidence"].append("epoch_start_or_end_missing")
             return result
         end = ends[identifier]
+        if discontinuity is not None and end["audio_sequence"] > discontinuity:
+            result["evidence"].append("realtime_audio_discontinuity")
+            return result
         if seq > end["audio_sequence"]:
             result["evidence"].append("outside_completed_audio_epoch")
             return result
@@ -291,6 +324,7 @@ class SessionDiagnostics:
                 "server_dropped_events": self.server_dropped,
                 "local_dropped_events": self.local_dropped,
                 "sequence_gaps": self.sequence_gaps,
+                "audio_discontinuity_after_sequence": self.audio_discontinuity_after_sequence,
             },
             "events": self.events,
             "audio_packets": self.audio_packets,
@@ -309,7 +343,11 @@ def session_errors(client: dict) -> list[dict]:
     """Extract structured errors, including legacy results without diagnostics."""
     collector = SessionDiagnostics()
     if isinstance(client.get("session_errors"), list):
-        collector.errors = [dict(error) for error in client["session_errors"]]
+        collector.errors = [
+            {**error, "message": bounded_error_message(error.get("message", "Session error"))}
+            for error in client["session_errors"]
+            if isinstance(error, dict) and error.get("code") != "no_valid_turns"
+        ]
     else:
         for message in client.get("rtvi_messages", []):
             payload = message.get("data")
@@ -323,19 +361,36 @@ def session_errors(client: dict) -> list[dict]:
         for turn in client.get("realtime_turn_metrics", []):
             if turn.get("error"):
                 collector.add_error(str(turn["error"]), source="protocol", received_unix_s=None)
-    if client.get("error") and not any(e["message"] == client["error"] for e in collector.errors):
-        collector.add_error(str(client["error"]), source="client", component="client", received_unix_s=None)
+    if client.get("error") and client["error"] != NO_VALID_TURNS:
+        message = bounded_error_message(client["error"])
+        if not any(e["message"] == message for e in collector.errors):
+            collector.add_error(message, source="client", component="client", received_unix_s=None)
     return collector.errors
 
 
-def quality_status(client: dict) -> str:
+def has_valid_response(client: dict) -> bool:
+    """Use the benchmark's recorded valid-turn count and latency."""
+    try:
+        return client.get("average_latency") is not None and int(client.get("num_valid_turns") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def is_hard_deadline(client: dict) -> bool:
+    """Identify forced benchmark window expiry in new and legacy artifacts."""
+    return str(client.get("error") or "").startswith("Hard deadline reached")
+
+
+def quality_status(client: dict, reported_errors: list[dict] | None = None) -> str:
     """Separate usable completion from error-free completion and runtime failure."""
     error = str(client.get("error") or "")
-    if error and not error.startswith("Hard deadline reached"):
+    if error and error != NO_VALID_TURNS and not is_hard_deadline(client):
         return "failed"
-    if client.get("average_latency") is None or not client.get("num_valid_turns", 0):
+    if not has_valid_response(client):
         return "no_response"
-    if error or client.get("failed_turns", 0) or session_errors(client):
+    if reported_errors is None:
+        reported_errors = session_errors(client)
+    if error or client.get("failed_turns", 0) or reported_errors:
         return "degraded"
     return "successful"
 
@@ -354,12 +409,13 @@ def write_diagnostic_reports(directory, clients: list[dict]) -> dict:
         for gap in diagnostics.get("glitch_events", []):
             gaps.append({"client": identifier, **gap})
         reported_errors = session_errors(client)
+        status = quality_status(client, reported_errors)
         for error in reported_errors:
-            errors.append({"client": identifier, "session_status": quality_status(client), **error})
+            errors.append({"client": identifier, "session_status": status, **error})
         qualities.append(
             {
                 "client": identifier,
-                "status": quality_status(client),
+                "status": status,
                 "valid_turns": client.get("num_valid_turns", 0),
                 "failed_turns": client.get("failed_turns", 0),
                 "reported_errors": len(reported_errors),

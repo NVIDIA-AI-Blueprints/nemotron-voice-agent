@@ -2,7 +2,8 @@
 
 Use the Generic Assistant when NVIDIA streaming automatic speech recognition
 (ASR) can tag who is talking. The conversation panel then labels each speaker,
-and the selected prompt decides how the assistant treats them.
+and the selected prompt decides how the assistant treats them. This guide
+applies to the Pipecat Generic Assistant (`nva-pipecat`).
 
 ## Prerequisites
 

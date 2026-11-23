@@ -1,6 +1,6 @@
 # Run Scaling & Performance Tests
 
-Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/) to run latency and scaling tests against a running voice-agent server.
+Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/) to run latency and scaling tests against a running voice-agent server. This guide applies to the Pipecat examples (`nva-pipecat`).
 
 `benchmark.py` drives a single client. `simulate_concurrency.sh` orchestrates multiple parallel clients and rolls up suite-level results.
 
@@ -30,13 +30,13 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 3. Start the voice-agent server with TLS enabled. The scaling benchmark connects to `wss://<host>:<port>/api/ws` and disables certificate verification for the local self-signed certificate.
 
     ```bash
-    uv run python src/server.py
+    uv run nva-pipecat
     ```
 
-    To run perf tests against the Generic Cascaded example with the benchmark prompt catalog, set `selection: generic-assistant` in [`examples_registry.yaml`](../../examples_registry.yaml) and then start the server with the perf prompt catalog:
+    To run perf tests against the Generic Assistant example with the benchmark prompt catalog, set `pipecat.selection` to `generic-assistant` in [`examples_registry.yaml`](../../examples_registry.yaml) and then start the server with the perf prompt catalog:
 
     ```bash
-    uv run python src/server.py \
+    uv run nva-pipecat \
       --prompt-file benchmarking_tools/scaling-perf/perf_prompts.yaml
     ```
 
@@ -78,13 +78,13 @@ Useful flags (passed through to `simulate_concurrency.sh`):
 
 The `generic-assistant/server-perf` recipe enables `SCALING_PERF_DIAGNOSTICS=true` by default. Other Compose recipes leave it disabled. The observer sends bounded frame metadata to scaling clients without changing synthesis or audio pacing policy.
 
-Enable capture on a host-native server with this command:
+For a host-native server, enable capture from the repository root.
 
 ```bash
-SCALING_PERF_DIAGNOSTICS=true uv run python src/server.py
+SCALING_PERF_DIAGNOSTICS=true uv run nva-pipecat
 ```
 
-To compare the performance recipe without server markers, recreate it with an explicit override:
+To compare the performance recipe without server markers, run this command from the repository root.
 
 ```bash
 SCALING_PERF_DIAGNOSTICS=false \
@@ -98,7 +98,9 @@ After a `simulate_concurrency.sh` run, inspect the artifacts in each concurrency
 3. Open `glitch_events.csv` for individual deficit durations, phases, classifications, confidence, and evidence.
 4. Open `glitch_summary.txt` for measurement-window event and duration shares.
 
-`Successful` means error-free completion, not guaranteed clean audio. `Degraded` retains valid-response sessions with recorded errors or failed turns. A raw playback-buffer deficit does not itself identify a TTS or CPU bottleneck. Missing or unaligned markers produce `unknown` classifications; inspect coverage instead of treating missing evidence as a pass.
+`Successful` describes error-free completion. Refer to the gap reports for audio continuity. `Degraded` retains valid-response sessions with recorded errors, failed turns, or a hard deadline. Use diagnostic coverage to distinguish missing evidence from a measured result.
+
+`tool_wait` marks a detected gap before the first audio of a tool-triggered follow-up. Its duration measures the playback deficit and can include time for the tool, the follow-up response, synthesis, and delivery. When Realtime recovery discards audio and breaks alignment, affected epochs remain `unknown`.
 
 The metadata extension is supported by the repository's RTVI endpoint and Realtime gateway. Other endpoints can omit it. Lifecycle markers contain identifiers, timing, PCM offsets, and boundary information. They omit spoken text, tool arguments/results, and PCM payloads. Error messages are captured separately with credential redaction. Standard transcript logs and optional WAV capture remain separate.
 

@@ -21,6 +21,7 @@ from benchmark_core import (
     ProtocolConnectionClosed,
     RunLogger,
 )
+from benchmark_diagnostics import DIAGNOSTICS_TYPE
 from rtvi_transport import RTVIAudioFrame, RTVIStartupError, RTVITransport, RTVITransportClosed
 
 
@@ -138,13 +139,14 @@ class RTVIClient(ProtocolClient):
         if self.diagnostics is not None:
             self.diagnostics.ingest(message)
         message_type = str(message.get("type", "unknown"))
+        nested = message.get("data") if message_type == "server-message" else None
+        if message_type == DIAGNOSTICS_TYPE or (isinstance(nested, dict) and nested.get("type") == DIAGNOSTICS_TYPE):
+            return
         self.rtvi_messages.append({"timestamp": dt.datetime.now().isoformat(), "type": message_type, "data": message})
         await self.logger.log(f"{self.stream_id} RTVI message: {json.dumps(message, sort_keys=True)}")
-        if message_type == "server-message" and isinstance(message.get("data"), dict):
-            nested = message["data"]
-            if isinstance(nested.get("type"), str):
-                message = nested
-                message_type = nested["type"]
+        if isinstance(nested, dict) and isinstance(nested.get("type"), str):
+            message = nested
+            message_type = nested["type"]
         if message_type == "user-bot-latency":
             value = _positive_number(message.get("latency"))
             if self.collecting_metrics and value is not None and not message.get("first", False):

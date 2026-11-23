@@ -8,17 +8,17 @@ Derive from the change matrix and skip layers with no changes. Default bottom-up
 
 1. Import paths / module moves
 2. Service constructors & `*Settings` (`Nvidia{LLM,STT,TTS}Service`)
-3. Shared plumbing (`src/examples/shared/`: `pipeline_utils.py`, `prewarm.py`, text filters, audio recorder)
+3. Shared plumbing (`src/nemotron_voice_agent/pipecat/shared/`: `pipeline_utils.py`, `prewarm.py`, text filters, audio recorder)
 4. Frames, `FrameProcessor` subclasses, aggregators / `LLMContext`
 5. Turn strategies, VAD, smart-turn
-6. Transports & serializers (`src/server.py`: SmallWebRTC / FastAPI websocket)
+6. Transports & serializers (`src/nemotron_voice_agent/pipecat/runtime/server.py`: SmallWebRTC / FastAPI websocket)
 7. Per-example `pipeline.py` (`Pipeline`, pipeline-task/runner, params). Use the new names from the notes
 8. Companion-package usage (e.g. the `omni_assistant_subagents` example): if its package was folded into
    `pipecat-ai` core, rewrite imports to the new in-core modules. Otherwise apply that package's own changes
 9. `pyproject.toml` extras + server dependency changes (bump / **remove a folded-in package** / add), then
    `uv.lock` last, so tests/lint run against the new pin
-10. Client (`client/`): bump `@pipecat-ai/*` in `client/package.json` to RTVI-compatible versions, migrate
-    `client/src/**` RTVI usage (renamed events/messages/providers/hooks, transport setup), then refresh the
+10. Client (`clients/pipecat/`): bump `@pipecat-ai/*` in `clients/pipecat/package.json` to RTVI-compatible versions, migrate
+    `clients/pipecat/src/**` RTVI usage (renamed events/messages/providers/hooks, transport setup), then refresh the
     lockfile. Do this last so the client builds against the matching server contract
 
 ## Step 2: Implement each layer
@@ -39,8 +39,8 @@ frame names, old import paths, changed `pipecat_subagents` bus message shapes. F
 Verify (real module paths from Phase 1):
 
 ```bash
-uv run python -c "import src.server"
-uv run python -c "from src.examples.shared import pipeline_utils"
+uv run python -c "import nemotron_voice_agent.pipecat.runtime.server"
+uv run python -c "from nemotron_voice_agent.pipecat.shared import pipeline_utils"
 uv run ruff check src/ | head -40
 ```
 
@@ -53,17 +53,17 @@ layer if a frame/RTVI payload shape changed rather than dropping fields.
 
 ## Step 3: Cross-cutting sweep
 
-- **Import roots**: no `src/` import from an old module path.
+- **Import roots**: no `src/nemotron_voice_agent/pipecat/runtime/` import from an old module path.
 - **Frames**: every referenced frame (`LLMRunFrame`, `LLMTextFrame`, `LLMFullResponse{Start,End}Frame`,
   `TTSUpdateSettingsFrame`, `RTVIServerMessageFrame`, …) exists, and `isinstance` checks use new names.
 - **Services**: `Nvidia{LLM,STT,TTS}Service` + `*Settings` constructors/fields + update-settings frames align.
 - **Turns/VAD**: `turns.*`, `audio.turn.smart_turn.*`, `audio.vad.*` (`UserTurnStrategies`, `UserTurnProcessor`,
   `VADParams`, `SileroVADAnalyzer`, smart-turn v3) classes/params/wiring match.
-- **Transports/serializers**: `src/server.py` `SmallWebRTCConnection`/`SmallWebRTCTransport`,
+- **Transports/serializers**: `src/nemotron_voice_agent/pipecat/runtime/server.py` `SmallWebRTCConnection`/`SmallWebRTCTransport`,
   `ProtobufFrameSerializer`, runner arg types (`RunnerArguments`, `SmallWebRTCRunnerArguments`).
 - **RTVI/observers (server)**: `processors.frameworks.rtvi.*`, `observers.*` (`UserBotLatencyObserver`).
 - **RTVI contract (client)**: any RTVI event/message/provider rename in the notes must be applied in
-  `client/src/**` so the client matches the server wire protocol. Keep the two in sync.
+  `clients/pipecat/src/**` so the client matches the server wire protocol. Keep the two in sync.
 - **Companion-package usage** (e.g. the `omni_assistant_subagents` example): every symbol it imports resolves to
   its new home per the change inventory: either the companion package's new API, or the in-core `pipecat.*`
   modules it was folded into.
@@ -76,31 +76,31 @@ each companion package, **bump, rename, or remove it if folded into core**. Keep
 override-dependencies` (e.g. `cryptography` CVE pin) unless newly resolved. Then:
 
 ```bash
-uv sync --dev --group harness
+uv sync --locked
 uv run python -c "import pipecat; print(pipecat.__version__)"   # + import each companion pkg still depended on
 ```
 
 Confirm `uv.lock` matches intended pins, no removed package lingers, nothing pulled a conflicting `pipecat-ai`.
 
-**Client**: bump every `@pipecat-ai/*` in `client/package.json` to the RTVI-compatible versions from the
+**Client**: bump every `@pipecat-ai/*` in `clients/pipecat/package.json` to the RTVI-compatible versions from the
 matrix, and remove any client package whose capability was dropped/renamed. Then:
 
 ```bash
-cd client && npm install && npm run lint && npm run build   # tsc surfaces RTVI API renames as type errors
+cd clients/pipecat && npm install && npm run lint && npm run build   # tsc surfaces RTVI API renames as type errors
 ```
 
 Fix client type/lint errors using the renamed RTVI APIs from the notes. Confirm the lockfile updated.
 
 ## Step 5: Tests
 
-Unit tests live under `tests/unit/` (`test_service_catalog.py`, `test_prompt_catalog.py`,
+Unit tests live under `tests/unit/pipecat/` (`test_service_catalog.py`, `test_prompt_catalog.py`,
 and the `frontend_backend_live/` tests). Update plumbing only and preserve intent.
 
-- Scan: `grep -rn "pipecat\|<old_import_root>\|<OldClass>\|<OldFrame>" tests/unit/`.
+- Scan: `grep -rn "pipecat\|<old_import_root>\|<OldClass>\|<OldFrame>" tests/unit/pipecat/`.
 - Change only import paths, mock targets, constructor/`Settings` kwargs, frame names, fixture shapes. Never
   change assertions, remove tests, or reduce coverage.
 - Run/fix (max 3 cycles):
-  `set +e; uv run pytest tests/unit -x -q > /tmp/pytest.log 2>&1; status=$?; head -80 /tmp/pytest.log; exit $status`.
+  `set +e; uv run pytest tests/unit/pipecat -x -q > /tmp/pytest.log 2>&1; status=$?; head -80 /tmp/pytest.log; exit $status`.
   Classify each failure as source bug (fix source, feed back to gap analysis) vs test plumbing (fix test).
 - Lint (CI parity): `uv run ruff format . && uv run ruff check . --fix && uv run ruff check .`.
 

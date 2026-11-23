@@ -96,7 +96,7 @@ def _ssl_context_insecure() -> ssl.SSLContext:
 def parse_server_url(url: str, *, insecure_skip_verify: bool = False) -> tuple[str, str, ssl.SSLContext | None]:
     """Parse ``http(s)://host[:port]`` into HTTP base URL, WebSocket origin, and optional SSL context.
 
-    If the URL omits a port, ``7860`` is used (same default as ``src/server.py``).
+    If the URL omits a port, ``7860`` is used (same default as ``src/nemotron_voice_agent/pipecat/runtime/server.py``).
     """
     p = urllib.parse.urlsplit(url.strip())
     scheme = (p.scheme or "").lower()

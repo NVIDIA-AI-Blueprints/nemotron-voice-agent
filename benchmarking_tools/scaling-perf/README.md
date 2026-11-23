@@ -52,7 +52,7 @@ root `benchmark` dependency group (shared by every tool under
    Docker Compose, because `benchmark.py` and `simulate_concurrency.sh` run
    on the host, not inside the app container.
 
-2. Start the voice-agent server ([Docker compose](../../docs/01-getting-started.md) or `uv run python src/server.py`).
+2. Start the voice-agent server ([Docker compose](../../docs/01-getting-started.md) or `uv run nva-pipecat`).
 3. Add WAV files into `dataset/`. The benchmark cycles through them as the simulated user's utterances each turn. Prepare each file so the benchmark can time turns correctly:
 
    - **Record the query or reuse existing audio**, using generic queries or ones that match your specific use case.
@@ -63,7 +63,7 @@ root `benchmark` dependency group (shared by every tool under
    If you do not trim the trailing silence, the client-side end-to-end latency is lower because the client keeps waiting through that silence before it starts measuring. The client-side E2E numbers are then wrong, but the **RTVI-based, server-reported metrics stay reliable** (`server_e2e`, `asr_ttfb`, `tts_ttfb`, `llm_ttfat`, and `llm_processing_time`) because they use server-side pipeline events rather than the end of the file. Refer to [What it measures](#what-it-measures).
 
 `simulate_concurrency.sh` auto-dispatches `benchmark.py` through `uv run`
-when the root `pyproject.toml` is detected, so the commands below work
+when `pyproject.toml` is detected, so the commands below work
 straight from a fresh `uv sync --group benchmark`.
 
 ### Realtime Endpoint
@@ -295,11 +295,11 @@ perf_suite_<timestamp>/
 
 ## Session Diagnostics
 
-Enable server frame metadata when you need to investigate individual buffer deficits, tool-followup waits, or reported errors. The server uses Pipecat's native frame observer through the shared pipeline helper. It does not patch TTS providers or transport methods.
+Enable server frame metadata to investigate individual buffer deficits, pauses before tool follow-ups, or reported errors. The shared pipeline helper registers a native Pipecat frame observer.
 
 ### Enable or Disable Capture
 
-The `generic-assistant/server-perf` Compose recipe enables `SCALING_PERF_DIAGNOSTICS=true` by default. Other recipes default to `false`. You can override the value explicitly for a comparison:
+The `generic-assistant/server-perf` Compose recipe enables `SCALING_PERF_DIAGNOSTICS=true` by default. Other recipes default to `false`. Run the following commands from the repository root to compare settings.
 
 ```bash
 # Disable server markers while keeping the same performance recipe.
@@ -311,17 +311,17 @@ SCALING_PERF_DIAGNOSTICS=true \
 docker compose --profile generic-assistant/server-perf up -d
 ```
 
-For a host-native server, set the environment variable on the server process:
+For a host-native server, run this command from the repository root.
 
 ```bash
-SCALING_PERF_DIAGNOSTICS=true uv run python src/server.py
+SCALING_PERF_DIAGNOSTICS=true uv run nva-pipecat
 ```
 
 The benchmark always records received audio timing and available protocol errors. Server markers are optional. The repository's RTVI endpoint and Realtime gateway can deliver them; other endpoints can lack this extension. Inspect coverage before interpreting a classification.
 
 Diagnostic batches use type `nva.perf.diagnostics` and schema version `1`. They carry session identifiers, event sequence numbers, timestamps, audio sequence numbers, and cumulative PCM offsets. Lifecycle markers cover LLM and tool activity, audio epochs, sentence boundaries, interruptions, and errors. They omit spoken text, tool arguments, tool results, and audio payloads. Structured diagnostic error records use Pipecat's credential redaction. Existing raw protocol/transcript logging and optional WAV capture remain separate from these metadata markers.
 
-Capture uses bounded event collections and batched delivery. Dropped events and sequence gaps are reported. The observer adds metadata, CPU work, and transport traffic; compare enabled and disabled runs with the same workload when evaluating overhead.
+Capture uses bounded event collections and batched delivery. The client keeps diagnostic events in the `diagnostics` collection and reports dropped events and sequence gaps. Compare enabled and disabled runs with the same workload to measure the observer's CPU and transport overhead.
 
 ### Inspect Errors and Completion Separately
 
@@ -345,7 +345,7 @@ The completion categories have these meanings:
 | `successful` | Valid response without recorded session errors, failed turns, or a session deadline; this is error-free completion, not a clean-audio guarantee |
 | `degraded` | Valid response with recorded errors, failed turns, or a hard deadline |
 | `failed` | A qualifying runtime error, even if earlier responses completed |
-| `no_response` | No valid response and no qualifying runtime failure |
+| `no_response` | No valid response and no qualifying runtime failure, including a session that completes with zero valid turns |
 
 `Successful` and `Degraded` are separate columns in `results.txt`; their sum counts completed clients with valid responses. The JSON field `completed_clients` retains that combined count. `Errors` counts reported error records, while `Glitches` retains the legacy client flag count. A nonfatal provider error can therefore reduce `Successful` and increase `Degraded` without ending the client session.
 
@@ -353,19 +353,23 @@ Glitch evidence is orthogonal to completion status. A client can be `successful`
 
 ### Interpret Post-Test Gap Classifications
 
-The detector estimates how much received PCM remains for playback. A deficit greater than 20 ms records an event; it is not a listening-confirmed audio defect. Classification runs after the test so delayed markers can be considered. It uses output audio offsets and lifecycle evidence rather than guessing sentence boundaries from arrival-time pauses. Offsets describe queued PCM and sentence units, not forced word-to-audio alignment.
+The detector estimates how much received PCM remains for playback. When the next packet arrives, a deficit greater than 20 ms records a candidate playback gap. Playback that never resumes can surface through other metrics, such as a turn timeout. Classification runs after the test and uses output audio offsets and lifecycle markers, including markers that arrive after the packet. The offsets describe queued PCM and sentence units.
 
 | Classification | Evidence Used |
 |---|---|
 | `within_sentence` | The playback cursor falls inside an aligned sentence unit |
 | `between_sentences` | An aligned sentence boundary matches the playback cursor, with preceding aligned sentence evidence |
-| `tool_wait` | First audio of a tool-driven follow-up epoch; this does not measure tool execution time |
+| `tool_wait` | A gap before the first audio of a response linked to a tool-triggered LLM follow-up |
 | `interruption` | An interruption marker is adjacent to the playback boundary |
-| `unknown` | Capture, audio epoch, or sentence-alignment evidence is missing or incomplete |
+| `unknown` | Capture, audio epoch, or alignment evidence is missing or incomplete |
 
 Each event retains `confidence` and `evidence`. `audio_offset` confidence indicates aligned sentence/audio offset evidence. `frame_evidence` indicates lifecycle evidence. `unavailable` means the classifier cannot support a more specific label. These values are evidence categories, not calibrated probabilities.
 
-Coverage reports server marker availability, dropped server/client events, and sequence gaps. Capture loss forces conservative `unknown` classification. The classifier also requires client/server audio-epoch duration and packet counts to agree; mismatches remain `unknown`. Initial audio alone does not establish a gap between two sentences. Token-streaming providers can lack reliable sentence-to-audio alignment; those gaps also remain `unknown`. A boundary label describes context, not whether TTS generation, CPU scheduling, network delivery, or intentional application behavior caused the wait.
+The observer links an eligible final tool result to the follow-up through Pipecat's assistant context and response markers. The `tool_wait` duration is the playback deficit before that response's audio. It can reflect time spent executing the tool, generating the follow-up response, synthesizing speech, and delivering audio. Use tool start and end markers to estimate time in the tool separately.
+
+Coverage reports server marker availability, dropped events, sequence gaps, and known audio discontinuities. The classifier requires matching client and server audio durations and packet counts. If Realtime setup or response cancellation discards audio, coverage records the last collected client packet sequence in `audio_discontinuity_after_sequence`. Epochs extending past that boundary receive `unknown` classification. Earlier epochs can still classify when their evidence is complete.
+
+Initial audio alone provides insufficient evidence for a gap between sentences. Gaps that require sentence alignment remain `unknown` for token-streaming providers that lack it. Boundary labels describe conversational context. Investigate the model and transport timeline to identify what caused the wait.
 
 Events retain `warmup`, `measurement`, `reply_drain`, or `unknown` phase. The JSON/CSV reports preserve all phases; `glitch_summary.txt` compares measurement-window events by both count and summed deficit duration. Neither zero captured events nor an `unknown` label establishes glitch-free playback when capture is unavailable. A raw-flagged client without captured gap events is counted in `flagged_clients_without_event_evidence`; the text summary states that its event count and duration are unavailable.
 

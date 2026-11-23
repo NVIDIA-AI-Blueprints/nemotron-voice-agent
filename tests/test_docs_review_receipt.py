@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_SCRIPT = Path(__file__).parent.parent / "scripts" / "docs-review-receipt.py"
+_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "docs-review-receipt.py"
 _HEAD_SHA = "a" * 40
 _AGENTS_BLOB_SHA = "b" * 40
 

@@ -137,10 +137,10 @@
       "id": "nemotron-voice-agent-deploy-configure-restrict-examples",
       "prompt": "Only expose the generic and multilingual examples in the UI.",
       "expected_skill": "nemotron-voice-agent-deploy",
-      "expected_output": "Explains that `selection` in examples_registry.yaml accepts only `all` or one example id, so it cannot expose exactly two examples, and offers `all` or locking to one example instead without writing an invalid list.",
+      "expected_output": "Explains that `pipecat.selection` in examples_registry.yaml accepts only `all` or one example id, so it cannot expose exactly two examples, and offers `all` or locking to one example instead without writing an invalid list.",
       "assertions": [
-        "Did not write a list or two example ids into `selection`.",
-        "Stated that `selection` accepts only `all` or one example id.",
+        "Did not write a list or two example ids into `pipecat.selection`.",
+        "Stated that `pipecat.selection` accepts only `all` or one example id.",
         "Preserved the other registry entries and comments."
       ]
     },
