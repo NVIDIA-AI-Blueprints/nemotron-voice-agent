@@ -25,6 +25,30 @@ on:
         description: "Retries per scenario"
         required: true
         default: "2"
+      custom_llm_base_url:
+        description: "Optional Generic/Multilingual chat-completions base URL, ending in /v1"
+        required: false
+        default: ""
+      custom_llm_model_id:
+        description: "Served LLM model ID; set together with custom_llm_base_url"
+        required: false
+        default: ""
+      custom_asr_server:
+        description: "Optional Generic/Multilingual Riva streaming gRPC host:port (not HTTP)"
+        required: false
+        default: ""
+      custom_asr_model_id:
+        description: "Served Riva ASR model name; set together with custom_asr_server"
+        required: false
+        default: ""
+      custom_asr_use_ssl:
+        description: "Custom ASR TLS: true or false; blank uses the repository variable or true"
+        required: false
+        default: ""
+      custom_asr_function_id:
+        description: "Optional NVCF ASR function UUID; blank for direct Riva endpoints"
+        required: false
+        default: ""
   push:
     branches: [main, develop]
   pull_request:
@@ -43,6 +67,20 @@ jobs:
     runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 180
+
+    # Custom endpoint defaults are opt-in for manual runs. Automatic CI keeps
+    # the manifest's native services. Secret values never enter runner bodies.
+    env:
+      CUSTOM_LLM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && (inputs.custom_llm_base_url || vars.CUSTOM_LLM_BASE_URL) || '' }}
+      CUSTOM_LLM_MODEL_ID: ${{ github.event_name == 'workflow_dispatch' && (inputs.custom_llm_model_id || vars.CUSTOM_LLM_MODEL_ID) || '' }}
+      CUSTOM_LLM_API_KEY: ${{ secrets[vars.CUSTOM_LLM_API_KEY_ENV || 'CUSTOM_LLM_API_KEY'] }}
+      CUSTOM_LLM_MAX_TOKENS: ${{ vars.CUSTOM_LLM_MAX_TOKENS || '4096' }}
+      CUSTOM_LLM_EXTRA_PARAMS: ${{ vars.CUSTOM_LLM_EXTRA_PARAMS || '{}' }}
+      CUSTOM_ASR_SERVER: ${{ github.event_name == 'workflow_dispatch' && (inputs.custom_asr_server || vars.CUSTOM_ASR_SERVER) || '' }}
+      CUSTOM_ASR_MODEL_ID: ${{ github.event_name == 'workflow_dispatch' && (inputs.custom_asr_model_id || vars.CUSTOM_ASR_MODEL_ID) || '' }}
+      CUSTOM_ASR_API_KEY: ${{ secrets[vars.CUSTOM_ASR_API_KEY_ENV || 'CUSTOM_ASR_API_KEY'] }}
+      CUSTOM_ASR_USE_SSL: ${{ inputs.custom_asr_use_ssl || vars.CUSTOM_ASR_USE_SSL || 'true' }}
+      CUSTOM_ASR_FUNCTION_ID: ${{ inputs.custom_asr_function_id || vars.CUSTOM_ASR_FUNCTION_ID || '' }}
 
     steps:
       - name: Checkout repository
@@ -83,6 +121,9 @@ jobs:
             echo "NVIDIA_INFERENCE_API_KEY repository secret is required for the NVIDIA-hosted evaluation judge."
             exit 1
           fi
+
+      - name: Validate custom endpoint configuration
+        run: python tests/evals/pipecat/service/custom_endpoints.py
 
       - name: Start local Omni NIM
         if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')

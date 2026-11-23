@@ -3,10 +3,11 @@
 
 """Tests for CI-only NVIDIA Inference API services."""
 
+import sys
 from importlib import util
 from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from pipecat.frames.frames import ErrorFrame
 
@@ -14,7 +15,8 @@ _SERVICE_PATH = Path(__file__).resolve().parents[2] / "evals" / "pipecat" / "ser
 _SPEC = util.spec_from_file_location("nvidia_inference_services", _SERVICE_PATH)
 assert _SPEC and _SPEC.loader
 nvidia_inference_services = util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(nvidia_inference_services)
+with patch.object(sys, "path", [str(_SERVICE_PATH.parent), *sys.path]):
+    _SPEC.loader.exec_module(nvidia_inference_services)
 InferenceMagpieTTSService = nvidia_inference_services.InferenceMagpieTTSService
 
 

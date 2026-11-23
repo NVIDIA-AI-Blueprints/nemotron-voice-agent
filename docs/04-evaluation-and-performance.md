@@ -4,6 +4,44 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 
 ---
 
+## Custom Endpoints In Service Evals
+
+Use **Actions > Pipecat Service Evals > Run workflow** with the default `cloud_tts_manifest.yaml` to evaluate a custom model.
+Custom endpoint overrides apply only to Generic and Multilingual cascaded scenarios.
+Omni scenarios retain their configured multimodal model and services. They do not evaluate the custom model.
+Automatic push and pull request runs retain the manifest defaults.
+
+Supply endpoint settings through the following workflow inputs or repository Actions variables.
+Workflow inputs take precedence over repository defaults when nonempty.
+
+| Workflow Input | Repository Variable | Value |
+| --- | --- | --- |
+| `custom_llm_base_url` | `CUSTOM_LLM_BASE_URL` | OpenAI-compatible chat-completions base URL, usually ending in `/v1`. |
+| `custom_llm_model_id` | `CUSTOM_LLM_MODEL_ID` | Model ID served by that endpoint. Set both LLM fields together. |
+| `custom_asr_server` | `CUSTOM_ASR_SERVER` | Riva streaming gRPC `host:port`, reachable from the runner. HTTP transcription APIs are not supported. |
+| `custom_asr_model_id` | `CUSTOM_ASR_MODEL_ID` | Served ASR model name. Set both ASR fields together. |
+| `custom_asr_use_ssl` | `CUSTOM_ASR_USE_SSL` | `true` by default. Use `false` only for a plaintext Riva server. |
+| `custom_asr_function_id` | `CUSTOM_ASR_FUNCTION_ID` | Optional NVCF function UUID, requiring TLS. Leave blank for a direct Riva endpoint. |
+
+Store credentials in repository Actions **secrets**, never workflow inputs or runner-body files.
+Use `CUSTOM_LLM_API_KEY` and `CUSTOM_ASR_API_KEY` by default.
+To choose other secret names, set the Actions variables `CUSTOM_LLM_API_KEY_ENV` and `CUSTOM_ASR_API_KEY_ENV`.
+For an unauthenticated endpoint, give its secret the value `not-needed`.
+An enabled custom endpoint with a missing credential fails validation instead of using a hosted-service key.
+The existing `NVIDIA_API_KEY` and `NVIDIA_INFERENCE_API_KEY` remain necessary for the other services and judges.
+
+The optional Actions variable `CUSTOM_LLM_MAX_TOKENS` defaults to `4096`.
+`CUSTOM_LLM_EXTRA_PARAMS` accepts a JSON object of model-specific request options, including explicit reasoning settings.
+Custom LLM requests replace inherited model-specific options; they do not automatically add Nemotron thinking flags.
+These controls affect only the bot, including its Multilingual summary LLM. User simulation, TTS, and judges keep their existing settings.
+
+For an audio smoke, select `generic_audio_e2e_roundtrip` in **scenario** and supply either or both endpoint pairs.
+For a complete run, leave **scenario** blank; interpret Omni results separately because they retain the native multimodal model.
+Omni-only selections and manifests that bypass `inference_eval_bot.py` reject custom overrides instead of ignoring them.
+The service runner validates configuration before running scenarios. Production catalogs, recipes, and pipeline code remain unchanged.
+
+---
+
 ## Latency and Scalability
 
 ### Reference Results

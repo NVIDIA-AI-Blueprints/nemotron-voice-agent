@@ -9,11 +9,14 @@ import io
 import os
 import wave
 from collections.abc import AsyncGenerator
+from copy import deepcopy
 
 import httpx
+from custom_endpoints import custom_asr, custom_llm
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.services.nvidia.omni.llm import NvidiaOmniLLMService
+from pipecat.services.nvidia.stt import NvidiaSTTService
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
@@ -31,8 +34,32 @@ class InferenceNvidiaLLMService(NvidiaLLMService):
     """Use the CI Inference API credential instead of the NVCF credential."""
 
     def __init__(self, *args, api_key: str | None = None, **kwargs) -> None:
-        """Ignore the example-provided credential and use the CI-only key."""
-        super().__init__(*args, api_key=_api_key(), **kwargs)
+        """Use the custom credential when selected; otherwise use the CI-only key."""
+        override = custom_llm()
+        if override:
+            settings = deepcopy(kwargs.pop("settings", None)) or self.Settings()
+            settings.model = override["model"]
+            settings.max_tokens = override["max_tokens"]
+            # Replace inherited model-specific parameters, including Nemotron thinking flags.
+            settings.extra = override["extra"]
+            kwargs.update(base_url=override["base_url"], settings=settings)
+        super().__init__(*args, api_key=override["api_key"] if override else _api_key(), **kwargs)
+
+
+class InferenceNvidiaSTTService(NvidiaSTTService):
+    """Override only the bot's Riva ASR endpoint inside the CI eval process."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Keep language and audio settings while replacing endpoint, model, TLS, and key."""
+        override = custom_asr()
+        if override:
+            kwargs.update(
+                api_key=override["api_key"],
+                server=override["server"],
+                use_ssl=override["use_ssl"],
+                model_function_map={"model_name": override["model"], "function_id": override["function_id"]},
+            )
+        super().__init__(*args, **kwargs)
 
 
 class InferenceNvidiaOmniLLMService(NvidiaOmniLLMService):

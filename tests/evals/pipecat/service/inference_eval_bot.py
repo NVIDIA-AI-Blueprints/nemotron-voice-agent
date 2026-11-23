@@ -5,10 +5,14 @@
 
 from __future__ import annotations
 
+import json
+
+from custom_endpoints import custom_asr, custom_llm
 from nvidia_inference_services import (
     InferenceMagpieTTSService,
     InferenceNvidiaLLMService,
     InferenceNvidiaOmniLLMService,
+    InferenceNvidiaSTTService,
 )
 from pipecat.runner.types import RunnerArguments
 
@@ -22,11 +26,15 @@ def _install_ci_services(pipeline_mode: str) -> None:
 
         pipeline.NvidiaLLMService = InferenceNvidiaLLMService
         pipeline.NvidiaTTSService = InferenceMagpieTTSService
+        if custom_asr():
+            pipeline.NvidiaSTTService = InferenceNvidiaSTTService
     elif pipeline_mode == "multilingual-assistant":
         import nemotron_voice_agent.pipecat.examples.multilingual.pipeline as pipeline
 
         pipeline.NvidiaLLMService = InferenceNvidiaLLMService
         pipeline.NvidiaTTSService = InferenceMagpieTTSService
+        if custom_asr():
+            pipeline.NvidiaSTTService = InferenceNvidiaSTTService
     elif pipeline_mode == "omni-assistant":
         import nemotron_voice_agent.pipecat.examples.omni_assistant.pipeline as pipeline
 
@@ -55,8 +63,33 @@ def _install_ci_services(pipeline_mode: str) -> None:
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Install CI services and delegate to the registered example eval bot."""
-    body = runner_args.body if isinstance(runner_args.body, dict) else {}
-    _install_ci_services(str(body.get("pipeline_mode") or ""))
+    body = dict(runner_args.body) if isinstance(runner_args.body, dict) else {}
+    pipeline_mode = str(body.get("pipeline_mode") or "")
+    if pipeline_mode in {"generic-assistant", "multilingual-assistant"}:
+        llm, asr = custom_llm(), custom_asr()
+        if llm:
+            body.update(
+                llm_id="custom-ci-llm",
+                model_id=llm["model"],
+                base_url=llm["base_url"],
+                max_tokens=llm["max_tokens"],
+                extra_params=json.dumps(llm["extra"]),
+            )
+            print(f"CI custom LLM: mode={pipeline_mode}, model={llm['model']}, base_url={llm['base_url']}", flush=True)
+        if asr:
+            body.update(
+                asr_id="custom-ci-asr",
+                asr_server=asr["server"],
+                asr_model=asr["model"],
+                asr_function_id=asr["function_id"],
+            )
+            print(
+                f"CI custom ASR: mode={pipeline_mode}, model={asr['model']}, "
+                f"server={asr['server']}, TLS={asr['use_ssl']}",
+                flush=True,
+            )
+    runner_args.body = body
+    _install_ci_services(pipeline_mode)
     await registered_eval_bot(runner_args)
 
 

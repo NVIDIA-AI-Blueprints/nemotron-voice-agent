@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import yaml
+from custom_endpoints import custom_asr, custom_llm
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MANIFEST = Path("tests/evals/pipecat/service/cloud_tts_manifest.yaml")
@@ -84,6 +85,26 @@ def _runner_body_from_yaml(path: Path, key: str) -> dict:
         attachment["path"] = _resolve_attachment_path(attachment["path"], base=path.parent)
         merged["eval_attachment"] = attachment
     return merged
+
+
+def _validate_custom_scenarios(manifest: Path, scenarios: list[str]) -> None:
+    data = _load_yaml_mapping(manifest, "manifest")
+    supported = False
+    for item in data.get("suite", []):
+        if not set(item.get("scenarios", [])) & set(scenarios):
+            continue
+        bots_dir = Path(_resolve_relative_path(str(data.get("bots_dir", ".")), base=manifest.parent))
+        if (bots_dir / str(item.get("bot", ""))).resolve() != Path(__file__).with_name("inference_eval_bot.py"):
+            raise ValueError("Custom endpoints require a manifest using the CI inference_eval_bot.py entrypoint")
+        body_path = Path(_resolve_relative_path(str(item.get("runner_body", "")), base=manifest.parent))
+        body = (
+            _runner_body_from_yaml(body_path, str(item.get("runner_body_key", "")))
+            if body_path.suffix in {".yaml", ".yml"}
+            else _load_yaml_mapping(body_path, "runner body")
+        )
+        supported |= body.get("pipeline_mode") in {"generic-assistant", "multilingual-assistant"}
+    if not supported:
+        raise ValueError("Custom endpoints require at least one Generic or Multilingual scenario; Omni is unchanged")
 
 
 def _materialize_manifest(manifest: Path, work_dir: Path) -> Path:
@@ -176,7 +197,10 @@ def main() -> int:
     args = _parse_args()
     manifest = args.manifest if args.manifest.is_absolute() else ROOT / args.manifest
     try:
+        llm, asr = custom_llm(), custom_asr()
         scenarios = _selected_scenarios(args.scenario, manifest)
+        if llm or asr:
+            _validate_custom_scenarios(manifest, scenarios)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
