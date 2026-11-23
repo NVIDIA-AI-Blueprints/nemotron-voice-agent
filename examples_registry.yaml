@@ -91,6 +91,8 @@ pipecat:
         tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
       categories:
         thinker-llm: llm
+      # The repository UI shows the EVENT LOG tab, and the bot sends the events that fill it, only while this is listed.
+      capabilities: [event_log]
       settings:
         llm:
           nemotron-lightning:
@@ -113,7 +115,10 @@ pipecat:
           magpie-zeroshot-tts:
             synthesis_mode: per_sentence
       defaults:
-        prompt: [cafe]
+        prompt: [airline]
+      # The cafe's talker prompt stays in prompts.yaml but is not offered in the UI, since the UI bot below runs the
+      # airline desk and a cafe talker would not match it.
+      agent_prompt_keys: [cafe]
       bot: nemotron_voice_agent.pipecat.examples.frontend_backend_live.pipeline:bot
       config:
         frontend:
@@ -132,16 +137,19 @@ pipecat:
               command: [hermes, acp]
               pass_env: [PATH, LANG, LC_ALL, TZ, HERMES_HOME]
               runtime_label: hermes
+        # The domain of the repository UI bot: the Demo Air travel desk. To run the Bluebird Cafe instead, set
+        # channel: cafe, backend.prompt: cafe and backend.tools: {cafe: {}} here; in this entry, set defaults.prompt to
+        # [cafe] and agent_prompt_keys to [airline]. The Live gateway and its benchmarks use ``core``, not this block.
         ui_bot:
-          channel: cafe
+          channel: airline
           core:
             delegation:
               result_format: speak_display
             backend:
               adapter: llm
-              prompt: cafe
+              prompt: airline
               tools:
-                cafe: {}
+                airline: {}
       live:
         factory: nemotron_voice_agent.pipecat.examples.frontend_backend_live.factory:create_frontend_adapter
         describe: nemotron_voice_agent.pipecat.examples.frontend_backend_live.factory:describe

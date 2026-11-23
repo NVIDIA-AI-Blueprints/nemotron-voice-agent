@@ -46,6 +46,7 @@ class OpenWork:
     progress: str | None = None
     news: bool = True
     lines_said: int = 0
+    still_said: bool = False
     ready: int = 0
     ended: bool = False
     waits_for_app: bool = False
@@ -178,7 +179,7 @@ class WorkNote:
             self._leave_if_done(entry)
 
     def hand_over(self, delegation_id: str, taker: str) -> None:
-        """Move the delegation's words, clocks, line count and waiting results to ``taker``, which carries its work."""
+        """Move the delegation's words, clocks, lines said and waiting results to ``taker``, which carries its work."""
         entry = self.entries.pop(delegation_id, None)
         carrier = self.entries.get(taker)
         if entry is None or carrier is None:
@@ -189,6 +190,7 @@ class WorkNote:
         starts = [start for start in (carrier.started_at, entry.started_at) if start is not None]
         carrier.started_at = min(starts) if starts else None
         carrier.lines_said += entry.lines_said
+        carrier.still_said = carrier.still_said or entry.still_said
         carrier.ready += entry.ready
         carrier.carries += (entry.id, *entry.carries)
         self.observe("worknote.joined", delegation_id=delegation_id, taker=taker)
@@ -220,6 +222,15 @@ class WorkNote:
             if self._quiet(entry) and entry.news and entry.lines_said < max_lines:
                 return entry
         return None
+
+    @staticmethod
+    def steps_ended(entry: OpenWork) -> bool:
+        """Return whether every tool call of the entry's latest response ended.
+
+        The backend then works from outputs the note does not hold: a worded line about those steps could only guess
+        their outcome.
+        """
+        return bool(entry.calls) and all(call.status is not None for call in entry.calls.values())
 
     def quiet(self, delegation_id: str) -> bool:
         """Return whether the delegation is quiet: sent, no answer ready, not ended, not waiting for the app."""

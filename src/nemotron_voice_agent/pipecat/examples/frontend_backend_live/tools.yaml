@@ -1,0 +1,333 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The server tools of the Frontend/Backend Live example, which the repository UI lists in its Tools tab
+# (GET /api/tools). The delegation core runs these through its tool sources (backend.tools in the example's
+# settings), not through this file. The entries are the schemas of delegation_core/backend/tools/cafe/schemas.py and
+# delegation_core/backend/tools/airline/schemas.py, and a test checks that the two stay the same. A prompt lists the
+# tools that it enables in its tools_available entry in prompts.yaml.
+
+get_menu:
+  type: function
+  function:
+    name: get_menu
+    description: Look up Bluebird Cafe menu items with prices, available sizes, and modifiers. Call this before quoting any
+      item or price.
+    parameters:
+      type: object
+      properties:
+        category:
+          type: string
+          enum:
+          - all
+          - coffee
+          - tea
+          - pastry
+          - food
+          description: Limit results to one category. Defaults to all.
+        query:
+          type: string
+          description: Optional free-text filter matched against item names.
+      required: []
+      additionalProperties: false
+manage_cart:
+  type: function
+  function:
+    name: manage_cart
+    description: Read or change the user's cart. Returns the full cart with line items, subtotal, tax, and total after the
+      change. This is the source of truth for the order.
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          enum:
+          - view
+          - add
+          - update_quantity
+          - remove
+          - clear
+          description: The cart operation to perform.
+        item_id:
+          type: string
+          description: 'Menu item id, required for add. Example: ''lat''.'
+        line_id:
+          type: string
+          description: Cart line id, required for update_quantity and remove.
+        quantity:
+          type: integer
+          description: Quantity for add or update_quantity. Defaults to 1.
+        size:
+          type: string
+          enum:
+          - small
+          - medium
+          - large
+          description: Drink size for add. Ignored for food and pastries.
+        modifiers:
+          type: array
+          items:
+            type: string
+            enum:
+            - oat_milk
+            - extra_shot
+            - decaf
+            - iced
+          description: Optional modifiers for add.
+      required:
+      - action
+      additionalProperties: false
+place_order:
+  type: function
+  function:
+    name: place_order
+    description: Place the current cart as an order. Call with confirmed=false to get a read-back summary to confirm with
+      the user, and confirmed=true only after the user has said yes. Takes a few seconds to complete.
+    parameters:
+      type: object
+      properties:
+        customer_name:
+          type: string
+          description: Name to call out when the order is ready.
+        confirmed:
+          type: boolean
+          description: True only if the user explicitly confirmed the order.
+      required:
+      - customer_name
+      - confirmed
+      additionalProperties: false
+flights_search:
+  type: function
+  function:
+    name: flights_search
+    description: 'Search up to five nonstop Demo Air flights between two cities on one date, each with a demo fare. Pass
+      origin and destination as the caller said them (a city, an airport name or an IATA code); the tool resolves them. Demo Air
+      flies between only twelve U.S. cities: for any other place the result is not_served and names the closest served city,
+      so offer that and never invent a flight. time_of_day, depart_after and depart_before narrow the day''s flights before
+      the best five are kept; when nothing matches, the result says so and lists no other flights. Each flight has an option
+      number that new_booking and modify_existing_booking accept. Flights come from a sample timetable, not real departures;
+      dates run up to 60 days ahead.'
+    parameters:
+      type: object
+      properties:
+        origin:
+          type: string
+          description: Departure city, airport name or IATA code.
+        destination:
+          type: string
+          description: Arrival city, airport name or IATA code.
+        date:
+          type: string
+          description: Travel date as YYYY-MM-DD.
+        cabin:
+          type: string
+          enum: &id001
+          - economy
+          - premium_economy
+          - business
+          - first
+          description: Cabin to price. Defaults to economy.
+        sort:
+          type: string
+          enum:
+          - price
+          - duration
+          - departure_time
+          description: Order of the results. Defaults to departure_time.
+        time_of_day:
+          type: string
+          description: 'Part of the day on the searched date: morning 05:00-11:59, afternoon 12:00-17:59, evening 18:00-23:59,
+            overnight (red-eye) 21:00-23:59.'
+        depart_after:
+          type: string
+          description: Earliest departure time, 24-hour HH:MM.
+        depart_before:
+          type: string
+          description: Departures before this time, 24-hour HH:MM; a flight at exactly this time is left out.
+      required:
+      - origin
+      - destination
+      - date
+      additionalProperties: false
+where_we_fly:
+  type: function
+  function:
+    name: where_we_fly
+    description: The cities Demo Air serves, with their airport codes, and the airline's routes. Use it when the caller asks
+      where Demo Air flies or which cities are covered. Every pair of the cities has nonstop flights.
+    parameters:
+      type: object
+      properties: {}
+      required: []
+      additionalProperties: false
+get_flight_status:
+  type: function
+  function:
+    name: get_flight_status
+    description: 'Status of one Demo Air flight on one day: scheduled, boarding, delayed, en route, landed or cancelled,
+      with scheduled, estimated and actual times, terminal and gate, and the reason for a delay or a cancellation. Uses a
+      flight from the caller''s bookings or the latest search when it knows one. Sample data, not a real departure.'
+    parameters:
+      type: object
+      properties:
+        flight_number:
+          type: string
+          description: Demo Air flight number, such as DA 214 or just 214.
+        date:
+          type: string
+          description: Flight date as YYYY-MM-DD. Defaults to the flight's date in the trips, else today.
+      required:
+      - flight_number
+      additionalProperties: false
+get_ontime_trend:
+  type: function
+  function:
+    name: get_ontime_trend
+    description: 'How often a flight was on time over about the last 90 days: on_time_pct, late_pct, very_late_pct, avg_delay_min
+      when it is late, and flights_counted. Sample data.'
+    parameters:
+      type: object
+      properties:
+        flight_number:
+          type: string
+          description: Demo Air flight number, such as DA 214 or just 214.
+      required:
+      - flight_number
+      additionalProperties: false
+sign_in:
+  type: function
+  function:
+    name: sign_in
+    description: Sign in to a demo account by user ID for this session, or create a demo account in the caller's own name
+      and sign in to it. No password. The sample accounts are jane_doe_001 (two trips, one of them delayed) and marcus_lee_002
+      (a trip today whose flight was cancelled). Give either user_id or new_account_name.
+    parameters:
+      type: object
+      properties:
+        user_id:
+          type: string
+          description: User ID such as jane_doe_001.
+        new_account_name:
+          type: string
+          description: The caller's full name, to create a new demo account.
+      required: []
+      additionalProperties: false
+get_existing_bookings:
+  type: function
+  function:
+    name: get_existing_bookings
+    description: The signed-in caller's trips with booking codes, routes, dates, cabins, seats and meals, including cancelled
+      ones. Pass user_id to sign in first.
+    parameters:
+      type: object
+      properties:
+        user_id:
+          type: string
+          description: User ID, to sign in before listing.
+      required: []
+      additionalProperties: false
+new_booking:
+  type: function
+  function:
+    name: new_booking
+    description: 'Book one flight from the latest flights_search as a demo booking for the signed-in caller. Needs a search
+      first. Changes only after a read-back: call without confirmed to get the read-back (status needs_confirmation, nothing
+      changes), tell the caller, and call again with the same arguments and confirmed=true only after they clearly say yes.'
+    parameters:
+      type: object
+      properties:
+        flight:
+          type: string
+          description: 'Which flight of the latest search: its option number, flight number or departure time.'
+        passengers:
+          type: string
+          description: Passenger names, comma separated. Defaults to the account holder.
+        cabin:
+          type: string
+          enum: *id001
+          description: Cabin to book. Defaults to the searched cabin.
+        confirmed: &id002
+          type: boolean
+          description: True only after the caller said yes to the read-back of this exact change. Omit it to read back.
+      required:
+      - flight
+      additionalProperties: false
+modify_existing_booking:
+  type: function
+  function:
+    name: modify_existing_booking
+    description: 'Move a booking to a flight from the latest flights_search and state the fare difference. Needs a search
+      first. A seat on the old flight is released; the meal stays. Changes only after a read-back: call without confirmed
+      to get the read-back (status needs_confirmation, nothing changes), tell the caller, and call again with the same arguments
+      and confirmed=true only after they clearly say yes.'
+    parameters:
+      type: object
+      properties:
+        flight:
+          type: string
+          description: 'Which flight of the latest search: its option number, flight number or departure time.'
+        booking_id: &id003
+          type: string
+          description: 'Six-character booking code such as K7Q2ZP. Optional: without it the tool uses the booking just made
+            or changed, or the caller''s only active booking, and otherwise asks which.'
+        confirmed: *id002
+      required:
+      - flight
+      additionalProperties: false
+cancel_booking:
+  type: function
+  function:
+    name: cancel_booking
+    description: 'Cancel a booking and state its refund rule. Changes only after a read-back: call without confirmed to get
+      the read-back (status needs_confirmation, nothing changes), tell the caller, and call again with the same arguments
+      and confirmed=true only after they clearly say yes.'
+    parameters:
+      type: object
+      properties:
+        booking_id: *id003
+        confirmed: *id002
+      required: []
+      additionalProperties: false
+select_seat_and_meal:
+  type: function
+  function:
+    name: select_seat_and_meal
+    description: 'Choose a seat and/or a special meal on a booking. Give seat, meal or both. Changes only after a read-back:
+      call without confirmed to get the read-back (status needs_confirmation, nothing changes), tell the caller, and call
+      again with the same arguments and confirmed=true only after they clearly say yes.'
+    parameters:
+      type: object
+      properties:
+        booking_id: *id003
+        seat:
+          type: string
+          description: A seat such as 18A, or window, aisle or exit row.
+        meal:
+          type: string
+          description: A meal in words (vegetarian, vegan, kosher, gluten-free) or a code such as VGML.
+        flight_number:
+          type: string
+          description: One flight of a multi-flight trip. Defaults to every flight of the booking.
+        confirmed: *id002
+      required: []
+      additionalProperties: false
+upgrade_class:
+  type: function
+  function:
+    name: upgrade_class
+    description: 'Move a booking to another cabin and state the demo price difference. Seats are released because they belong
+      to a cabin. Changes only after a read-back: call without confirmed to get the read-back (status needs_confirmation,
+      nothing changes), tell the caller, and call again with the same arguments and confirmed=true only after they clearly
+      say yes.'
+    parameters:
+      type: object
+      properties:
+        cabin:
+          type: string
+          enum: *id001
+          description: The cabin to move to.
+        booking_id: *id003
+        confirmed: *id002
+      required:
+      - cabin
+      additionalProperties: false

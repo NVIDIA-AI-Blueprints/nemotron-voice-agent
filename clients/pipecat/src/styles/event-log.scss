@@ -1,0 +1,207 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// The Event log tab (components/events/EventLogPanel.tsx): a console of the requests the voice agent sends to its backend
+// and the OpenAI-format events that stream back, oldest first. It takes its surfaces, text, borders and green from the
+// NVIDIA theme (nvidia-theme.scss). Each event type has one mild colour, used on the type's name and arrow only; rows stay
+// dark. Small text takes a lifted grey, because the theme's --text-muted is under 4.5:1 on a dark surface.
+// Motion is limited to short colour changes, which prefers-reduced-motion switches off.
+
+.evlog {
+  --evlog-muted: #8f8f8f;
+  --evlog-focus: #b3e76a;
+  --evlog-request: #f5b544;
+  --evlog-lifecycle: #a8a8a8;
+  --evlog-tool: #a3e635;
+  --evlog-text: #38bdf8;
+  --evlog-error: #f87171;
+
+  // The center column is narrow whenever the window is, so the rows adapt to this panel's width, not the window's.
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-4);
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+
+  button { font-family: inherit; }
+}
+
+// ---- Header and controls ------------------------------------------------------------------------------------------
+.evlog__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+}
+.evlog__title {
+  min-width: 0;
+  h2 { margin: 0; font-size: var(--text-lg); font-weight: var(--font-semibold); color: var(--text-primary); }
+  p { margin: 2px 0 0; max-width: 56ch; font-size: var(--text-xs); line-height: 1.5; color: var(--evlog-muted); }
+}
+.evlog__tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.evlog__filters { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.evlog__chip {
+  --chip: var(--evlog-lifecycle);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 3px 11px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--evlog-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+  &::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--chip); opacity: 0.35; }
+  &[data-family="request"] { --chip: var(--evlog-request); }
+  &[data-family="tool"] { --chip: var(--evlog-tool); }
+  &[data-family="text"] { --chip: var(--evlog-text); }
+  &[data-family="error"] { --chip: var(--evlog-error); }
+  &:hover { color: var(--text-primary); border-color: var(--border-strong); }
+  &[aria-pressed="true"] {
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--chip) 55%, transparent);
+    background: color-mix(in srgb, var(--chip) 10%, transparent);
+    &::before { opacity: 1; }
+  }
+  &:focus-visible { outline: 2px solid var(--evlog-focus); outline-offset: 2px; }
+}
+
+.evlog__btn {
+  min-height: 30px;
+  padding: 4px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  &:hover:not(:disabled) { background: var(--bg-card-hover); border-color: var(--border-strong); }
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+  &:focus-visible { outline: 2px solid var(--evlog-focus); outline-offset: 2px; }
+}
+
+// ---- Counts ----------------------------------------------------------------------------------------------------------
+.evlog__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--evlog-muted);
+  font-variant-numeric: tabular-nums;
+}
+.evlog__badge {
+  padding: 1px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  &--warn { color: var(--evlog-request); border-color: color-mix(in srgb, var(--evlog-request) 55%, transparent); }
+}
+.evlog__note { color: var(--evlog-tool); }
+
+// ---- The console -----------------------------------------------------------------------------------------------------
+.evlog__frame { position: relative; flex: 1; min-height: 0; display: flex; }
+.evlog__scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  &:focus-visible { outline: 2px solid var(--evlog-focus); outline-offset: 2px; }
+}
+.evlog__empty { margin: 0; padding: var(--space-8) var(--space-6); max-width: 60ch; font-family: var(--font-sans); font-size: var(--text-sm); line-height: 1.6; color: var(--evlog-muted); }
+.evlog__list { list-style: none; margin: 0; padding: 4px 0; min-width: 640px; }
+
+.evlog__item {
+  --family: var(--evlog-lifecycle);
+  border-bottom: 1px solid var(--border-subtle);
+  &:last-child { border-bottom: 0; }
+  &[data-family="request"] { --family: var(--evlog-request); }
+  &[data-family="tool"] { --family: var(--evlog-tool); }
+  &[data-family="text"] { --family: var(--evlog-text); }
+  &[data-family="error"] { --family: var(--evlog-error); }
+  &[data-open] { background: var(--bg-card); }
+}
+.evlog__row {
+  display: grid;
+  grid-template-columns: 5.6rem 1rem 1.7rem minmax(11rem, 17rem) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 10px;
+  width: 100%;
+  padding: 3px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  &:hover { background: var(--bg-card-hover); }
+  &:focus-visible { outline: 2px solid var(--evlog-focus); outline-offset: -2px; }
+  > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+.evlog__t { color: var(--evlog-muted); font-variant-numeric: tabular-nums; }
+.evlog__dir { color: var(--family); font-weight: 700; }
+.evlog__stream { color: var(--evlog-muted); }
+.evlog__kind { color: var(--family); font-weight: 600; }
+.evlog__sum { color: var(--text-secondary); }
+.evlog__json {
+  margin: 0;
+  padding: 8px 14px 12px 6.4rem;
+  overflow-x: auto;
+  color: var(--text-secondary);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.evlog__jump {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--nvidia-green);
+  background: var(--nvidia-green);
+  color: var(--bg-primary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-bold);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  &:hover { background: var(--nvidia-green-hover); border-color: var(--nvidia-green-hover); }
+  &:focus-visible { outline: 2px solid var(--evlog-focus); outline-offset: 2px; }
+}
+
+// A narrow panel drops the response label (the type and the one-line summary still tell the response apart) and lets the
+// rows shrink instead of scrolling sideways.
+@container (max-width: 720px) {
+  .evlog__list { min-width: 0; }
+  .evlog__row { grid-template-columns: 4.9rem 1rem minmax(9rem, 13rem) minmax(0, 1fr); }
+  .evlog__stream { display: none; }
+  .evlog__json { padding-left: 14px; }
+}
+
+@media (max-width: 700px) {
+  .evlog { padding: var(--space-3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evlog__chip, .evlog__btn { transition: none; }
+}

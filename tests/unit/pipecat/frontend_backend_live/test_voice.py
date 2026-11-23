@@ -611,6 +611,22 @@ class WorkTests(unittest.IsolatedAsyncioTestCase):
             await call.quiet()
             self.assertEqual(call.said(), ["Still on it."])
 
+    async def test_after_every_tool_call_ended_the_fixed_line_is_said_once(self):
+        script = (decision("delegate", ""),)
+        async with CallHarness(*script, config=settings(delegation={"progress_after_seconds": 0.2})) as call:
+            await call.say("Move me to the first one.")
+            await call.until(lambda: call.port.inputs, "the delegation")
+            call.port.started("del_1")
+            step = {"type": "mcp_call", "id": "mcp_1", "name": "modify_existing_booking", "server_label": "airline"}
+            call.port.send("del_1", "response.output_item.done", item={**step, "status": "completed"})
+            await call.until(lambda: call.said() == [LINES.still_working], "the fixed line")
+            again = {**step, "id": "mcp_2", "status": "completed"}
+            call.port.send("del_1", "response.output_item.done", item=again)
+            await asyncio.sleep(0.6)
+            await call.quiet()
+            self.assertEqual(call.said(), [LINES.still_working])
+            self.assertEqual(len(call.chat.requests), 1)  # no model worded it
+
     async def test_commentary_replaces_a_progress_line_being_worded(self):
         held = asyncio.Event()
         progress = [chunk('{"action":"speak",'), held, chunk('"speech":"Still on it."}'), chunk(finish="stop")]

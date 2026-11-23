@@ -1,11 +1,12 @@
 # Frontend/Backend Live Cascaded Example
 
-This example is a cascaded voice agent that puts a routing talker in front of backend work. On every caller turn, the talker, a fast large language model (LLM) call, speaks a reply, delegates the turn, or waits. The delegation core runs the delegated work, and the talker words each result for the voice to say when the caller is idle. The reference domain is the Bluebird Cafe ordering assistant, whose backend looks up the menu, edits a cart, and places an order.
+This example is a cascaded voice agent that puts a routing talker in front of backend work. On every caller turn, the talker, a fast large language model (LLM) call, speaks a reply, delegates the turn, or waits. The delegation core runs the delegated work, and the talker words each result for the voice to say when the caller is idle. The repository UI runs the Demo Air travel desk, a fictional airline whose backend searches flights, checks flight status, and books, changes, and cancels demo bookings. Refer to [Demo Air Travel Desk](#demo-air-travel-desk). The same pipeline can run the Bluebird Cafe ordering assistant, whose backend looks up the menu, edits a cart, and places an order, by a change to the registry entry.
 
 The example has two ways in:
 
 - **Live session clients**, such as Pipecat apps or your own app, connect through `/v1/live/sessions` and supply the prompts. The Compose profiles serve the Live routes when `.env` sets `LIVE_API_TOKEN`, or `LIVE_ENABLED=true` to serve them without a token. For the routes and their settings, refer to [Use the Live Gateway](../../../../../docs/how-to/use-live-gateway.md).
-- **The repository UI** (`/`) runs a bot whose backend runs the cafe tools on the server and shows each delegation as a task card. The Realtime gateway (`WS /v1/realtime`) drives the same bot.
+- **The repository UI** (`/`) runs a bot whose backend runs the airline tools on the server and shows each delegation as a task card. The Realtime gateway (`WS /v1/realtime`) drives the same bot.
+  With the `event_log` capability, the bot relays its backend's OpenAI-format events to the browser as `live-event` messages, and the developer view's **EVENT LOG** tab prints them. Refer to [Event Relay](#event-relay) and the [Event log](../../../../../clients/pipecat/README.md#event-log) section of the client README.
 
 A live session runs through four parts: the [Live gateway](../../runtime/gateways/live/), the frontend adapter (the rest of this package), the [delegation core](delegation_core/), and the backend adapter. The frontend adapter is a Pipecat pipeline of automatic speech recognition (ASR), the talker, and text-to-speech (TTS). The following diagram shows the four parts:
 
@@ -85,7 +86,7 @@ The example's settings are the `config` block of its `pipecat.examples.frontend-
 
 - `frontend`: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`), which sets the talker, the voice, and the caller's turns.
 - `core`: the delegation core of live sessions, as [Build and Configure the Core](delegation_core/README.md#build-and-configure-the-core) describes.
-- `ui_bot`: the UI bot's channel context (`channel`) and its own core: `core` with `ui_bot.core` merged over it. A mapping merges key by key, while any other value, `null` included, replaces it. The shipped `ui_bot.core` keeps the bot on the `llm` adapter.
+- `ui_bot`: the UI bot's channel context (`channel`) and its own core: `core` with `ui_bot.core` merged over it. A mapping merges key by key, while any other value, `null` included, replaces it. The shipped `ui_bot.core` keeps the bot on the `llm` adapter. The shipped entry sets the channel, the backend prompt, and the server tools to the airline desk. Refer to [Demo Air Travel Desk](#demo-air-travel-desk).
 
 The following excerpt shows the frontend keys that you are most likely to change, with the values that the example runs with:
 
@@ -100,7 +101,7 @@ config:
       prompt: generic                    # the Talker prompt of a session with no instructions
       delegation:
         app_wait_seconds: 50             # the app-wait line after the app takes this long; null: none
-        progress_after_seconds: 8        # a progress line after this much silent work; null: none
+        progress_after_seconds: 8        # a progress line after this much silent work (the fixed Lines.still_working once every tool call ended); null: none
         progress_max_per_delegation: 3   # progress lines for one delegation
       memory:
         context_tokens: 16000            # the talker's memory budget
@@ -143,9 +144,141 @@ The `tools` style is experimental, so test a model's routing decisions on your o
 
 ### Prompts
 
-[`prompts.yaml`](prompts.yaml) holds the talker prompt that the repository UI lists (`cafe`) and, in `agent_prompts`, the other texts, which the **Prompts** tab shows read-only. `Talker` and `Backend` hold the default talker and backend prompts, and `Channel` holds the UI bot's channel context. `Cascade` holds the text of the talker's calls, `Lines` holds the voice's fixed lines, and `Core` holds the delegation core's texts.
+[`prompts.yaml`](prompts.yaml) holds the talker prompts `airline` and `cafe`, of which the repository UI lists the one that the registry's `agent_prompt_keys` does not hide, and, in `agent_prompts`, the other texts, which the **Prompts** tab shows read-only. `Talker` and `Backend` hold the default talker and backend prompts, and `Channel` holds the UI bot's channel context. `Cascade` holds the text of the talker's calls, `Lines` holds the voice's fixed lines, and `Core` holds the delegation core's texts.
 
 Each session reads the file when it starts, but the server reads the core's texts and the Live core's default backend prompt once, so restart it after you edit them. A file that `PROMPT_FILE_PATH` names replaces the whole file, so it must hold every `agent_prompts` entry. It can leave out the `tools` style's entries in `Cascade` (`tool_frame_before`, `tool_routing`, `tool_rules`, `tools.delegate`, and `tools.wait`) when no model uses that style. An unknown entry in `Cascade` or `Lines` refuses the live and UI bot sessions, and the server log names the entry or its group.
+
+## Demo Air Travel Desk
+
+The repository UI runs the example as a travel desk. Ava, the desk's assistant at Demo Air (code `DA`), finds flights, checks flight status and on-time records, and looks up, books, changes, upgrades, and cancels demo bookings. Demo Air is a made-up airline. The data is a deterministic sample, and nothing is booked or charged. Bookings live in the session's memory, so nothing persists after the call ends.
+
+The airline's code is in [`delegation_core/backend/tools/airline/`](delegation_core/backend/tools/airline/). It makes no network call and uses no paid or licensed data. The airport facts are public geographic data as published by OurAirports (public domain), and the time zones are IANA zones.
+
+### Network and Flight Numbers
+
+Demo Air flies a nonstop route between every pair of 12 U.S. cities:
+
+| City | Code | City | Code |
+| --- | --- | --- | --- |
+| Atlanta | ATL | Los Angeles | LAX |
+| Boston | BOS | Miami | MIA |
+| Chicago | ORD | New York | JFK |
+| Dallas | DFW | Phoenix | PHX |
+| Denver | DEN | San Francisco | SFO |
+| Las Vegas | LAS | Seattle | SEA |
+
+The schedule has 528 daily flights: 3 to 5 a day each way for each pair, set by airport size. Callers can book dates up to 60 days ahead. The desk's day is the date in Central time, the zone of its Chicago hub. The flight numbers run from DA 100 to DA 755:
+
+- Each pair of cities has its own block of 10 numbers, with the pairs ordered by airport code.
+- A flight toward the east has an even number, and a flight toward the west has an odd number.
+- A day's departures on a route are numbered in clock order. For example, Denver to Boston is DA 210, 212, 214, and 216, and Boston to Denver is DA 211, 213, 215, and 217.
+- A flight keeps its number and its local time every day.
+- Flights toward the east take a little less time than the flights back, and some flights arrive the next day.
+
+A flight status is one of scheduled, boarding, delayed, en route, landed, or cancelled, with a cause for a delay or a cancellation.
+
+### What the Desk Does Not Serve
+
+The desk says what it does not serve. For any other place, the tools return a `not_served` answer. When a served city lies within 450 miles, the answer names it, for example "Demo Air doesn't fly to Boise, Idaho. The closest city we serve is Seattle, about 399 miles away." Otherwise, the answer lists the 12 cities. The `where_we_fly` tool lists the cities for a caller who asks.
+
+The agent says once per call that the airline is made up and that nothing is charged.
+
+### Sample Accounts
+
+Two sample accounts tell two stories. A caller can also open an account in their own name.
+
+| User ID | Spoken | Tier | Story |
+| --- | --- | --- | --- |
+| `jane_doe_001` | "jane doe zero zero one" | Gold | Two trips. One flight is delayed by 45 minutes (booking K7Q2ZP, Boston to Denver tomorrow). The other is a business trip from JFK to LAX in 24 days (M4X8RT). |
+| `marcus_lee_002` | "marcus lee zero zero two" | Silver | One trip (R9T4WN, Chicago to Seattle) whose flight today Demo Air cancelled. The agent says so, finds another flight on the route, and moves the booking at no charge. The booking keeps the fare that was paid. Cancelling that booking refunds it in full. |
+
+Try these things to say:
+
+- "I need a flight from Boston to Denver tomorrow."
+- "Anything leaving in the afternoon?"
+- "Where do you fly?"
+- "Can I fly from Boise to Denver?"
+- "My user ID is jane doe zero zero one."
+- "Is my flight today on time?" (as Marcus)
+
+### Airline Tools
+
+The tools are the `airline` tool source in `TOOL_SOURCES`, beside `cafe`. They run in the server process.
+
+| Tool | What it does |
+| --- | --- |
+| `flights_search` | Lists up to five nonstop flights for a route and date. It accepts a city, airport name, or IATA code, and filters by time of day, departure window, cabin, and sort order. |
+| `where_we_fly` | Lists the 12 cities that Demo Air serves. |
+| `get_flight_status` | Returns the state, delay, times, terminal, and gate of one flight, with the cause of a delay or a cancellation. |
+| `get_ontime_trend` | Returns how often a flight ran on time over about 90 days. |
+| `sign_in` | Signs in with a user ID, or creates a demo account for a name. No password is needed. |
+| `get_existing_bookings` | Lists the signed-in traveler's trips. |
+| `new_booking`, `modify_existing_booking`, `cancel_booking`, `select_seat_and_meal`, `upgrade_class` | Read a change back, then commit it after the caller confirms. |
+
+Each of the five change tools enforces the confirmation in the tool, not in the prompt. A call without `confirmed`, or a `confirmed: true` call with no matching read-back, returns `needs_confirmation` and changes nothing. A change commits only when the caller's yes follows the read-back of the same change. A repeated call ID returns the first result and never repeats a change. Fares are demo fares.
+
+### Select the Domain
+
+The registry entry selects the domain, and no code change is needed to switch. The `frontend-backend-live` entry in [`examples_registry.yaml`](../../../../../examples_registry.yaml) ships with these settings:
+
+| Key | Airline value |
+| --- | --- |
+| `defaults.prompt` | `[airline]` |
+| `agent_prompt_keys` | `[cafe]`, which hides the cafe talker prompt from the UI's prompt selector |
+| `config.ui_bot.channel` | `airline` |
+| `config.ui_bot.core.backend.prompt` | `airline` |
+| `config.ui_bot.core.backend.tools` | `{airline: {}}` |
+
+To run the Bluebird Cafe instead, make these changes in the same entry and restart the server:
+
+- Set `config.ui_bot.channel` to `cafe`, `config.ui_bot.core.backend.prompt` to `cafe`, and `config.ui_bot.core.backend.tools` to `{cafe: {}}`.
+- Set `defaults.prompt` to `[cafe]` and `agent_prompt_keys` to `[airline]`.
+
+The entry's `event_log` capability, which turns on the [Event Relay](#event-relay), works for any domain, so it stays.
+
+The Live gateway and its benchmarks use the `core` block, not `ui_bot`, so this choice does not affect them.
+
+The `airline` entries of [`prompts.yaml`](prompts.yaml) are the top-level `airline` talker prompt (with its `tools_available`), `agent_prompts.Backend.airline`, and `agent_prompts.Channel.airline`. A `PROMPT_FILE_PATH` file that replaces `prompts.yaml` needs `Channel.airline` and `Backend.airline`. The shared `agent_prompts.Lines.intro` and `Lines.greeting` name no persona. The writer words the greeting from the talker prompt: "Greet the caller briefly as the person and business your instructions describe, and ask how you can help." The fixed fallback line is "Hi, thanks for calling. How can I help?"
+
+### Event Relay
+
+With the `event_log` capability in the registry entry, the UI bot relays its backend's OpenAI-format events to the browser as RTVI server messages, and the developer view's **EVENT LOG** tab prints them. Without the capability, the bot relays nothing. The relay is generic and works for any domain. Each message has this shape:
+
+```json
+{"type": "live-event", "v": 1, "seq": 0, "t": 0, "direction": "", "kind": "", "stream": "", "delegation": "", "event": {}}
+```
+
+The code is in [`media/live_events.py`](media/live_events.py), and [`pipeline.py`](pipeline.py) wires it with `relays_events()` and `tapped()`. A server tool call, which is an `mcp_call` item such as one with `server_label` `airline`, goes out whole: its `arguments` and `output` are not clipped, up to 64,000 characters for an event. A larger event has those fields cut until it fits. The relay cuts other long text at 2,000 characters. It shows the backend's prompt as its size and its tools as names.
+
+For the tab, refer to the [client README](../../../../../clients/pipecat/README.md#event-log).
+
+### Verify the Desk
+
+Run the checks from the repository root:
+
+```bash
+uv run pytest tests/unit/pipecat/frontend_backend_live -q
+uv run python scripts/airline_backend_smoke.py --script book manage scope disruption
+```
+
+The airline tests are `test_airline_tools.py`, `test_airline_network.py`, `test_live_events.py`, `test_ui_bot.py`, and `test_prompts.py`. The smoke script plays scripted callers against the real backend prompt and tools with a real model, so it needs `NVIDIA_API_KEY` in the environment. It prints the transcripts and flags long answers, repeated or missing demo notes, claims of a completed change in a read-back, and any airline other than Demo Air.
+
+The client's Event log tests read a call recorded from these tools, which a unit test checks. Run this script after you change a tool or the sample accounts, and add `--check` to verify without writing:
+
+```bash
+uv run python scripts/export_airline_demo.py      # writes clients/pipecat/tests/airline-recorded-call.ts
+```
+
+### Balancing Conversation and Routing
+
+The airline prompts add conversational behavior without replacing the routing rules that the cascade shares with every prompt:
+
+- The talker says what the desk does, that the airline is made up, and who Ava is without a backend call. It never states a flight, price, code, or status before the backend returns it.
+- The talker never asks for a user ID, a booking code, or a confirmation. The backend asks, so every yes, no, and correction reaches the tools.
+- Lead-ins stay short and generic and name no detail, so the talker cannot promise an outcome.
+- The backend words results for speech in short answers of about 35 words: two flights aloud and the rest on screen, trips by route and date, no recaps, 12-hour times, spoken dates, and one next step at most. It says once per call, or when the caller asks, that the airline is made up and that nothing is charged.
+
+To change the desk's wording, edit the `airline` entries in [`prompts.yaml`](prompts.yaml). Keep these rules when you do, and repeat any limit on what the caller may hear in the backend prompt, as the tips below describe.
 
 ## Customization
 
@@ -163,4 +296,4 @@ Follow these practices:
 
 - **Repeat the talker's limits in the backend's instructions.** When the talker cannot word a result, the voice says the backend's text as written. So also put any limits on what the caller may hear in `delegation.responses.instructions`, or in your backend's prompt in client mode.
 - **Keep the app-wait line before the deadline.** `core.delegation.client_tool_timeout_seconds` (60) is the core's deadline for the app's function outputs. Keep `frontend.cascade.delegation.app_wait_seconds` (50) below it, so the `app_wait_line` plays while the work still waits.
-- **Change the UI bot's backend with its talker prompt.** A new top-level talker prompt keeps the cafe's channel context, backend prompt, tools, and greeting lines. So also change `backend.prompt` and `backend.tools` under `ui_bot.core`, `ui_bot.channel`, and the `intro` and `greeting` lines in `agent_prompts.Lines`.
+- **Change the UI bot's domain in its registry entry.** A new top-level talker prompt does not change the UI bot's channel context, backend prompt, or tools. Set `ui_bot.channel`, `ui_bot.core.backend.prompt`, and `ui_bot.core.backend.tools` to the new domain, and set `defaults.prompt` and `agent_prompt_keys` to match, as [Select the Domain](#select-the-domain) describes for the airline and the cafe.

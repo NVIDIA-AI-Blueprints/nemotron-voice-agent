@@ -5,10 +5,13 @@
 
 from collections.abc import Mapping
 
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.tools.airline.tools import (
+    AirlineTools,
+)
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.tools.cafe.tools import (
     CafeTools,
 )
 
-TOOL_SOURCES: Mapping[str, type] = {source.label: source for source in (CafeTools,)}
+TOOL_SOURCES: Mapping[str, type] = {source.label: source for source in (AirlineTools, CafeTools)}
 
-__all__ = ["TOOL_SOURCES", "CafeTools"]
+__all__ = ["TOOL_SOURCES", "AirlineTools", "CafeTools"]

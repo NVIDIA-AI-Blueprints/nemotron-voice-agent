@@ -9,18 +9,20 @@ import json
 import os
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import yaml
+from fastapi.testclient import TestClient
 from pipecat.frames.frames import VADUserStoppedSpeakingFrame
 from pipecat.processors.filters.identity_filter import IdentityFilter
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live import factory, pipeline
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.config_manager.schema import LiveConfig
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.config_manager.schema import ExampleConfig, LiveConfig
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.app import build_core
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.frontend import build_frontend
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.models.endpoints import ExampleCatalog
@@ -28,8 +30,9 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.talker import T
 from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation import ServerDelegation
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.lifecycle import announce_response, finish_response
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.serializer import RealtimeFrameSerializer
+from nemotron_voice_agent.pipecat.runtime.server import create_app
 from tests.unit.pipecat.cascade_helpers import FakeSTT, chat_adapters, transcript_turns
-from tests.unit.pipecat.core_helpers import chunk, tool_fragment
+from tests.unit.pipecat.core_helpers import CAFE_UI_BOT, ROOT, chunk, example_settings, tool_fragment
 from tests.unit.pipecat.frontend_helpers import (
     CATALOG,
     FRONT,
@@ -76,14 +79,19 @@ class FakeTransport:
 
 
 class BotCase(unittest.IsolatedAsyncioTestCase):
-    """``pipeline.bot()`` as it runs, on a scripted talker, fake speech and a fake RTVI transport."""
+    """``pipeline.bot()`` as it runs, on a scripted talker, fake speech and a fake RTVI transport.
+
+    It runs on the cafe's ``ui_bot`` settings unless a subclass sets ``UI_BOT``; None is the registry's own.
+    """
+
+    UI_BOT = CAFE_UI_BOT
 
     def setUp(self):
         self.events, self.aggregator_welcome, self.welcome, self.close_fails = [], [], True, False
         self.chat, self.body = ScriptedChat(), {"pipeline_mode": "frontend-backend-live"}
         self.frontends, self.running = [], asyncio.Event()
         self.transport, self.stt, self.tts = FakeTransport(), FakeSTT(), SentenceTTS()
-        config = factory.example_config()
+        config = ExampleConfig.model_validate(example_settings(self.UI_BOT))
         core = factory.ui_bot_core(config)
         cascade = LiveConfig.model_validate(factory.with_display_label(factory.adapter_block(config), core))
         case = self
@@ -379,6 +387,164 @@ class BotCallTests(BotCase):
         kinds = ["user-turn-finalized", "user-bot-latency", "metric-group", "latency-breakdown"]
         self.assertEqual([data["type"] for data in sent], kinds)
         self.assertEqual((sent[0]["transcript"], sent[2]["group_id"]), ("A pot of Earl Grey.", "turn-1"))
+
+
+class AirlineGreetingTests(BotCase):
+    """The registry's own ``ui_bot``: the Demo Air desk greets from the same neutral intro as any domain."""
+
+    UI_BOT = None
+
+    async def test_the_welcome_is_worded_from_the_intro_on_the_airline_seed(self):
+        self.chat.script.append(decision("speak", "Thanks for calling Demo Air, this is Ava."))
+        self.body.update(system_prompt="detailed thinking off", prompt_key="airline")
+        self.enterContext(patch.dict(os.environ))
+        for name in ("PROMPT_FILE_PATH", "PROMPT_SELECTOR"):
+            os.environ.pop(name, None)
+
+        async def during_run(frontend):
+            await frontend.worker.rtvi.set_client_ready()
+            await self.until(lambda: self.tts.spoken, "the greeting")
+
+        await self.run_bot(during_run)
+        self.assertEqual(self.tts.spoken, ["Thanks for calling Demo Air, this is Ava."])
+        lines = PROMPTS_FILE["agent_prompts"]["Lines"]
+        self.assertIn(lines["intro"]["content"], json.dumps(self.chat.requests[0]["messages"], ensure_ascii=False))
+        for line in lines.values():
+            self.assertNotIn("Remy", line["content"])
+            self.assertNotIn("Bluebird", line["content"])
+        talker = PROMPTS_FILE["airline"]["content"]
+        channel = PROMPTS_FILE["agent_prompts"]["Channel"]["airline"]["content"].strip()
+        self.assertIn(
+            f"detailed thinking off\n\n{talker}\n\n{channel}", self.chat.requests[0]["messages"][0]["content"]
+        )
+
+
+class AirlineCallTests(BotCase):
+    """A whole call on the registry's own ``ui_bot``, with the real airline tools and the events relay on."""
+
+    UI_BOT = None
+
+    def setUp(self):
+        super().setUp()
+        self.welcome, self.backend = False, ScriptedChat()
+        self.body["prompt_key"] = "airline"
+
+        def core(settings, *, endpoints, defaults):
+            return build_core(settings, endpoints=endpoints, defaults=defaults, adapters=chat_adapters(self.backend))
+
+        for name, value in {
+            "build_core": core,
+            "core_client": factory.core_client,
+            "ServerDelegation": ServerDelegation,
+        }.items():
+            self.enterContext(patch.object(pipeline, name, value))
+
+    def sent(self, kind: str) -> list[dict]:
+        return [data for data in self.transport.outbound.messages if data.get("type") == kind]
+
+    async def test_a_search_runs_the_airline_tool_and_its_whole_output_reaches_the_screen(self):
+        held = asyncio.Event()
+        tomorrow = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+        arguments = json.dumps({"origin": "Boston", "destination": "Denver", "date": tomorrow})
+        worded = "Four flights match, the first at 9:55 AM for two hundred sixty dollars."
+        self.chat.script += [decision("delegate", "Let me look."), decision("speak", worded)]
+        self.backend.script += [
+            [chunk(tool_calls=[tool_fragment(0, "call_1", "flights_search", arguments)]), chunk(finish="tool_calls")],
+            held,
+            [chunk("Four flights match.", finish="stop")],
+        ]
+
+        async def during_run(frontend):
+            await frontend.worker.rtvi.set_client_ready()
+            await self.stt.propose("Flights from Boston to Denver tomorrow, please.")
+            await self.until(lambda: self.tts.spoken, "the lead-in")
+            held.set()
+            await self.until(lambda: len(self.tts.spoken) == 2, "the answer")
+            await self.until(self.cards_done, f"the card, {self.cards()}")
+
+        await self.run_bot(during_run)
+        self.assertEqual(self.tts.spoken, ["Let me look.", worded])
+        tool_result = next(m for m in self.backend.requests[1]["messages"] if m["role"] == "tool")
+        found = json.loads(tool_result["content"])
+        self.assertEqual((found["status"], found["count"]), ("ok", 4))
+        # The relay: ordered, with no gap, and the tool call carries its whole output.
+        events = self.sent("live-event")
+        self.assertEqual([event["seq"] for event in events], list(range(1, len(events) + 1)))
+        self.assertEqual(events[0]["kind"], "conversations.create")
+        calls = [
+            e for e in events if e["kind"] == "response.output_item.done" and e["event"]["item"]["type"] == "mcp_call"
+        ]
+        self.assertEqual(len(calls), 1)
+        item = calls[0]["event"]["item"]
+        self.assertEqual(
+            (item["server_label"], item["name"], item["status"]), ("airline", "flights_search", "completed")
+        )
+        self.assertEqual(json.loads(item["arguments"])["destination"], "Denver")
+        self.assertEqual(json.loads(item["output"]), found)
+        self.assertEqual(len(json.loads(item["output"])["flights"]), 4)
+        self.assertEqual({e["stream"] for e in events if e["kind"].startswith("response.")} - {None}, {"r1"})
+
+    def cards(self) -> dict:
+        """Return each delegation's newest task card, by its task id."""
+        return {d["task_id"]: d for d in self.sent("agent-task-update")}
+
+    def cards_done(self) -> bool:
+        return bool(self.cards()) and all(card["status"] == "done" for card in self.cards().values())
+
+    async def test_without_the_capability_nothing_is_relayed(self):
+        self.enterContext(patch.object(pipeline, "relays_events", lambda key: False))
+        self.chat.script.append(decision("speak", "Hello."))
+
+        async def during_run(frontend):
+            await frontend.worker.rtvi.set_client_ready()
+            await self.stt.propose("Hello there.")
+            await self.until(lambda: self.tts.spoken, "the reply")
+
+        await self.run_bot(during_run)
+        self.assertEqual(self.sent("live-event"), [])
+
+
+class ListingTests(unittest.TestCase):
+    """What the repository UI is offered for this example."""
+
+    def test_the_ui_lists_the_airline_prompt_and_the_tools_of_both_sources(self):
+        client = TestClient(create_app())
+        prompts = client.get("/api/prompts", params={"pipeline_mode": "frontend-backend-live"}).json()
+        session = [p for p in prompts if p["scope"] == "session"]
+        self.assertEqual([p["key"] for p in session], ["airline"])
+        self.assertEqual([p["default"] for p in session], [True])
+        # The cafe's talker prompt is still in the file, but the UI does not offer it next to the airline backend.
+        cafe = next(p for p in prompts if p["key"] == "cafe")
+        self.assertEqual((cafe["selectable"], cafe["scope"]), (False, "agent"))
+        self.assertTrue(all(p["selectable"] and p["content"] for p in session))
+        tools = client.get("/api/tools", params={"pipeline_mode": "frontend-backend-live"}).json()
+        names = [tool["name"] for tool in tools]
+        self.assertEqual(names[:3], ["get_menu", "manage_cart", "place_order"])
+        self.assertEqual(len(names), 14)
+        self.assertTrue(all(tool["description"] and tool["parameters"]["type"] == "object" for tool in tools))
+        for prompt in session:
+            self.assertEqual(len(prompt["tools"]), 11)
+            self.assertTrue(set(prompt["tools"]) <= set(names), prompt["key"])
+
+    def test_the_event_log_is_offered_to_this_example_and_to_no_other(self):
+        import nemotron_voice_agent.pipecat.runtime.examples_registry as registry
+
+        this = registry.metadata(registry.find("frontend-backend-live", ignore_lock=True))
+        self.assertEqual(this["capabilities"], ["event_log"])
+        self.assertEqual(this["defaults"]["prompt"][0]["key"], "airline")
+        for key, example in registry.EXAMPLES.items():
+            if key != "frontend-backend-live":
+                with self.subTest(key):
+                    self.assertNotIn("event_log", example["capabilities"])
+
+    def test_the_registry_names_the_airline_and_says_how_to_get_the_cafe_back(self):
+        text = (ROOT / "examples_registry.yaml").read_text(encoding="utf-8")
+        entry = text[text.index("    frontend-backend-live:") :]
+        entry = entry[: entry.index("\n      live:")]
+        self.assertIn("prompt: [airline]", entry)
+        self.assertIn("agent_prompt_keys: [cafe]", entry)
+        self.assertIn("channel: airline", entry)
+        self.assertIn("To run the Bluebird Cafe instead", entry)
 
 
 class BotRootTests(unittest.TestCase):

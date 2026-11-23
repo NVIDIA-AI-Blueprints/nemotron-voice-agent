@@ -113,6 +113,31 @@ class Display(Results):
         self.calls.append(("ended", delegation_id, how.value))
 
 
+class StepsEndedTests(unittest.TestCase):
+    """Work whose tool calls all ended is told apart from work that thinks before a tool or runs one."""
+
+    def test_steps_ended_only_once_every_call_of_the_latest_response_ended(self):
+        note = WorkNote(LOADED.cascade, tracks=True, clock=lambda: 0.0, observe=lambda *a, **k: None)
+        note.confirm(note.reserve("move me to the first one"), "d1")
+        note.running("d1")
+        entry = note.entries["d1"]
+        self.assertFalse(note.steps_ended(entry))  # thinking, no tool yet
+        note.call_started("d1", "r1", "c1", "modify_existing_booking")
+        self.assertFalse(note.steps_ended(entry))  # a tool runs
+        note.call_ended("d1", "r1", "c1", "modify_existing_booking", "completed")
+        self.assertTrue(note.steps_ended(entry))  # the backend works from outputs the note does not hold
+        note.call_started("d1", "r2", "c2", "select_seat_and_meal")
+        self.assertFalse(note.steps_ended(entry))  # a later response's tool runs
+
+    def test_the_fixed_line_said_for_a_delegation_stays_said_when_another_carries_its_work(self):
+        note = WorkNote(LOADED.cascade, tracks=True, clock=lambda: 0.0, observe=lambda *a, **k: None)
+        note.confirm(note.reserve("move me to the first one"), "d1")
+        note.confirm(note.reserve("and a window seat"), "d2")
+        note.entries["d1"].still_said = True
+        note.hand_over("d1", "d2")
+        self.assertTrue(note.entries["d2"].still_said)
+
+
 class Reading:
     """A reader with recording doubles around it, for the frontend's own delegations ``delegation_ids``."""
 

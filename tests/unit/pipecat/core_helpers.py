@@ -32,9 +32,25 @@ CORE_TEXTS = {name: entry["content"] for name, entry in PROMPTS["agent_prompts"]
 REGISTRY = yaml.safe_load((ROOT / "examples_registry.yaml").read_text(encoding="utf-8"))["pipecat"]
 EXAMPLE_SETTINGS = REGISTRY["examples"]["frontend-backend-live"]["config"]
 CORE_BLOCK = EXAMPLE_SETTINGS["core"]
+# The registry's ui_bot is the airline desk. The bot tests that are about the bot, not its domain, run on the cafe's.
+CAFE_UI_BOT = {
+    "channel": "cafe",
+    "core": {
+        "delegation": {"result_format": "speak_display"},
+        "backend": {"adapter": "llm", "prompt": "cafe", "tools": {"cafe": {}}},
+    },
+}
 HARNESS_GROUP = all(find_spec(name) for name in GROUP_PACKAGES)
 NO_HARNESS_GROUP = "the harness dependency group is not installed: uv sync --group harness"
 ENDINGS = Path(__file__).parent / "fixtures" / "delegation_endings.json"
+
+
+def example_settings(ui_bot: Mapping | None = None) -> dict:
+    """Return the example's settings from the registry, with ``ui_bot`` in place of the registry's when one is given."""
+    settings = deepcopy(EXAMPLE_SETTINGS)
+    if ui_bot is not None:
+        settings["ui_bot"] = deepcopy(dict(ui_bot))
+    return settings
 
 
 def merged(base, changes):
