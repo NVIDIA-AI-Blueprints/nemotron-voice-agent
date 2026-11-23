@@ -17,8 +17,8 @@
     "@livekit/components-react": "2.9.25",
     "@tanstack/react-query": "5.101.3",
     "livekit-client": "2.24.1",
-    "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
