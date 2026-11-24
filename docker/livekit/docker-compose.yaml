@@ -281,10 +281,21 @@ services:
         aliases:
           - nvidia-llm-vllm
 
+  livekit-nemo-speech-asr:
+    extends:
+      file: ../sidecars/docker-compose.nemo-speech-cpp.yaml
+      service: nemo-speech-asr
+    profiles: !override
+      - generic-assistant-livekit/single-gpu
+    networks:
+      default:
+        aliases:
+          - nemo-speech-asr
+
   livekit-nemo-speech:
     extends:
       file: ../sidecars/docker-compose.nemo-speech-cpp.yaml
-      service: nemo-speech
+      service: nemo-speech-tts
     profiles: !override
       - generic-assistant-livekit/single-gpu
     networks:

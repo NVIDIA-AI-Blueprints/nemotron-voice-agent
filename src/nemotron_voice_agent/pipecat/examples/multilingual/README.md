@@ -58,7 +58,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
    | --- | --- | --- |
    | `multilingual-assistant` | `multilingual-assistant` | none (cloud NVCF) |
    | `multilingual-assistant/server` | `multilingual-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
-   | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-multilingual` |
+   | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-asr-multilingual`, `nemo-speech-tts` |
    | `multilingual-assistant/dynamo` | `multilingual-assistant-dynamo` | `dynamo-frontend`, `dynamo-lightning-worker`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
 
@@ -144,7 +144,7 @@ Multilingual behavior depends on the ASR model, the LLM, and the selected TTS vo
 | Session language is unavailable or startup is rejected | The selected locale is not supported by the active ASR, TTS, or built-in LLM | Select a locale shown in Voice Settings. For built-in LLM support, see [Configure LLM](../../../../../docs/how-to/configure-llm.md#multilingual-session-languages). |
 | Japanese or Chinese is missing from Voice Settings on single-GPU | Magpie TTS on NeMo-Speech.cpp does not advertise `ja-JP` or `zh-CN` | Expected on `multilingual-assistant/single-gpu` with any built-in LLM. Use the cloud or `multilingual-assistant/server` recipe for these languages. See [Configure LLM](../../../../../docs/how-to/configure-llm.md#multilingual-session-languages). |
 | TTS uses the wrong voice or language | Selected session language is not supported by the active TTS service | Check the configured TTS service exposes that language code, or pick a supported language |
-| No voices discovered at startup | TTS prewarm failed | For Cloud, confirm `NVIDIA_API_KEY` in `.env`. For Server, also confirm NGC login and TTS sidecar health with `docker compose ps`. For Single-GPU, confirm that the NeMo-Speech.cpp sidecar is healthy and `models/nemo-speech` contains the downloaded weights. |
+| No voices discovered at startup | TTS prewarm failed | For Cloud, confirm `NVIDIA_API_KEY` in `.env`. For Server, also confirm NGC login and TTS sidecar health with `docker compose ps`. For Single-GPU, confirm that the `nemo-speech-asr-multilingual` and `nemo-speech-tts` sidecars are healthy and `models/nemo-speech` contains the downloaded weights. |
 | Bot does not respond to a turn (no transcript) | Nemotron ASR Multilingual can drop a turn in noisy environments | Speak again, reduce background noise, and use a good microphone. See [Configure ASR](../../../../../docs/how-to/configure-asr.md#choosing-a-multilingual-asr-model) |
 | Weak or awkward replies in some languages | Nemotron 3.5 Lightning has weaker conversation quality in a few languages | Use Nemotron 3.5 Super VL for better multilingual quality. See [Configure LLM](../../../../../docs/how-to/configure-llm.md) |
 | Random ASR text while silent | Parakeet RNNT noise sensitivity | Expected with the Parakeet opt-in. The default Nemotron ASR is less prone to this. Otherwise reduce room noise and use a good mic |

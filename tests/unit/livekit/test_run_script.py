@@ -286,7 +286,10 @@ def test_wait_does_not_report_ready_while_a_service_has_no_container(tmp_path):
     assert "Ready to connect" not in result.stderr
 
 
-SINGLE_GPU_SERVICES = "livekit-init livekit-server livekit-nvidia-llm-vllm livekit-nemo-speech livekit-agent-single-gpu"
+SINGLE_GPU_SERVICES = (
+    "livekit-init livekit-server livekit-nvidia-llm-vllm livekit-nemo-speech-asr livekit-nemo-speech "
+    "livekit-agent-single-gpu"
+)
 
 
 def test_wait_succeeds_when_every_container_runs_and_init_has_exited(tmp_path):
@@ -295,7 +298,9 @@ def test_wait_succeeds_when_every_container_runs_and_init_has_exited(tmp_path):
     assert "Ready to connect" in result.stderr
 
 
-@pytest.mark.parametrize("stopped", ["livekit-nemo-speech", "livekit-agent-single-gpu", "livekit-server"])
+@pytest.mark.parametrize(
+    "stopped", ["livekit-nemo-speech-asr", "livekit-nemo-speech", "livekit-agent-single-gpu", "livekit-server"]
+)
 def test_wait_flags_a_stopped_container_even_without_a_health_check(tmp_path, stopped):
     # The speech sidecar, the agent, and the LiveKit server have no health check, so only their state shows a crash.
     # The agent's log can still contain "registered worker" after it stops.
@@ -439,7 +444,8 @@ def test_clean_names_the_unknown_option(tmp_path):
         (["single-gpu", "llm"], "livekit-nvidia-llm-vllm"),
         (["server", "llm"], "livekit-nvidia-llm"),
         (["server", "agent"], "livekit-agent-server"),
-        (["single-gpu", "speech"], "livekit-nemo-speech"),
+        (["single-gpu", "asr"], "livekit-nemo-speech-asr"),
+        (["single-gpu", "tts"], "livekit-nemo-speech"),
         (["cloud", "livekit"], "livekit-server"),
     ],
 )

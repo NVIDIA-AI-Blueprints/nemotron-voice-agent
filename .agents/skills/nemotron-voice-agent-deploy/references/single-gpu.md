@@ -22,6 +22,8 @@ Derive vLLM `--gpu-memory-utilization` from **this host's** measured memory. Nev
 
 ### 1. Record Available Memory
 
+If the recipe already ran before the ASR and TTS split, run `docker compose --profile <recipe> --profile transcribe-asr-single-gpu down --remove-orphans` first. This removes the old combined speech container and any Transcribe container from an earlier run, which would otherwise keep their GPU memory.
+
 Record CUDA-visible total and free memory plus host memory:
 
 ```bash
@@ -34,10 +36,19 @@ On DGX Spark and Jetson Thor, treat `MemAvailable` as the host-side limit becaus
 
 ### 2. Measure the Speech Reservation
 
-Start **only** the speech sidecar from `recipes.md`. Wait until ASR/TTS are loaded and warmed. Measure again. The drop is the speech reservation. Do not estimate from GGUF file sizes.
+Start **only** the speech sidecars that the deployment runs, with the service names from `recipes.md`. Wait until they are loaded and warmed. Measure again. The drop is the speech reservation. Do not estimate from GGUF file sizes.
+
+- Streaming ASR: start the ASR sidecar (for example `nemo-speech-asr`) and `nemo-speech-tts`.
+- Omni recipes: these recipes have no ASR sidecar. Start `nemo-speech-tts` alone.
+- Transcribe only: do not start the streaming ASR sidecar. Start `nemo-speech-tts` and `nemotron-transcribe-single-gpu` with the `transcribe-asr-single-gpu` profile. The measured drop then includes Transcribe, and step 3 subtracts it once.
 
 ```bash
-docker compose --profile <recipe> up -d <speech-sidecar>
+# Streaming ASR
+docker compose --profile <recipe> up -d <asr-sidecar> nemo-speech-tts
+# Omni
+docker compose --profile <recipe> up -d nemo-speech-tts
+# Transcribe only
+docker compose --profile <recipe> --profile transcribe-asr-single-gpu up -d nemo-speech-tts nemotron-transcribe-single-gpu
 ```
 
 ### 3. Calculate the vLLM Budget
@@ -58,7 +69,7 @@ gpu_memory_utilization =
 
 ### 4. Compare the Budget with the Recipe
 
-Compare that budget with the vLLM recipe: `docker/sidecars/docker-compose.nemotron35-lightning.yaml` for cascaded examples, `docker/sidecars/docker-compose.nemotron3-omni.yaml` for Omni. For Bolt E4B, use `docker/sidecars/docker-compose.nemotron35-bolt-e4b.yaml`, which needs at least 24 GiB usable after `VLLM_VRAM_HEADROOM_MIB`. If the automatic plan leaves the wrong reserve for this host, set only the supported `.env` controls: `VLLM_VRAM_HEADROOM_MIB` or, when an explicit fraction is required, `VLLM_GPU_MEMORY_UTILIZATION`. If the model does not fit with safe headroom, use cloud. When the `transcribe-asr-single-gpu` profile is on, Transcribe takes about 26 GiB more before Lightning starts. On a workstation GPU, Lightning waits for Transcribe to be healthy and then sizes its memory from the free memory that remains, so measure free memory after Transcribe loads. This applies when `VLLM_GPU_MEMORY_UTILIZATION` is unset. When you set it, that value replaces the calculated fraction. The 28 GiB minimum still applies, and the fraction is not checked against the remaining free memory. DGX Spark and Jetson Thor do not size from free memory. Lightning uses a fixed `--gpu-memory-utilization` of `0.35` there.
+Compare that budget with the vLLM recipe: `docker/sidecars/docker-compose.nemotron35-lightning.yaml` for cascaded examples, `docker/sidecars/docker-compose.nemotron3-omni.yaml` for Omni. For Bolt E4B, use `docker/sidecars/docker-compose.nemotron35-bolt-e4b.yaml`, which needs at least 24 GiB usable after `VLLM_VRAM_HEADROOM_MIB`. If the automatic plan leaves the wrong reserve for this host, set only the supported `.env` controls: `VLLM_VRAM_HEADROOM_MIB` or, when an explicit fraction is required, `VLLM_GPU_MEMORY_UTILIZATION`. If the model does not fit with safe headroom, use cloud. When the `transcribe-asr-single-gpu` profile is on, Transcribe takes about 26 GiB more before Lightning starts. Step 2 already includes it in the measured speech reservation. On a workstation GPU, Lightning waits for Transcribe to be healthy and then sizes its memory from the free memory that remains, so measure free memory after Transcribe loads. This applies when `VLLM_GPU_MEMORY_UTILIZATION` is unset. When you set it, that value replaces the calculated fraction. The 28 GiB minimum still applies, and the fraction is not checked against the remaining free memory. DGX Spark and Jetson Thor do not size from free memory. Lightning uses a fixed `--gpu-memory-utilization` of `0.35` there.
 
 ### 5. Verify the Warm Stack
 
@@ -82,7 +93,7 @@ Omni examples use the hardware selection in `docker/sidecars/docker-compose.nemo
 
 ## Failures
 
-- Hang or OOM → GGUFs are missing, or `--gpu-memory-utilization` was not sized with the speech sidecar loaded. Follow the memory-fit procedure and use the documented `.env` controls when an override is required.
+- Hang or OOM → GGUFs are missing, or `--gpu-memory-utilization` was not sized with the speech sidecars loaded. Follow the memory-fit procedure and use the documented `.env` controls when an override is required.
 - `Engine core initialization failed` in a vLLM service, or `Free memory on device ... is less than desired GPU memory utilization` on Jetson Thor after a vLLM stopped or crashed → reclaim page cache and retry:
 
 ```bash

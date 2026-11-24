@@ -81,7 +81,14 @@ ASR runs one of three ways, and the repo wires the right one per profile:
     docker compose --profile multilingual-assistant/single-gpu --profile transcribe-asr-single-gpu up -d
     ```
 
-    Pass the same profiles to `docker compose down`. The cloud recipes do not include Transcribe.
+    The single-GPU recipes run ASR and TTS in separate containers. To free the GPU memory of the streaming ASR so that only Transcribe runs, scale the ASR container to `0`. The TTS container keeps running:
+
+    ```bash
+    docker compose --profile generic-assistant/single-gpu --profile transcribe-asr-single-gpu up -d --scale nemo-speech-asr=0
+    docker compose --profile multilingual-assistant/single-gpu --profile transcribe-asr-single-gpu up -d --scale nemo-speech-asr-multilingual=0
+    ```
+
+    Pass the same profiles to `docker compose down`, without `--scale`. The cloud recipes do not include Transcribe.
 
     Transcribe writes the transcript in the spoken language. The session language does not change it.
 
@@ -90,7 +97,7 @@ ASR runs one of three ways, and the repo wires the right one per profile:
     External NIMs must not require an API key because the pipeline does not pass one. Set `server.asr.nemotron-transcribe.server` to the HTTP API URL of the NIM, including `/v1`. Keep `asr_type: transcribe`. Transcribe produces final transcripts without speaker labels. In Generic Assistant, leave `transcription_prompt` unset for audio-only requests, or use an official NIM transcription template.
 
     In rare cases, Transcribe can follow an instruction spoken in the audio (for example, "answer in one word") instead of transcribing it.
-- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, one sidecar serves **ASR + TTS together** from local GGUF weights (`nemo-speech` for English, `nemo-speech-multilingual` for the multilingual example, both in `docker-compose.nemo-speech-cpp.yaml` and both reachable as `nemo-speech`). See [Jetson Thor](../03-jetson-thor.md).
+- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, two sidecars serve ASR and TTS from local GGUF weights. The ASR sidecar is `nemo-speech-asr` for English or `nemo-speech-asr-multilingual` for the multilingual example, reachable as `nemo-speech-asr:50052`. The TTS sidecar is `nemo-speech-tts`, reachable as `nemo-speech:50051`. All are in `docker-compose.nemo-speech-cpp.yaml`. Refer to [Jetson Thor](../03-jetson-thor.md).
 
 > Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs require compute capability **≥ 8.0** and **≥ 16 GB** VRAM.
 
@@ -98,7 +105,7 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 
 The streaming ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. Standard `*/server` deployments let NIM select the LLM profile automatically, so its memory footprint depends on the detected GPU and selected precision. Confirm the selected profile before assuming ASR (~15 GB), TTS (~14 GB), and the LLM fit on one ~80 GB GPU. If they do not fit, move the speech sidecars separately: update the ASR `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml) and the selected TTS service's `device_ids` in its Compose file. Refer to the [Server NIM device-placement guidance](../../.agents/skills/nemotron-voice-agent-deploy/references/server.md#precision) and [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the complete multi-GPU layout.
 
-With the server recipe, Transcribe runs on its own GPU (GPU 1 by default). Refer to the [Transcribe NIM support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#nemotron-transcribe) for supported GPUs and memory. With a single-GPU recipe, Transcribe shares GPU `0` and needs about 26 GiB in addition to the LLM and the speech sidecar.
+With the server recipe, Transcribe runs on its own GPU (GPU 1 by default). Refer to the [Transcribe NIM support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#nemotron-transcribe) for supported GPUs and memory. With a single-GPU recipe, Transcribe shares GPU `0` and needs about 26 GiB in addition to the LLM and the speech sidecars.
 
 The Transcribe NIM support matrix does not list Jetson Thor. It lists DGX Spark only as a planned tier without measured settings, so the server NIM recipe does not support Transcribe on these devices.
 

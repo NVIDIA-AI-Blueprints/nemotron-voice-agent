@@ -63,7 +63,7 @@ the supported configuration on Thor.
     required in `.env`.
 
 5. Start the full stack via Docker Compose. This brings up the LLM (vLLM), the
-   NeMo-Speech.cpp sidecar, and the Pipecat pipeline together. Choose the profile for
+   NeMo-Speech.cpp ASR and TTS sidecars, and the Pipecat pipeline together. Choose the profile for
    your example:
 
     ```bash

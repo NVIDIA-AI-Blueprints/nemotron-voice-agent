@@ -18,12 +18,14 @@ x-nemo-speech: &nemo-speech
   restart: unless-stopped
 
 services:
-  nemo-speech:
+  nemo-speech-asr:
     <<: *nemo-speech
     # Diarization needs the asr/, diarization/, and vad/ models from
     # scripts/download-nemo-speech-models.sh.
     profiles:
       - generic-assistant/single-gpu
+    ports:
+      - "50052:50052"
     environment:
       NEMO_SPEECH_ASR_DIAR_MODEL_PATH: /models/diarization/Nemotron-3-Diarization.q8_0.gguf
       NEMO_SPEECH_ASR_DIAR_PRESET: v3-streaming
@@ -35,60 +37,46 @@ services:
       - --asr.backend.gpu=0
       - --asr.endpointing.enable=${NEMO_SPEECH_ASR_ENDPOINTING:-true}
       - --asr.endpointing.stop_history_eou_ms=${NEMO_SPEECH_ASR_STOP_HISTORY_EOU_MS:-320}
-      - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2607.f16.gguf
-      - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
-      - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
-      - --tts.tn-model-dir=/models/tn_configs
-      - --tts.language-code=en-US
-      - --tts.voice-name=John
-      - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
-      - --bind=0.0.0.0:50051
+      - --bind=0.0.0.0:50052
 
-  nemo-speech-frontend-backend:
+  nemo-speech-asr-frontend-backend:
     <<: *nemo-speech
     profiles: [frontend-backend-live/single-gpu]
+    ports:
+      - "50052:50052"
     command:
       - --asr.model.path=/models/nemotron-speech-streaming-en-0.6b.q8_0.gguf
       - --asr.backend.gpu=0
       - --asr.endpointing.enable=${NEMO_SPEECH_ASR_ENDPOINTING:-true}
       - --asr.endpointing.stop_history_eou_ms=${NEMO_SPEECH_ASR_STOP_HISTORY_EOU_MS:-320}
-      - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2607.f16.gguf
-      - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
-      - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
-      - --tts.tn-model-dir=/models/tn_configs
-      - --tts.language-code=en-US
-      - --tts.voice-name=John
-      - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
-      - --bind=0.0.0.0:50051
+      - --bind=0.0.0.0:50052
     networks:
       default:
         aliases:
-          - nemo-speech
+          - nemo-speech-asr
 
-  nemo-speech-multilingual:
+  nemo-speech-asr-multilingual:
     <<: *nemo-speech
     profiles: [multilingual-assistant/single-gpu]
+    ports:
+      - "50052:50052"
     command:
       - --asr.model.path=/models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
       - --asr.backend.gpu=0
       - --asr.endpointing.enable=${NEMO_SPEECH_ASR_ENDPOINTING:-true}
       - --asr.endpointing.stop_history_eou_ms=${NEMO_SPEECH_ASR_STOP_HISTORY_EOU_MS:-320}
-      - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2607.f16.gguf
-      - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
-      - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
-      - --tts.tn-model-dir=/models/tn_configs
-      - --tts.language-code=en-US
-      - --tts.voice-name=John
-      - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
-      - --bind=0.0.0.0:50051
+      - --bind=0.0.0.0:50052
     networks:
       default:
         aliases:
-          - nemo-speech
+          - nemo-speech-asr
 
   nemo-speech-tts:
     <<: *nemo-speech
     profiles:
+      - generic-assistant/single-gpu
+      - multilingual-assistant/single-gpu
+      - frontend-backend-live/single-gpu
       - omni-assistant/single-gpu
       - omni-assistant-subagents/single-gpu
     command:

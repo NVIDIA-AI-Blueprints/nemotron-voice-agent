@@ -182,7 +182,7 @@ Every speech sidecar publishes its own host ports, so alternatives can run side 
 | `chatterbox-tts-service` | `50251` | `9100` |
 | `magpie-zeroshot-tts-service` | `50351` | `9200` |
 
-When two containers serve the same model for different profiles, give them the same Compose network alias so one catalog entry covers both. Every NeMo-Speech.cpp variant answers on `nemo-speech`, and both single-GPU Lightning containers answer on `nvidia-llm-vllm`.
+When two containers serve the same model for different profiles, give them the same Compose network alias so one catalog entry covers both. Every NeMo-Speech.cpp ASR variant answers on `nemo-speech-asr`, every NeMo-Speech.cpp TTS container answers on `nemo-speech`, and both single-GPU Lightning containers answer on `nvidia-llm-vllm`.
 
 To run models locally for a **new example**, add your example's profile (for example `my-example/server`) to the relevant service(s) under `docker/sidecars/`, add the app service with `SERVICE_RECIPE` in `docker/pipecat/docker-compose.yaml`, and list the catalog keys under `pipecat.examples.<example>.services` in `examples_registry.yaml`. Refer to [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
 

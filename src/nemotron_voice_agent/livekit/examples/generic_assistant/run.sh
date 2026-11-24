@@ -21,7 +21,7 @@
 #   run.sh down [profile]                    Stop a profile, or all profiles when none is given
 #   run.sh clean [profile] [--image] [-y]    Stop and delete the LiveKit volumes (credentials, SIP records); --image also removes the image
 #   run.sh ps [profile]                      Show container status
-#   run.sh logs <profile> [service]          Follow logs. Services: agent, livekit, ui, init, llm, asr, tts, speech,
+#   run.sh logs <profile> [service]          Follow logs. Services: agent, livekit, ui, init, llm, asr, tts,
 #                                            redis, sip
 #   run.sh tunnel <user@host>                Run on your laptop: forward the UI and LiveKit ports from the host
 #   run.sh wait <profile> [seconds]          Wait until every container with a healthcheck is healthy (default 3600),
@@ -111,7 +111,7 @@ service_name() {
     asr)
       case "$profile" in
         server) echo livekit-nemotron-asr ;;
-        single-gpu) echo livekit-nemo-speech ;;
+        single-gpu) echo livekit-nemo-speech-asr ;;
         *) die "the cloud profile has no local ASR" ;;
       esac ;;
     tts)
@@ -121,9 +121,6 @@ service_name() {
         *) die "the cloud profile has no local TTS" ;;
       esac ;;
     redis | sip) echo "livekit-$svc" ;;
-    speech)
-      [ "$profile" = single-gpu ] || die "'speech' exists only in the single-gpu profile"
-      echo livekit-nemo-speech ;;
     *) echo "$svc" ;;
   esac
 }
@@ -145,7 +142,7 @@ profile_ports() {
   case "$1" in
     cloud) echo "7880 7881 $ui" ;;
     server) echo "7880 7881 $ui 9000 9001 50151 50152 18000" ;;
-    single-gpu) echo "7880 7881 $ui 50051 18000" ;;
+    single-gpu) echo "7880 7881 $ui 50051 50052 18000" ;;
   esac
 }
 
