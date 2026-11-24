@@ -51,8 +51,7 @@ def read_until(ws, reader, kind, where=lambda event: True, timeout=10.0):
 
 
 class PrimaryWebSocketTests(unittest.TestCase):
-    @mock.patch.object(audio_recorder, "ENABLE_ASR_DUMP", False)
-    @mock.patch.object(audio_recorder, "ENABLE_TTS_DUMP", False)
+    @mock.patch.object(audio_recorder, "ENABLE_AUDIO_DUMP", False)
     def test_a_session_hears_replies_and_closes_on_starlettes_socket(self):
         chat, stt = ScriptedChat(decision("speak", "Hello there.")), RecordingSTT()
 

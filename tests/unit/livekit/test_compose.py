@@ -129,3 +129,15 @@ def test_overlay_containers_get_no_model_credentials(services):
 def test_the_init_service_receives_the_overlay_switch_and_there_is_no_relay_service(services):
     assert "LIVEKIT_SIP" in environment(services["livekit-init"])
     assert not [name for name in services if "turn" in name]
+
+
+@pytest.mark.parametrize("name", AGENTS)
+def test_agents_pass_audio_dump_env_vars_and_mount_dump_directory(services, name):
+    env = environment(services[name])
+    assert env["ENABLE_AUDIO_DUMP"] == "${ENABLE_AUDIO_DUMP:-false}"
+    assert env["AUDIO_DUMP_PATH"] == "${AUDIO_DUMP_PATH:-audio_dumps}"
+    assert "../../audio_dumps:/app/audio_dumps" in services[name]["volumes"]
+
+
+def test_ui_does_not_mount_audio_dumps(services):
+    assert "../../audio_dumps:/app/audio_dumps" not in services["livekit-ui"]["volumes"]

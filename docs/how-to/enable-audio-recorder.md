@@ -1,20 +1,18 @@
 # Enable the Audio Recorder
 
-The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each conversation turn is saved as a separate WAV file for easy analysis. This guide applies to the Pipecat examples (`nva-pipecat`).
+The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each session is saved as one stereo file, with the user on the left channel and the agent on the right channel. This guide applies to the Pipecat examples (`nva-pipecat`) and the LiveKit Generic Assistant.
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_ASR_AUDIO_DUMP` | `false` | Capture incoming user audio (per turn) |
-| `ENABLE_TTS_AUDIO_DUMP` | `false` | Capture outgoing synthesized audio (per turn) |
+| `ENABLE_AUDIO_DUMP` | `false` | Turn on session recording |
 | `AUDIO_DUMP_PATH` | `audio_dumps` | Output directory (relative to project root, or absolute) |
 
 To enable the audio recorder, set the environment variables in the `.env` file:
 
 ```bash
-ENABLE_ASR_AUDIO_DUMP=true
-ENABLE_TTS_AUDIO_DUMP=true
+ENABLE_AUDIO_DUMP=true
 AUDIO_DUMP_PATH=audio_dumps
 ```
 
@@ -32,7 +30,7 @@ The shipped examples already create and wire the shared recorder, so the `.env` 
     from nemotron_voice_agent.pipecat.shared.audio_recorder import create_audio_recorder
     ```
 
-2. Create the recorder and add it to the pipeline. `create_audio_recorder()` returns `None` when both ASR and TTS dump flags are off, so it stays a no-op until enabled:
+2. Create the recorder and add it to the pipeline. `create_audio_recorder()` returns `None` when `ENABLE_AUDIO_DUMP` is off, so it stays a no-op until enabled:
 
     ```python
     audio_recorder = create_audio_recorder()
@@ -53,26 +51,21 @@ The shipped examples already create and wire the shared recorder, so the `.env` 
         await audio_recorder.start_recording()
     ```
 
-With those in place, the `ENABLE_ASR_AUDIO_DUMP` / `ENABLE_TTS_AUDIO_DUMP` / `AUDIO_DUMP_PATH` settings above control capture for your custom example.
+With those in place, the `ENABLE_AUDIO_DUMP` and `AUDIO_DUMP_PATH` settings above control capture for your custom example.
 
 ## Output Format
 
-Files are saved as 16-bit mono PCM WAV with per-turn indexing:
+Each session is saved as one stereo file when the session ends.
 
 ```text
 audio_dumps/
-├── asr_<stream_id>_000.wav   # User turn 0
-├── asr_<stream_id>_001.wav   # User turn 1
-├── tts_<stream_id>_000.wav   # Bot turn 0
-├── tts_<stream_id>_001.wav   # Bot turn 1
-└── ...
+├── session_<stream_id>.wav   # Pipecat: 16-bit PCM WAV
+└── session_<job_id>.ogg      # LiveKit: Ogg Opus
 ```
 
-The `<stream_id>` is a unique 8-character hex ID per session, so files from concurrent sessions do not collide.
+Pipecat uses the stereo recording of its `AudioBufferProcessor`. LiveKit uses the session recorder of LiveKit Agents. The ID is unique per session, so files from concurrent sessions do not collide. The `INFO` log line of the recorder names the session ID. The Frontend/Backend Live example records its live sessions, over WebRTC and WebSocket, each from its start.
 
-The recorder's `INFO` log line at a session's start names that session's `<stream_id>`. The Frontend/Backend Live example records its live sessions, over WebRTC and WebSocket, each from its start.
-
-> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker/pipecat/docker-compose.yaml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
+> **Note:** For host-native runs, files are written under the project root by default. For Pipecat Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker/pipecat/docker-compose.yaml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
 >
 > ```bash
 > docker compose --profile <recipe> cp <app-service>:/app/audio_dumps ./
@@ -98,5 +91,15 @@ The recorder's `INFO` log line at a session's start names that session's `<strea
 > # Option 2: Fix ownership after container creates it
 > sudo chown -R $(id -u):$(id -g) ./audio_dumps
 > ```
+
+## LiveKit Generic Assistant
+
+`docker/livekit/docker-compose.yaml` mounts `./audio_dumps` on the agent services, so with the default `AUDIO_DUMP_PATH` the files appear in `./audio_dumps` on the host. Recreate the agent of your profile after you change `.env`, for example:
+
+```bash
+docker compose --profile generic-assistant-livekit/single-gpu up -d livekit-agent-single-gpu
+```
+
+The agent writes the files as `root`. To fix ownership, run `sudo chown -R $(id -u):$(id -g) ./audio_dumps`.
 
 > **Warning:** Disable the audio recorder in production to prevent disk exhaustion.

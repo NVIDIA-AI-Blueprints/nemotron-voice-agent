@@ -24,7 +24,7 @@ Unless a row names the Generic Assistant on LiveKit, the guides apply to the Pip
 | [Multilingual Voice Agent](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Prompt-driven multilingual replies with a fixed language and TTS voice per session |
 | [Enable OpenTelemetry Tracing](how-to/enable-opentelemetry-tracing.md) | Monitor latency and conversation flows with Phoenix or any OTLP backend |
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
-| [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
+| [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Record session audio for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
 | [Use the Live Gateway](how-to/use-live-gateway.md) | Live sessions at `/v1/live` for Pipecat apps and other clients of the Frontend/Backend Live example |
 | [Frontend/Backend Live](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) | Choose a backend adapter and configure the talker and UI bot |

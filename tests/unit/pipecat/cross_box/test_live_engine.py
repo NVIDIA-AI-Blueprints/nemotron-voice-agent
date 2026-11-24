@@ -68,8 +68,7 @@ def menu_call():
 
 class EngineCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.enterContext(patch.object(audio_recorder, "ENABLE_ASR_DUMP", False))
-        self.enterContext(patch.object(audio_recorder, "ENABLE_TTS_DUMP", False))
+        self.enterContext(patch.object(audio_recorder, "ENABLE_AUDIO_DUMP", False))
 
     async def serve(self, session, script, *, live_config=LIVE_CONFIG, models=(), tts=FakeTTS, early=(), **delegation):
         """Serve ``session`` over a WebSocket, sending ``early`` before it starts; both models run on ``script``."""

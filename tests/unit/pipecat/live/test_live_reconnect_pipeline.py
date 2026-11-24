@@ -61,8 +61,7 @@ class ReconnectPipelineTests(unittest.IsolatedAsyncioTestCase):
             await prepare_resume(frontend)
 
         with (
-            patch.object(audio_recorder, "ENABLE_ASR_DUMP", False),
-            patch.object(audio_recorder, "ENABLE_TTS_DUMP", False),
+            patch.object(audio_recorder, "ENABLE_AUDIO_DUMP", False),
             patch.object(CascadeAdapter, "prepare_resume", hold_resume),
         ):
             try:

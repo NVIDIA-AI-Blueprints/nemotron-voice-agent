@@ -152,7 +152,7 @@ The following table lists the main files in this example.
 
 The web UI is a React client in [`clients/livekit/`](../../../../../clients/livekit/). The image builds it, so run the `up` command of your profile again after you change it. To work on it with hot reload against a running UI server, run `cd clients/livekit && npm ci && npm run dev`. The Vite server sends the data endpoints to `LIVEKIT_UI_SERVER`, which defaults to `http://127.0.0.1:3000`. Check a change with `npm run lint`, `npm test` (Node.js 22.18 or newer), and `npm run build`.
 
-To change the prompts or add a use case, refer to [Sample Use Cases](#sample-use-cases).
+To change the prompts or add a use case, refer to [Sample Use Cases](#sample-use-cases). To record session audio for debugging, refer to [Enable the Audio Recorder](../../../../../docs/how-to/enable-audio-recorder.md#livekit-generic-assistant).
 
 ### Configure Models
 

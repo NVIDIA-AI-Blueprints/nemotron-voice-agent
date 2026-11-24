@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Generic Assistant on LiveKit.** A new example built on LiveKit Agents with Cloud, Server, and Single GPU deployment profiles, a web UI for selecting services, settings, and prompts, and optional phone call support over SIP.
+- **Generic Assistant on LiveKit.** A new example built on LiveKit Agents with Cloud, Server, and Single GPU deployment profiles, a web UI for selecting services, settings, and prompts, optional phone call support over SIP, and optional session audio recording.
 - **Nemotron 3.5 Transcribe ASR.** Self-hosted whole-turn speech recognition for the Generic and Multilingual Assistants on Server and Single GPU recipes, with optional transcription prompts in the Generic Assistant.
 - **NVIDIA Dynamo recipes.** Run Nemotron 3.5 Lightning through NVIDIA Dynamo for the Generic and Multilingual Assistants, including Streaming Input in the Generic Assistant and multi-GPU worker scaling.
 - **Frontend/Backend Live example and Live gateway.** A voice assistant that stays responsive while delegating work to a backend LLM, agent, or external harness such as Hermes, with Cloud, Server, and Single GPU recipes and `/v1/live` WebRTC and WebSocket support.
@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Audio recorder uses one flag.** Set `ENABLE_AUDIO_DUMP=true` instead of `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`. Each session is saved as one stereo file.
 - **Repository layout organized by framework.** Code and configuration are now grouped by framework (Pipecat and LiveKit), and the Pipecat server starts with `uv run nva-pipecat`.
 - **Docker Compose 2.24.4 or newer required.** Needed for the unified Compose setup that includes LiveKit.
 - **Pipecat upgraded to 1.15.0.** Updated server and browser client packages, and switched Omni examples to Pipecat's built-in NVIDIA Omni service.
