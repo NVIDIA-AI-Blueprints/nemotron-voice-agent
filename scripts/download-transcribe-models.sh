@@ -8,7 +8,7 @@ usage() {
   cat <<USAGE
 Usage: $0 [DEST=models/transcribe] [auto|nvfp4|iq4_nl]
 Select NVFP4 for compute capability 10.x, 11.x, or 12.x, otherwise IQ4_NL.
-DEST defaults to TRANSCRIBE_MODEL_LOC or the repository's models/transcribe.
+DEST defaults to TRANSCRIBE_MODEL_LOC (an absolute path) or the repository's models/transcribe.
 USAGE
 }
 
@@ -34,6 +34,11 @@ if [[ -f "${ROOT}/.env" ]]; then
   # shellcheck disable=SC1091
   source "${ROOT}/.env"
   set +a
+fi
+if [[ -z "${1:-}" && -n "${TRANSCRIBE_MODEL_LOC:-}" && "${TRANSCRIBE_MODEL_LOC}" != /* ]]; then
+  echo "TRANSCRIBE_MODEL_LOC must be an absolute path: ${TRANSCRIBE_MODEL_LOC}" >&2
+  echo "Docker Compose resolves a relative path from docker/sidecars/, not from the current directory." >&2
+  exit 1
 fi
 DEST="${1:-${TRANSCRIBE_MODEL_LOC:-${ROOT}/models/transcribe}}"
 DEST="$(python3 -c 'import os, sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "${DEST}")"

@@ -35,7 +35,7 @@ The profiles get their model files as follows:
 
 - **Cloud:** None. The models run on NVIDIA-hosted endpoints.
 - **Server:** The official NVIDIA NIM containers download their models from NGC at first start. The first run can take 30 to 60 minutes.
-- **Single GPU:** One NeMo-Speech.cpp sidecar loads small GGUF files for ASR and TTS. A script downloads the speech files (under 1 GB each) from Hugging Face. vLLM downloads the LLM (about 21.6 GB) at first start.
+- **Single GPU:** Two NeMo-Speech.cpp sidecars load small GGUF files, one for ASR and one for TTS. A script downloads the speech files (under 1 GB each) from Hugging Face. vLLM downloads the LLM (about 21.6 GB) at first start.
 
 ## Prerequisites
 
@@ -55,7 +55,7 @@ The credentials depend on the profile:
 For the Server and Single GPU profiles, use a machine that is not running other model servers, and check the following:
 
 - **Memory:** On DGX Spark and Jetson Thor, the GPU shares memory with the system. Stop other model containers first.
-- **Ports:** These host ports must be free: 7880 to 7882 (LiveKit), 3000 (UI), 9000, 9001, 50151, 50152, and 18000 (Server), or 50051 and 18000 (Single GPU).
+- **Ports:** These host ports must be free: 7880 to 7882 (LiveKit), 3000 (UI), 9000, 9001, 50151, 50152, and 18000 (Server), or 50051, 50052, and 18000 (Single GPU).
 - **Pipecat:** Do not run a Pipecat recipe on the same machine at the same time.
 
 ## Run the Example
@@ -92,7 +92,7 @@ Run every command from the repository root.
    | --- | --- | --- |
    | `generic-assistant-livekit` | `livekit-agent` | none (cloud NVCF) |
    | `generic-assistant-livekit/server` | `livekit-agent-server` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
-   | `generic-assistant-livekit/single-gpu` | `livekit-agent-single-gpu` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech` |
+   | `generic-assistant-livekit/single-gpu` | `livekit-agent-single-gpu` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech-asr`, `livekit-nemo-speech` (TTS) |
 
    > The sidecars extend the definitions in `docker/sidecars/`. The agent shares the network namespace of `livekit-server`. If you recreate `livekit-server`, run the same `up` command again.
 

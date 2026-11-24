@@ -41,7 +41,8 @@ def test_server_recipe_uses_compose_hostnames():
 
 def test_single_gpu_recipe_uses_nemo_speech():
     cfg = config.load_config("single-gpu", env={}, catalog=CATALOG)
-    assert cfg.asr_server == cfg.tts_server == "nemo-speech:50051"
+    assert cfg.asr_server == "nemo-speech-asr:50052"
+    assert cfg.tts_server == "nemo-speech:50051"
     assert cfg.llm_base_url == "http://nvidia-llm-vllm:8000/v1"
     assert cfg.tts_sample_rate == config.SINGLE_GPU_TTS_SAMPLE_RATE
 

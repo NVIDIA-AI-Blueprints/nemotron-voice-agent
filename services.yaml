@@ -181,14 +181,14 @@ single-gpu:
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron Speech Streaming"
-      server: "nemo-speech:50051"
+      server: "nemo-speech-asr:50052"
       model: "nemotron-speech-streaming-en-0.6b"
       settings: nemo-speech-asr
       speaker_diarization_supported: true
       speaker_diarization_max_speakers: 8
     nemotron-asr-streaming-multilingual:
       name: "Nemotron 3.5 ASR Streaming Multilingual"
-      server: "nemo-speech:50051"
+      server: "nemo-speech-asr:50052"
       model: "nemotron-3.5-asr-streaming-0.6b"
       settings: nemo-speech-asr
       language_code: "auto"
