@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Audio recorder uses one flag.** Set `ENABLE_AUDIO_DUMP=true` instead of `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`. The recorder saves the streams it captures: stereo playback, ASR input, and TTS output. Refer to [Enable the Audio Recorder](docs/how-to/enable-audio-recorder.md) for formats and storage.
+- **Audio recorder uses one flag.** Set `ENABLE_AUDIO_DUMP=true` instead of `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`. The recorder saves the streams it captures: a server-side stereo conversation mix, ASR input, and TTS output. Refer to [Enable the Audio Recorder](docs/how-to/enable-audio-recorder.md) for formats and storage.
 - **Separate NeMo-Speech.cpp services for Pipecat Single-GPU recipes.** Use `nemo-speech-tts` for TTS logs and the recipe's `nemo-speech-asr*` service for ASR logs. Omni recipes use only the TTS sidecar. If you switch to Transcribe, you can now scale streaming ASR to zero without stopping TTS. Recreate the stack with `--remove-orphans` on upgrade to remove the old combined service.
 - **Repository layout organized by framework.** Code and configuration are now grouped by framework (Pipecat and LiveKit), and the Pipecat server starts with `uv run nva-pipecat`.
 - **Docker Compose 2.24.4 or newer required.** Needed for the unified Compose setup that includes LiveKit.

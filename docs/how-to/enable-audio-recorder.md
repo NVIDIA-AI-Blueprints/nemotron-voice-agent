@@ -61,12 +61,12 @@ With those in place, the `ENABLE_AUDIO_DUMP` and `AUDIO_DUMP_PATH` settings abov
 
 ## Output Format
 
-At session end, the recorder writes files for the streams it captured. An empty stream can leave no file. Expect at most one playback file per session, in the format for your framework:
+At session end, the recorder writes files for the streams it captured. An empty stream can leave no file. Expect at most one server-side conversation mix per session, in the format for your framework:
 
 ```text
 audio_dumps/
-├── session_<id>.wav       # Pipecat: stereo playback, 16-bit PCM WAV
-├── session_<id>.ogg       # LiveKit: stereo playback, Ogg Opus
+├── session_<id>.wav       # Pipecat: stereo mix, 16-bit PCM WAV
+├── session_<id>.ogg       # LiveKit: stereo mix, Ogg Opus
 ├── asr_<id>_session.wav   # the audio that ASR received, 16-bit PCM WAV
 └── tts_<id>_session.wav   # the audio that TTS produced, 16-bit PCM WAV
 ```

@@ -50,38 +50,32 @@ The [Omni examples](../../src/nemotron_voice_agent/pipecat/examples/omni_assista
 
 ## Chat History Limit
 
-Every turn appends to the LLM's context. Left unbounded, that context keeps growing, which raises latency (more tokens to process means a higher time-to-first-token), increases cost, and eventually overflows the model's context window. For real-time voice, a small, bounded context is what keeps replies fast. Pipecat manages history through its [context aggregators](https://docs.pipecat.ai/guides/learn/context-management) and built-in [context summarization](https://docs.pipecat.ai/pipecat/fundamentals/context-summarization). The examples wire a **turn-count** window (`CHAT_HISTORY_RECENT_TURNS`) on top for a predictable per-turn budget.
+`CHAT_HISTORY_RECENT_TURNS` controls when the Pipecat Generic and Multilingual assistants attempt to summarize older conversation history. It does not set a hard context or token limit. The Omni examples do not use this setting.
 
-We use context summarization logic for our examples to always **pin the initial prompt / system messages** loaded at session start. Nemotron's chat template carries the assistant instructions and tool definitions in the *user* section, so those must stay verbatim. Evicting them (as a token-based window might) would degrade tool-calling and persona. Only the older **conversational** turns are trimmed, and the handling differs by example:
-
-- **Generic** and **Multilingual** assistants **summarize** older history: once the conversation grows past the recent window, the older turns are condensed into a single pinned summary message (an additional LLM call after the turn), and the most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-- **Frontend/Backend Live** does not read `CHAT_HISTORY_RECENT_TURNS`. Its talker keeps a token budget, `frontend.cascade.memory.context_tokens` in the example's settings, and drops the oldest turns, never the prompt, after the history passes the `compact_at` share of that budget. The backend's history budget is the core's `delegation.context_tokens`. For details, refer to [Use the Live Gateway → Errors and Limits](use-live-gateway.md#errors-and-limits).
+Frontend/Backend Live uses separate token budgets: `frontend.cascade.memory.context_tokens` for the talker and `delegation.context_tokens` for the backend. For details, refer to [Use the Live Gateway: Errors and Limits](use-live-gateway.md#errors-and-limits).
 
 ### Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHAT_HISTORY_RECENT_TURNS` | `10` (Generic / Multilingual) | Most recent non-prompt turns kept before older history is summarized |
+The default window is 10 user turns. To change it for a Generic or Multilingual deployment:
 
-```bash
-# Override the per-example default (applies to whichever example is running, except Frontend/Backend Live)
-CHAT_HISTORY_RECENT_TURNS=10
-```
+1. Set `CHAT_HISTORY_RECENT_TURNS` in `.env`.
+
+   ```dotenv
+   # Applies only to the Pipecat Generic and Multilingual assistants.
+   CHAT_HISTORY_RECENT_TURNS=10
+   ```
+
+   Values below `1` disable this summarization.
+
+2. Apply the change by restarting the host-native app or [recreating the Compose app container](../02-configuration-guide.md#where-to-make-changes).
 
 ### How It Works
 
-When the message count exceeds `CHAT_HISTORY_RECENT_TURNS`:
-
-1. Initial prompt messages loaded at session start are always preserved.
-2. The most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-3. Older non-prompt turns are **summarized into one pinned summary message** (Generic / Multilingual).
+After each assistant turn, the pipeline finds the recent window by counting backward through user-role messages, excluding the initial prompt. If non-prompt history precedes that window, the pipeline makes a separate LLM call to summarize it. On success, it replaces the older history with one summary message and keeps the initial prompt and recent messages unchanged. If summarization fails or the context changes during the call, the pipeline leaves the existing history intact.
 
 ### Recommendations
 
-| Use Case | Value |
-|----------|-------|
-| Standard conversations | `10`–`20` |
-| Multilingual mode | `5-10` |
+Start with the default. Use a larger window if the assistant needs more verbatim history, or a smaller one if older turns can be summarized sooner.
 
 ## Audio Output Buffering
 
