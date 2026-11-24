@@ -14,7 +14,7 @@ Five models back the examples. Each is served by the self-hosted Compose service
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
-| **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/sidecars/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/sidecars/docker-compose.nemotron35-lightning.yaml) (vLLM), [`docker-compose.dynamo-lightning.yaml`](../../docker/sidecars/docker-compose.dynamo-lightning.yaml) (NVIDIA Dynamo, experimental) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
+| **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/sidecars/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/sidecars/docker-compose.nemotron35-lightning.yaml) (vLLM), [`docker-compose.dynamo-lightning.yaml`](../../docker/sidecars/docker-compose.dynamo-lightning.yaml) (NVIDIA Dynamo) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
 | **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/sidecars/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
 | **Nemotron 3.5 Bolt 74B A9B**: higher-capability alternative, available self-hosted on single-GPU hosts only | [`docker-compose.nemotron35-bolt.yaml`](../../docker/sidecars/docker-compose.nemotron35-bolt.yaml) (`nemotron-35-bolt-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB) |
 | **Nemotron 3.5 Bolt E4B**: compact conversational and tool-calling small language model (SLM) with a low time to first token (TTFT), 8B total and 4B effective | [`docker-compose.nemotron35-bolt-e4b.yaml`](../../docker/sidecars/docker-compose.nemotron35-bolt-e4b.yaml) (`nemotron-35-bolt-e4b` NIM, `nemotron-35-bolt-e4b-vllm` vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b) |
@@ -24,7 +24,7 @@ Each model is exposed as one or more **catalog keys** in `services.yaml`:
 
 | Model | Catalog keys |
 |-------|--------------|
-| Nemotron 3.5 Lightning | `nemotron-lightning`, `nemotron-lightning-dynamo` (NVIDIA Dynamo, experimental) |
+| Nemotron 3.5 Lightning | `nemotron-lightning`, `nemotron-lightning-dynamo` (NVIDIA Dynamo) |
 | Nemotron 3.5 Super VL | `nemotron-super` |
 | Nemotron 3.5 Bolt 74B | `nemotron-bolt-74b` (self-hosted single-GPU only) |
 | Nemotron 3.5 Bolt E4B | `nemotron-bolt-4b` |
@@ -55,7 +55,7 @@ You can self-host the LLM three ways, and the repo wires the right one per profi
 
 - **NIM** (`nvidia-llm`, `nvidia-llm-omni`, `nemotron-35-super-vl`, `nemotron-35-bolt-e4b`): a prebuilt, optimized inference microservice with automatic, hardware-aware model-profile selection. It is used by `*/server` recipes.
 - **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`, `nemotron-35-super-vl-vllm`, `nemotron-35-bolt-vllm`, `nemotron-35-bolt-e4b-vllm`): serves weights directly. The `*/single-gpu` recipes select the serving precision automatically from the host and GPU.
-- **NVIDIA Dynamo** (`dynamo-frontend`, `dynamo-lightning-worker`, experimental): routes requests from a frontend to vLLM workers. It is used by the `*/dynamo` recipes. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
+- **NVIDIA Dynamo** (`dynamo-frontend`, `dynamo-lightning-worker`): routes requests from a frontend to vLLM workers. It is used by the `*/dynamo` recipes. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo).
 
 All three expose the same OpenAI-compatible API, so the pipeline and the request tuning below behave identically against each of them.
 
@@ -158,7 +158,7 @@ The single-GPU vLLM service and the server NIM read the **Reasoning Budget** fro
 
 **Conversational Mode** is a setting of the `nemotron-bolt-4b` settings profile, not of the service. It is on by default for every Bolt E4B endpoint, including NVIDIA Cloud, the server NIM, and the single-GPU service. Turn it off for a session in the Services tab. The model's own chat template defaults it to off, so a client that calls the endpoint directly gets it off unless the request sets `chat_template_kwargs.conversational_mode`.
 
-### Run Nemotron 3.5 Lightning on NVIDIA Dynamo (Experimental)
+### Run Nemotron 3.5 Lightning on NVIDIA Dynamo
 
 [NVIDIA Dynamo](https://docs.nvidia.com/dynamo/) is an open source inference framework that serves an engine such as vLLM behind one OpenAI-compatible frontend. The frontend routes each request to one of several engine workers, so you can scale the LLM across GPUs and hosts without changing the pipeline. When a worker stops, its in-flight chat completions move to another worker.
 
@@ -224,7 +224,7 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 
 The streaming server holds the latest word until another word arrives or the turn commits. If an ASR correction changes previously queued prompt tokens, the engine request restarts with the updated prompt. Voice activity detection (VAD) stopping does not guarantee that prefill is complete: final ASR updates or pending chunks can still require processing.
 
-The sessions follow the text protocol of [NVIDIA Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo-experimental), so `NvidiaStreamingLLMService` connects to either server. **Max Tokens** maps to `max_output_tokens`. The OpenAI Realtime protocol caps a finite limit at 4096, so a larger or empty **Max Tokens** is sent as `inf`. The other LLM settings, such as **Temperature**, **Reasoning**, and **Reasoning Budget**, and the multi-speaker `response_format` travel in the `session.chat_completion_options.update` extension. Reasoning text is not streamed, only the answer and tool calls.
+The sessions follow the text protocol of [NVIDIA Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo), so `NvidiaStreamingLLMService` connects to either server. **Max Tokens** maps to `max_output_tokens`. The OpenAI Realtime protocol caps a finite limit at 4096, so a larger or empty **Max Tokens** is sent as `inf`. The other LLM settings, such as **Temperature**, **Reasoning**, and **Reasoning Budget**, and the multi-speaker `response_format` travel in the `session.chat_completion_options.update` extension. Reasoning text is not streamed, only the answer and tool calls.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4, FP8, or BF16 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 

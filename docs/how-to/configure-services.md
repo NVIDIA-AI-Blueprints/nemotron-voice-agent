@@ -50,7 +50,7 @@ server:
 
 ## How the active recipe selects entries
 
-This section describes the Pipecat backend. Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The experimental `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run nva-pipecat`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
+This section describes the Pipecat backend. Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run nva-pipecat`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |

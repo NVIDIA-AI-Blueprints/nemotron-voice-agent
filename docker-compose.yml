@@ -21,7 +21,7 @@ name: nemotron-voice-agent
 #   single-gpu                One GPU (workstation, DGX Spark, or Jetson Thor)
 #                             running the NeMo-Speech.cpp speech stack alongside vLLM
 #   dynamo                    NIM ASR + TTS with the LLM served by NVIDIA Dynamo.
-#                             Generic and Multilingual Assistants, experimental
+#                             Generic and Multilingual Assistants
 #
 # Cloud-only recipes:
 #   docker compose --profile generic-assistant up
