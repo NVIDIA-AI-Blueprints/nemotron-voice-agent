@@ -29,6 +29,7 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.talker import T
 from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation import ServerDelegation
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.lifecycle import announce_response, finish_response
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.serializer import RealtimeFrameSerializer
+from nemotron_voice_agent.pipecat.shared.audio_recorder import AudioDump
 from tests.unit.pipecat import frontend_helpers
 from tests.unit.pipecat.cascade_helpers import FakeSTT, chat_adapters, transcript_turns
 from tests.unit.pipecat.core_helpers import chunk, tool_fragment
@@ -136,7 +137,7 @@ class BotCase(unittest.IsolatedAsyncioTestCase):
             "build_core": lambda settings, *, endpoints, defaults, observe: SimpleNamespace(aclose=core_closed),
             "core_client": lambda core, **kwargs: "client",
             "ServerDelegation": Delegation,
-            "create_audio_recorder": lambda: None,
+            "create_audio_recorder": AudioDump,
             "build_frontend": build,
         }.items():
             self.enterContext(patch.object(pipeline, name, value))

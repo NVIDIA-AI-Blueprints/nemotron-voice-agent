@@ -1,6 +1,6 @@
 # Enable the Audio Recorder
 
-The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each session is saved as one stereo file, with the user on the left channel and the agent on the right channel. This guide applies to the Pipecat examples (`nva-pipecat`) and the LiveKit Generic Assistant.
+The audio recorder captures session audio for debugging and issue reproduction. Each session is saved as a stereo playback file, with the user on the left channel and the agent on the right channel. It is also saved as the audio that ASR received and that TTS produced, at their own sample rates, so you can replay a session against ASR or TTS in a standalone setup. This guide applies to the Pipecat examples (`nva-pipecat`) and the LiveKit Generic Assistant.
 
 ## Configuration
 
@@ -30,7 +30,7 @@ The shipped examples already create and wire the shared recorder, so the `.env` 
     from nemotron_voice_agent.pipecat.shared.audio_recorder import create_audio_recorder
     ```
 
-2. Create the recorder and add it to the pipeline. `create_audio_recorder()` returns `None` when `ENABLE_AUDIO_DUMP` is off, so it stays a no-op until enabled:
+2. Create the recorder and add its three parts to the pipeline. `inputs` goes right after the input transport, `outputs` right before the output transport, and `after` after it. The parts are empty when `ENABLE_AUDIO_DUMP` is off, so the recorder stays a no-op until enabled:
 
     ```python
     audio_recorder = create_audio_recorder()
@@ -38,8 +38,11 @@ The shipped examples already create and wire the shared recorder, so the `.env` 
     pipeline = Pipeline(
         [
             transport.input(),
-            # ... ASR, LLM, TTS, transport.output() ...
-            *([audio_recorder] if audio_recorder else []),
+            *audio_recorder.inputs,
+            # ... ASR, LLM, TTS ...
+            *audio_recorder.outputs,
+            transport.output(),
+            *audio_recorder.after,
         ]
     )
     ```
@@ -47,23 +50,30 @@ The shipped examples already create and wire the shared recorder, so the `.env` 
 3. Start it once the client connects (for example, in your `on_client_connected` handler):
 
     ```python
-    if audio_recorder:
-        await audio_recorder.start_recording()
+    await audio_recorder.start_recording()
     ```
 
 With those in place, the `ENABLE_AUDIO_DUMP` and `AUDIO_DUMP_PATH` settings above control capture for your custom example.
 
 ## Output Format
 
-Each session is saved as one stereo file when the session ends.
+Each session is saved as three files when the session ends.
 
 ```text
 audio_dumps/
-├── session_<stream_id>.wav   # Pipecat: 16-bit PCM WAV
-└── session_<job_id>.ogg      # LiveKit: Ogg Opus
+├── session_<id>.wav       # Pipecat: stereo playback, 16-bit PCM WAV
+├── session_<id>.ogg       # LiveKit: stereo playback, Ogg Opus
+├── asr_<id>_session.wav   # the audio that ASR received, 16-bit PCM WAV
+└── tts_<id>_session.wav   # the audio that TTS produced, 16-bit PCM WAV
 ```
 
-Pipecat uses the stereo recording of its `AudioBufferProcessor`. LiveKit uses the session recorder of LiveKit Agents. The ID is unique per session, so files from concurrent sessions do not collide. The `INFO` log line of the recorder names the session ID. The Frontend/Backend Live example records its live sessions, over WebRTC and WebSocket, each from its start.
+| File | What it holds |
+|------|---------------|
+| `session_<id>` | The conversation as the user heard it, for playback. Pipecat uses the stereo recording of its `AudioBufferProcessor`. LiveKit uses the session recorder of LiveKit Agents. Both resample the audio. |
+| `asr_<id>_session.wav` | Every audio frame that ASR received in the session, at its own sample rate, before turn handling filters any audio. It also holds the microphone audio from before the user speaks. Use it to replay a session against ASR. In the Omni Assistant, it holds the audio that the Omni model received. |
+| `tts_<id>_session.wav` | Every audio frame that TTS sent toward the output in the session, at its own sample rate. |
+
+The ASR and TTS files start together and share one timeline. When a stream pauses for more than 0.2 seconds, the file holds silence for the pause, so the two files line up. The ID is unique per session, so files from concurrent sessions do not collide. The `INFO` log line of the recorder names the session ID. The Frontend/Backend Live example records its live sessions, over WebRTC and WebSocket, each from its start.
 
 > **Note:** For host-native runs, files are written under the project root by default. For Pipecat Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker/pipecat/docker-compose.yaml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
 >

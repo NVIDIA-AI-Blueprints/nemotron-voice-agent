@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Audio recorder uses one flag.** Set `ENABLE_AUDIO_DUMP=true` instead of `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`. Each session is saved as one stereo file.
+- **Audio recorder uses one flag.** Set `ENABLE_AUDIO_DUMP=true` instead of `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`. Each session is saved as a stereo playback file, and as full-session files of the audio that ASR received and TTS produced.
 - **Repository layout organized by framework.** Code and configuration are now grouped by framework (Pipecat and LiveKit), and the Pipecat server starts with `uv run nva-pipecat`.
 - **Docker Compose 2.24.4 or newer required.** Needed for the unified Compose setup that includes LiveKit.
 - **Pipecat upgraded to 1.15.0.** Updated server and browser client packages, and switched Omni examples to Pipecat's built-in NVIDIA Omni service.

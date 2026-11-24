@@ -23,11 +23,10 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.adapter.bridge 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.adapter.serializer import LiveFrameSerializer
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.frontend import FrontendEdges
 from nemotron_voice_agent.pipecat.runtime.utils import parse_env_bool, parse_env_int
-from nemotron_voice_agent.pipecat.shared.audio_recorder import create_audio_recorder
+from nemotron_voice_agent.pipecat.shared.audio_recorder import AudioDump, create_audio_recorder
 from nemotron_voice_agent.pipecat.shared.pipeline_utils import build_pipeline_params
 
 if TYPE_CHECKING:
-    from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
     from pipecat.processors.frame_processor import FrameProcessor
 
     from nemotron_voice_agent.pipecat.runtime.gateways.live.ports import MediaConnection, SessionPort
@@ -126,7 +125,7 @@ class PipelineHost:
         """Start empty: the session's view comes with the start, and the pipeline once :meth:`run_pipeline` runs."""
         self.session: SessionPort | None = None
         self.gate: LiveInputGate | None = None
-        self.recorder: AudioBufferProcessor | None = None
+        self.recorder: AudioDump | None = None
         self.task: PipelineWorker | None = None
         self.runner_task: asyncio.Task | None = None
 
@@ -144,8 +143,13 @@ class PipelineHost:
             "observers": [LiveEventObserver(self.session, self.gate, stt), latency_observer()],
         }
         transcript = LiveOutputTranscript(self.session)
-        after = [transcript, *([self.recorder] if self.recorder else [])]
-        return FrontendEdges(inputs=[*inputs, self.gate], outputs=outputs, worker=worker, after=after)
+        after = [transcript, *self.recorder.after]
+        return FrontendEdges(
+            inputs=[*inputs, self.gate, *self.recorder.inputs],
+            outputs=[*self.recorder.outputs, *outputs],
+            worker=worker,
+            after=after,
+        )
 
     async def run_pipeline(self, worker: PipelineWorker, processors: list) -> None:
         """Run ``worker``'s pipeline and return once it runs; a processor that could not set up raises."""
@@ -158,8 +162,7 @@ class PipelineHost:
         @self.task.event_handler("on_pipeline_started")
         async def on_started(worker, frame):
             self.gate.muted = False
-            if self.recorder:
-                await self.recorder.start_recording()
+            await self.recorder.start_recording()
             started.set()
 
         @self.task.event_handler("on_pipeline_finished")

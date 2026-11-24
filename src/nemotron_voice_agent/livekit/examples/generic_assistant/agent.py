@@ -12,14 +12,15 @@ import os
 import shutil
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
 from pathlib import Path
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.agents import NOT_GIVEN, Agent, AgentServer, AgentSession, JobContext, ModelSettings, cli
 from livekit.plugins import nvidia, openai, silero
 
 from nemotron_voice_agent.core.paths import REPO_ROOT
+from nemotron_voice_agent.core.session_audio import Recording, SessionAudio, write_wav
 from nemotron_voice_agent.livekit.runtime.credentials import apply_to_environ
 
 from .config import AgentConfig, load_config, service_options
@@ -237,6 +238,51 @@ def save_recording(source: Path, dump_dir: Path, name: str) -> Path | None:
     return target
 
 
+def save_streams(recordings: Mapping[str, Recording | None], dump_dir: Path, job_id: str) -> list[Path]:
+    """Write each recorded stream to `<name>_<job_id>_session.wav`, and return the files written."""
+    saved = []
+    for name, recording in recordings.items():
+        if recording is None:
+            continue
+        path = dump_dir / f"{name}_{job_id}_session.wav"
+        try:
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            write_wav(path, recording)
+        except OSError as exc:
+            log.warning("cannot save the session audio to %s: %s", path, exc)
+            continue
+        log.info("session audio saved: %s", path)
+        saved.append(path)
+    return saved
+
+
+class RecordedAgent(Agent):
+    """An agent that also records the audio that its STT received and its TTS produced, for the whole session."""
+
+    def __init__(self, *, heard: SessionAudio, spoken: SessionAudio, **kwargs):
+        """Record into ``heard`` and ``spoken``, and build the agent from ``kwargs``."""
+        super().__init__(**kwargs)
+        self.heard = heard
+        self.spoken = spoken
+
+    async def stt_node(self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings):
+        """Record each frame before LiveKit's STT node receives it."""
+
+        async def recorded() -> AsyncIterator[rtc.AudioFrame]:
+            async for frame in audio:
+                self.heard.add(bytes(frame.data), frame.sample_rate, frame.num_channels)
+                yield frame
+
+        async for event in Agent.default.stt_node(self, recorded(), model_settings):
+            yield event
+
+    async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        """Record each frame that LiveKit's TTS node produces."""
+        async for frame in Agent.default.tts_node(self, text, model_settings):
+            self.spoken.add(bytes(frame.data), frame.sample_rate, frame.num_channels)
+            yield frame
+
+
 def describe_session(room: str, cfg: AgentConfig, scenario_name: str, custom_prompt: str, voice: str | None) -> str:
     """Return one log line with the services, settings, use case, and voice that a session runs with."""
     models = ", ".join(f"{model['kind']}={model.get('id') or model['name']}" for model in cfg.models())
@@ -340,18 +386,25 @@ async def entrypoint(ctx: JobContext):
                 session.say(f"Hi, this is my {names[voice]} voice.", add_to_chat_ctx=False)
 
         ctx.room.on("data_received", on_data)  # registered before the session starts, so an early change is not lost
-        agent = Agent(
-            instructions=scenario.instructions,
-            tools=[traced_tool(fn, emit) for fn in scenario.make_tools()],  # fresh demo state for each session
-        )
+        agent_options = {
+            "instructions": scenario.instructions,
+            "tools": [traced_tool(fn, emit) for fn in scenario.make_tools()],  # fresh demo state for each session
+        }
         dump_dir = audio_dump_dir()
         if dump_dir:
+            agent = RecordedAgent(heard=SessionAudio(), spoken=SessionAudio(), **agent_options)
 
             async def _save_recording(_reason: str) -> None:
                 source = ctx.session_directory / "audio.ogg"
                 await asyncio.to_thread(save_recording, source, dump_dir, f"session_{ctx.job.id}")
+                recordings = {"asr": agent.heard.finish(), "tts": agent.spoken.finish()}
+                await asyncio.to_thread(save_streams, recordings, dump_dir, ctx.job.id)
 
             ctx.add_shutdown_callback(_save_recording)
+            agent.heard.start()
+            agent.spoken.start()
+        else:
+            agent = Agent(**agent_options)
         record = {"audio": True, "traces": False, "logs": False, "transcript": False} if dump_dir else NOT_GIVEN
         await session.start(agent=agent, room=ctx.room, record=record)
         started = True
