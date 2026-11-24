@@ -19,40 +19,42 @@ The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../.
 
 The registry lists `nemotron-asr-streaming-multilingual` first for ASR, so it is the default on Server and Single GPU. It has no NVIDIA Cloud endpoint, so the Cloud recipe uses the next key, `parakeet-rnnt`.
 
-## Running the example
+## Running the Example
 
 This example runs with **Cloud**, **Server** (NIM, recommended for scaling), universal **Single GPU**, and **Dynamo** profiles. Server and Dynamo are workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../../../docs/03-jetson-thor.md) when applicable. Refer to the [Getting Started guide](../../../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
-1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud, Server, or Dynamo profile:
+1. Create `.env` only if it does not exist:
 
    ```bash
    test -f .env || cp .env.example .env
    ```
 
+2. Set the credentials for your recipe. Cloud and Server use `NVIDIA_API_KEY`.
+
    > **Single GPU:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This recipe serves the LLM with vLLM, which downloads model weights from Hugging Face.
 
    > **Dynamo:** set both `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`. The ASR and TTS NIMs come from NGC, and the Dynamo worker downloads the Lightning weights from Hugging Face. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
 
-2. Log in to the NVIDIA NGC container registry (Server and Dynamo only. Skip for Cloud and Single GPU):
+3. Log in to the NVIDIA NGC container registry (Server and Dynamo only. Skip for Cloud and Single GPU):
 
    ```bash
    set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-3. Deploy the profile that matches your hardware:
+4. Download the speech assets for Single-GPU only. Run the script as your user, not with `sudo`.
 
    ```bash
-   docker compose --profile multilingual-assistant up -d              # Cloud (no local GPU)
-   docker compose --profile multilingual-assistant/server up -d  # Server (NIM, recommended for scaling)
-
-   # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
-   docker compose --profile multilingual-assistant/single-gpu up -d
-
-   # Lightning on NVIDIA Dynamo, with the Server ASR and TTS NIMs
-   docker compose --profile multilingual-assistant/dynamo up -d
    ```
+
+5. Start one recipe. Substitute a profile from the table for `<recipe>`.
+
+   ```bash
+   docker compose --profile <recipe> up -d
+   ```
+
+   Each recipe starts the following services:
 
    | Recipe profile | App service | Sidecars |
    | --- | --- | --- |
@@ -60,24 +62,18 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
    | `multilingual-assistant/server` | `multilingual-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
    | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-asr-multilingual`, `nemo-speech-tts` |
    | `multilingual-assistant/dynamo` | `multilingual-assistant-dynamo` | `dynamo-frontend`, `dynamo-lightning-worker`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
-4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
 
-5. Clean up when you are done by tearing down with the same profile you started with:
+6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
 
-   ```bash
-   docker compose --profile multilingual-assistant down              # Cloud (no local GPU)
-   docker compose --profile multilingual-assistant/server down       # Server
-   docker compose --profile multilingual-assistant/single-gpu down   # One GPU (incl. DGX Spark and Jetson Thor)
-   docker compose --profile multilingual-assistant/dynamo down       # NVIDIA Dynamo
-   ```
+7. Test the session language using [Testing](#testing).
+8. Select **Disconnect** to end the session.
+9. Stop the deployment with `docker compose --profile <recipe> down` using the same recipe.
 
-To run host-native without Docker, set `pipecat.selection` to `multilingual-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
-
-After deploying, validate the session language with the steps in [Testing](#testing).
+For a [host-native run](../../../../../docs/01-getting-started.md#optional-local-development-without-docker), use `multilingual-assistant` as `pipecat.selection`.
 
 ## Transcribe ASR
 
-Optional. Transcribe runs self-hosted with the server or single-GPU recipe. Start the server NIM with `docker compose --profile multilingual-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-multilingual=0`. The scale option keeps the NIM ASR sidecar from using GPU memory. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting, then choose the session language in **Voice Settings**. Transcribe writes the transcript in the spoken language. The session language does not change it. Refer to [Configure ASR](../../../../../docs/how-to/configure-asr.md#hardware-requirements-and-deployment-configs) for deployment, including single-GPU setup, and language compatibility.
+For whole-turn transcription instead of streaming ASR, follow [Run Transcribe With a Server Recipe](../../../../../docs/how-to/configure-asr.md#run-transcribe-with-a-server-recipe) or [Run Transcribe With a Single-GPU Recipe](../../../../../docs/how-to/configure-asr.md#run-transcribe-with-a-single-gpu-recipe). Transcribe writes transcripts in the spoken language regardless of your **Voice Settings** selection.
 
 ## Customization
 
@@ -144,7 +140,7 @@ Multilingual behavior depends on the ASR model, the LLM, and the selected TTS vo
 | Session language is unavailable or startup is rejected | The selected locale is not supported by the active ASR, TTS, or built-in LLM | Select a locale shown in Voice Settings. For built-in LLM support, see [Configure LLM](../../../../../docs/how-to/configure-llm.md#multilingual-session-languages). |
 | Japanese or Chinese is missing from Voice Settings on single-GPU | Magpie TTS on NeMo-Speech.cpp does not advertise `ja-JP` or `zh-CN` | Expected on `multilingual-assistant/single-gpu` with any built-in LLM. Use the cloud or `multilingual-assistant/server` recipe for these languages. See [Configure LLM](../../../../../docs/how-to/configure-llm.md#multilingual-session-languages). |
 | TTS uses the wrong voice or language | Selected session language is not supported by the active TTS service | Check the configured TTS service exposes that language code, or pick a supported language |
-| No voices discovered at startup | TTS prewarm failed | For Cloud, confirm `NVIDIA_API_KEY` in `.env`. For Server, also confirm NGC login and TTS sidecar health with `docker compose ps`. For Single-GPU, confirm that the `nemo-speech-asr-multilingual` and `nemo-speech-tts` sidecars are healthy and `models/nemo-speech` contains the downloaded weights. |
+| No voices discovered at startup | TTS prewarm failed | For Cloud, confirm `NVIDIA_API_KEY` in `.env`. For Server, also confirm NGC login and TTS sidecar health with `docker compose ps`. For Single-GPU, confirm that the `nemo-speech-tts` sidecar is running and `models/nemo-speech` contains the downloaded weights. |
 | Bot does not respond to a turn (no transcript) | Nemotron ASR Multilingual can drop a turn in noisy environments | Speak again, reduce background noise, and use a good microphone. See [Configure ASR](../../../../../docs/how-to/configure-asr.md#choosing-a-multilingual-asr-model) |
 | Weak or awkward replies in some languages | Nemotron 3.5 Lightning has weaker conversation quality in a few languages | Use Nemotron 3.5 Super VL for better multilingual quality. See [Configure LLM](../../../../../docs/how-to/configure-llm.md) |
 | Random ASR text while silent | Parakeet RNNT noise sensitivity | Expected with the Parakeet opt-in. The default Nemotron ASR is less prone to this. Otherwise reduce room noise and use a good mic |

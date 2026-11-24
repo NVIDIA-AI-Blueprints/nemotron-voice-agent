@@ -1,4 +1,4 @@
-# Run Scaling & Performance Tests
+# Run Scaling and Performance Tests
 
 Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/) to run latency and scaling tests against a running voice-agent server. This guide applies to the Pipecat examples (`nva-pipecat`).
 
@@ -27,7 +27,7 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
     uv sync --group benchmark
     ```
 
-3. Start the voice-agent server with TLS enabled. The scaling benchmark connects to `wss://<host>:<port>/api/ws` and disables certificate verification for the local self-signed certificate.
+3. Start the voice-agent server with TLS enabled. The benchmark connects to the Pipecat RTVI endpoint at `wss://<host>:<port>/api/ws` and verifies the certificate by default.
 
     ```bash
     uv run nva-pipecat
@@ -46,33 +46,33 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 
 ## Run
 
-From `benchmarking_tools/scaling-perf/`:
+These commands target a local server with the built-in self-signed certificate. Omit `--insecure` for a server with a trusted certificate. To benchmark the OpenAI Realtime gateway instead of RTVI, follow [Realtime Endpoint](../../benchmarking_tools/scaling-perf/README.md#realtime-endpoint).
 
-Single client (smoke test):
+1. Change to the benchmark directory.
 
-```bash
-uv run python3 benchmark.py
-```
+    ```bash
+    cd benchmarking_tools/scaling-perf
+    ```
 
-Concurrent run (N parallel clients, single concurrency level):
+2. Run a single-client smoke test.
 
-```bash
-./simulate_concurrency.sh --clients 4
-```
+    ```bash
+    uv run python3 benchmark.py --insecure
+    ```
 
-Scaling sweep (one run per concurrency level, with cooldown between levels):
+3. Choose one of these commands to run a load test:
 
-```bash
-./simulate_concurrency.sh --clients "1 2 4 8 16"
-```
+    **One concurrency level:**
 
-Useful flags (passed through to `simulate_concurrency.sh`):
+    ```bash
+    ./simulate_concurrency.sh --clients 4 --insecure
+    ```
 
-```bash
-./simulate_concurrency.sh --host localhost --port 7860 --clients "1 4"
-./simulate_concurrency.sh --clients "1 4" --test-duration 30 --cooldown 5
-./simulate_concurrency.sh --clients "4" --no-save-audio
-```
+    **Scaling sweep with cooldown between levels:**
+
+    ```bash
+    ./simulate_concurrency.sh --clients "1 2 4 8 16" --insecure
+    ```
 
 ## Outputs
 

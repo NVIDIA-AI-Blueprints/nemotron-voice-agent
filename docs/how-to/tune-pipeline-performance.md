@@ -113,11 +113,7 @@ UVICORN_WORKERS=<workers>
 
 Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the recommended scaling deployment shape and its companion tuning values, see [Reproducing the recommended scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
 
-When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows are disabled** because that state is process-local. For multi-worker deployments, use one of these patterns:
-
-- keep a **single worker** if you depend on per-process session config
-- use **sticky routing** so a session stays on the same worker
-- move session state into **shared storage**
+When `UVICORN_WORKERS > 1`, the stock app disables session-config-based WebRTC and WebSocket flows and does not serve `/v1/live`. Keep one worker for those flows. Sticky routing alone does not reenable the disabled routes. Use the [scaling benchmark](../../benchmarking_tools/scaling-perf/README.md) for the supported multi-worker test path.
 
 ## Transport Selection
 

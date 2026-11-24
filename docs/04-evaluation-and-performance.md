@@ -8,7 +8,7 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 
 ### Reference Results
 
-The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x B200 GPU** setup (one GPU for Nemotron ASR Streaming (English), one for Magpie Multilingual TTS, and two for the Nemotron 3.5 Lightning LLM). E2E latency stays below one second through 64 concurrent streams. All latencies are in seconds.
+The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x B200 GPU** setup (one GPU for Nemotron ASR Streaming (English), one for Magpie Multilingual TTS, and two for the Nemotron 3.5 Lightning LLM). In this reference run, server end-to-end latency stayed below one second through 64 concurrent streams. The table reports seconds. These results are not a latency guarantee for other deployments.
 
 > **Note:** This benchmark uses a 4-GPU setup to measure scalability. Deployment options include cloud-only with no local GPUs, about 80 GB VRAM for the default all-on-one-GPU `*/server` NIM layout, or a supported one-GPU host for `*/single-gpu`. See [Configure LLM](how-to/configure-llm.md#vram--hardware-support) for the automatic VRAM plan.
 >

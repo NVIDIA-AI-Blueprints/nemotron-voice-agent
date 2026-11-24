@@ -22,33 +22,40 @@ The Cloud recipe uses hosted services. The Server recipe requires a workstation 
 
 Run these commands from the repository root.
 
-1. Preserve your `.env` file, or copy the template. Set `NVIDIA_API_KEY` for Cloud or Server. For Single GPU, set `HF_TOKEN` for the model download.
+1. Create `.env` only if it does not exist.
 
    ```bash
    test -f .env || cp .env.example .env
    ```
 
-2. For Server, sign in to the NVIDIA NGC container registry.
+2. Set `NVIDIA_API_KEY` for Cloud or Server, or `HF_TOKEN` for Single-GPU.
+3. For Server only, sign in to the NVIDIA NGC container registry.
 
    ```bash
    set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-3. Start one recipe profile. Download the speech weights before starting Single GPU.
+4. Download the speech weights for Single-GPU only. Run the script as your user, not with `sudo`.
 
    ```bash
-   docker compose --profile frontend-backend-live up -d
-   docker compose --profile frontend-backend-live/server up -d
-
    bash scripts/download-nemo-speech-models.sh
-   docker compose --profile frontend-backend-live/single-gpu up -d
    ```
 
-4. Open `https://localhost:7860/` and ask what teas the cafe has. For browser connection issues, refer to [Browser Access](../../../../../docs/06-troubleshooting.md#browser-access).
-5. When finished, run `docker compose --profile frontend-backend-live down`, using the same profile you started.
+5. Start one recipe. Replace `<recipe>` with `frontend-backend-live` for Cloud, `frontend-backend-live/server` for Server, or `frontend-backend-live/single-gpu` for Single-GPU.
 
-For local development without Docker, set `pipecat.selection: frontend-backend-live` in the registry, then run `uv run nva-pipecat`.
+   ```bash
+   docker compose --profile <recipe> up -d
+   ```
+
+6. Open `https://localhost:7860/`. For connection issues, refer to [Browser Access](../../../../../docs/06-troubleshooting.md#browser-access).
+7. Select **Connect**.
+8. Allow microphone access if prompted.
+9. Ask what teas the cafe has after the greeting. Expect a spoken reply and a delegated task in the **Conversation** tab.
+10. Select **Disconnect** to end the session.
+11. Stop the deployment with `docker compose --profile <recipe> down` using the same recipe.
+
+For a [host-native run](../../../../../docs/01-getting-started.md#optional-local-development-without-docker), use `frontend-backend-live` as `pipecat.selection`. The browser procedure does not require `LIVE_API_TOKEN`; for an external client, follow [Use the Live Gateway](../../../../../docs/how-to/use-live-gateway.md).
 
 ## Configuration
 

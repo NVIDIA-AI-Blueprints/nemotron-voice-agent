@@ -62,74 +62,57 @@ For the Server and Single GPU profiles, use a machine that is not running other 
 
 Run every command from the repository root.
 
-1. Preserve any existing `.env` file. Otherwise, copy the template, and then set the credentials that [Prerequisites](#prerequisites) lists for your profile in `.env`. If your `.env` comes from another example, add the LiveKit entries from [`.env.example`](../../../../../.env.example):
+1. Create `.env` only if it does not exist:
 
    ```bash
    test -f .env || cp .env.example .env
    ```
 
-2. Log in to the NVIDIA NGC container registry. This step applies to the Server profile only. Skip it for Cloud and Single GPU:
+2. Set the credentials for your profile in `.env`. For optional LiveKit settings, refer to [`.env.example`](../../../../../.env.example).
+3. Log in to the NVIDIA NGC container registry. This step applies to the Server profile only. Skip it for Cloud and Single GPU:
 
    ```bash
    set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-3. Deploy the profile that matches your hardware. Run only one profile at a time:
+4. Download speech weights for Single-GPU only. Run the script as your user, not with `sudo`. DGX Spark and Jetson Thor are not validated for this LiveKit recipe.
 
    ```bash
-   docker compose --profile generic-assistant-livekit up -d          # Cloud
-   docker compose --profile generic-assistant-livekit/server up -d   # Server
-
-   # One GPU (incl. DGX Spark and Jetson Thor, not validated). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
-   docker compose --profile generic-assistant-livekit/single-gpu up -d
+   ```
+
+5. Start one recipe with the helper. Replace `<mode>` with `cloud`, `server`, or `single-gpu` from the table.
+
+   ```bash
+   src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up <mode>
    ```
 
    Each profile starts the following app service and sidecars. Every profile also starts `livekit-init`, which writes the LiveKit credentials and exits, and then `livekit-server` and `livekit-ui`:
 
-   | Recipe profile | App service | Sidecars |
-   | --- | --- | --- |
-   | `generic-assistant-livekit` | `livekit-agent` | none (cloud NVCF) |
-   | `generic-assistant-livekit/server` | `livekit-agent-server` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
-   | `generic-assistant-livekit/single-gpu` | `livekit-agent-single-gpu` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech-asr`, `livekit-nemo-speech` (TTS) |
+   | Helper Mode | Compose Profile | Agent Service | Model Sidecars |
+   | --- | --- | --- | --- |
+   | `cloud` | `generic-assistant-livekit` | `livekit-agent` | none (cloud NVCF) |
+   | `server` | `generic-assistant-livekit/server` | `livekit-agent-server` | `livekit-nvidia-llm`, `livekit-nemotron-asr`, `livekit-magpie-tts` |
+   | `single-gpu` | `generic-assistant-livekit/single-gpu` | `livekit-agent-single-gpu` | `livekit-nvidia-llm-vllm`, `livekit-nemo-speech-asr`, `livekit-nemo-speech` (TTS) |
 
    > The sidecars extend the definitions in `docker/sidecars/`. The agent shares the network namespace of `livekit-server`. If you recreate `livekit-server`, run the same `up` command again.
 
-   The helper script [`run.sh`](run.sh) runs the same profiles with extra checks. It checks your `.env` and the Docker Compose version, and stops a different running profile. It stops with an error if a host port is busy or, for Single GPU, if the speech weights are missing. For Single GPU, it also warns about low memory. Then it waits until the sidecars are healthy and the agent has registered with LiveKit:
+   The [helper](run.sh) checks prerequisites and waits for the sidecars and agent registration. With plain Compose, use `docker compose --profile <profile> up -d` instead, then run the helper's `wait <mode>` command. Phone calls use a separate, optional [Linux SIP setup](SIP.md).
 
-   ```bash
-   src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up cloud        # Cloud
-   src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up server       # Server
-   src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up single-gpu   # Single GPU
-   ```
+6. Wait for `Ready to connect`. The first startup can take time to download and load models. If you interrupt the wait with Ctrl+C, the containers keep running. Resume with `src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh wait <mode>`.
+7. Open `http://localhost:3000/` on the Docker host. For another computer, follow [Remote Browser Access](#remote-browser-access). The **DEFAULT PIPELINE** panel shows the active models.
+8. Select **Connect**.
+9. Allow microphone access if prompted.
+10. Ask a question. Expect a spoken reply from the agent.
+11. Select **Disconnect** to leave the room.
+12. Stop the recipe with the mode you started:
 
-   To also answer phone calls, add `--sip` to `run.sh up`, or add the `/sip` profile and set `LIVEKIT_SIP=1` with Compose. SIP needs a Linux host. The [SIP guide](SIP.md) covers the full setup, including the number mapping:
+    ```bash
+    src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh down <mode>
+    ```
 
-   ```bash
-   src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up cloud --sip   # or server, single-gpu
-   # The Compose equivalent. LIVEKIT_SIP=1 is required, or `sip-setup` fails with "sip not connected (redis required)":
-   LIVEKIT_SIP=1 docker compose --profile generic-assistant-livekit --profile generic-assistant-livekit/sip up -d
-   ```
-
-   The first start of the Server and Single GPU profiles downloads and loads models, which can take a long time. The script prints progress every 15 seconds. `not ready yet` is normal while a large model loads. Investigate only if a container restarts or its last log line stops changing. Connect after the script prints `Ready to connect`. To stop waiting without stopping the containers, press Ctrl+C. Use these commands to resume the wait, or to skip it:
-
-   ```bash
-   src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh wait single-gpu             # resume the wait
-   src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up single-gpu --no-wait     # start without waiting
-   ```
-
-4. Open the UI at `http://localhost:3000/` on the machine that runs Docker. For a browser on another computer, refer to [Remote Browser Access](#remote-browser-access). The **DEFAULT PIPELINE** panel shows the models in use. Optionally, choose services in the **SERVICES** tab, and choose a prompt and a voice in the left panel. Then select **Connect**, and speak.
-
-5. Clean up when you are done by tearing down with the same profile you started with:
-
-   ```bash
-   docker compose --profile generic-assistant-livekit down              # Cloud
-   docker compose --profile generic-assistant-livekit/server down       # Server
-   docker compose --profile generic-assistant-livekit/single-gpu down   # Single GPU
-   ```
-
-   To stop the profile with the helper script, or to also delete the LiveKit volumes, refer to [Cleanup](#cleanup).
+    For plain Compose, use `docker compose --profile <profile> down`. To remove LiveKit volumes too, refer to [Cleanup](#cleanup).
 
 ## Configuration
 

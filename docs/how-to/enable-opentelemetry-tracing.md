@@ -2,7 +2,7 @@
 
 OpenTelemetry tracing provides observability for the cascaded voice pipelines, allowing you to monitor latency, debug issues, and analyze conversation flows. The steps below show how to enable tracing with [Phoenix](https://arize.com/docs/phoenix/self-hosting). This guide applies to the Pipecat examples (`nva-pipecat`).
 
-## Steps
+## Start and Verify Phoenix
 
 1. Enable tracing in `.env` **before** starting the stack, so the app picks it up:
 
@@ -28,19 +28,27 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
     http://localhost:6006
     ```
 
-    For remote access replace `localhost` with your server's IP address.
+    Use a trusted network or an authenticated proxy for remote access. Traces can contain conversation data.
+
+4. Run a voice turn in the Pipecat UI.
+5. Look for a new turn trace in Phoenix.
+6. Stop the stack and overlay when finished:
+
+    ```bash
+    docker compose --profile generic-assistant/server --profile tracing down
+    ```
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_TRACING` | `false` | Enable OpenTelemetry tracing for both pipelines |
+| `ENABLE_TRACING` | `false` | Enable tracing for instrumented Pipecat pipelines |
 | `OTEL_CONSOLE_EXPORT` | `false` | Also print traces to stdout (useful for local debugging) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP collector endpoint |
 
 **Endpoint format:**
-- **gRPC** (port 4317): `host:port` (for example, `phoenix:4317` or `localhost:4317`)
-- **HTTP** (port 4318 or custom): `http://host:port` (for example, `http://phoenix:4318`)
+- **gRPC**: `host:port` (for example, `phoenix:4317`). The app uses an insecure gRPC channel.
+- **HTTP**: the full OTLP traces URL, including the path (for example, `https://collector.example.com/v1/traces`).
 
 ## Trace Structure
 

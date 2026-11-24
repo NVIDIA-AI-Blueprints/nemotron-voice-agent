@@ -18,35 +18,37 @@ The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../.
 
 Nemotron Omni handles both speech recognition and response generation, so this example does not configure a separate ASR model. The agents share this model and apply role-specific prompts and reasoning settings.
 
-## Running the example
+## Running the Example
 
 This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended for scaling), and **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations and DGX Spark. It is **not supported on Jetson Thor**. See the [Getting Started guide](../../../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
-1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile:
+1. Create `.env` only if it does not exist:
 
    ```bash
    test -f .env || cp .env.example .env
    ```
 
-   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
-
-2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
+2. Set `NVIDIA_API_KEY` in `.env` for Cloud or Server, or `HF_TOKEN` for Single-GPU. The Single-GPU vLLM service downloads Omni weights from Hugging Face.
+3. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
 
    ```bash
    set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
-3. Deploy the profile that matches your hardware:
+4. Download the speech assets for Single-GPU only. Run the script as your user, not with `sudo`.
 
    ```bash
-   docker compose --profile omni-assistant-subagents up -d              # Cloud (no local GPU)
-   docker compose --profile omni-assistant-subagents/server up -d  # Server (Omni NIM + NIM TTS, recommended for scaling)
-
-   # One GPU (workstation or DGX Spark). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
-   docker compose --profile omni-assistant-subagents/single-gpu up -d
    ```
+
+5. Start one recipe from the table. On Jetson Thor, choose the Cloud profile.
+
+   ```bash
+   docker compose --profile <recipe> up -d
+   ```
+
+   Substitute a profile from the following table for `<recipe>`:
 
    | Recipe profile | App service | Shared sidecars pulled from `docker/sidecars/` |
    | --- | --- | --- |
@@ -54,17 +56,15 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    | `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
    | `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
-4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
+6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
 
-5. Clean up when you are done by tearing down with the same profile you started with:
+7. Select **Connect**.
+8. Allow microphone access if prompted.
+9. Ask a question. Expect a spoken reply from the speaker agent.
+10. Select **Disconnect** to end the session.
+11. Stop the deployment with `docker compose --profile <recipe> down` using the same recipe.
 
-   ```bash
-   docker compose --profile omni-assistant-subagents down              # Cloud (no local GPU)
-   docker compose --profile omni-assistant-subagents/server down       # Server
-   docker compose --profile omni-assistant-subagents/single-gpu down   # One GPU (incl. DGX Spark)
-   ```
-
-To run host-native without Docker, set `pipecat.selection` to `omni-assistant-subagents` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
+For a [host-native run](../../../../../docs/01-getting-started.md#optional-local-development-without-docker), use `omni-assistant-subagents` as `pipecat.selection`.
 
 ## Customization
 

@@ -8,7 +8,7 @@
 - **Same pipelines as the UI** — Drive the cascaded ASR → LLM → TTS pipelines already used by `WS /api/ws` (Pipecat RTVI).
 - **Nemotron config surface** — Map Realtime session fields that translate onto the cascade; expose NVIDIA-only knobs under `session.nvidia`.
 
-It is a **protocol gateway**, not a drop-in clone of OpenAI’s hosted Realtime endpoint.
+This is a protocol gateway on the Pipecat app server, not a drop-in clone of the hosted OpenAI Realtime endpoint. It is separate from the [Live gateway](use-live-gateway.md) and from [Streaming Input](configure-llm.md#deployment-tuning-parameters), which sends text to an LLM sidecar.
 
 ## How This Differs from OpenAI Realtime
 

@@ -4,9 +4,9 @@ The Nemotron Voice Agent keeps every built-in LLM, ASR, and TTS service in one c
 
 This guide covers the **mechanics**: how the catalog is laid out, how the active recipe selects entries, and how to extend it. For the differences in the LiveKit example, refer to [Use the Catalog with LiveKit](#use-the-catalog-with-livekit).
 
-## Required credentials
+## Required Credentials
 
-Set one key per recipe family. Do not mix them.
+Set the keys for your recipe in the repository's `.env`.
 
 | Recipe family | Required `.env` key |
 | --- | --- |
@@ -14,10 +14,11 @@ Set one key per recipe family. Do not mix them.
 | Server (`<example>/server`) | `NVIDIA_API_KEY` |
 | Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` |
 | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` |
+| Dynamo (`<example>/dynamo`) | `NVIDIA_API_KEY` for the speech NIMs and `HF_TOKEN` for the Lightning weights |
 
 The LiveKit profiles `generic-assistant-livekit`, `generic-assistant-livekit/server`, and `generic-assistant-livekit/single-gpu` use the same keys as Cloud, Server, and Single-GPU.
 
-`NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server and Performance Server additionally need `docker login nvcr.io` before `up`. Single-GPU requires `HF_TOKEN` for Hugging Face model downloads and does not use `NVIDIA_API_KEY`.
+`NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server, Performance Server, and Dynamo need `docker login nvcr.io` before `up`. The stock Single-GPU recipe uses `HF_TOKEN` for Hugging Face downloads and does not need `NVIDIA_API_KEY`.
 
 ## Catalog layout
 
@@ -48,9 +49,9 @@ server:
       nvcf: {}
 ```
 
-## How the active recipe selects entries
+## How the Active Recipe Selects Entries
 
-This section describes the Pipecat backend. Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run nva-pipecat`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
+This section describes the Pipecat backend. Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run nva-pipecat`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. For host-native runs with local models, start only the named model services so Compose does not also launch an app on the same port. `SERVICE_RECIPE` overrides detection.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |

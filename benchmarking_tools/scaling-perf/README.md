@@ -153,9 +153,9 @@ scaling configuration:
 
 - Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
-- `nvidia-llm`: `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`, GPUs `2,3`, alias
+- `nvidia-llm-perf`: `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`, GPUs `2,3`, alias
   `nvidia-llm`
-- `nemotron-asr-streaming-english`:
+- `nemotron-asr-streaming-english-perf`:
   `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
   `nemotron-asr-streaming-english`
 - `magpie-multilingual-tts-service-perf`:
@@ -186,17 +186,26 @@ scaling configuration:
 > and [environment variable](https://docs.nvidia.com/nim/large-language-models/latest/reference/environment-variables.html)
 > documentation.
 
-Deploy it with:
+1. Set `NVIDIA_API_KEY` in the repository's `.env` and sign in to `nvcr.io` with your NGC API key. Refer to [Getting Started](../../docs/01-getting-started.md#prerequisites).
+2. Start the benchmark recipe from the repository root. Do not start a browser recipe alongside it.
 
-```bash
-docker compose --profile generic-assistant/server-perf up -d
-```
+   ```bash
+   docker compose --profile generic-assistant/server-perf up -d
+   ```
 
-After the stack is healthy, run the sweep from this directory:
+3. Check service status with `docker compose --profile generic-assistant/server-perf ps`. Wait for the model services to finish loading.
+4. Run the sweep from this directory. `--insecure` permits the local self-signed certificate. Omit it for a server with a trusted certificate.
 
-```bash
-./simulate_concurrency.sh --clients "1 2 4 8 16" --insecure
-```
+   ```bash
+   ./simulate_concurrency.sh --clients "1 2 4 8 16" --insecure
+   ```
+
+5. Return to the repository root.
+6. Stop the benchmark recipe.
+
+   ```bash
+   docker compose --profile generic-assistant/server-perf down
+   ```
 
 ## Run
 

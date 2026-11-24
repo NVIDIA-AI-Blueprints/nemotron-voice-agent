@@ -1,214 +1,151 @@
 # Getting Started
 
-This guide walks you through the cloud-only, server, single-GPU, and Dynamo deployment options for the Nemotron Voice Agent. It covers the Pipecat examples and the Generic Assistant on LiveKit. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
+Deploy a voice agent and test a first voice turn. Start with a Cloud recipe if you do not have a supported local GPU. The Docker Compose procedure below is for Pipecat; LiveKit has its own browser workflow.
 
 ## Prerequisites
 
-Before you begin, ensure you have the following:
+You need Docker Compose 2.24.4 or newer. Check your version with `docker compose version`. For a local GPU recipe, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) and verify that containers can access the GPU.
 
-- Docker Compose 2.24.4 or newer. Check the version with `docker compose version`.
-- **Cloud (`<example>`), Server (`*/server`), and Performance Server (`generic-assistant/server-perf`):** an NVIDIA API key (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server and Performance Server also need NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
-- **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `generic-assistant/single-gpu` also builds its diarization VAD model locally, which needs `uv`, or Python 3 with `gguf==0.19.0` and `numpy==2.2.6`. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
-- **Dynamo (`*/dynamo`):** both `NVIDIA_API_KEY` with NGC access for the ASR and TTS NIMs, and `HF_TOKEN` for the Nemotron 3.5 Lightning weights. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
+Choose credentials for your recipe:
 
-For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+| Recipe Family | Key in `.env` | NGC Registry Login |
+| --- | --- | --- |
+| Cloud (`<example>`) | `NVIDIA_API_KEY` from [build.nvidia.com](https://build.nvidia.com/) | Not required |
+| Server (`<example>/server`) | `NVIDIA_API_KEY` with [NGC access](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account) | Required |
+| Single-GPU (`<example>/single-gpu`) | [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) | Not required |
+| Dynamo (`<example>/dynamo`) | `NVIDIA_API_KEY` with NGC access for the speech NIMs **and** `HF_TOKEN` for the Lightning weights | Required |
 
-## Docker based Deployment
+Single-GPU recipes also need NVIDIA driver 580.x or newer for NeMo-Speech.cpp. The speech download script needs Python 3 and either the Hugging Face `hf` CLI or `uvx`. The Generic Assistant also needs `uv`, or Python with `gguf==0.19.0` and `numpy==2.2.6`, to build the voice activity detection (VAD) model used by diarization.
 
-Each example ships as Docker Compose **profiles**. Pick exactly one per deployment. The bare **`<example>`** profile runs cloud-only (no local GPU, using NVIDIA cloud API endpoints). **`<example>/server`** is the scaling-oriented NIM stack on a **workstation** (not DGX Spark, not Jetson Thor). **`<example>/single-gpu`** is the one-GPU path. Supported hardware varies by example and is listed below. `docker compose up` with no profile is intentionally a no-op so the deployment is always explicit.
+## Docker Based Deployment
 
-> **Note:** For example-specific architecture, configuration, and tunables, see each example's README (linked in the table below).
+Choose exactly one recipe per deployment. Cloud uses NVIDIA-hosted endpoints without a local GPU. Server runs NVIDIA NIM microservices on a workstation, not DGX Spark or Jetson Thor. Single-GPU uses local models; check [model sizing](how-to/configure-llm.md#vram--hardware-support) before starting. Dynamo requires an Ada, Hopper, or Blackwell workstation GPU with at least 64 GB for one worker. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo) for sizing and extra workers.
 
-| Example | Description | Supported profiles |
-|---------|-------------|--------------------|
-| [`generic-assistant`](../src/nemotron_voice_agent/pipecat/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `generic-assistant/dynamo` (workstation) |
-| [`multilingual-assistant`](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `multilingual-assistant/dynamo` (workstation) |
-| [`omni-assistant`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
-| [`omni-assistant-subagents`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
-| [`frontend-backend-live`](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) | Routing talker with the `/v1/live` session API and three backend adapters: the backend LLM, an LLM agent, or an agent runtime harness (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
-| [`generic-assistant-livekit`](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md) | Cascaded pipeline on LiveKit Agents with its own web UI and optional phone calls (SIP). Refer to [Deploy the Generic Assistant on LiveKit](#deploy-the-generic-assistant-on-livekit). | `generic-assistant-livekit`, `generic-assistant-livekit/server`, `generic-assistant-livekit/single-gpu` (workstation, DGX Spark and Jetson Thor not validated) |
+Choose a profile from the following table. Each linked example lists its default models and sidecars.
 
-> Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any Pipecat profile.
+| Example | Cloud | Server | Single-GPU | Dynamo |
+| --- | --- | --- | --- | --- |
+| [Generic Assistant](../src/nemotron_voice_agent/pipecat/examples/generic/README.md) | `generic-assistant` | `generic-assistant/server` | `generic-assistant/single-gpu` | `generic-assistant/dynamo` |
+| [Multilingual Assistant](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | `multilingual-assistant` | `multilingual-assistant/server` | `multilingual-assistant/single-gpu` | `multilingual-assistant/dynamo` |
+| [Omni Assistant](../src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) | `omni-assistant` | `omni-assistant/server` | `omni-assistant/single-gpu` | — |
+| [Omni Assistant Subagents](../src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/README.md) | `omni-assistant-subagents` | `omni-assistant-subagents/server` | `omni-assistant-subagents/single-gpu` (workstation or DGX Spark only) | — |
+| [Frontend/Backend Live](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) | `frontend-backend-live` | `frontend-backend-live/server` (three GPUs for the stock recipe) | `frontend-backend-live/single-gpu` | — |
 
----
+Single-GPU profiles support compatible workstations and DGX Spark. For Jetson Thor, follow the [Jetson Thor guide](03-jetson-thor.md); Omni Assistant Subagents is Cloud only on Thor. For the four-GPU `generic-assistant/server-perf` load test, follow the [scaling benchmark](../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup) instead of the browser procedure.
 
 ### Deployment Steps
 
-1. Clone the repository and navigate to the root directory.
+Run the following steps for your selected Pipecat profile.
+
+1. Clone the release branch.
 
     ```bash
-    git clone git@github.com:NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    git clone --branch release_v2.4.0 https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    ```
+
+2. Change to the repository root.
+
+    ```bash
     cd nemotron-voice-agent
     ```
 
-2. Configure the environment. Copy the example environment file [.env.example](../.env.example) only if `.env` is missing. Set the key for the recipe family you will run. Do not mix these.
-
-    | Recipe family | Required `.env` key | `docker login nvcr.io` |
-    | --- | --- | --- |
-    | Cloud (`<example>`) | `NVIDIA_API_KEY` | No |
-    | Server (`<example>/server`) | `NVIDIA_API_KEY` | Yes, before `up` |
-    | Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` | Yes, before `up` |
-    | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` | No |
-    | Dynamo (`<example>/dynamo`) | `NVIDIA_API_KEY` and `HF_TOKEN` | Yes, before `up` |
-
-    `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. `HF_TOKEN` is required for Single-GPU. Do not mix these, except for Dynamo, which needs both.
+3. Create `.env` only if it does not exist.
 
     ```bash
     test -f .env || cp .env.example .env
     ```
 
-    Docker Compose passes `.env` values into the app and model sidecars, so exporting a key in your shell is not enough for runtime.
-
-    To use `/v1/live`, keep the `frontend-backend-live` profile's default example selection and set `LIVE_API_TOKEN` in `.env` before starting Docker Compose. If the deployment is already running, rerun its `docker compose --profile <profile> up -d` command to apply the change. For local access without a token and other requirements, refer to [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
-
-3. For **`*/server`, `*/dynamo`, and `generic-assistant/server-perf` only**, log in to the NVIDIA NGC Docker Registry:
+4. Set the key or keys for your recipe in `.env`. An exported shell variable alone does not populate the app's `.env` file.
+5. Log in to NGC for Server or Dynamo only.
 
     ```bash
     set -a; . ./.env; set +a
     printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
     ```
 
-    Skip this step for cloud-only and `*/single-gpu`.
-
-4. Deploy the example profile of your choice. These commands start the Pipecat examples. For the Generic Assistant on LiveKit, refer to [Deploy the Generic Assistant on LiveKit](#deploy-the-generic-assistant-on-livekit).
-
-    **4.1 Cloud only** (no local GPU):
-
-    ```bash
-    docker compose --profile generic-assistant up -d            # Generic Cascaded
-    docker compose --profile multilingual-assistant up -d       # Multilingual Cascaded
-    docker compose --profile omni-assistant up -d               # Nemotron Omni Assistant
-    docker compose --profile omni-assistant-subagents up -d     # Nemotron Omni Assistant Subagents
-    docker compose --profile frontend-backend-live up -d        # Frontend/Backend Live Cafe Assistant
-    ```
-
-    **4.2 Server** (workstation NIM stack, not DGX Spark or Jetson Thor):
-
-    ```bash
-    docker compose --profile generic-assistant/server up -d         # Generic Cascaded
-    docker compose --profile multilingual-assistant/server up -d    # Multilingual Cascaded
-    docker compose --profile omni-assistant/server up -d            # Nemotron Omni Assistant
-    docker compose --profile omni-assistant-subagents/server up -d  # Nemotron Omni Assistant Subagents
-    docker compose --profile frontend-backend-live/server up -d     # Frontend/Backend Live Cafe Assistant
-    ```
-
-    The `frontend-backend-live/server` recipe runs its talker on the Nemotron 3.5 Lightning NIM on GPU `0` and its backend on the Nemotron 3.5 Super VL NIM with reasoning enabled, which it starts on GPUs `1` and `2`, so it needs three GPUs. When the Super VL NIM is not running, the backend runs on the Lightning NIM. Refer to the example's [Default Models](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#default-models).
-
-    **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve those weights as W4A16 through Marlin. Blackwell workstations enable DFlash speculative decoding automatically. DGX Spark does not load a DSpark draft model due to a known issue with vLLM streaming prefill. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
-
-    Download the NeMo-Speech.cpp weights **as your user** (do not use `sudo`), and rerun this step after upgrading. The script reads `HF_TOKEN` from `.env`, pulls the GGUFs from Hugging Face, and fetches Magpie TTS text-normalization grammars from the [NeMo-Speech.cpp GitHub release](https://github.com/NVIDIA/NeMo-Speech.cpp/releases) into `models/nemo-speech`. For `generic-assistant/single-gpu`, it also installs the diarization and Silero VAD models, which the speech container loads even when diarization is off. A failed VAD build only prints a warning, so check the output before you start that recipe:
+6. Download the speech weights for Single-GPU only. Run the script as your user, not with `sudo`, and rerun it after upgrading to refresh the assets. Omni recipes use the speech sidecar for text-to-speech (TTS) only.
 
     ```bash
     bash scripts/download-nemo-speech-models.sh
     ```
 
-    Then start the stack:
+7. For `generic-assistant/single-gpu`, check the download output for VAD build warnings before starting. The ASR sidecar loads the diarization and VAD models even when speaker labels are off.
+8. Start your selected recipe. Substitute one profile from the table for `<recipe>`.
 
     ```bash
-    docker compose --profile generic-assistant/single-gpu up -d          # Generic Cascaded
-    docker compose --profile multilingual-assistant/single-gpu up -d     # Multilingual Cascaded
-    docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
-    docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
-    docker compose --profile frontend-backend-live/single-gpu up -d      # Frontend/Backend Live
+    docker compose --profile <recipe> up -d
     ```
 
-    **4.4 Dynamo** (workstation recipe, not DGX Spark or Jetson Thor). The Generic and Multilingual Assistants can serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the ASR and TTS NIMs of the `/server` recipe. The recipe starts one Dynamo worker on GPU `0`, which needs an Ada, Hopper, or Blackwell GPU with at least 64 GB of memory. For details and extra workers, refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
+    The first start can take time to build images, download models, and load weights. Most Pipecat profiles default `EXAMPLE_SELECTION` to the matching example. The performance profile hard-codes `generic-assistant`. Setting `EXAMPLE_SELECTION=all` on other profiles exposes the selector but does not start other examples' sidecars or serve `/v1/live`.
+
+9. Check container status.
 
     ```bash
-    docker compose --profile generic-assistant/dynamo up -d         # Generic Cascaded
-    docker compose --profile multilingual-assistant/dynamo up -d    # Multilingual Cascaded
+    docker compose --profile <recipe> ps
     ```
 
-    To verify all services are healthy, run `docker compose ps`.
+    Wait for the app to become healthy. A healthy app does not guarantee that all model services are ready. For startup failures, refer to [Troubleshooting](06-troubleshooting.md).
 
-    > **Note:** Each Docker Compose profile pins `EXAMPLE_SELECTION=<example>`, so the container runs that single example. Set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
-    >
-    > **Note:** To change how the Frontend/Backend Live example runs delegated work, refer to [Choose a Backend Adapter](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#choose-a-backend-adapter).
-    >
-    > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
+10. Open `https://localhost:7860/` on the Docker host, or `https://<machine-ip>:7860/` from another machine. If you changed `PIPELINE_APP_PORT`, use that host port. For TLS warnings or microphone problems, refer to [Browser Access](06-troubleshooting.md#browser-access). Remote WebRTC clients can need [a TURN server](how-to/enable-turn-server.md).
+11. Select **Connect**. The default local services must be ready before a session can start.
+12. Allow microphone access if prompted.
+13. Ask a question after the greeting finishes. You should hear a spoken reply. The first turn on a local recipe can take longer while the models warm up.
+14. Select **Disconnect** to end the session.
+15. Stop the deployment with the same profile. Include any overlays you started with it.
 
-5. Access the Pipecat application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require). The Generic Assistant on LiveKit serves its UI at `http://localhost:3000`.
+    ```bash
+    docker compose --profile <recipe> down
+    ```
 
-    > **Note:** `PIPELINE_TLS=false` serves plain HTTP for headless/API testing only. For plain-HTTP browser testing, see [plain-HTTP deployment and usage](06-troubleshooting.md#browser-access).
-    >
-    > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
-    >
-    > **Note:** If connecting from a different network (NAT, cloud, restrictive firewall), see [Enable a TURN Server for Remote Access](how-to/enable-turn-server.md).
-
----
+For application clients, follow [Use the Live Gateway](how-to/use-live-gateway.md) or [Use the Realtime Gateway](how-to/use-realtime-gateway.md). Neither is required to use the repository browser UI.
 
 ## Deploy the Generic Assistant on LiveKit
 
-The Generic Assistant on LiveKit uses the same `.env`, `services.yaml`, and model sidecar definitions in `docker/sidecars/` as the Pipecat examples. It runs its own LiveKit server, agent worker, and web UI, so the deployment steps differ in the following ways:
+The LiveKit example runs its own server, agent worker, and web UI. Its [deployment guide](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#run-the-example) covers choosing one recipe, waiting for agent readiness, connecting to the UI at `http://localhost:3000/`, and using an SSH tunnel for a remote browser. Stop any Pipecat recipe before starting LiveKit on the same host to avoid resource or port conflicts. SIP is an optional [Linux-only setup](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md).
 
-- **Profiles:** deploy with `docker compose --profile generic-assistant-livekit up -d`, or the `/server` or `/single-gpu` profile. For `/single-gpu`, first run `bash scripts/download-nemo-speech-models.sh`. The helper script `src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh up <cloud|server|single-gpu>` runs the same profiles with extra checks, and waits until the agent is ready.
-- **Web UI:** open `http://localhost:3000/` on the host, or use `run.sh tunnel <user>@<host>` from another computer.
-- **One stack per machine:** do not run a Pipecat recipe on the same machine at the same time, because the profiles share GPUs and ports.
-- **Phone calls:** the optional `generic-assistant-livekit/sip` profile connects a phone number to the agent.
+## Optional: Local Development Without Docker
 
-For the full procedure, refer to the [Generic Assistant on LiveKit README](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md). For phone calls, refer to [Phone Calls (SIP)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md).
+Run the Pipecat app directly with NVIDIA Cloud endpoints. You need Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), Node.js 22.14 or a later 22.x release, and a real `NVIDIA_API_KEY`. Run the commands from the release checkout. Stop any Compose app using port `7860` first.
 
----
-
-## Optional: Local Development (without Docker)
-
-This procedure runs the Pipecat server. For the Generic Assistant on LiveKit, refer to its [README](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md).
-
-For development and debugging, you can run the server directly:
-
-1. Install [uv](https://docs.astral.sh/uv/) and Node.js 20+.
-
-2. Install dependencies and build the client:
+1. Install Python dependencies from the lockfile.
 
     ```bash
-    uv sync
-    cd clients/pipecat && npm install && npm run build && cd ../..
+    uv sync --locked
     ```
 
-3. Install local commit hooks:
+2. Install the Pipecat client dependencies.
 
     ```bash
-    uv run pre-commit install
+    npm --prefix clients/pipecat ci
     ```
 
-    The hooks run formatting and linting checks on staged files during `git commit`.
-
-4. Configure the environment:
+3. Build the web UI.
 
     ```bash
-    cp .env.example .env
-    # Cloud or */server (including server-perf): set NVIDIA_API_KEY
-    # */single-gpu sidecars: set HF_TOKEN instead
+    npm --prefix clients/pipecat run build
     ```
 
-5. Start the server:
+4. Create `.env` only if it does not exist.
 
     ```bash
-    uv run nva-pipecat --host 0.0.0.0 --port 7860
+    test -f .env || cp .env.example .env
     ```
 
-    To serve plain HTTP instead of HTTPS, set `PIPELINE_TLS=false` in `.env` or prefix the command:
+5. Set `NVIDIA_API_KEY` in `.env`.
+6. Set `pipecat.selection` to `generic-assistant` in [`examples_registry.yaml`](../examples_registry.yaml) for this first run. The registry defaults to `all`, which exposes the example selector. An `EXAMPLE_SELECTION` environment override takes precedence. There is no example-selection command-line flag.
+7. Start the Pipecat server.
 
     ```bash
-    PIPELINE_TLS=false uv run nva-pipecat --host 0.0.0.0 --port 7860
+    uv run nva-pipecat
     ```
 
-    Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `pipecat.selection` field to choose what the UI exposes, then start the server normally. The server has no example-selection CLI flag. Pipeline options such as `--prompt-file` remain available.
+    The default address is `https://localhost:7860/`. For a browser on another machine, start with `--host 0.0.0.0` and use the server address instead of `localhost`.
 
-    Without reachable local sidecars, a host-native server uses the NVIDIA Cloud (NVCF) service endpoints, which need a real `NVIDIA_API_KEY` (not empty or `not-needed`). To run against **local on-prem services**, start the matching Compose sidecars first, then start the app. The backend detects whether the NIM (`/server`) or NeMo-Speech.cpp (`/single-gpu`) sidecars are reachable and rewrites Compose endpoints to `localhost` automatically. Set `SERVICE_RECIPE=server` or `SERVICE_RECIPE=single-gpu` to pin the section instead.
+8. Open the UI in your browser.
+9. Select **Connect**.
+10. Allow microphone access if prompted.
+11. Ask a question after the greeting. The assistant should answer aloud.
+12. Select **Disconnect** to end the session.
+13. Press Ctrl+C in the server terminal to stop the app.
 
-    | `pipecat.selection` in `examples_registry.yaml` | UI behavior |
-    |-----------------------------------------|-------------|
-    | `all` | Show every registered example (default) |
-    | `generic-assistant` | Lock to Generic Assistant |
-    | `multilingual-assistant` | Lock to Multilingual Assistant |
-    | `omni-assistant` | Lock to Nemotron Omni Assistant |
-    | `omni-assistant-subagents` | Lock to Nemotron Omni Assistant Subagents |
-    | `frontend-backend-live` | Lock to Frontend Backend Live |
-
-    > **Note:** Docker Compose deployments pin `EXAMPLE_SELECTION=<example>` to a single example. You can set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
-
-6. Access the application locally at `https://localhost:7860`, or from another machine at
-   `https://<machine-ip>:7860` (replace `<machine-ip>` with the host IP).
-
-   > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
+For a host-native app with local models, start only the named model services from your example's Compose recipe, not the full recipe. The server can detect reachable sidecars on published host ports. Refer to [How the Active Recipe Selects Entries](how-to/configure-services.md#how-the-active-recipe-selects-entries) for detection and `SERVICE_RECIPE` overrides.

@@ -1,10 +1,6 @@
 # Deploying Voice Agent on Jetson Thor
 
-This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker Compose. It covers the Pipecat examples and the Generic Assistant on LiveKit.
-
-Thor deploys with the `*/single-gpu` recipes. They run the NeMo-Speech.cpp speech
-stack (ASR and TTS from local GGUF weights) next to vLLM on the same GPU, which is
-the supported configuration on Thor.
+Deploy a Pipecat Single-GPU recipe on Jetson Thor. The cascaded examples run separate NeMo-Speech.cpp ASR and TTS sidecars alongside vLLM. Omni Assistant uses NeMo-Speech.cpp only for TTS. The [Generic Assistant on LiveKit](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md) has a separate UI and is not validated on Thor.
 
 ---
 
@@ -19,15 +15,27 @@ the supported configuration on Thor.
 
 ## Deployment Steps
 
-1. Clone the repository and configure the environment:
+Run these steps for one Pipecat recipe.
+
+1. Clone the release branch.
 
     ```bash
-    git clone git@github.com:NVIDIA-AI-Blueprints/nemotron-voice-agent.git
-    cd nemotron-voice-agent
-    cp .env.example .env
+    git clone --branch release_v2.4.0 https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
     ```
 
-2. Set `HF_TOKEN` in `.env` for Hugging Face model downloads. Thor uses `*/single-gpu` only. Do not set `NVIDIA_API_KEY` or run `docker login nvcr.io` for this path.
+2. Change to the repository root.
+
+    ```bash
+    cd nemotron-voice-agent
+    ```
+
+3. Create `.env` only if it does not exist.
+
+    ```bash
+    test -f .env || cp .env.example .env
+    ```
+
+4. Set `HF_TOKEN` in `.env` for Hugging Face model downloads. The local Single-GPU recipes do not require `NVIDIA_API_KEY` or `docker login nvcr.io`.
 
     ```bash
     # Required for */single-gpu
@@ -36,7 +44,7 @@ the supported configuration on Thor.
 
     `omni-assistant-subagents/single-gpu` is **not supported** on Jetson Thor. Use cloud `omni-assistant-subagents` for that example, which runs on NVIDIA cloud endpoints and needs `NVIDIA_API_KEY` (not `HF_TOKEN`). The no-`NVIDIA_API_KEY` rule above applies only to the `*/single-gpu` path.
 
-3. Download the NeMo-Speech.cpp model weights. **One-time per machine.** The script
+5. Download the NeMo-Speech.cpp model weights as your user, not with `sudo`. Rerun this step after an upgrade. The script
    fetches the ASR, Magpie TTS, and NanoCodec GGUFs plus Magpie TTS
    text-normalization grammars (`tn_configs`) into `models/nemo-speech`:
 
@@ -44,13 +52,13 @@ the supported configuration on Thor.
     bash scripts/download-nemo-speech-models.sh
     ```
 
-    Run as your user, not `sudo`. The script reads `HF_TOKEN` from `.env`.
+    The script reads `HF_TOKEN` from `.env`. For `generic-assistant/single-gpu`, resolve any VAD build warnings before startup. Refer to the [Single-GPU prerequisites](01-getting-started.md#prerequisites).
 
     > To keep the weights outside the repo so they survive re-clones and worktrees, set
     > `NEMO_SPEECH_MODEL_LOC` in `.env` to an absolute path, or pass that path as
     > the script's first argument.
 
-4. Check available memory before starting. GPU, OS, containers, and page cache
+6. Check available memory before starting. GPU, OS, containers, and page cache
    all share Thor's unified memory, so treat `MemAvailable` as the ceiling:
 
     ```bash
@@ -62,50 +70,23 @@ the supported configuration on Thor.
     and selects the Jetson Thor NVFP4 recipe automatically. No vLLM setting is
     required in `.env`.
 
-5. Start the full stack via Docker Compose. This brings up the LLM (vLLM), the
-   NeMo-Speech.cpp ASR and TTS sidecars, and the Pipecat pipeline together. Choose the profile for
-   your example:
+7. Start one recipe. Replace `<example>` with `generic-assistant`, `multilingual-assistant`, `omni-assistant`, or `frontend-backend-live`.
 
     ```bash
-    # Generic Cascaded: NeMo-Speech.cpp ASR + TTS + Nemotron 3.5 Lightning vLLM
-    docker compose --profile generic-assistant/single-gpu up -d
-
-    # Multilingual Cascaded: multilingual ASR + Magpie TTS + Nemotron 3.5 Lightning vLLM
-    docker compose --profile multilingual-assistant/single-gpu up -d
-
-    # Nemotron Omni: local Omni vLLM + NeMo-Speech.cpp TTS only (Omni does its own ASR)
-    docker compose --profile omni-assistant/single-gpu up -d
-
-    # Frontend/Backend Live: NeMo-Speech.cpp + Lightning vLLM
-    docker compose --profile frontend-backend-live/single-gpu up -d
-
-    # Generic Assistant on LiveKit: NeMo-Speech.cpp + Lightning vLLM (not validated on Jetson Thor)
-    docker compose --profile generic-assistant-livekit/single-gpu up -d
+    docker compose --profile <example>/single-gpu up -d
     ```
 
-    For the Generic Assistant on LiveKit, refer to its [README](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md). It serves its UI at `http://localhost:3000`, and steps 6 and 7 apply only to the Pipecat examples.
+    The first start can take time to download and load the models. For troubleshooting, inspect logs with `docker compose --profile <example>/single-gpu logs --tail 200` and refer to [Single-GPU Troubleshooting](06-troubleshooting.md#single-gpu).
 
-    > **Note:** To connect an app to `/v1/live`, follow [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
-
-    > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
-
-6. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require).
-
-    > **Note:** `PIPELINE_TLS=false` serves plain HTTP for headless/API testing only. For plain-HTTP browser testing, see [plain-HTTP deployment and usage](06-troubleshooting.md#browser-access).
-
-    > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
-
-7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, `omni-assistant`, or `frontend-backend-live`).
+8. Open `https://<machine-ip>:7860/` in your browser. Keep TLS enabled for microphone access. For certificate warnings, refer to [Browser Access](06-troubleshooting.md#browser-access).
+9. Select **Connect**.
+10. Allow microphone access if prompted.
+11. Ask a question after the greeting. Expect a spoken reply.
+12. Select **Disconnect** to end the session.
+13. Stop the deployment using the same profile:
 
     ```bash
-    # View logs for the whole profile
-    docker compose --profile <example>/single-gpu logs -f
-
-    # Rebuild after code changes
-    docker compose --profile <example>/single-gpu up --build -d
-
-    # Stop all services
     docker compose --profile <example>/single-gpu down
     ```
 
-    If hitting startup or runtime issues, see [Troubleshooting](06-troubleshooting.md#single-gpu), which covers low-memory and vLLM engine-core failures, and more.
+For an application client rather than the browser UI, refer to [Use the Live Gateway](how-to/use-live-gateway.md) or [Use the Realtime Gateway](how-to/use-realtime-gateway.md).
