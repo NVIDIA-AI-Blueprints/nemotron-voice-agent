@@ -14,7 +14,7 @@ Built on the open-source [Pipecat](https://github.com/pipecat-ai/pipecat) and [L
 
 The blueprint provides reference pipelines for building and evaluating voice agents.
 
-- **Measured latency at scale**: the [four-B200 reference benchmark](docs/04-evaluation-and-performance.md#reference-results) measured sub-second end-to-end latency through 64 concurrent streams. Results depend on the recipe, hardware, and workload.
+- **Measured latency at scale**: the [historical four-B200 benchmark table](docs/04-evaluation-and-performance.md#reference-results) reports server-side end-to-end latency below one second at each tested concurrency, up to 64 streams. This is not a measurement of browser playback latency.
 - **Fully open models**: Nemotron Streaming and Parakeet ASR, Magpie TTS and Nemotron LLM models. Swap any component, self-host, no lock-in.
 - **Interruption Handling**: Voice Activity Detection (VAD) and End-of-Utterance (EOU) logic to guide the agent on exactly when to start and stop speaking, ensuring a natural conversational flow.
 - **Multilingual Capabilities**: native support for multiple languages provided by NVIDIA Magpie TTS and Multilingual ASR.

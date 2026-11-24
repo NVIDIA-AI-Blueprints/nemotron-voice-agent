@@ -73,7 +73,7 @@ audio_dumps/
 
 | File | What it holds |
 |------|---------------|
-| `session_<id>` | The conversation as the user heard it, for playback. Pipecat uses the stereo recording of its `AudioBufferProcessor`. LiveKit uses the session recorder of LiveKit Agents. Both resample the audio. |
+| `session_<id>` | A server-side conversation mix for playback, not a record of what reached the listener. Pipecat uses the stereo output of `AudioBufferProcessor`. LiveKit uses the LiveKit Agents session recorder. Both resample the audio. |
 | `asr_<id>_session.wav` | Every audio frame that ASR received in the session, at its own sample rate, before turn handling filters any audio. It also holds the microphone audio from before the user speaks. Use it to replay a session against ASR. In the Omni Assistant, it holds the audio that the Omni model received. |
 | `tts_<id>_session.wav` | Every audio frame that TTS sent toward the output in the session, at its own sample rate. |
 

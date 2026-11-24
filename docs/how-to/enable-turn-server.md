@@ -4,7 +4,7 @@ Use a TURN server when a firewall or NAT prevents a direct WebRTC connection. Lo
 
 > **Architecture note:** The bundled `turn` profile uses the `instrumentisto/coturn` image, which is supported on **x86_64 (linux/amd64) only**. It is **not** supported on arm64 / aarch64 platforms (for example, NVIDIA Jetson Thor). On arm64 hosts, do not enable `--profile turn`. Instead, point the client at an externally hosted TURN server by setting `TURN_URL`, `TURN_USERNAME`, and `TURN_PASSWORD` in `.env` (see the snippet below).
 
-## Deploy the bundled coturn service (x86_64)
+## Deploy the Bundled Coturn Service (x86_64)
 
 The opt-in `turn` profile runs [Coturn](../../docker/sidecars/docker-compose.coturn.yaml) alongside one Pipecat recipe.
 
@@ -32,7 +32,7 @@ The opt-in `turn` profile runs [Coturn](../../docker/sidecars/docker-compose.cot
 
 If `TURN_URL` is unset, the app derives the host from the request. Behind a reverse proxy, forward the client-reachable host in `X-Forwarded-Host`.
 
-## Use an external TURN server (arm64 / Jetson Thor, or shared infra)
+## Use an External TURN Server (arm64, Jetson Thor, or Shared Infrastructure)
 
 On arm64 hosts the bundled coturn image will not run. Point the client at an externally hosted TURN server by setting the same three variables in `.env`, and **omit** `--profile turn`:
 

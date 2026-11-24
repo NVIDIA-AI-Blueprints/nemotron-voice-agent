@@ -1,4 +1,4 @@
-# Generic - cascaded pipeline example
+# Generic Assistant Cascaded Pipeline Example
 
 Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`NvidiaSTTService` -> `NvidiaLLMService` with function calling -> `NvidiaTTSService`). It keeps ASR, LLM, tools, and TTS as separate services. Word-level input streaming and timestamp-based LLM context commits require `NvidiaWordTTSService` with Magpie TTS Multilingual NIM 1.10.0 or newer. Refer to [Configure TTS](../../../../../docs/how-to/configure-tts.md#word-level-input-streaming-and-timestamps).
 
@@ -26,18 +26,13 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    test -f .env || cp .env.example .env
    ```
 
-2. Set the credentials for your recipe. Cloud and Server use `NVIDIA_API_KEY`.
+2. Set the credentials for your browser recipe. Cloud and Server use `NVIDIA_API_KEY`.
 
    > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server and Performance Server profiles use NIMs from NGC (`NVIDIA_API_KEY`) and do not use `HF_TOKEN`.
 
    > **Dynamo profile:** set both `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`. The ASR and TTS NIMs come from NGC, and the Dynamo worker downloads the Lightning weights from Hugging Face. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
 
-3. Log in to the NVIDIA NGC container registry (Server, Server Performance, and Dynamo only. Skip for Cloud and Single GPU):
-
-   ```bash
-   set -a; . ./.env; set +a
-   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-   ```
+3. [Log in to the NGC registry](../../../../../docs/01-getting-started.md#log-in-to-the-ngc-registry) for Server or Dynamo only.
 
 4. Download the speech assets for Single-GPU only. Run the script as your user, not with `sudo`. Resolve any VAD build warnings before starting.
 
@@ -62,7 +57,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    | `generic-assistant/dynamo` | `generic-assistant-dynamo` | `dynamo-frontend`, `dynamo-lightning-worker`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
    > The standard Lightning `server` deployment uses NIM's automatic compatible-profile selection. The `single-gpu` deployment uses its hardware-aware vLLM configuration. The four-GPU `server-perf` benchmark pins NVFP4 TP2 for Blackwell. On older hardware, change it to a compatible TP2 profile as described in [Configure LLM](../../../../../docs/how-to/configure-llm.md).
 
-6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
+6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for the browser and the scaling benchmark. For plain-HTTP browser testing, refer to [Browser Access](../../../../../docs/06-troubleshooting.md#browser-access).
 
 7. Select **Connect**.
 8. Allow microphone access if prompted.
@@ -92,11 +87,11 @@ For whole-turn transcription instead of streaming ASR, follow [Run Transcribe Wi
 
 To change models, voices, prompts, or tool wiring, see [Configure Services](../../../../../docs/how-to/configure-services.md), [Configure LLM](../../../../../docs/how-to/configure-llm.md), [Configure ASR](../../../../../docs/how-to/configure-asr.md), [Configure TTS](../../../../../docs/how-to/configure-tts.md), and [Configure Prompts](../../../../../docs/how-to/configure-prompts.md).
 
-## Speaker labels
+## Speaker Labels
 
 Optional. Select **Generic Assistant** with an ASR entry that sets `speaker_diarization_supported: true`, then turn on **Diarization** in **Speaker Labels** before you connect. Default prompts follow the first speaker. `multi_speaker_assistant` labels every speaker and answers only when called by name. Refer to [Enable Speaker Labels](../../../../../docs/how-to/enable-speaker-labels.md).
 
-## Tips & best practices
+## Tips and Best Practices
 
 - **Start from this baseline.** The generic example is intentionally minimal. Add domain logic, custom tools, and deployment-specific service choices on top of it rather than starting from scratch.
 - **Pick the model for the deployment.** Nemotron 3.5 Lightning is the default across profiles. Nemotron 3.5 Super VL is a higher-capability alternative that runs on NVIDIA Cloud, or self-hosted with the `nemotron-35-super-vl` (server) or `nemotron-35-super-vl-single-gpu` profile. Refer to [Run Nemotron 3.5 Super VL](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-super-vl) for commands, sizing, and precision. After you start Super VL, select it in the Services tab, then disconnect and connect again if a session is already running. Nemotron 3.5 Bolt 74B is another self-hosted alternative for Blackwell workstation GPUs and DGX Spark that you start with the `nemotron-35-bolt-single-gpu` profile. Nemotron 3.5 Bolt E4B is a compact option that runs on NVIDIA Cloud, or self-hosted with the `nemotron-35-bolt-e4b` (server) or `nemotron-35-bolt-e4b-single-gpu` profile. Select `nemotron-bolt-74b` or `nemotron-bolt-4b` in the Services tab. Refer to [Run Nemotron 3.5 Bolt 74B](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-bolt-74b) and [Run Nemotron 3.5 Bolt E4B](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-bolt-e4b).

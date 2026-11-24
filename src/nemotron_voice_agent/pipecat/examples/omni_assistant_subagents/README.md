@@ -1,4 +1,4 @@
-# Nemotron 3 Omni Assistant Subagents - cascaded pipeline example
+# Nemotron 3 Omni Assistant Subagents Example
 
 Multi-agent variant of [`omni-assistant`](../omni_assistant/README.md) built on Pipecat's built-in multi-agent framework (`pipecat.workers`). A transport agent owns I/O and TTS, a speaker agent owns spoken output, and worker agents handle uploaded media, live webcam vision, and deliberate reasoning. It keeps the voice conversation responsive while specialized agents analyze uploaded media and live webcam frames and escalate difficult turns to a reasoning pass.
 
@@ -29,12 +29,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    ```
 
 2. Set `NVIDIA_API_KEY` in `.env` for Cloud or Server, or `HF_TOKEN` for Single-GPU. The Single-GPU vLLM service downloads Omni weights from Hugging Face.
-3. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
-
-   ```bash
-   set -a; . ./.env; set +a
-   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-   ```
+3. [Log in to the NGC registry](../../../../../docs/01-getting-started.md#log-in-to-the-ngc-registry) for Server only.
 
 4. Download the speech assets for Single-GPU only. Run the script as your user, not with `sudo`.
 
@@ -88,7 +83,7 @@ The example declares `capabilities: [attachments, webcam]` under `pipecat.exampl
 | `POST /api/sessions/{session_id}/webcam/frames` | Upload one webcam JPEG frame |
 | `GET /api/webcam-config` | Browser webcam capture defaults |
 
-## Tips & best practices
+## Tips and Best Practices
 
 - **Keep the voice loop responsive.** Media, webcam, and reasoning analysis run as separate worker agents so the transport and speaker agents never block on vision or reasoning work. Preserve that split when adding new capabilities.
 - **Reuse the deferred-dispatch pattern.** `media_dispatch_processor.py` holds analyzer dispatch until the current spoken turn finishes, which avoids cutting the user off. Reuse it for any new asynchronous worker.

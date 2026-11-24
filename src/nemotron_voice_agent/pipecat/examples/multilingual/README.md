@@ -1,4 +1,4 @@
-# Multilingual - cascaded pipeline example
+# Multilingual Assistant Cascaded Pipeline Example
 
 Multilingual cascaded voice pipeline using Pipecat's built-in NVIDIA services (`NvidiaSTTService` -> `NvidiaLLMService` -> `NvidiaTTSService`). The session is locked to a single language for the whole connection (selected in the UI, default `de-DE`): the ASR, the TTS voice, and the LLM all operate in that one language. The LLM replies with plain spoken text, kept on-language by the fixed-session prompt addon and a per-turn reminder.
 
@@ -35,12 +35,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
 
    > **Dynamo:** set both `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`. The ASR and TTS NIMs come from NGC, and the Dynamo worker downloads the Lightning weights from Hugging Face. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
 
-3. Log in to the NVIDIA NGC container registry (Server and Dynamo only. Skip for Cloud and Single GPU):
-
-   ```bash
-   set -a; . ./.env; set +a
-   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-   ```
+3. [Log in to the NGC registry](../../../../../docs/01-getting-started.md#log-in-to-the-ngc-registry) for Server or Dynamo only.
 
 4. Download the speech assets for Single-GPU only. Run the script as your user, not with `sudo`.
 
@@ -84,14 +79,14 @@ TTS voices and supported language codes are discovered at runtime by prewarming 
 | `pipeline.py` | pipecat entry point, multilingual mode always on |
 | `prompts.yaml` | multilingual prompt catalog (`multilingual_voice_assistant`) |
 
-### How it works
+### How It Works
 
 1. The user selects a locale compatible with the active ASR, TTS, and LLM in the UI (default `de-DE`) before connecting.
 2. The session language is passed to the ASR and pins the TTS voice when the connection starts. It does not change mid-session.
 3. The fixed-session prompt addon instructs the LLM to reply only in that language, and the LLM returns plain spoken text (no JSON, labels, or metadata) that flows straight to TTS, the client transcript, and chat history.
 4. `PerTurnReminderProcessor` re-states the "reply only in <language>" reminder on each user turn at request time only, so the reminder never pollutes stored history.
 
-### Switching the multilingual ASR model
+### Switching the Multilingual ASR Model
 
 **Parakeet 1.1B RNNT Multilingual** offers stronger multilingual recognition quality at higher latency (see [Model Selection Notes](#model-selection-notes)). To run it instead of the default Nemotron ASR Streaming Multilingual on-prem:
 
@@ -106,7 +101,7 @@ TTS voices and supported language codes are discovered at runtime by prewarming 
 
 3. Switch back to Nemotron by reversing the registry edit and redeploying the stock on-prem recipe.
 
-## Tips & best practices
+## Tips and Best Practices
 
 ### Model Selection Notes
 

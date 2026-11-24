@@ -56,12 +56,7 @@ Run the following steps for your selected Pipecat profile.
     ```
 
 4. Set the key or keys for your recipe in `.env`. An exported shell variable alone does not populate the app's `.env` file.
-5. Log in to NGC for Server or Dynamo only.
-
-    ```bash
-    set -a; . ./.env; set +a
-    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
-    ```
+5. [Log in to the NGC registry](#log-in-to-the-ngc-registry) for Server or Dynamo only.
 
 6. Download the speech weights for Single-GPU only. Run the script as your user, not with `sudo`, and rerun it after upgrading to refresh the assets. Omni recipes use the speech sidecar for text-to-speech (TTS) only.
 
@@ -99,13 +94,27 @@ Run the following steps for your selected Pipecat profile.
 
 For application clients, follow [Use the Live Gateway](how-to/use-live-gateway.md) or [Use the Realtime Gateway](how-to/use-realtime-gateway.md). Neither is required to use the repository browser UI.
 
+### Log In to the NGC Registry
+
+Run this command in Bash before starting a recipe that pulls NGC images. At the hidden prompt, enter your NGC API key. The command passes it to Docker through standard input without parsing `.env` or saving the key in shell history.
+
+```bash
+(
+  IFS= read -rs -p 'NGC API key: ' ngc_key || exit 1
+  printf '\n' >&2
+  printf '%s\n' "$ngc_key" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+)
+```
+
+Expect `Login Succeeded`. Registry login does not replace the `NVIDIA_API_KEY` setting in `.env`.
+
 ## Deploy the Generic Assistant on LiveKit
 
 The LiveKit example runs its own server, agent worker, and web UI. Its [deployment guide](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#run-the-example) covers choosing one recipe, waiting for agent readiness, connecting to the UI at `http://localhost:3000/`, and using an SSH tunnel for a remote browser. Stop any Pipecat recipe before starting LiveKit on the same host to avoid resource or port conflicts. SIP is an optional [Linux-only setup](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md).
 
 ## Optional: Local Development Without Docker
 
-Run the Pipecat app directly with NVIDIA Cloud endpoints. You need Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), Node.js 22.14 or a later 22.x release, and a real `NVIDIA_API_KEY`. Run the commands from the release checkout. Stop any Compose app using port `7860` first.
+Run the Pipecat app directly with NVIDIA Cloud endpoints. You need Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), and an NVIDIA Cloud API key. For the Pipecat web UI, use Node.js 22.14 or a later 22.x version to satisfy the engine declared by the locked `@daily-co/daily-js` dependency. Pipecat CI uses Node.js 20; the 22.x guidance is a local recommendation, not a minimum established by CI. Run the commands from the release checkout. Stop any Compose app using port `7860` first.
 
 1. Install Python dependencies from the lockfile.
 

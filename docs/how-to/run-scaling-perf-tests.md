@@ -48,6 +48,27 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 
 These commands target a local server with the built-in self-signed certificate. Omit `--insecure` for a server with a trusted certificate. To benchmark the OpenAI Realtime gateway instead of RTVI, follow [Realtime Endpoint](../../benchmarking_tools/scaling-perf/README.md#realtime-endpoint).
 
+### Run Against the Server Performance Recipe
+
+The `generic-assistant/server-perf` recipe disables the welcome message. Use `--skip-bot-intro` so the client does not wait for audio the server will not send.
+
+1. Change to `benchmarking_tools/scaling-perf`.
+2. Run a single-client smoke test.
+
+    ```bash
+    uv run python3 benchmark.py --skip-bot-intro --insecure
+    ```
+
+3. Run a scaling sweep.
+
+    ```bash
+    ./simulate_concurrency.sh --clients "1 2 4 8 16" --skip-bot-intro --insecure
+    ```
+
+### Run Against a Target That Sends a Welcome Message
+
+Keep the default intro drain for these targets. Each client waits for and discards the greeting before sending test turns. The sweep wrapper sets a shared measurement window in advance, so a slow greeting can leave less time for measured turns.
+
 1. Change to the benchmark directory.
 
     ```bash

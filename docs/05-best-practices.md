@@ -40,19 +40,17 @@ Implement event-driven patterns for:
 
 ## Optimizing Pipeline Latency
 
-To optimize latency, first measure end-to-end and per-component latency. Voice agent latency comes from multiple pipeline components. Understanding each contributor enables targeted optimization:
+Measure end-to-end latency and each component's latency under your expected workload. Use the breakdown to choose what to tune, then repeat the same test to check the effect.
 
 ### Audio Processing Latency
 
 **Voice Activity Detection (VAD):**
-- **Contribution**: 200-500ms (end of speech detection)
 - **Optimization**:
   - Use streaming VAD with shorter silence thresholds.
   - Explore shorter EOU detection with Nemotron Speech ASR and open-source smart turn detection models.
   - Implement adaptive VAD sensitivity based on environment noise.
 
 **Audio Buffering:**
-- **Contribution**: 50-200ms (network buffering, codec processing)
 - **Optimization**:
   - Use lower latency audio codecs (Opus at 20ms frames).
   - Minimize audio buffer sizes while maintaining quality.
@@ -69,7 +67,6 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 ### ASR (Automatic Speech Recognition) Latency
 
 **Model Processing:**
-- **Contribution**: 50-100 ms for Nemotron Speech ASR
 - **Optimization**:
   - Deploy Nemotron Speech ASR NIM locally.
   - Utilize latest GPU hardware and optimized models.
@@ -79,15 +76,13 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 ### Language Model (LLM) Processing Latency
 
 **Model Inference:**
-- **Contribution**: 200-800ms depending on model size and complexity
 - **Optimization**:
   - **Model Selection**: Use smaller, faster models (Nemotron 3.5 Lightning 30B).
   - **TRT LLM Optimized**: Use TRT LLM optimized NIM deployments.
-  - **Quantization**: Use NVFP4/FP8 models for 2-3x speedup.
+  - **Quantization**: Compare latency and answer quality for the NVFP4 or FP8 profiles your hardware supports.
   - **KV-Cache Optimization**: Enable KV caching for lower TTFB and optimize based on use case.
 
 **Context Management:**
-- **Contribution**: 50-200ms for large contexts
 - **Optimization**:
   - Implement context truncation strategies such as summarization.
   - Enable KV caching with adequate cache size.
@@ -95,15 +90,13 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 ### TTS (Text-to-Speech) Latency
 
 **Synthesis Time:**
-- **Contribution**: 150-300ms for first audio chunk
 - **Optimization**:
   - **Streaming TTS**: Start playback before full synthesis.
-  - **Local Magpie TTS**: Achieve 150-200ms with TRT optimized Magpie model.
+  - **Local Magpie TTS**: Measure time to first audio at your expected concurrency.
   - **Chunked Generation**: Process sentences as they are generated.
   - **Batch Size**: Tune the Magpie model batch size for the deployment shape. In single-GPU local profiles, ASR, TTS, and LLM may contend for the same GPU memory budget. Keep the default `batch_size=8` for baseline stability, then benchmark before increasing it.
 
 **Audio Post-processing:**
-- **Contribution**: 50-100ms (normalization, encoding)
 - **Optimization**:
   - Minimize audio processing pipeline.
   - Use hardware-accelerated audio codecs.
@@ -120,7 +113,6 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 - Use smart turn analysis to detect end-of-utterance more accurately, reducing unnecessary waiting.
 - Process interim ASR transcripts before speech ends.
 - Pre-generate likely responses during user speech.
-- **Potential Savings**: Achieve 200-400ms reduction in perceived latency.
 
 **Filler Words or Intermediate Responses:**
 - Generate or use random filler words to reduce perceived latency.

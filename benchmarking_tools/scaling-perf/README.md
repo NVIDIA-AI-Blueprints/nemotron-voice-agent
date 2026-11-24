@@ -124,7 +124,7 @@ while errors during session configuration remain fatal. Item-level failures do
 not end the session; the current turn records their details in its `error`
 metric while the response continues.
 
-### Prompt override for perf runs
+### Prompt Override for Performance Runs
 
 By default, `generic-assistant/server-perf` uses the same default prompt
 as the normal Generic Assistant server profile.
@@ -142,14 +142,13 @@ docker compose --profile generic-assistant/server-perf up -d
 This catalog defaults to `prompt_1000_tokens`. Available prompt entries are
 `prompt_200_tokens`, `prompt_1000_tokens`, and `prompt_5000_tokens`.
 
-## Reproducing the recommended scaling setup
+## Reproducing the Recommended Scaling Setup
 
 The recommended scaling setup uses four Blackwell GPUs with `1 GPU` for ASR,
 `1 GPU` for TTS, and `2 GPUs` for the `Nemotron 3.5 Lightning 30B` LLM.
 
 This setup is available as the dedicated Compose recipe
-`generic-assistant/server-perf`. It automatically applies the published
-scaling configuration:
+`generic-assistant/server-perf`. It applies the following settings. Do not assume they match the historical four-B200 reference run.
 
 - Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
@@ -165,10 +164,7 @@ scaling configuration:
   `USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`,
   `AUDIO_OUT_10MS_CHUNKS=40`
 
-> **Hardware-specific profile:** `vllm-nvfp4-tp2-pp1-18.0` was selected from
-> `list-model-profiles` and benchmarked on two NVIDIA RTX PRO 6000 Blackwell
-> GPUs. The checked-in pin is an RTX PRO 6000 benchmark baseline, not a portable
-> recommendation. Before running this performance recipe on any other hardware,
+> **Hardware-specific profile:** The repository history records that `vllm-nvfp4-tp2-pp1-18.0` was selected on two NVIDIA RTX PRO 6000 Blackwell GPUs. The profile comparison is not included in the checkout. Treat the pin as hardware-specific. Before running this performance recipe on any other hardware,
 > including H100, replace the pin by following these steps:
 >
 > 1. Run `list-model-profiles` with the deployed image on the actual LLM GPUs.
@@ -186,22 +182,30 @@ scaling configuration:
 > and [environment variable](https://docs.nvidia.com/nim/large-language-models/latest/reference/environment-variables.html)
 > documentation.
 
-1. Set `NVIDIA_API_KEY` in the repository's `.env` and sign in to `nvcr.io` with your NGC API key. Refer to [Getting Started](../../docs/01-getting-started.md#prerequisites).
-2. Start the benchmark recipe from the repository root. Do not start a browser recipe alongside it.
+1. Set `NVIDIA_API_KEY` in the repository's `.env`.
+2. [Log in to the NGC registry](../../docs/01-getting-started.md#log-in-to-the-ngc-registry).
+3. Start the benchmark recipe from the repository root. Do not start a browser recipe alongside it.
 
    ```bash
    docker compose --profile generic-assistant/server-perf up -d
    ```
 
-3. Check service status with `docker compose --profile generic-assistant/server-perf ps`. Wait for the model services to finish loading.
-4. Run the sweep from this directory. `--insecure` permits the local self-signed certificate. Omit it for a server with a trusted certificate.
+4. Check service status with `docker compose --profile generic-assistant/server-perf ps`. Wait for the model services to finish loading.
+5. Change to `benchmarking_tools/scaling-perf`.
+6. Run a single-client smoke test. This recipe disables the welcome message, so pass `--skip-bot-intro`. Omit `--insecure` if the server has a trusted certificate.
 
    ```bash
-   ./simulate_concurrency.sh --clients "1 2 4 8 16" --insecure
+   uv run python3 benchmark.py --skip-bot-intro --insecure
    ```
 
-5. Return to the repository root.
-6. Stop the benchmark recipe.
+7. Run the sweep.
+
+   ```bash
+   ./simulate_concurrency.sh --clients "1 2 4 8 16" --skip-bot-intro --insecure
+   ```
+
+8. Return to the repository root.
+9. Stop the benchmark recipe.
 
    ```bash
    docker compose --profile generic-assistant/server-perf down
@@ -209,7 +213,7 @@ scaling configuration:
 
 ## Run
 
-From this directory:
+Run these examples from this directory. The RTVI commands below assume the target sends a welcome message. For `generic-assistant/server-perf`, use the smoke test and sweep above instead.
 
 ```bash
 # Single RTVI client (1 process)
@@ -257,7 +261,7 @@ wrapper and `benchmark.py` unless the description states otherwise:
 
 `Ctrl-C` is graceful — workers stop, partial results stay on disk.
 
-## Output layout
+## Output Layout
 
 **Where to look first:** open `results.txt` for `simulate_concurrency.sh` runs
 (single-level or sweeps). For direct `uv run python3 benchmark.py` runs, check
@@ -293,7 +297,7 @@ perf_suite_<timestamp>/
     └── client_<i>_<unix_ms>/...
 ```
 
-## What it measures
+## What It Measures
 
 Per-client (the core target of this tool):
 

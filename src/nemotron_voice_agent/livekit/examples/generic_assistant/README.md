@@ -27,9 +27,9 @@ The profiles match the three modes of the repository's Pipecat examples. Choose 
 | --- | --- | --- | --- | --- | --- | --- |
 | Cloud | `generic-assistant-livekit` | No local GPU | `NVIDIA_API_KEY` | Nemotron ASR Streaming English | Nemotron 3.5 Lightning 30B A3B | Magpie TTS Multilingual |
 | Server | `generic-assistant-livekit/server` | Workstation | `NVIDIA_API_KEY` and an NGC login | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
-| Single GPU | `generic-assistant-livekit/single-gpu` | Workstation, DGX Spark, or Jetson Thor | `HF_TOKEN` | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Single GPU | `generic-assistant-livekit/single-gpu` | Compatible GPU workstation; not validated on DGX Spark or Jetson Thor | `HF_TOKEN` | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
 
-The Server profile does not support DGX Spark or Jetson Thor. Use the Single GPU profile on those devices. The Single GPU profile is not validated on DGX Spark or Jetson Thor. The hardware support follows the [Getting Started guide](../../../../../docs/01-getting-started.md). To use other models, refer to [Configure Models](#configure-models).
+The Server profile does not support DGX Spark or Jetson Thor. The Pipecat hardware guidance in [Getting Started](../../../../../docs/01-getting-started.md) does not establish LiveKit support on those devices. To use other models, refer to [Configure Models](#configure-models).
 
 The profiles get their model files as follows:
 
@@ -54,7 +54,7 @@ The credentials depend on the profile:
 
 For the Server and Single GPU profiles, use a machine that is not running other model servers, and check the following:
 
-- **Memory:** On DGX Spark and Jetson Thor, the GPU shares memory with the system. Stop other model containers first.
+- **Memory:** Stop other model containers before starting a local recipe.
 - **Ports:** These host ports must be free: 7880 to 7882 (LiveKit), 3000 (UI), 9000, 9001, 50151, 50152, and 18000 (Server), or 50051, 50052, and 18000 (Single GPU).
 - **Pipecat:** Do not run a Pipecat recipe on the same machine at the same time.
 
@@ -69,12 +69,7 @@ Run every command from the repository root.
    ```
 
 2. Set the credentials for your profile in `.env`. For optional LiveKit settings, refer to [`.env.example`](../../../../../.env.example).
-3. Log in to the NVIDIA NGC container registry. This step applies to the Server profile only. Skip it for Cloud and Single GPU:
-
-   ```bash
-   set -a; . ./.env; set +a
-   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-   ```
+3. [Log in to the NGC registry](../../../../../docs/01-getting-started.md#log-in-to-the-ngc-registry) for Server only.
 
 4. Download speech weights for Single-GPU only. Run the script as your user, not with `sudo`. DGX Spark and Jetson Thor are not validated for this LiveKit recipe.
 

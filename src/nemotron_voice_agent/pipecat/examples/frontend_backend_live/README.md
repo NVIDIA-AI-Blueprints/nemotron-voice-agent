@@ -29,12 +29,7 @@ Run these commands from the repository root.
    ```
 
 2. Set `NVIDIA_API_KEY` for Cloud or Server, or `HF_TOKEN` for Single-GPU.
-3. For Server only, sign in to the NVIDIA NGC container registry.
-
-   ```bash
-   set -a; . ./.env; set +a
-   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-   ```
+3. [Log in to the NGC registry](../../../../../docs/01-getting-started.md#log-in-to-the-ngc-registry) for Server only.
 
 4. Download the speech weights for Single-GPU only. Run the script as your user, not with `sudo`.
 

@@ -2,7 +2,7 @@
 
 Known issues and fixes for **startup and deployment** of the Nemotron Voice Agent. Find your symptom in the **Error** column, apply the **Cause & fix**, and follow the **Reference** for depth.
 
-## Containers and first run
+## Containers and First Run
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
@@ -38,18 +38,18 @@ Known issues and fixes for **startup and deployment** of the Nemotron Voice Agen
 
 > Full GPU sizing and precision detail lives in [Configure LLM → VRAM & hardware support](how-to/configure-llm.md#vram--hardware-support). For other self-hosted LLM NIM issues (CUDA driver-init errors 802/803, profile selection, and more), see the [NIM for LLMs troubleshooting guide](https://docs.nvidia.com/nim/large-language-models/latest/troubleshooting/index.html).
 
-## Self-hosted LLM tool calling and reasoning
+## Self-Hosted LLM Tool Calling and Reasoning
 
 Self-hosted Nemotron 3 and Nemotron 3.5 models only. Cloud (NVCF) has the parsers enabled server-side, and the repo's `docker/sidecars/docker-compose.nemotron3*.yaml` files already set them. The parser names differ per model, so take them from the model's own Compose file.
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
 | `HTTP 400: "auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser` | The 2.x LLM NIM versions do not enable the parsers automatically. The stock Compose files already include the required NIM and raw-vLLM flags. Use the stock 2.4.0 Compose definition for your model. If you maintain an override, restore the complete parser arguments from that definition. Setting `NIM_PASSTHROUGH_ARGS` only in `.env` does not replace the stock service's value. | [Configure LLM → Parser and Tool Calling](how-to/configure-llm.md#reasoning-parser--tool-calling-self-hosted) · [`docker-compose.nemotron35-lightning.yaml`](../docker/sidecars/docker-compose.nemotron35-lightning.yaml) |
-| Reasoning is spoken by TTS / `<think>` leaks into the answer | The reasoning parser is not set. Add the `--reasoning-parser` value from the model's stock Compose file, for example `nemotron_v3` for Lightning or `gemma4` for Bolt E4B. It separates reasoning from `content` and keeps reasoning off working. | [Configure LLM → Parser and Tool Calling](how-to/configure-llm.md#reasoning-parser--tool-calling-self-hosted) |
+| Reasoning is spoken by TTS / `<think>` leaks into the answer | The reasoning parser is not set. Add the `--reasoning-parser` value from the model's stock Compose file, for example `nemotron_v3` for Lightning or `gemma4` for Bolt E4B. The parser separates reasoning output from answer content so TTS can speak the answer without the reasoning text. | [Configure LLM → Parser and Tool Calling](how-to/configure-llm.md#reasoning-parser--tool-calling-self-hosted) |
 | Bot speaks tool names and planning text before the tool result (with Reasoning OFF) | Known model limitation with **Nemotron 3.5 Lightning 30B A3B** when `enable_thinking` is `false`: the model can occasionally emit tool-selection scratchpad text as normal assistant `content` tokens before or instead of the structured tool call, and once that text enters the chat history, later turns in the same session can continue repeating the pattern. Start a new session to clear the context, or turn **Reasoning** ON / use **Nemotron 3.5 Super VL** for tool-heavy sessions. | [Configure LLM → Reasoning (Thinking) On/Off](how-to/configure-llm.md#reasoning-thinking-onoff) |
 | Raw vLLM: `nemotron_v3` parser not found, or `MIXED_PRECISION` not supported | Check for a stale image or a custom override. The stock Lightning sidecar pins `vllm/vllm-openai:v0.31.0` and sets the parser arguments in Compose. Restore the stock image and arguments before recreating the service. | [`docker-compose.nemotron35-lightning.yaml`](../docker/sidecars/docker-compose.nemotron35-lightning.yaml) |
 
-## ASR (speech-to-text)
+## ASR (Speech-to-Text)
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
@@ -59,7 +59,7 @@ Self-hosted Nemotron 3 and Nemotron 3.5 models only. Cloud (NVCF) has the parser
 | No transcription / no voices discovered at startup | The speech prewarm failed. For Cloud, confirm `NVIDIA_API_KEY` in `.env`. For Server, also confirm NGC login and sidecar health with `docker compose ps`. For Single-GPU, confirm that the TTS sidecar `nemo-speech-tts` and the ASR sidecar of your recipe (`nemo-speech-asr`, `nemo-speech-asr-multilingual`, or `nemo-speech-asr-frontend-backend`) are healthy. If you selected Transcribe, check `nemotron-transcribe` on Server or `nemotron-transcribe-single-gpu` on Single-GPU instead of the streaming ASR service. Also confirm that `models/nemo-speech` contains the downloaded weights. | [Multilingual Example → Troubleshooting](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md#troubleshooting) |
 | Mic or ASR stops accepting input after a long idle period (around 8-10 minutes) | The Pipecat pipeline idle timeout ended the session or ASR server connection timeout due to no audio. `PIPELINE_IDLE_TIMEOUT_SECS` defaults to **600 seconds**. Start a new browser session (reload the page) to reconnect with a fresh pipeline. To allow longer idle sessions, raise `PIPELINE_IDLE_TIMEOUT_SECS` in `.env` (minimum 300) and send silence buffers to avoid ASR timeout. | [`.env.example`](../.env.example) |
 
-## TTS (text-to-speech)
+## TTS (Text-to-Speech)
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
@@ -68,7 +68,7 @@ Self-hosted Nemotron 3 and Nemotron 3.5 models only. Cloud (NVCF) has the parser
 | Single-GPU TTS reads digits, dates, or currency as characters (for example "2" instead of "two") | Magpie TTS text normalization is off. Re-run `bash scripts/download-nemo-speech-models.sh` so `models/nemo-speech/tn_configs` is present, then restart the `*/single-gpu` profile. The sidecar must receive `--tts.tn-model-dir=/models/tn_configs`. | [Getting Started](01-getting-started.md#docker-based-deployment) · [Jetson Thor](03-jetson-thor.md) |
 | Long replies are rejected or truncated | The TTS NIM caps a request at **2,000 normalized characters**. The NVIDIA Pipecat TTS service streams replies **sentence-by-sentence with a 200-character hard limit per sentence**, so the cap is not reached in normal use. It mainly affects custom integrations that synthesize large blocks at once. Split long text into sentence or paragraph chunks. | [Configure TTS](how-to/configure-tts.md) · [TTS NIM troubleshooting](https://docs.nvidia.com/nim/speech/latest/troubleshooting/tts.html) |
 
-## Response quality (hallucination and repetition)
+## Response Quality (Hallucination and Repetition)
 
 These are runtime behavior issues and apply to any deployment, cloud or local.
 
@@ -77,7 +77,7 @@ These are runtime behavior issues and apply to any deployment, cloud or local.
 | Bot invents facts or answers something the user did not ask (hallucination) | Two common sources. First, ASR mis-transcription feeds a wrong query to the LLM, which is worse under background noise. Improve transcription with word boosting and domain finetuning. Second, the LLM fabricates. Lower `temperature`, prefer Nemotron 3.5 Super VL or reasoning ON for hard questions, ground answers with tool calls, and instruct the prompt to say it does not know rather than guess. | [Configure ASR → Customization](how-to/configure-asr.md#customization) · [Configure LLM → request parameters](how-to/configure-llm.md#tuning-llm-request-parameters) · [Configure Prompts](how-to/configure-prompts.md) |
 | Bot repeats the same words or phrases, or loops | The model is not penalizing repetition, or the context has degenerated. Raise `repetition_penalty` above `1` in the catalog entry's `extra_body` (repo default `1.05`), and avoid an over-low `temperature`. If repetition builds up over a long session, check the chat-history window and summarization so stale or duplicated turns are not fed back into the context. | [Configure LLM → request parameters](how-to/configure-llm.md#tuning-llm-request-parameters) · [Tune Pipeline Performance](how-to/tune-pipeline-performance.md) |
 
-## Turn-taking and interruptions
+## Turn-Taking and Interruptions
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
@@ -128,7 +128,7 @@ The hosted **[build.nvidia.com](https://build.nvidia.com/)** endpoints are for *
 
 For the Generic Assistant on LiveKit, including its web UI, agent worker, and phone calls, refer to [Troubleshooting](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#troubleshooting) in its README and [Troubleshooting](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md#troubleshooting) in the SIP guide.
 
-## Browser access
+## Browser Access
 
 This section applies to the Pipecat examples.
 

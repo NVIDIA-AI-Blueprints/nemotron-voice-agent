@@ -1,4 +1,4 @@
-# Nemotron Omni Assistant - cascaded pipeline example
+# Nemotron Omni Assistant Example
 
 Cascaded voice pipeline that uses Nemotron 3 Nano Omni as a single model for ASR and the LLM, then hands the text reply to Magpie TTS. Nemotron Omni consumes user audio directly and produces the assistant text that Magpie TTS speaks. This example enables only text and audio inputs. Uploaded media and webcam vision are covered by [`omni-assistant-subagents`](../omni_assistant_subagents/README.md).
 
@@ -29,12 +29,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    ```
 
 2. Set `NVIDIA_API_KEY` in `.env` for Cloud or Server, or `HF_TOKEN` for Single-GPU. The Single-GPU vLLM service downloads Omni weights from Hugging Face.
-3. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
-
-   ```bash
-   set -a; . ./.env; set +a
-   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-   ```
+3. [Log in to the NGC registry](../../../../../docs/01-getting-started.md#log-in-to-the-ngc-registry) for Server only.
 
 4. Download the speech assets for Single-GPU only. Run the script as your user, not with `sudo`.
 
@@ -88,7 +83,7 @@ Environment variables read by [`pipeline.py`](pipeline.py):
 
 For model selection, voices, and shared service-catalog mechanics, see [Configure LLM](../../../../../docs/how-to/configure-llm.md), [Configure TTS](../../../../../docs/how-to/configure-tts.md), and [Configure Services](../../../../../docs/how-to/configure-services.md).
 
-## Tips & best practices
+## Tips and Best Practices
 
 - **Omni model and hardware.** The Server recipe uses the `nvidia-llm-omni` NIM sidecar with automatic model-profile selection. The Single-GPU recipe uses `nvidia-llm-vllm-omni` and selects the model precision from the GPU at startup. Blackwell workstations, DGX Spark, and Jetson Thor use NVFP4. Hopper and Ada use FP8. See [Configure LLM](../../../../../docs/how-to/configure-llm.md#vram--hardware-support).
 - **Tune Omni behavior** with the environment variables in the table above: raise the minimum-audio threshold if noise triggers spurious turns, and adjust max-tokens and sampling for your latency and verbosity targets.
