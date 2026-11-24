@@ -55,14 +55,7 @@ Measure end-to-end latency and each component's latency under your expected work
   - Use lower latency audio codecs (Opus at 20ms frames).
   - Minimize audio buffer sizes while maintaining quality.
   - Implement jitter buffers for network variations.
-- **Scaling Audio Output for Concurrency:**
-  When scaling to multiple concurrent audio streams in the cascaded pipeline using FastAPI WebSocket transport, consider increasing the output audio chunk size using the `AUDIO_OUT_10MS_CHUNKS` parameter up to 400ms to reduce audio glitches and enable smoother playback.
-
-  **Configuration in `.env`:**
-  ```bash
-  # Override transport defaults (WebRTC: 5, WebSocket: 10)
-  AUDIO_OUT_10MS_CHUNKS=10
-  ```
+- **Scaling Audio Output for Concurrency:** Larger output batches reduce how often the server sends audio but can delay playback. Compare playback gaps and interruption delay on your client under load. Refer to [Audio Output Buffering](how-to/tune-pipeline-performance.md#audio-output-buffering) for the defaults and a tuning procedure.
 
 ### ASR (Automatic Speech Recognition) Latency
 
@@ -94,7 +87,8 @@ Measure end-to-end latency and each component's latency under your expected work
   - **Streaming TTS**: Start playback before full synthesis.
   - **Local Magpie TTS**: Measure time to first audio at your expected concurrency.
   - **Chunked Generation**: Process sentences as they are generated.
-  - **Batch Size**: Tune the Magpie model batch size for the deployment shape. In single-GPU local profiles, ASR, TTS, and LLM may contend for the same GPU memory budget. Keep the default `batch_size=8` for baseline stability, then benchmark before increasing it.
+  - **Magpie Multilingual NIM Batch Size**: The standard Server and Dynamo recipes select `batch_size=8` through `NIM_TAGS_SELECTOR`. Server Performance selects `batch_size=64` for its dedicated TTS GPU. Benchmark latency and throughput before changing the selector.
+  - **Single-GPU Memory**: The `nemo-speech-tts` sidecar runs NeMo-Speech.cpp and does not use the NIM selector. Check GPU memory use with the full recipe running because the model services can share the same GPU memory budget.
 
 **Audio Post-processing:**
 - **Optimization**:

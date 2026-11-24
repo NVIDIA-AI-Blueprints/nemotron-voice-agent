@@ -85,22 +85,22 @@ When the message count exceeds `CHAT_HISTORY_RECENT_TURNS`:
 
 ## Audio Output Buffering
 
-`AUDIO_OUT_10MS_CHUNKS` sets how many 10 ms audio frames the server batches per outbound send (the output buffer depth). The default is `5` (50 ms) for WebRTC and `10` (100 ms) for WebSocket.
+`AUDIO_OUT_10MS_CHUNKS` sets the size of each server output batch in units of 10 ms of audio. Pipecat defaults to `5` (50 ms) for WebRTC and `10` (100 ms) for WebSocket. The `generic-assistant/server-perf` benchmark recipe sets `40` (400 ms); this is a benchmark setting, not a client latency target.
 
-```bash
-# In .env: override the transport default
-AUDIO_OUT_10MS_CHUNKS=10
-```
+Larger batches send the same amount of audio in fewer chunks but can delay playback while the server fills each batch. The setting does not control the client playback queue. Audio already queued on the client can continue playing after a user interrupts unless the client discards it.
 
-- **WebRTC, `5` (50 ms):** lowest latency.
-- **WebSocket, `10` (100 ms):** smoother over a plain stream.
-- **High concurrency, `10`–`40` (100–400 ms):** prevents glitches under load.
+To tune a recipe that reads this setting from `.env`, use your client and expected concurrent load. Measure interruption delay from the start of user speech to the end of assistant playback.
 
-**Why buffer, and why more for WebSocket.** WebRTC ships its own jitter buffer and paces media for you, so a small buffer stays glitch-free at low latency. A raw WebSocket stream has no media-layer jitter buffer (frames ride a plain TCP connection), so under network jitter or many concurrent sessions, too-small chunks starve the client and you hear gaps or crackle. A larger buffer absorbs that variance, trading a little added latency for stable playback. Raise it further as concurrency grows.
+1. Measure playback gaps and interruption delay with the transport default.
+2. Set a different batch size in `.env`. For example, try 20 units (200 ms) for WebSocket.
 
-**Telephony / server-side: send in bursts.** When the consumer is a telephony gateway (SIP/PSTN) or another server that does its own buffering and pacing, real-time chunking on our side only adds latency. Use a custom transport to send audio as soon as it is generated, and let the downstream handle playout timing.
+   ```dotenv
+   AUDIO_OUT_10MS_CHUNKS=20
+   ```
 
-**Barge-in trade-off.** Buffering works against fast barge-in: when the user interrupts, audio already queued downstream keeps playing until it drains, so the bot talks over the user for up to the buffer's duration. The bigger the buffer, the longer that tail. For low barge-in latency with a large buffer, the client must **flush its playback queue** on interruption (drop the buffered audio) rather than play it out. Custom and telephony clients (typically on the WebSocket path) should implement this flush.
+3. Apply the change by restarting the host-native app or [recreating the Compose app container](../02-configuration-guide.md#where-to-make-changes).
+4. Repeat the client measurements under the same load.
+5. Choose the batch size that meets your playback and interruption targets.
 
 ## Uvicorn Worker Scaling
 
@@ -117,18 +117,18 @@ When `UVICORN_WORKERS > 1`, the stock app disables session-config-based WebRTC a
 
 ## Transport Selection
 
-The server supports both WebRTC and WebSocket transports simultaneously on different endpoints:
+When both transports are enabled, Pipecat exposes them on different endpoints:
 
 | Transport | Endpoint | Best For |
 |-----------|----------|----------|
-| **WebRTC** | `POST /api/offer` | Production voice interactions, lowest latency |
-| **WebSocket** | `WS /api/ws` | Telephony / server-side integrations, testing, firewall-restricted environments, simpler deployments |
+| **WebRTC** | `POST /api/offer` | Direct browser sessions using WebRTC media transport |
+| **WebSocket** | `WS /api/ws` | RTVI testing and integrations that handle audio framing and playback |
 
-**For telephony (SIP/PSTN) and server-to-server use cases, use the WebSocket endpoint.** It streams raw audio frames you can bridge to a gateway or another service. WebRTC is best for direct browser clients, where its built-in jitter buffering and NAT traversal give the lowest latency.
+For a custom telephony bridge or server-to-server integration, the WebSocket endpoint uses the Pipecat client frame format. It is not a SIP endpoint. WebRTC provides media transport and jitter handling for browser clients. Compare playback gaps and interruption delay on your target client under load rather than assuming one transport always has lower latency.
 
-### Choosing which transports are exposed
+### Choosing Which Transports Are Exposed
 
-Both transports are exposed by default and the browser UI picks one. To restrict the server to a single transport, set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) or override it at runtime with the `TRANSPORT_SELECTION` environment variable (the env var wins):
+Pipecat exposes both transports by default. Set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) to restrict the server to one transport. `TRANSPORT_SELECTION` overrides the registry value. The following values apply to both settings:
 
 | Value | Exposes |
 |-------|---------|
@@ -136,7 +136,12 @@ Both transports are exposed by default and the browser UI picks one. To restrict
 | `webrtc` | WebRTC only |
 | `websocket` | WebSocket only |
 
-```bash
-# .env: e.g. expose only WebSocket for a telephony / server-side deployment
-TRANSPORT_SELECTION=websocket
-```
+To expose only WebSocket using the environment override:
+
+1. Set `TRANSPORT_SELECTION` in `.env`.
+
+   ```dotenv
+   TRANSPORT_SELECTION=websocket
+   ```
+
+2. Apply the change by restarting the host-native app or [recreating the Compose app container](../02-configuration-guide.md#where-to-make-changes).

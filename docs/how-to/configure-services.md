@@ -51,11 +51,15 @@ server:
 
 ## How the Active Recipe Selects Entries
 
-This section describes the Pipecat backend. Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The `*-dynamo` app services leave it unset for automatic detection, as do host-native runs (`uv run nva-pipecat`) by default. In `auto`, the backend probes the `server` and `single-gpu` endpoints in parallel and caches the results for 5 seconds. It selects the section with the most reachable entries. Within that section, each slot lists its reachable entries. If none in a slot are reachable, the slot keeps all its entries so defaults still resolve and the readiness check can report the unavailable service. If no self-hosted endpoint is reachable in either section, the backend uses NVIDIA Cloud when `NVIDIA_API_KEY` is set. Otherwise it lists the `server` section. For host-native runs with local models, start only the named model services so Compose does not also launch an app on the same port. `SERVICE_RECIPE` overrides detection.
+Pipecat Compose app services set `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, except `generic-assistant-dynamo` and `multilingual-assistant-dynamo`. Those two services leave it unset to use `auto`, the same default as host-native runs (`uv run nva-pipecat`). A non-`auto` value skips recipe detection, not service status checks.
+
+In `auto`, Pipecat probes the `server` and `single-gpu` endpoints in parallel and caches reachability results for 5 seconds. It selects the section with the most reachable entries, preferring `server` on a tie. If a slot in that section has no reachable entries, Pipecat keeps all entries in that slot so the session readiness check can report the unavailable service.
+
+For host-native runs with local models, start only the named model services so Compose does not also launch an app on the same port. The following table shows which entries each recipe lists.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |
-| `auto` (unset) | reachable entries of the detected section, or the whole `server` section when nothing is reachable and `NVIDIA_API_KEY` is not set | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
+| `auto` (unset) | Reachable entries per slot in the detected section. If none in a slot are reachable, all entries in that slot. If no endpoint in either section is reachable, no self-hosted entries when `NVIDIA_API_KEY` is set, or the example's `server` entries otherwise. | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 | `cloud` | none | `server` entries with `nvcf` |
 | `server` | `server` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 | `single-gpu` | `single-gpu` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
