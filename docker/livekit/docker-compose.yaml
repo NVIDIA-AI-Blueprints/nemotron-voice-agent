@@ -49,6 +49,8 @@ x-livekit-env: &livekit-env
   ASR_SERVICE: ${ASR_SERVICE:-}
   TTS_SERVICE: ${TTS_SERVICE:-}
   LIVEKIT_UI_CUSTOM_ENDPOINTS: ${LIVEKIT_UI_CUSTOM_ENDPOINTS:-}
+  ENABLE_AUDIO_DUMP: ${ENABLE_AUDIO_DUMP:-false}
+  AUDIO_DUMP_PATH: ${AUDIO_DUMP_PATH:-audio_dumps}
 
 services:
   # Writes the LiveKit key and secret and the server config to the livekit_state volume, then exits. It keeps
@@ -135,6 +137,7 @@ services:
       - ../../settings.yaml:/app/settings.yaml:ro
       - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
       - ../../src:/app/src:ro
+      - ../../audio_dumps:/app/audio_dumps
       - livekit_state:/state
     environment:
       <<: *livekit-env
@@ -156,6 +159,7 @@ services:
       - ../../settings.yaml:/app/settings.yaml:ro
       - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
       - ../../src:/app/src:ro
+      - ../../audio_dumps:/app/audio_dumps
       - livekit_state:/state
     environment:
       <<: *livekit-env
@@ -176,6 +180,7 @@ services:
       - ../../settings.yaml:/app/settings.yaml:ro
       - ../../examples_registry.yaml:/app/examples_registry.yaml:ro
       - ../../src:/app/src:ro
+      - ../../audio_dumps:/app/audio_dumps
       - livekit_state:/state
     environment:
       <<: *livekit-env

@@ -58,7 +58,7 @@ def reply(ms: int, rate: int = WIRE_RATE) -> OutputAudioRawFrame:
 def edges(transport="websocket", port=None, **kwargs):
     host = PipelineHost()
     host.session = port or RecordingPort(session_id="live_traced")
-    with patch.object(audio_recorder, "ENABLE_ASR_DUMP", False), patch.object(audio_recorder, "ENABLE_TTS_DUMP", False):
+    with patch.object(audio_recorder, "ENABLE_AUDIO_DUMP", False):
         return host.edges(transport=transport, audio_in_rate=LIVE_AUDIO_IN_RATE, stt=None, **kwargs)
 
 
@@ -174,10 +174,10 @@ class AudioTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((worker["params"].enable_metrics, worker["params"].enable_usage_metrics), (True, True))
 
     async def test_the_audio_recorder_follows_the_transcript_when_on(self):
+        self.enterContext(patch.object(audio_recorder, "_write_wav"))
         with (
-            patch.object(audio_recorder, "ENABLE_ASR_DUMP", True),
+            patch.object(audio_recorder, "ENABLE_AUDIO_DUMP", True),
             patch.object(audio_recorder, "_validate_dump_dir"),
-            patch.object(audio_recorder, "_write_wav"),
         ):
             host, port = TextHost(), RecordingPort(socket=FakeSocket(AudioFormat(rate=16000)))
             await host.start(port, None)

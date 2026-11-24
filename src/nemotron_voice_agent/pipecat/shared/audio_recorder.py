@@ -3,11 +3,11 @@
 
 """Session audio recorder using Pipecat's AudioBufferProcessor.
 
-Captures user (ASR input) and bot (TTS output) audio to separate WAV files.
+Records each session to one stereo WAV file, with the user (ASR input) on the left channel and the bot
+(TTS output) on the right channel.
 Controlled via environment variables:
-  - ENABLE_ASR_AUDIO_DUMP  (default: false)
-  - ENABLE_TTS_AUDIO_DUMP  (default: false)
-  - AUDIO_DUMP_PATH        (default: <project_root>/audio_dumps)
+  - ENABLE_AUDIO_DUMP  (default: false)
+  - AUDIO_DUMP_PATH    (default: <project_root>/audio_dumps)
 """
 
 import os
@@ -16,7 +16,7 @@ import wave
 from pathlib import Path
 
 from loguru import logger
-from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor, TurnAudioData
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 
 from nemotron_voice_agent.core.paths import REPO_ROOT
 
@@ -25,16 +25,15 @@ def _env_bool(key: str, default: str = "false") -> bool:
     return os.getenv(key, default).lower() == "true"
 
 
-ENABLE_ASR_DUMP = _env_bool("ENABLE_ASR_AUDIO_DUMP")
-ENABLE_TTS_DUMP = _env_bool("ENABLE_TTS_AUDIO_DUMP")
+ENABLE_AUDIO_DUMP = _env_bool("ENABLE_AUDIO_DUMP")
 _raw_dump_path = Path(os.getenv("AUDIO_DUMP_PATH", "audio_dumps"))
 AUDIO_DUMP_PATH = _raw_dump_path if _raw_dump_path.is_absolute() else REPO_ROOT / _raw_dump_path
 
 
-def _write_wav(filepath: Path, audio: bytes, sample_rate: int) -> None:
-    """Write raw PCM16 mono audio to a WAV file."""
+def _write_wav(filepath: Path, audio: bytes, sample_rate: int, num_channels: int) -> None:
+    """Write raw PCM16 audio to a WAV file."""
     with wave.open(str(filepath), "wb") as wf:
-        wf.setnchannels(1)
+        wf.setnchannels(num_channels)
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         wf.writeframes(audio)
@@ -55,40 +54,23 @@ def _validate_dump_dir(dump_dir: Path) -> None:
 
 
 def create_audio_recorder() -> AudioBufferProcessor | None:
-    """Create an AudioBufferProcessor that saves per-turn audio clips to WAV files.
+    """Create an AudioBufferProcessor that saves each session to `session_{stream}.wav`.
 
-    Returns None if both ASR and TTS dumps are disabled.
-    Each session gets a unique stream ID, and each turn gets an incrementing index:
-      asr_{stream}_{turn}.wav, tts_{stream}_{turn}.wav
+    Returns None if `ENABLE_AUDIO_DUMP` is off. The file is written when the session ends.
     Caller must await recorder.start_recording() on client connect.
     """
-    if not ENABLE_ASR_DUMP and not ENABLE_TTS_DUMP:
+    if not ENABLE_AUDIO_DUMP:
         return None
 
     _validate_dump_dir(AUDIO_DUMP_PATH)
     stream_id = uuid.uuid4().hex[:8]
-    turn_counter = {"asr": 0, "tts": 0}
 
-    recorder = AudioBufferProcessor(num_channels=1, enable_turn_audio=True)
+    recorder = AudioBufferProcessor(num_channels=2)
 
-    @recorder.event_handler("on_user_turn_audio")
-    async def on_user_turn(processor, turn: TurnAudioData):
-        if not ENABLE_ASR_DUMP or not turn.audio:
-            return
-        idx = turn_counter["asr"]
-        turn_counter["asr"] = idx + 1
-        _write_wav(AUDIO_DUMP_PATH / f"asr_{stream_id}_{idx:03d}.wav", turn.audio, turn.sample_rate)
+    @recorder.event_handler("on_audio_data")
+    async def on_audio_data(processor, audio: bytes, sample_rate: int, num_channels: int):
+        if audio:
+            _write_wav(AUDIO_DUMP_PATH / f"session_{stream_id}.wav", audio, sample_rate, num_channels)
 
-    @recorder.event_handler("on_bot_turn_audio")
-    async def on_bot_turn(processor, turn: TurnAudioData):
-        if not ENABLE_TTS_DUMP or not turn.audio:
-            return
-        idx = turn_counter["tts"]
-        turn_counter["tts"] = idx + 1
-        _write_wav(AUDIO_DUMP_PATH / f"tts_{stream_id}_{idx:03d}.wav", turn.audio, turn.sample_rate)
-
-    logger.info(
-        f"Audio recorder enabled (per-turn) — ASR={ENABLE_ASR_DUMP}, TTS={ENABLE_TTS_DUMP}, "
-        f"path={AUDIO_DUMP_PATH}, stream={stream_id}"
-    )
+    logger.info(f"Audio recorder enabled (per-session) — path={AUDIO_DUMP_PATH}, stream={stream_id}")
     return recorder

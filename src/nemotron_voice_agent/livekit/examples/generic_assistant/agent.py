@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -18,6 +19,7 @@ from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.plugins import nvidia, openai, silero
 
+from nemotron_voice_agent.core.paths import REPO_ROOT
 from nemotron_voice_agent.livekit.runtime.credentials import apply_to_environ
 
 from .config import AgentConfig, load_config, service_options
@@ -211,6 +213,30 @@ def missing_api_key(cfg: AgentConfig, env: Mapping[str, str] = os.environ) -> li
     return [slot for slot in ("llm", "asr", "tts") if cfg.slot_hosted(slot)]
 
 
+def audio_dump_dir(env: Mapping[str, str] = os.environ) -> Path | None:
+    """Return the folder for session recordings, or None when `ENABLE_AUDIO_DUMP` is not `true`."""
+    if env.get("ENABLE_AUDIO_DUMP", "").strip().lower() != "true":
+        return None
+    path = Path(env.get("AUDIO_DUMP_PATH") or "audio_dumps")
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def save_recording(source: Path, dump_dir: Path, name: str) -> Path | None:
+    """Copy LiveKit's session recording out of the job's temporary folder, which is deleted when the job ends."""
+    if not source.is_file():
+        log.warning("no session recording at %s", source)
+        return None
+    try:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        target = dump_dir / f"{name}.ogg"
+        shutil.copyfile(source, target)
+    except OSError as exc:
+        log.warning("cannot save the session recording to %s: %s", dump_dir, exc)
+        return None
+    log.info("session audio saved: %s", target)
+    return target
+
+
 def describe_session(room: str, cfg: AgentConfig, scenario_name: str, custom_prompt: str, voice: str | None) -> str:
     """Return one log line with the services, settings, use case, and voice that a session runs with."""
     models = ", ".join(f"{model['kind']}={model.get('id') or model['name']}" for model in cfg.models())
@@ -318,7 +344,16 @@ async def entrypoint(ctx: JobContext):
             instructions=scenario.instructions,
             tools=[traced_tool(fn, emit) for fn in scenario.make_tools()],  # fresh demo state for each session
         )
-        await session.start(agent=agent, room=ctx.room)
+        dump_dir = audio_dump_dir()
+        if dump_dir:
+
+            async def _save_recording(_reason: str) -> None:
+                source = ctx.session_directory / "audio.ogg"
+                await asyncio.to_thread(save_recording, source, dump_dir, f"session_{ctx.job.id}")
+
+            ctx.add_shutdown_callback(_save_recording)
+        record = {"audio": True, "traces": False, "logs": False, "transcript": False} if dump_dir else NOT_GIVEN
+        await session.start(agent=agent, room=ctx.room, record=record)
         started = True
         emit("session", recipe=cfg.recipe, models=cfg.models(), scenario=scenario.name)
         emit("voices", voices=voices, current=tts._opts.voice)
