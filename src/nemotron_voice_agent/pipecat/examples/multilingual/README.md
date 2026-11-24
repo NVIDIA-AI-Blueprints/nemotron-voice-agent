@@ -15,13 +15,13 @@ The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../.
 | Cloud | Parakeet 1.1B RNNT Multilingual ASR | Nemotron 3.5 Lightning 30B A3B | Magpie TTS Multilingual |
 | Server | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
 | Single GPU | Nemotron 3.5 ASR Streaming Multilingual 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
-| Dynamo (experimental) | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B through NVIDIA Dynamo, with chat completions | Magpie TTS Multilingual NIM |
+| Dynamo | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B through NVIDIA Dynamo, with chat completions | Magpie TTS Multilingual NIM |
 
 The registry lists `nemotron-asr-streaming-multilingual` first for ASR, so it is the default on Server and Single GPU. It has no NVIDIA Cloud endpoint, so the Cloud recipe uses the next key, `parakeet-rnnt`.
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM, recommended for scaling), universal **Single GPU**, and experimental **Dynamo** profiles. Server and Dynamo are workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../../../docs/03-jetson-thor.md) when applicable. See the [Getting Started guide](../../../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+This example runs with **Cloud**, **Server** (NIM, recommended for scaling), universal **Single GPU**, and **Dynamo** profiles. Server and Dynamo are workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../../../docs/03-jetson-thor.md) when applicable. Refer to the [Getting Started guide](../../../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
 1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud, Server, or Dynamo profile:
 
@@ -31,7 +31,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
 
    > **Single GPU:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This recipe serves the LLM with vLLM, which downloads model weights from Hugging Face.
 
-   > **Dynamo:** set both `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`. The ASR and TTS NIMs come from NGC, and the Dynamo worker downloads the Lightning weights from Hugging Face. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
+   > **Dynamo:** set both `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`. The ASR and TTS NIMs come from NGC, and the Dynamo worker downloads the Lightning weights from Hugging Face. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
 
 2. Log in to the NVIDIA NGC container registry (Server and Dynamo only. Skip for Cloud and Single GPU):
 
@@ -50,7 +50,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
    bash scripts/download-nemo-speech-models.sh
    docker compose --profile multilingual-assistant/single-gpu up -d
 
-   # Experimental: Lightning on NVIDIA Dynamo, with the Server ASR and TTS NIMs
+   # Lightning on NVIDIA Dynamo, with the Server ASR and TTS NIMs
    docker compose --profile multilingual-assistant/dynamo up -d
    ```
 
@@ -68,7 +68,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
    docker compose --profile multilingual-assistant down              # Cloud (no local GPU)
    docker compose --profile multilingual-assistant/server down       # Server
    docker compose --profile multilingual-assistant/single-gpu down   # One GPU (incl. DGX Spark and Jetson Thor)
-   docker compose --profile multilingual-assistant/dynamo down       # NVIDIA Dynamo (experimental)
+   docker compose --profile multilingual-assistant/dynamo down       # NVIDIA Dynamo
    ```
 
 To run host-native without Docker, set `pipecat.selection` to `multilingual-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.

@@ -14,7 +14,7 @@ metadata:
 
 ## When to Use This Skill
 
-Use this skill to bring up or tear down the Nemotron Voice Agent with a Docker Compose recipe profile. It covers choosing a cloud, `*/server`, `*/single-gpu`, or experimental `*/dynamo` recipe, wiring the right credentials (`NVIDIA_API_KEY` plus an `nvcr.io` login for `*/server`, `HF_TOKEN` for `*/single-gpu`, and both for `*/dynamo`), inspecting host hardware, selecting a recipe, and troubleshooting startup or authentication failures.
+Use this skill to bring up or tear down the Nemotron Voice Agent with a Docker Compose recipe profile. It covers choosing a cloud, `*/server`, `*/single-gpu`, or `*/dynamo` recipe, wiring the right credentials (`NVIDIA_API_KEY` plus an `nvcr.io` login for `*/server`, `HF_TOKEN` for `*/single-gpu`, and both for `*/dynamo`), inspecting host hardware, selecting a recipe, and troubleshooting startup or authentication failures.
 
 This skill covers the Pipecat recipes. For the `generic-assistant-livekit` profiles, follow `src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md`.
 
@@ -29,7 +29,7 @@ Do not use this skill to change `pipeline.py` or migrate Pipecat versions (use `
 - The optional `transcribe-asr` sidecar runs with `generic-assistant/server` or `multilingual-assistant/server`. The optional `transcribe-asr-single-gpu` sidecar runs with `generic-assistant/single-gpu` or `multilingual-assistant/single-gpu`. Neither is a recipe. Refer to `references/configure.md` for setup, `references/server.md` for server GPU placement, and `references/single-gpu.md` for single-GPU memory.
 - Preserve existing `.env`. Create it only if missing: `test -f .env || cp .env.example .env`.
 - Use `references/configure.md` for `.env`, catalog, setting, or prompt changes. Do not write host-specific vLLM flags into `.env`.
-- Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU Blackwell workstation load benchmark with a pinned NVFP4 TP2 LLM profile, not a UI deploy. Older hardware requires a compatible TP2 profile. See `benchmarking_tools/scaling-perf/README.md`. `generic-assistant/dynamo` and `multilingual-assistant/dynamo` are experimental workstation recipes with the LLM on NVIDIA Dynamo and the Server ASR and TTS NIMs. Refer to `references/recipes.md`.
+- Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU Blackwell workstation load benchmark with a pinned NVFP4 TP2 LLM profile, not a UI deploy. Older hardware requires a compatible TP2 profile. Refer to `benchmarking_tools/scaling-perf/README.md`. `generic-assistant/dynamo` and `multilingual-assistant/dynamo` are workstation recipes with the LLM on NVIDIA Dynamo and the Server ASR and TTS NIMs. Refer to `references/recipes.md`.
 - Selector modes (`all`, or one `<example>`) are host-native (`uv run`) only. No compose profile.
 - Generic, Multilingual, Omni, and Frontend/Backend `/single-gpu` support compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, that example is cloud-only (`omni-assistant-subagents`). Orin-class Jetson is unsupported (the model does not fit). Do not infer fit from the platform name. Complete memory-fit first. The single-GPU compose files detect product and compute capability. Do not set those by hand.
 
@@ -40,7 +40,7 @@ Do not use this skill to change `pipeline.py` or migrate Pipecat versions (use `
 | Cloud (`<example>`) | `NVIDIA_API_KEY` (NVCF) | **No** |
 | Server (`<example>/server`, including `server-perf`) | `NVIDIA_API_KEY` (NGC + NIM) | **Yes**, before `up` |
 | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` (Hugging Face download speed / rate limits) | **No**. Do not use `NVIDIA_API_KEY`. |
-| Dynamo (`<example>/dynamo`, experimental) | `NVIDIA_API_KEY` for the NIMs and `HF_TOKEN` for the Lightning weights | **Yes**, before `up` |
+| Dynamo (`<example>/dynamo`) | `NVIDIA_API_KEY` for the NIMs and `HF_TOKEN` for the Lightning weights | **Yes**, before `up` |
 
 `HF_TOKEN` is not a substitute for `NVIDIA_API_KEY`. The reverse is also false. `TURN_USERNAME` and `TURN_PASSWORD` are required only with `--profile turn`.
 
@@ -69,7 +69,7 @@ Choose **one** recipe from `references/recipes.md`. Hardware only tells you what
 - Cloud: needs `NVIDIA_API_KEY`. It is the fallback when local VRAM is not enough.
 - `server`: workstation NIM only. **Not supported on DGX Spark or Jetson Thor.** If the hardware readout is Spark or Thor, do not open `references/server.md`. Use `single-gpu` or cloud. On a workstation: NGC login + `references/server.md`.
 - `single-gpu`: one GPU (workstation, DGX Spark, Jetson Thor). Needs `HF_TOKEN` + `references/single-gpu.md`. Exception: `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor**. Use cloud.
-- `dynamo` (experimental): Generic and Multilingual only, on a workstation GPU with compute capability 8.9 or newer (Ada, Hopper, Blackwell) and at least 64 GB. **Not supported on DGX Spark or Jetson Thor.** Offer it only when the user asks for NVIDIA Dynamo. Needs NGC login + `HF_TOKEN` + the Dynamo row in `references/recipes.md`. The first `up` builds the Dynamo image.
+- `dynamo`: Generic and Multilingual only, on a workstation GPU with compute capability 8.9 or newer (Ada, Hopper, Blackwell) and at least 64 GB. **Not supported on DGX Spark or Jetson Thor.** Offer it when the user asks for NVIDIA Dynamo. Needs NGC login + `HF_TOKEN` + the Dynamo row in `references/recipes.md`. The first `up` builds the Dynamo image.
 
 If more than one family is viable, present the options and let the user pick. Auto-select only when a single option is viable (for example no usable GPU → cloud).
 

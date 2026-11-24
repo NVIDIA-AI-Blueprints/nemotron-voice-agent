@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through the cloud-only, server, single-GPU, and experimental Dynamo deployment options for the Nemotron Voice Agent. It covers the Pipecat examples and the Generic Assistant on LiveKit. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
+This guide walks you through the cloud-only, server, single-GPU, and Dynamo deployment options for the Nemotron Voice Agent. It covers the Pipecat examples and the Generic Assistant on LiveKit. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
 
 ## Prerequisites
 
@@ -9,7 +9,7 @@ Before you begin, ensure you have the following:
 - Docker Compose 2.24.4 or newer. Check the version with `docker compose version`.
 - **Cloud (`<example>`), Server (`*/server`), and Performance Server (`generic-assistant/server-perf`):** an NVIDIA API key (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server and Performance Server also need NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
 - **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `generic-assistant/single-gpu` also builds its diarization VAD model locally, which needs `uv`, or Python 3 with `gguf==0.19.0` and `numpy==2.2.6`. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
-- **Dynamo (`*/dynamo`, experimental):** both `NVIDIA_API_KEY` with NGC access for the ASR and TTS NIMs, and `HF_TOKEN` for the Nemotron 3.5 Lightning weights. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
+- **Dynamo (`*/dynamo`):** both `NVIDIA_API_KEY` with NGC access for the ASR and TTS NIMs, and `HF_TOKEN` for the Nemotron 3.5 Lightning weights. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
 
 For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
@@ -21,8 +21,8 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
 | Example | Description | Supported profiles |
 |---------|-------------|--------------------|
-| [`generic-assistant`](../src/nemotron_voice_agent/pipecat/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `generic-assistant/dynamo` (workstation, experimental) |
-| [`multilingual-assistant`](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `multilingual-assistant/dynamo` (workstation, experimental) |
+| [`generic-assistant`](../src/nemotron_voice_agent/pipecat/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `generic-assistant/dynamo` (workstation) |
+| [`multilingual-assistant`](../src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `multilingual-assistant/dynamo` (workstation) |
 | [`omni-assistant`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
 | [`frontend-backend-live`](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) | Routing talker with the `/v1/live` session API and three backend adapters: the backend LLM, an LLM agent, or an agent runtime harness (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
@@ -112,7 +112,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile frontend-backend-live/single-gpu up -d      # Frontend/Backend Live
     ```
 
-    **4.4 Dynamo** (experimental workstation recipe, not DGX Spark or Jetson Thor). The Generic and Multilingual Assistants can serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the ASR and TTS NIMs of the `/server` recipe. The recipe starts one Dynamo worker on GPU `0`, which needs an Ada, Hopper, or Blackwell GPU with at least 64 GB of memory. For details and extra workers, refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
+    **4.4 Dynamo** (workstation recipe, not DGX Spark or Jetson Thor). The Generic and Multilingual Assistants can serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the ASR and TTS NIMs of the `/server` recipe. The recipe starts one Dynamo worker on GPU `0`, which needs an Ada, Hopper, or Blackwell GPU with at least 64 GB of memory. For details and extra workers, refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo).
 
     ```bash
     docker compose --profile generic-assistant/dynamo up -d         # Generic Cascaded

@@ -26,12 +26,18 @@ Built on the open-source [Pipecat](https://github.com/pipecat-ai/pipecat) and [L
 
 ## 📣 News
 
-- **[October 2026] v2.3.1**
-  - Nemotron 3.5 Bolt E4B on NVIDIA Cloud, server, and single-GPU hosts, with Conversational Mode.
-  - Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.
+- **[November 2026] v2.4.0**
+  - Generic Assistant on LiveKit Agents with Cloud, Server, Single GPU, and optional SIP phone call profiles.
+  - Frontend/Backend Live example and `/v1/live` gateway for responsive voice interaction with delegated backend work.
+  - Nemotron 3.5 Transcribe ASR on Server and Single GPU recipes, and NVIDIA Dynamo recipes.
+  - Nemotron 3.5 Super VL on NVIDIA Cloud.
 
 <details>
 <summary>Previous releases</summary>
+
+- **[October 2026] v2.3.1**
+  - Nemotron 3.5 Bolt E4B on NVIDIA Cloud, server, and single-GPU hosts, with Conversational Mode.
+  - Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.
 
 - **[October 2026] v2.3.0**
   - Nemotron 3.5 Super VL on server and single-GPU hosts.
@@ -69,6 +75,7 @@ See the [CHANGELOG](CHANGELOG.md) for the full release history.
 | Component | Model | Swap with |
 |-----------|-------|-----------|
 | **ASR** | [Nemotron ASR Streaming](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) | Any NIM ASR |
+| | [Nemotron 3.5 Transcribe 30B A4B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) | |
 | | [Parakeet CTC 1.1B ASR](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) | |
 | | [Parakeet 1.1B RNNT Multilingual ASR](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) | |
 | **TTS** | [Magpie TTS Multilingual](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) | Any NIM TTS |
@@ -89,8 +96,8 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 
 | Example | Description | When to use | Supported Deployment Profiles |
 |---------|-------------|-------------|--------------------|
-| [Generic Assistant](src/nemotron_voice_agent/pipecat/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron streaming ASR by default, optional whole-turn Transcribe ASR, Nemotron LLM, and Magpie TTS. Optional speaker labels isolate the first speaker or label a multi-speaker conversation. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
-| [Multilingual Assistant](src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. Optional Transcribe ASR. | Use for non-English and multi-language voice agents. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation, experimental) |
+| [Generic Assistant](src/nemotron_voice_agent/pipecat/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron streaming ASR by default, optional whole-turn Transcribe ASR, Nemotron LLM, and Magpie TTS. Optional speaker labels isolate the first speaker or label a multi-speaker conversation. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation) |
+| [Multilingual Assistant](src/nemotron_voice_agent/pipecat/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. Optional Transcribe ASR. | Use for non-English and multi-language voice agents. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor), Dynamo (workstation) |
 | [Nemotron Omni Assistant](src/nemotron_voice_agent/pipecat/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 | [Nemotron Omni Assistant Subagents](src/nemotron_voice_agent/pipecat/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
 | [Frontend/Backend Live](src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md) | Bluebird Cafe assistant with a routing talker and a choice of backend LLM, LLM agent, or external agent such as Hermes. Apps connect through `/v1/live`. | Keep voice interaction responsive while delegated work runs separately. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
@@ -119,7 +126,7 @@ Credentials depend on the deployment profile. Do not mix them, except for Dynamo
 
 - **Cloud, Server, and Performance Server**: an **NVIDIA API Key** (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server (`*/server`) and Performance Server (`generic-assistant/server-perf`) also need valid **NVIDIA NGC** credentials to pull NIM container images (refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
 - **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads and NVIDIA driver 580.x or newer for NeMo-Speech.cpp. It does not require `NVIDIA_API_KEY` or authentication with `docker login nvcr.io`.
-- **Dynamo (experimental)**: the `*/dynamo` recipes need both the Server credentials (`NVIDIA_API_KEY` and `docker login nvcr.io`) for the speech NIMs and `HF_TOKEN` for the LLM weights.
+- **Dynamo**: the `*/dynamo` recipes need both the Server credentials (`NVIDIA_API_KEY` and `docker login nvcr.io`) for the speech NIMs and `HF_TOKEN` for the LLM weights.
 - **Docker**: Docker Compose 2.24.4 or newer. Cloud needs Docker only. Server, Performance Server, and Single GPU also need Docker with NVIDIA GPU support ([NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)).
 
 ---

@@ -8,28 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Generic Assistant on LiveKit.** A new example on LiveKit Agents runs with the `generic-assistant-livekit` Cloud, Server, and Single GPU profiles. The optional `generic-assistant-livekit/sip` profile answers phone calls. Its web UI chooses the services, their settings, and the prompt for each session.
-- **Nemotron 3.5 Transcribe ASR for the Generic and Multilingual Assistants.** Run Transcribe self-hosted for speech recognition. The Generic Assistant also accepts optional transcription prompts.
-- **Experimental NVIDIA Dynamo recipes for the Generic and Multilingual Assistants.** The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` profiles serve Nemotron 3.5 Lightning through NVIDIA Dynamo with the Server ASR and TTS NIMs, including **Streaming Input** in the Generic Assistant. You can add Dynamo workers on other GPUs.
-- **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
-- **Frontend/Backend Live example.** A talker replies, delegates to a backend LLM, LLM agent, or harness such as Hermes, or waits. Cloud, `/server`, and `/single-gpu` recipes serve the Bluebird Cafe assistant.
-- **Live gateway.** The Frontend/Backend Live example serves `/v1/live` over WebRTC and WebSocket, with backend task controls and opt-in WebSocket reconnect for Responses-mode clients. Set `LIVE_API_TOKEN` or `LIVE_ENABLED=true` to serve it.
-- **Nemotron 3.5 Super VL on NVIDIA Cloud.** `nemotron-super` is served from NVIDIA Cloud with a **Reasoning Effort** setting, and it is the Frontend/Backend Live backend default on the Cloud and `/server` recipes. On `/server`, it needs GPUs `1` and `2`.
+- **Generic Assistant on LiveKit.** A new example built on LiveKit Agents with Cloud, Server, and Single GPU deployment profiles, a web UI for selecting services, settings, and prompts, and optional phone call support over SIP.
+- **Nemotron 3.5 Transcribe ASR.** Self-hosted whole-turn speech recognition for the Generic and Multilingual Assistants on Server and Single GPU recipes, with optional transcription prompts in the Generic Assistant.
+- **NVIDIA Dynamo recipes.** Run Nemotron 3.5 Lightning through NVIDIA Dynamo for the Generic and Multilingual Assistants, including Streaming Input in the Generic Assistant and multi-GPU worker scaling.
+- **Frontend/Backend Live example and Live gateway.** A voice assistant that stays responsive while delegating work to a backend LLM, agent, or external harness such as Hermes, with Cloud, Server, and Single GPU recipes and `/v1/live` WebRTC and WebSocket support.
+- **Nemotron 3.5 Super VL on NVIDIA Cloud.** Available on NVIDIA Cloud with a Reasoning Effort setting, and used as the default backend for Frontend/Backend Live on Cloud and Server recipes.
+- **LLM time to first answer token (TTFAT).** Shown per LLM in the client Metrics tab and reported in the scaling benchmark.
 
 ### Changed
 
-- **Repository layout per framework.** The code moves to `src/nemotron_voice_agent/` with `core/`, `pipecat/`, and `livekit/` folders, and `examples_registry.yaml` nests its keys under `pipecat:` and `livekit:`. Start the Pipecat server with `uv run nva-pipecat` in place of `python src/server.py`.
-- **Docker Compose 2.24.4 or newer.** The root `docker-compose.yml` includes the LiveKit Compose file, which needs 2.24.4.
-- **Streaming input uses OpenAI Realtime text sessions.** The vLLM sidecars serve `/v1/realtime` in place of `/v1/streaming-session`, so update a custom `streaming_url` to the new path. With **Streaming Input** on, reasoning text is no longer streamed.
-- **Omni examples use Pipecat's `NvidiaOmniLLMService`.** The blueprint's own `nvidia_omni_multimodal_service.py` is removed. The service always reads the user transcript from the Omni response, so `OMNI_EMIT_TRANSCRIPTIONS` is no longer read.
-- **Pipecat 1.15.** The server moves from Pipecat 1.12 to `pipecat-ai` 1.15.0, including Silero VAD state retention and the current service APIs. The browser packages were updated for compatibility with that server.
-- **Omni vLLM 0.33.0.** The Omni vLLM service moves from 0.20.0 to 0.33.0.
-- **Scaling metric names.** `llm_ttft` is now `llm_ttfb`, and `vad_smart_turn` is now `turn_taking_latency`.
-- **Readiness checks for every self-hosted LLM.** Before a repository UI or Realtime gateway session starts, the server checks every self-hosted LLM that the example uses, including the Frontend/Backend Live backend LLM in the `thinker-llm` slot.
+- **Repository layout organized by framework.** Code and configuration are now grouped by framework (Pipecat and LiveKit), and the Pipecat server starts with `uv run nva-pipecat`.
+- **Docker Compose 2.24.4 or newer required.** Needed for the unified Compose setup that includes LiveKit.
+- **Pipecat upgraded to 1.15.0.** Updated server and browser client packages, and switched Omni examples to Pipecat's built-in NVIDIA Omni service.
+- **Streaming Input updated to OpenAI Realtime.** Self-hosted vLLM sidecars now serve Streaming Input over `/v1/realtime`, and reasoning text is no longer streamed when Streaming Input is enabled.
+- **Omni vLLM upgraded to 0.33.0.** Updated from 0.20.0.
+- **Scaling benchmark metric names updated.** Renamed `llm_ttft` to `llm_ttfb` and `vad_smart_turn` to `turn_taking_latency`.
+- **Startup readiness checks cover all self-hosted LLMs.** The server now verifies every self-hosted LLM required by an example before starting a session.
 
 ### Removed
 
-- **Frontend/Backend Agent example.** The airline assistant, its `booking-server` sidecar, and the `frontend-backend-agent` Compose profiles are removed. The Frontend/Backend Live example replaces it.
+- **Frontend/Backend Agent example.** Replaced by the Frontend/Backend Live example.
 
 ## [2.3.1] - 2026-10-29
 
