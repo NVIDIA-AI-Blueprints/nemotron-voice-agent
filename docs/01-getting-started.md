@@ -59,6 +59,8 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
     Docker Compose passes `.env` values into the app and model sidecars, so exporting a key in your shell is not enough for runtime.
 
+    To use `/v1/live`, keep the `frontend-backend-live` profile's default example selection and set `LIVE_API_TOKEN` in `.env` before starting Docker Compose. If the deployment is already running, rerun its `docker compose --profile <profile> up -d` command to apply the change. For local access without a token and other requirements, refer to [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
+
 3. For **`*/server`, `*/dynamo`, and `generic-assistant/server-perf` only**, log in to the NVIDIA NGC Docker Registry:
 
     ```bash
@@ -121,9 +123,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
     > **Note:** Each Docker Compose profile pins `EXAMPLE_SELECTION=<example>`, so the container runs that single example. Set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
     >
-    > **Note:** The `frontend-backend-live` profiles serve the Live session routes (`/v1/live`) when you set `LIVE_API_TOKEN` in `.env` and keep the profile's `EXAMPLE_SELECTION`, and every route then requires that token. With `EXAMPLE_SELECTION=all`, no Live route is served. To serve the routes without a token, for example on a trusted network, set `LIVE_ENABLED=true` instead. Anyone who can reach the server by an IP address, `localhost`, or a host name in `allowed_hosts` can then use them. For details, refer to [When the Routes Are Served](how-to/use-live-gateway.md#when-the-routes-are-served).
-    >
-    > **Note:** The `frontend-backend-live` profiles connect the backend LLM directly by default. To use another backend adapter, set `core.backend.adapter` in the `config` block of the `frontend-backend-live` entry in `examples_registry.yaml`, for example to `llm-agent` for the backend LLM agent, together with `core.delegation.result_format: speak_display`, and restart the app service. For the adapters, refer to [Choose a Backend Adapter](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#choose-a-backend-adapter), and for connecting an agent such as Hermes, refer to [Connect an Agent Harness](how-to/connect-an-agent-harness.md).
+    > **Note:** To change how the Frontend/Backend Live example runs delegated work, refer to [Choose a Backend Adapter](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#choose-a-backend-adapter).
     >
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 

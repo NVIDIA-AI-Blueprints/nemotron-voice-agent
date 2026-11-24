@@ -35,7 +35,9 @@ class AudioFormat(StrictModel):
     def default_rate(cls, value: Any) -> Any:
         """Give a format without a rate its own: 8000 Hz for G.711, which has one rate, else 24 kHz."""
         if isinstance(value, dict) and "rate" not in value:
-            return {**value, "rate": G711_RATES.get(value.get("type"), 24000)}
+            kind = value.get("type", "audio/pcm")
+            if isinstance(kind, str):
+                return {**value, "rate": G711_RATES.get(kind, 24000)}
         return value
 
     @model_validator(mode="after")
@@ -140,7 +142,7 @@ class BackendConfig(StrictModel):
     @model_validator(mode="after")
     def official_tools(self):
         """Reject a tool that is not an object of an official type, and a function tool without a name."""
-        if any(not isinstance(t, dict) or t.get("type") not in TOOL_TYPES for t in self.tools):
+        if any(not isinstance(t.get("type"), str) or t["type"] not in TOOL_TYPES for t in self.tools):
             raise ValueError(f"Each tool must be an object whose type is one of: {', '.join(sorted(TOOL_TYPES))}")
         if any(t["type"] == "function" and not (isinstance(t.get("name"), str) and t["name"]) for t in self.tools):
             raise ValueError("A function tool needs a name")
@@ -184,6 +186,8 @@ def _delegation_changes(patch: object, current_type: str) -> dict:
 
 
 MAX_ACKNOWLEDGEMENT_DELAY_MS = 800
+DEFAULT_RECONNECT_GRACE_SECONDS = 0
+MAX_RECONNECT_GRACE_SECONDS = 120
 
 
 class ClientDelegationConfig(StrictModel):
@@ -210,6 +214,10 @@ class ResponsesDelegationConfig(StrictModel):
     type: Literal["responses"]
     responses: BackendConfig
     acknowledgement_delay_ms: int = Field(default=0, ge=0, le=MAX_ACKNOWLEDGEMENT_DELAY_MS)
+    # Version-1 primary-WebSocket resume extension; zero retains the ordinary close-on-loss behavior.
+    reconnect_grace_seconds: float = Field(
+        default=DEFAULT_RECONNECT_GRACE_SECONDS, ge=0, le=MAX_RECONNECT_GRACE_SECONDS, allow_inf_nan=False, strict=True
+    )
 
     def updated(self, patch: object) -> ResponsesDelegationConfig:
         """Return this delegation after a ``session.update``'s ``delegation`` block, which may not be ``null``."""
@@ -220,6 +228,12 @@ class ResponsesDelegationConfig(StrictModel):
                 "session.delegation",
             )
         changes = _delegation_changes(patch, self.type)
+        if "reconnect_grace_seconds" in changes and changes["reconnect_grace_seconds"] != self.reconnect_grace_seconds:
+            raise ProtocolError(
+                "delegation.reconnect_grace_seconds cannot change after startup",
+                "immutable_field_update",
+                "session.delegation.reconnect_grace_seconds",
+            )
         current = self.model_dump()
         if isinstance(changes.get("responses"), dict):
             responses = changes["responses"]
@@ -314,6 +328,8 @@ class SessionConfig(StrictModel):
         if not isinstance(value, dict):
             return value
         kind = value.get("type", "client")
+        if not isinstance(kind, str):
+            raise ValueError("delegation.type must be a string")
         if kind not in DELEGATION_CONFIGS:
             raise ValueError(f"Unsupported delegation type {kind!r}: this server delegates to client or responses")
         return DELEGATION_CONFIGS[kind].model_validate(value)
@@ -336,7 +352,7 @@ class SessionConfig(StrictModel):
         for item in value:
             parts = item.get("content", []) if isinstance(item, dict) else None
             role = item.get("role") if isinstance(item, dict) else None
-            types = {"text", "output_text"} if role == "assistant" else {"input_text"}
+            types = ("text", "output_text") if role == "assistant" else ("input_text",)
             if (
                 not isinstance(item, dict)
                 or item.get("type", "message") != "message"
@@ -398,6 +414,11 @@ class SessionConfig(StrictModel):
             raise ProtocolError("WebRTC negotiates audio format in SDP", param="session.audio.format")
         if transport == "websocket" and self.client is not None:
             raise ProtocolError("client.data_channel is only supported for WebRTC sessions", param="session.client")
+        if transport != "websocket" and getattr(self.delegation, "reconnect_grace_seconds", 0):
+            raise ProtocolError(
+                "Reconnect requires a primary WebSocket with Responses delegation",
+                param="session.delegation.reconnect_grace_seconds",
+            )
 
     def with_wire_format(self) -> SessionConfig:
         """Return these settings with the WebSocket wire format resolved: the client's, or 24 kHz PCM."""

@@ -44,21 +44,38 @@ export function ToolsPanel() {
     );
   }
 
+  const promptTools = tools.filter((tool) => tool.scope !== "backend");
+  const backendTools = tools.filter((tool) => tool.scope === "backend");
+
   return (
     <div className="prompts-panel p-4">
       <div className="services-header">
         <h3 className="metrics-title">Tools</h3>
       </div>
-      <p className="prompts-section-label">
-        {selectedPrompt
-          ? `Enabled tools highlighted for prompt: ${selectedPrompt.key}`
-          : "All tools available in this example"}
-      </p>
-      <div className="prompts-list">
-        {tools.map((t) => (
-          <ToolCard key={t.name} tool={t} isActive={enabled.has(t.name)} />
-        ))}
-      </div>
+      {promptTools.length > 0 && (
+        <>
+          <p className="prompts-section-label">
+            {selectedPrompt
+              ? `Enabled tools highlighted for prompt: ${selectedPrompt.key}`
+              : "All prompt tools available in this example"}
+          </p>
+          <div className="prompts-list">
+            {promptTools.map((tool) => (
+              <ToolCard key={tool.name} tool={tool} isActive={enabled.has(tool.name)} />
+            ))}
+          </div>
+        </>
+      )}
+      {backendTools.length > 0 && (
+        <>
+          <p className="prompts-section-label">Backend tools</p>
+          <div className="prompts-list">
+            {backendTools.map((tool) => (
+              <ToolCard key={tool.name} tool={tool} isActive={false} />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

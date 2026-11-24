@@ -6,17 +6,22 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.im.input import is_user_message
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import input_item, is_message
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import (
+    WorkerData,
+    input_item,
+    is_message,
+)
 from nemotron_voice_agent.pipecat.shared.ids import approx_tokens
 
 
 def starts_a_request(item: dict) -> bool:
-    """Return whether an item opens a request: a user message, as every input and every brief begins with one."""
-    return is_user_message(item)
+    """Start a context window at caller input or a host-authored task-specific projection."""
+    if isinstance(item, WorkerData):
+        return item.starts_request
+    return is_message(item) and item.get("role") == "user"
 
 
 def with_ids(items: list[dict], key: str) -> list[dict]:
@@ -44,13 +49,13 @@ def item_size(item: dict) -> int:
     return approx_tokens(json.dumps(input_item(item)))
 
 
-def window_start(items: list[dict], sizes: list[int], budget: int) -> int:
+def window_start(items: Sequence[dict | None], sizes: list[int], budget: int) -> int:
     """Return where a window of ``items`` within ``budget`` starts, dropping whole requests and keeping the newest."""
     total, start = sum(sizes), 0
     for index in range(1, len(items)):
         if total <= budget:
             break
-        if starts_a_request(items[index]):
+        if (item := items[index]) is not None and starts_a_request(item):
             total -= sum(sizes[start:index])
             start = index
     return start
@@ -63,7 +68,7 @@ def owed_outputs(items: list[dict], text: str, reported: Mapping[str, dict] | No
     return [
         reported.get(item["call_id"]) or {"type": "function_call_output", "call_id": item["call_id"], "output": text}
         for item in items
-        if item.get("type") == "function_call" and item.get("call_id") not in answered
+        if item.get("type") == "function_call" and item.get("call_id") and item.get("call_id") not in answered
     ]
 
 
@@ -73,7 +78,7 @@ class Conversation:
     def __init__(self, budget: int, output_chars: int, marker: str):
         """Start empty; a window holds whole requests within ``budget`` tokens, tool outputs cut to ``output_chars``."""
         self.budget, self.output_chars, self.marker = budget, output_chars, marker
-        self._items: list[dict] = []
+        self._items: list[dict | None] = []
         self._sizes: list[int] = []
         self._base = 0
 
@@ -89,8 +94,22 @@ class Conversation:
             self._base += start
 
     def window(self) -> tuple[int, list[dict]]:
-        """Return the position of its first item, and the conversation within the budget."""
-        return self._base, deepcopy(self._items)
+        """Return the start of the retained window and its visible items."""
+        return self._base, deepcopy([item for item in self._items if item is not None])
+
+    def discard(self, item_id: str) -> None:
+        """Remove one item's content while keeping existing reader positions valid."""
+        for index, item in enumerate(self._items):
+            if item is not None and item.get("id") == item_id:
+                self._items[index] = None
+                self._sizes[index] = 0
+                return
+
+    def read(self, cursor: int) -> tuple[list[dict], int, int]:
+        """Return visible items, the first unread index, and the absolute read-through position."""
+        _, items = self.window()
+        read = sum(item is not None for item in self._items[: max(0, cursor - self._base)])
+        return items, read, self._base + len(self._items)
 
 
 class TaskHistory:
@@ -115,14 +134,22 @@ class TaskHistory:
             self.items.append(item)
             self._sizes.append(item_size(item))
 
-    def history(self) -> list[dict]:
-        """Return the view within the budget, oldest first; ``RuntimeError`` if the newest request alone is over it."""
+    def history(self, extra: Sequence[dict] = ()) -> list[dict]:
+        """Return the view and required extra items within the budget; refuse if the newest request cannot fit."""
         if self.budget is None:
-            return deepcopy(self.items)
-        start = window_start(self.items, self._sizes, self.budget)
-        if sum(self._sizes[start:]) > self.budget:
+            return deepcopy([*self.items, *extra])
+        available = self.budget - sum(map(item_size, extra))
+        start = window_start(self.items, self._sizes, available)
+        if sum(self._sizes[start:]) > available:
             raise RuntimeError("Backend context budget exceeded")
-        return deepcopy(self.items[start:])
+        return deepcopy([*self.items[start:], *extra])
+
+    def extra_budget(self, required: Sequence[dict] = ()) -> int | None:
+        """Return the room left after the newest whole request and any additional required items."""
+        if self.budget is None:
+            return None
+        start = next((index for index in reversed(range(len(self.items))) if starts_a_request(self.items[index])), 0)
+        return self.budget - sum(self._sizes[start:]) - sum(map(item_size, required))
 
     def owed(self, text: str, reported: Mapping[str, dict] | None = None) -> list[dict]:
         """Return an output for each call of the view that has none: its output in ``reported``, else ``text``."""

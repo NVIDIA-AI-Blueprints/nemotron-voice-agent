@@ -5,6 +5,7 @@
 """The talker as Pipecat's LLM service, in either style: each call's request and format, and what streams."""
 
 import asyncio
+import json
 import unittest
 import unittest.mock
 
@@ -27,6 +28,7 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.models.decision
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.talker import (
     RESPONSE_FORMATS,
     RESPONSE_KEY,
+    Layout,
     Request,
     TalkerCall,
     TalkerChat,
@@ -72,11 +74,11 @@ class Calls:
             call.deadline = asyncio.get_running_loop().time() + RELIABILITY.talker_attempt_timeout_seconds
         return call
 
-    def speaking(self, call, text):
+    def speaking(self, text):
         self.events.append(("speaking", text))
 
-    def finished(self, call, decision, held):
-        self.events.append(("finished", decision.action if decision else None, held))
+    def finished(self, call, decision):
+        self.events.append(("finished", decision.action if decision else None))
         self.decisions.append(decision)
         return call.text
 
@@ -105,6 +107,7 @@ class Calls:
 
     def interrupted(self):
         self.events.append(("interrupted",))
+        return self.number
 
     def caller_started(self):
         pass
@@ -213,9 +216,12 @@ class FormatTests(unittest.IsolatedAsyncioTestCase):
         alone = [asked, made, result, {"role": "user", "content": "Runtime data."}]
         self.assertEqual(DECIDE.messages([asked, made, result])[1:], alone)
         worded = [asked, {"role": "assistant", "content": "Sure.\nLet me check."}]
-        self.assertEqual(
-            WORD.messages(context)[1:], [*worded, {"role": "user", "content": "Thanks.\nUpdate: Earl Grey."}]
+        assert WORD.messages(context)[1:] == [*worded, {"role": "user", "content": "Thanks.\nUpdate: Earl Grey."}]
+        relay = Layout(TEXTS, TEXTS.json_rules).relay(
+            "Help with the menu.", "Earl Grey is available.", "Playback note."
         )
+        history = relay.messages(CONTEXT)[-2]["content"]
+        self.assertTrue(history.endswith("Caller: Tea, please.\nAnd cake.\nPlayback note."))
 
 
 class StreamTests(unittest.IsolatedAsyncioTestCase):
@@ -226,7 +232,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(sum(isinstance(f, LLMTextFrame) for f in frames), 2)
         streamed = "".join(event[1] for event in service.calls.events if event[0] == "speaking")
         self.assertEqual(streamed, "Sure, take your time.")
-        self.assertEqual(service.calls.events[-1], ("finished", "speak", ""))
+        self.assertEqual(service.calls.events[-1], ("finished", "speak"))
         [start] = [frame for frame in frames if isinstance(frame, LLMFullResponseStartFrame)]
         [end] = [frame for frame in frames if isinstance(frame, LLMFullResponseEndFrame)]
         self.assertEqual((start.metadata[RESPONSE_KEY], end.metadata[RESPONSE_KEY]), (1, 1))
@@ -245,7 +251,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_output_cut_by_the_token_limit_is_unusable(self):
         service, _ = talker(decision("wait", finish="length"), make=routing)
         await run(service)
-        self.assertEqual(service.calls.events, [("finished", "delegate", "")])  # unusable output parses as delegate
+        self.assertEqual(service.calls.events, [("finished", "delegate")])  # unusable output parses as delegate
 
     async def test_a_result_before_anything_is_said_cuts_the_call(self):
         call = routing(cut=True)
@@ -290,7 +296,7 @@ class ToolStyleTests(unittest.IsolatedAsyncioTestCase):
         async with CallHarness(reply, style="tools") as call:
             self.assertIsInstance(call.talker, TalkerTools)
             await call.say("Hi there")
-            await call.until(lambda: call.said() == ["Hello there. How can I help?"], "the reply")
+            await call.hear("Hello there. How can I help?")
             self.assertEqual(call.tts.spoken, ["Hello there.", "How can I help?"])
             request = call.request(0)
             framed = TEXTS.tool_frame_before + "You are Remy." + TEXTS.frame_after + "\n" + TEXTS.tool_routing
@@ -301,13 +307,20 @@ class ToolStyleTests(unittest.IsolatedAsyncioTestCase):
             await call.quiet()
             self.assertEqual((len(call.chat.requests), call.port.inputs), (1, []))
             self.assertFalse([m for m in call.context.get_messages() if m.get("tool_calls") or m.get("role") == "tool"])
-            heard = (Heard.AGENT, f"{TEXTS.transcript.agent}: Hello there. How can I help?")
-            self.assertIn(heard, call.voice.heard_log.lines())
+            [heard] = [
+                json.loads(text.partition(": ")[2])
+                for kind, text in call.voice.heard_log.lines()
+                if kind is Heard.AGENT
+            ]
+            self.assertEqual(
+                (heard["kind"], heard["recorded_sentence_prefix"], heard["complete_conveyance"]),
+                ("reply", "Hello there. How can I help?", True),
+            )
 
     async def test_an_unusable_call_makes_no_move(self):
         for case, (reply, reason, ran) in {
             "broken arguments": (tool_call("delegate", '{"lead_in": "Let'), "invalid_decision", []),
-            "an unknown tool": (tool_call("lookup_order", '{"order": "BB-42"}'), "invalid_decision", ["lookup_order"]),
+            "an unknown tool": (tool_call("lookup_order", '{"order": "BB-42"}'), "invalid_decision", []),
             "no text and no call": ([chunk(finish="stop")], "empty_output", []),
         }.items():
             with self.subTest(case):
@@ -328,10 +341,11 @@ class ToolStyleTests(unittest.IsolatedAsyncioTestCase):
                 [settled] = [frame for frame in down if isinstance(frame, FunctionCallResultFrame)]
                 self.assertEqual(settled.result, {"status": status})
 
-    async def test_a_whole_call_stands_past_the_token_limit(self):
+    async def test_a_call_from_an_incomplete_attempt_does_not_dispatch(self):
         lead_in = '{"lead_in": "Let me check."}'
-        _, decided, _, _ = await run_tools(tool_call("delegate", lead_in, finish="length"))
-        self.assertEqual((decided.action, decided.speech, decided.call_id), ("delegate", "Let me check.", "call_0"))
+        _, decided, down, up = await run_tools(tool_call("delegate", lead_in, finish="length"))
+        self.assertEqual((decided.action, decided.diagnostics["recovery"]), ("delegate", "incomplete_output"))
+        self.assertEqual([frame for frame in [*down, *up] if isinstance(frame, FUNCTION_FRAMES)], [])
         _, decided, down, up = await run_tools(tool_call("delegate", lead_in[:-4], finish="length"), settle=0.1)
         self.assertEqual((decided.action, decided.diagnostics["recovery"]), ("delegate", "incomplete_output"))
         self.assertEqual([frame for frame in [*down, *up] if isinstance(frame, FUNCTION_FRAMES)], [])

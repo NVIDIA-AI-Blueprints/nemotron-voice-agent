@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, StrictBool
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.llm import LlmSettings
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.config import (
@@ -35,6 +35,8 @@ class ConductorSettings(Settings):
     temperature: Annotated[float, Field(strict=True, ge=0)] | None = 0.0
     # "none" turns thinking off (the endpoint's enable_thinking, where its settings have one); null: the model's own.
     reasoning_effort: Text | None = "none"
+    # Request schema-constrained tool arguments from a compatible Chat Completions endpoint.
+    strict_tool_arguments: StrictBool = False
 
     def describe(self) -> dict:
         """Return the settings as plain JSON, by name."""
@@ -44,6 +46,7 @@ class ConductorSettings(Settings):
             "max_output_tokens_per_request": self.max_output_tokens_per_request,
             "temperature": self.temperature,
             "reasoning_effort": self.reasoning_effort,
+            "strict_tool_arguments": self.strict_tool_arguments,
         }
 
 

@@ -8,8 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import aclosing
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import aclosing, suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, get_args
@@ -17,12 +17,14 @@ from typing import Any, get_args
 from loguru import logger
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import (
+    BackendRun,
     Delivery,
     Phase,
     Route,
     Steering,
     StopOutcome,
     TaskContext,
+    ToolNotExecuted,
     ToolSource,
     allowed_tools,
     listed,
@@ -32,7 +34,7 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
     BrokenStreamError,
     back_off,
 )
-from nemotron_voice_agent.pipecat.shared.delegation_contract import TERMINALS
+from nemotron_voice_agent.pipecat.shared.delegation_contract import CHAT_COMPLETIONS, TERMINALS
 from nemotron_voice_agent.pipecat.shared.ids import uid
 
 from .settings import LlmSettings
@@ -74,10 +76,94 @@ class _Sent:
         )
 
 
+class _AttemptObservation:
+    """One logical provider reader's private observations, independent of the consumer's event drain."""
+
+    def __init__(self, trace: Callable[..., None], identity: dict):
+        """Bind the opening identity before scheduling the provider reader."""
+        self.trace, self.identity = trace, identity
+        self.started = time.monotonic()
+        self.reader_entered = self.created = self.finished = False
+        self.response_id: str | None = None
+        self.response_model: str | None = None
+        self.terminal: str | None = None
+        self.usage: dict | None = None
+        self.error_type: str | None = None
+        self._emit("started")
+
+    def _emit(self, event_phase: str, **fields: Any) -> None:
+        """An observation sink cannot change a model attempt or escape its done callback."""
+        try:
+            self.trace(f"backend.provider_attempt.{event_phase}", **self.identity, **fields)
+        except BaseException as exc:
+            self.failed_observation(event_phase, exc)
+
+    def failed_observation(self, event_phase: str, error: BaseException) -> None:
+        """Report only the error type; diagnostic failures never escape a reader done callback."""
+        with suppress(BaseException):
+            logger.warning(
+                "backend.provider_attempt.observation_failed observation_id={} event={} error_type={}",
+                self.identity["observation_id"],
+                event_phase,
+                type(error).__name__,
+            )
+
+    def observe(self, event: dict) -> None:
+        """Retain only provider-observed envelope metadata; never alter the event passed to the consumer."""
+        kind = event.get("type")
+        self.created = self.created or kind == "response.created"
+        response = event.get("response")
+        if isinstance(response, dict):
+            for field in ("id", "model"):
+                value = response.get(field)
+                if isinstance(value, str) and value.strip():
+                    setattr(self, "response_id" if field == "id" else "response_model", value)
+            if kind in TERMINALS:
+                usage = response.get("usage")
+                self.usage = deepcopy(usage) if isinstance(usage, dict) else None
+        if kind in TERMINALS:
+            self.terminal = kind
+
+    def end(self, reader: asyncio.Task | None, cut_by: str | None, error: BaseException | None = None) -> None:
+        """Emit once when the reader actually ends, including cancellation before its coroutine first runs."""
+        if self.finished:
+            return
+        self.finished = True
+        cancelled = reader is not None and reader.cancelled()
+        failure = error or (reader.exception() if reader is not None and not cancelled else None)
+        error_type = self.error_type or (type(failure).__name__ if failure is not None else None)
+        ending = cut_by or ("error" if error_type else "cancelled" if cancelled else self.terminal or "stream_ended")
+        translated = self.identity["provider_api"] == CHAT_COMPLETIONS
+        self._emit(
+            "ended",
+            carrier_scope="event_time",
+            reader_entered=self.reader_entered,
+            created_observed=self.created,
+            response_id=self.response_id,
+            response_id_source=("translated_response" if translated else "provider_event")
+            if self.response_id
+            else None,
+            response_model=self.response_model,
+            response_model_source=("translated_request" if translated else "provider_event")
+            if self.response_model
+            else None,
+            reported_model=None if translated else self.response_model,
+            provider_terminal=self.terminal,
+            usage=self.usage,
+            usage_missing=self.usage is None,
+            usage_authority="logical_provider_attempt",
+            cost=None,
+            cut_by=cut_by,
+            ending=ending,
+            error_type=error_type,
+            duration_ms=round((time.monotonic() - self.started) * 1000, 3),
+        )
+
+
 class _Attempt:
     """One try of a round: the provider's events, read by a task into a queue, so the run can cut it at any time."""
 
-    def __init__(self, provider: Backend, payload: dict):
+    def __init__(self, provider: Backend, payload: dict, *, trace: Callable[..., None], identity: dict):
         """Start reading one round of ``provider``, opened once: the run itself tries a failed round again."""
         self.provider = provider
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -87,18 +173,33 @@ class _Attempt:
         self.error: BaseException | None = None
         self.cut_by: str | None = None
         self.started = time.monotonic()
-        self.reader = asyncio.create_task(self._read(provider.stream(payload)), name="llm-round")
+        self.observation = _AttemptObservation(trace, identity)
+        try:
+            self.reader = asyncio.create_task(self._read(provider.stream(payload)), name="llm-round")
+        except BaseException as error:
+            self.observation.end(None, None, error)
+            raise
+        self.reader.add_done_callback(self._observed_end)
+
+    def _observed_end(self, reader: asyncio.Task) -> None:
+        try:
+            self.observation.end(reader, self.cut_by)
+        except BaseException as error:
+            self.observation.failed_observation("ended", error)
 
     async def _read(self, events: AsyncIterator[dict]) -> None:
         """Queue the round's events up to its first terminal, then stop reading."""
+        self.observation.reader_entered = True
         try:
             async with aclosing(events) as stream:
                 async for event in stream:
+                    self.observation.observe(event)
                     self.queue.put_nowait(event)
                     if event.get("type") in TERMINALS:
                         return
             self.queue.put_nowait(_End())
         except Exception as exc:
+            self.observation.error_type = type(exc).__name__
             self.queue.put_nowait(_End(exc))
 
     def cut(self, by: str) -> None:
@@ -136,6 +237,9 @@ class _Attempt:
     def closed(self, kind: str, **fields: Any) -> dict:
         """Return a terminal the run writes for this attempt (failed or incomplete), with no items."""
         response = dict((self.created or {}).get("response") or {})
+        reported = (self.terminal or {}).get("response") or {}
+        if "usage" in reported:
+            response["usage"] = reported["usage"]
         status = "failed" if kind == "response.failed" else "incomplete"
         return {"type": kind, "response": {**response, "status": status, "output": [], **fields}}
 
@@ -221,13 +325,18 @@ class LlmRun:
         tools: Sequence[ToolSource],
         settings: LlmSettings,
         retryable: Retryable,
+        parent: BackendRun | None = None,
+        prepare: Callable[[], Awaitable[None]] | None = None,
     ):
         """Run ``task``; nothing is called before :meth:`events`."""
         self.task, self.providers, self.sources = task, providers, tuple(tools)
+        self.parent = parent
+        self._prepare = prepare
         self.settings, self.retryable = settings, retryable
         self.round = 0
         self.done = False
         self.stopped = False
+        self.suspended = False
         self.waits = False
         self.held: list[Steering] = []
         self.owners: dict[str, ToolSource] = {}
@@ -235,6 +344,9 @@ class LlmRun:
         self._attempt: _Attempt | None = None
         self._readers: set[asyncio.Task] = set()
         self._calls: asyncio.Task | None = None
+        self._events_readers = 0
+        self._calls_unconfirmed = False
+        self._quiescent: asyncio.Future[None] | None = None
 
     async def events(self) -> AsyncIterator[dict]:
         """Yield the task's Responses events, attempt by attempt; called again after :meth:`resume`.
@@ -243,8 +355,12 @@ class LlmRun:
         failure. The last failure raises: a provider's error unchanged, so a 429 stays one, or the run's own.
         """
         self.waits = False
+        self._events_readers += 1
         try:
-            while not (self.done or self.stopped or self.waits):
+            if self._prepare is not None and not self.stopped:
+                await self._prepare()
+                self._prepare = None
+            while not (self.done or self.stopped or self.suspended or self.waits):
                 self.round += 1
                 tries = 0
                 while True:
@@ -256,8 +372,15 @@ class LlmRun:
                             yield created
                             if self.stopped:
                                 return
+                            if self.suspended:
+                                yield attempt.closed("response.incomplete", incomplete_details={"reason": "paused"})
+                                return
                     self._attempt = None
                     if self.stopped:
+                        return
+                    if self.suspended:
+                        if attempt.created is not None:
+                            yield attempt.closed("response.incomplete", incomplete_details={"reason": "paused"})
                         return
                     if attempt.cut_by == "steer" and attempt.terminal is None and attempt.error is None:
                         self.task.trace("backend.steered", round=self.round)
@@ -290,10 +413,14 @@ class LlmRun:
                         if self.stopped:
                             return
         finally:
-            if self._attempt is not None:
-                self._attempt.cut("close")
-                self._attempt = None
-            self._settle_held("not_applied")
+            try:
+                if self._attempt is not None:
+                    self._attempt.cut("close")
+                    self._attempt = None
+                self._settle_held("not_applied")
+            finally:
+                self._events_readers -= 1
+                self._notify_quiescent()
 
     def steer(self) -> None:
         """Restart a streaming round, which has dispatched nothing; else the steering waits for the next safe point.
@@ -306,7 +433,28 @@ class LlmRun:
 
     async def resume(self) -> None:
         """Go on after the app's outputs: the next round's safe point takes them."""
+        if self.stopped:
+            return
+        if self.suspended:
+            if await self.suspend() != "stopped":
+                raise RuntimeError("The worker has not settled its suspended invocation")
+            if self.stopped:
+                return
+            self.suspended = self.done = False
         self.task.trace("tools.completed", round=self.round)
+
+    async def suspend(self) -> StopOutcome:
+        """Fence inference without ending the run or inventing a result for an outstanding call."""
+        self.suspended = True
+        if self._attempt is not None:
+            self._attempt.cut("suspend")
+        running = [*self._readers, *([self._calls] if self._calls is not None else [])]
+        pending = {task for task in running if not task.done()}
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=self.settings.stop_timeout_seconds)
+        outcome: StopOutcome = "unconfirmed" if pending or not self._calls_quiescent() else "stopped"
+        self.task.trace("backend.suspended", round=self.round, outcome=outcome)
+        return outcome
 
     async def stop(self) -> StopOutcome:
         """Stop the task: cut a streaming round, let started calls finish, and confirm within the stop limit."""
@@ -317,13 +465,70 @@ class LlmRun:
         pending = {task for task in running if not task.done()}
         if pending:
             _, pending = await asyncio.wait(pending, timeout=self.settings.stop_timeout_seconds)
-        outcome: StopOutcome = "unconfirmed" if pending else "stopped"
+        outcome: StopOutcome = "unconfirmed" if pending or not self._calls_quiescent() else "stopped"
         self.task.trace("backend.stopped", round=self.round, outcome=outcome)
+        self._notify_quiescent()
         return outcome
+
+    def on_quiescent(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Report positive late local settlement without another stop, provider request, or business action."""
+        if self._quiescent is None:
+            self._quiescent = asyncio.get_running_loop().create_future()
+        future = self._quiescent
+        subscribed = True
+
+        def settled(done: asyncio.Future) -> None:
+            nonlocal subscribed
+            if subscribed and not done.cancelled() and done.exception() is None:
+                subscribed = False
+                callback()
+
+        def unsubscribe() -> None:
+            nonlocal subscribed
+            subscribed = False
+            future.remove_done_callback(settled)
+
+        future.add_done_callback(settled)
+        self._notify_quiescent()
+        return unsubscribe
+
+    def _notify_quiescent(self) -> None:
+        """A stopped run cannot open another attempt; both iterator exit and physical owners are required."""
+        future = self._quiescent
+        if (
+            future is None
+            or future.done()
+            or not self.stopped
+            or self._events_readers
+            or self._readers
+            or not self._calls_quiescent()
+        ):
+            return
+        future.set_result(None)
+
+    def _calls_quiescent(self) -> bool:
+        """A cancelled or exceptional aggregate is not positive proof that all its effects settled."""
+        calls = self._calls
+        return not self._calls_unconfirmed and (
+            calls is None or calls.done() and not calls.cancelled() and calls.exception() is None
+        )
+
+    def _reader_finished(self, reader: asyncio.Task) -> None:
+        """Provider reader completion includes its stream-close cleanup, including a requested local cut."""
+        self._readers.discard(reader)
+        self._notify_quiescent()
+
+    def _calls_finished(self, calls: asyncio.Task) -> None:
+        """An abandoned tool aggregate cannot establish positive settlement merely by being done."""
+        if calls.cancelled() or calls.exception() is not None:
+            self._calls_unconfirmed = True
+        self._notify_quiescent()
 
     def _start_attempt(self, tries: int) -> _Attempt | None:
         """Open an attempt of the round at a safe point, or ``None`` once the task was stopped."""
-        if self.stopped:
+        if self.stopped or self.suspended:
+            return None
+        if self.task.business_access != "full" and not self.task.can_dispatch():
             return None
         self._take_boundary()
         # Settled first: the IM joins it, and a typed run that lands brings its settings, which this round reads.
@@ -340,9 +545,24 @@ class LlmRun:
             tries + 1,
             _Sent(payload),
         )
-        attempt = self._attempt = _Attempt(provider, payload)
+        attempt = self._attempt = _Attempt(
+            provider,
+            payload,
+            trace=self.task.trace,
+            identity={
+                "observation_id": uid("provider_attempt"),
+                "conversation_ref": getattr(self.task, "conversation_ref", None),
+                "worker_implementation": "llm",
+                "role": "worker",
+                "provider_api": provider.name,
+                "round": self.round,
+                "attempt": tries + 1,
+                "requested_model": payload.get("model"),
+                "configured_model": provider.endpoint.model,
+            },
+        )
         self._readers.add(attempt.reader)
-        attempt.reader.add_done_callback(self._readers.discard)
+        attempt.reader.add_done_callback(self._reader_finished)
         return attempt
 
     def _payload(self, request: dict, history: list[dict]) -> dict:
@@ -354,6 +574,8 @@ class LlmRun:
         tools, self.owners = ([], {}) if capped else self._round_tools(request)
         self.offered = [tool["name"] for tool in tools if tool.get("name")]
         payload = {**request, "tools": tools, "input": deepcopy(history)}
+        if self.task.business_access != "full":
+            payload["_restricted_tools"] = True
         if capped:
             note = self.task.texts.round_cap_note
             payload["tool_choice"] = "none"
@@ -395,6 +617,13 @@ class LlmRun:
             self.done = True
             yield attempt.closed("response.failed", error={"code": "server_error", "message": "past the round cap"})
             raise RuntimeError("The backend kept calling tools past the round limit")
+        while any(self.task.placement_pending(call) for call in calls):
+            await self.task.wait_for_placement()
+            if self.stopped:
+                return
+            if self.suspended:
+                yield attempt.closed("response.incomplete", incomplete_details={"reason": "paused"})
+                return
         by_route: dict[Route, list[dict]] = {"app": [], "backend": [], "refused": []}
         for call in calls:
             by_route[self.task.route(call)].append(call)
@@ -413,7 +642,11 @@ class LlmRun:
             self.task.trace("tools.waiting", round=self.round, call_ids=[call["call_id"] for call in by_route["app"]])
 
     async def _run_calls(self, calls: list[dict]) -> None:
-        """Run the backend's calls at once; a stop never cuts them, it waits for them."""
+        """Run the completed round's calls, settling any that never start because the invocation was suspended."""
+        if self.suspended:
+            for call in calls:
+                self.task.dispatch(call, suspended=True)
+            return
         self.task.trace(
             "tools.started",
             round=self.round,
@@ -421,17 +654,34 @@ class LlmRun:
             names=[call.get("name", "") for call in calls],
         )
         self._calls = asyncio.create_task(self._run_all(calls), name="llm-calls")
+        self._calls.add_done_callback(self._calls_finished)
         await asyncio.shield(self._calls)
         self._calls = None
         self.task.trace("tools.completed", round=self.round)
 
     async def _run_all(self, calls: list[dict]) -> None:
-        """Run every call of the round together; one that raises never takes the others' outputs with it."""
-        await asyncio.gather(*(self._run_call(call) for call in calls), return_exceptions=True)
+        """Apply task-stop controls before independently dispatching the remaining calls."""
+        controls = [
+            call
+            for call in calls
+            if call.get("name") in ("cancel_work", "set_work_state")
+            and self.owners.get(call["name"]) is self.task.tools()
+        ]
+        for call in controls:
+            await self._run_call(call)
+        results = await asyncio.gather(
+            *(self._run_call(call) for call in calls if call not in controls), return_exceptions=True
+        )
+        if any(isinstance(result, BaseException) for result in results):
+            self._calls_unconfirmed = True
 
     async def _run_call(self, call: dict) -> None:
         """Run one call on the source that offered it, and report every outcome with an output."""
         call_id, name, texts = call.get("call_id", ""), call.get("name", ""), self.task.texts
+        while not self.suspended and self.task.placement_pending(call):
+            await self.task.wait_for_placement()
+        if self.task.dispatch(call, suspended=self.suspended) == "refused":
+            return
         source = self.owners.get(name)
         self.task.tool_started(call, source.label if source is not None else OWN_LABEL)
         limit = self.settings.server_tool_timeout_seconds
@@ -445,10 +695,20 @@ class LlmRun:
             except TimeoutError:
                 # Cut after its effect may have happened: whether it ran is not known.
                 output, outcome = json.dumps({"error": f"{name} did not answer within {limit:g} s"}), "unclear"
-            except Exception as exc:
+            except ToolNotExecuted as exc:
                 failed = texts.failed_output.format(name=name, error=f"{type(exc).__name__}: {exc}")
                 output, outcome = json.dumps({"error": failed}), "failed"
+            except asyncio.CancelledError as exc:
+                self._calls_unconfirmed = True
+                failed = texts.failed_output.format(name=name, error=type(exc).__name__)
+                self.task.tool_outcome(call_id, json.dumps({"error": failed}), "unclear")
+                raise
+            except Exception as exc:
+                failed = texts.failed_output.format(name=name, error=f"{type(exc).__name__}: {exc}")
+                output, outcome = json.dumps({"error": failed}), "unclear"
         self.task.tool_outcome(call_id, output, outcome)
+        if outcome == "done" and name == "cancel_work" and source is self.task.tools():
+            self.done = True
 
     def _take_boundary(self) -> None:
         """Take the app's outputs, and hold every waiting steering batch for the next attempt: a safe point."""

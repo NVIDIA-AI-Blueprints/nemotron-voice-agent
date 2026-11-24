@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
@@ -19,7 +20,6 @@ from ..agent import AcpAgent
 if TYPE_CHECKING:
     from ..updates import SessionUpdates
 
-TOOL_PREFIX = "mcp__{server}__"
 # The files Hermes reads instructions from in a session's folder; with any other, a session runs without them.
 INSTRUCTIONS_FILES = (
     ".hermes.md",
@@ -39,14 +39,6 @@ def _read_by_hermes(name: str) -> str:
     return name
 
 
-def _ends_with_space(command: str) -> str:
-    if not command[-1].isspace():
-        raise ValueError(
-            "must end with a space: Hermes reads a command's name up to the first space (quote it in YAML)"
-        )
-    return command
-
-
 def _not_a_command(guard: str) -> str:
     if guard.lstrip().startswith("/"):
         raise ValueError('must not start with "/": Hermes would run it as a command')
@@ -54,10 +46,9 @@ def _not_a_command(guard: str) -> str:
 
 
 class HermesSettings(StrictSettings):
-    """The ``backend.harness.agents.hermes`` block: Hermes's file of instructions, its steer command, its guard."""
+    """The ``backend.harness.agents.hermes`` block: Hermes's file of instructions and command guard."""
 
     instructions_file: Annotated[Text, AfterValidator(_read_by_hermes)] = ".hermes.md"
-    steer_command: Annotated[Text, AfterValidator(_ends_with_space)] = "/steer "
     command_guard: Annotated[Text, AfterValidator(_not_a_command)]
 
 
@@ -67,10 +58,11 @@ class HermesAgent(AcpAgent):
     name: ClassVar[str] = "hermes"
     turns_per_process: ClassVar[int | None] = 4
     Settings: ClassVar[type[HermesSettings]] = HermesSettings
+    runtime_ownership = "external"
 
-    def __init__(self, *, instructions_file: str, steer_command: str, command_guard: str):
-        """Take Hermes's instructions file, its steer command, and the guard put before a prompt starting with ``/``."""
-        self.instructions_file, self.steer_command, self.command_guard = instructions_file, steer_command, command_guard
+    def __init__(self, *, instructions_file: str, command_guard: str):
+        """Take Hermes's instructions file and the guard put before a prompt starting with ``/``."""
+        self.instructions_file, self.command_guard = instructions_file, command_guard
 
     def environment(self) -> Mapping[str, str]:
         """Return the environment that skips Hermes's startup connect to the MCP servers of its own configuration."""
@@ -92,32 +84,38 @@ class HermesAgent(AcpAgent):
         stripped = text.lstrip()
         return self.command_guard + stripped if stripped.startswith("/") else text
 
-    def steer_text(self, text: str) -> str:
-        """Return the steer command and the guarded text, since an idle Hermes runs a steer's text as a prompt.
-
-        Hermes puts a steer after the running tool batch, or before the next model call, and its reply is the ack.
-        """
-        return self.steer_command + self.prompt_text(text)
-
     def tool_name(self, title: Any) -> str:
         """Return the tool's name from the card's title, ``<tool>: <preview>``, whose preview may hold raw arguments."""
         return str(title or "").split(": ", 1)[0].strip()
 
     def bridged(self, name: str, server: str) -> bool:
-        """Return whether a call is one of the session's bridged tools, named ``mcp__<server>__<tool>``."""
-        return name.startswith(TOOL_PREFIX.format(server=server))
+        """Recognize this session's legacy or editor-namespaced MCP display name, without granting execution."""
+        legacy = f"mcp__{server}__"
+        if name.startswith(legacy):
+            return len(name) > len(legacy)
+        component = re.sub(r"[^A-Za-z0-9_]", "_", server)
+        return re.fullmatch(rf"mcp__editor_{re.escape(component)}_[0-9a-f]{{8}}__[A-Za-z0-9_]+", name) is not None
+
+    def bridged_call(self, name: str, arguments: Mapping[str, Any] | None, server: str) -> bool:
+        """Let the MCP door own pure structured MCP batches; never hide mixed, foreign or malformed wrappers."""
+        if self.bridged(name, server):
+            return True
+        if name != "tool_call" or not isinstance(arguments, Mapping) or set(arguments) != {"calls"}:
+            return False
+        calls = arguments["calls"]
+        return (
+            isinstance(calls, list)
+            and bool(calls)
+            and all(
+                isinstance(call, Mapping)
+                and set(call) == {"name", "arguments"}
+                and isinstance(call["name"], str)
+                and isinstance(call["arguments"], Mapping)
+                and self.bridged(call["name"], server)
+                for call in calls
+            )
+        )
 
     def unnamed_message(self, updates: SessionUpdates) -> str | None:
         """Return ``None``: a chunk with no message id is Hermes's own reply, such as an ack, never model text."""
-        return None
-
-    def no_answer(self, total: int | None, total_before: int | None) -> str | None:
-        """Return why an ``end_turn`` turn gave no answer: no model call completed unless its usage moved.
-
-        Hermes also ends provider errors and its own exits ``end_turn``, with its own text, and reports running usage.
-        """
-        if total is None:
-            return "the agent reported no usage: no model call completed (its own text)"
-        if total_before is not None and total == total_before:
-            return "the agent's usage did not move: no model call completed (its own text)"
         return None

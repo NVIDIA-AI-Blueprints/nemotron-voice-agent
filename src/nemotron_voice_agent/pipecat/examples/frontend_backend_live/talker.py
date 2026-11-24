@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loguru import logger
 from openai.types.chat import ChatCompletionChunk
@@ -28,7 +28,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.aggregators.llm_context import LLMContext, standard_message_text
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.llm import NvidiaLLMService
-from pipecat.utils.text.alnum_utils import alnum_only
+from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pydantic import TypeAdapter, ValidationError
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.models.decision import (
@@ -45,6 +45,7 @@ from nemotron_voice_agent.pipecat.shared.json_stream import JsonStringFieldStrea
 from nemotron_voice_agent.pipecat.shared.strict_settings import Tool
 
 if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletion
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
     from nemotron_voice_agent.pipecat.examples.frontend_backend_live.config_manager.schema import (
@@ -61,9 +62,8 @@ _current_call: contextvars.ContextVar[TalkerCall | None] = contextvars.ContextVa
 
 
 class Reply(Protocol):
-    """One streamed reply as its call reads it: the words it lets out or ``held``, its ``raw`` form, its decision."""
+    """One streamed reply and the decision read from it."""
 
-    held: str
     raw: Any
 
     def feed(self, delta: ChoiceDelta) -> str:
@@ -194,10 +194,12 @@ class JsonReply:
         """Return a ``speak``'s words once its action has decoded, when the call streams; hold any other speech."""
         content = delta.content or ""
         self.raw += content
+        if not self.streams:
+            return ""
         if not self.action.done:
             self.verb += self.action.feed(content)
         text = self.speech.feed(content)
-        if self.streams and self.action.done and self.verb == "speak":
+        if self.action.done and self.verb == "speak":
             text, self.held = self.held + text, ""
             return text
         self.held += text
@@ -205,9 +207,7 @@ class JsonReply:
 
     def decision(self, metadata: dict, finish: str | None) -> TalkerDecision:
         """Return the reply's first JSON object as a decision; a reply the token limit cut is ``incomplete_output``."""
-        if finish == "length":
-            return unusable_decision(metadata, "incomplete_output")
-        return decision_from_output_text(self.raw, metadata)
+        return decision_from_output_text(self.raw, metadata, finish_reason=finish)
 
 
 @dataclass
@@ -227,7 +227,6 @@ class ToolReply:
         self.streams = streams
         self.calls: dict[int, ToolCall] = {}
         self.text = ""
-        self.held = ""
 
     @property
     def raw(self) -> dict:
@@ -254,15 +253,14 @@ class ToolReply:
             return ""
         text = delta.content if self.text else delta.content.lstrip()
         self.text += text
-        if self.streams:
-            return text
-        self.held += text
-        return ""
+        return text if self.streams else ""
 
     def decision(self, metadata: dict, finish: str | None) -> TalkerDecision:
         """Return the move of the first ``TOOL_DECISIONS`` name a call made, else a ``speak`` unless cut or empty."""
         calls = self._in_order()
         diagnostics = {**metadata, "tool_calls": [call.name for call in calls]}
+        if calls and finish not in {"stop", "tool_calls"}:
+            return unusable_decision(diagnostics, "incomplete_output")
         for name, decide in TOOL_DECISIONS.items():
             for call in calls:
                 if call.name != name:
@@ -319,10 +317,10 @@ class Calls(Protocol):
     async def next_call(self, context: LLMContext) -> TalkerCall | None:
         """Return the call this run makes, or ``None`` when there is nothing to decide or say."""
 
-    def speaking(self, call: TalkerCall, text: str) -> None:
+    def speaking(self, text: str) -> None:
         """Note that a routing ``speak``'s words went on to speech."""
 
-    def finished(self, call: TalkerCall, decision: TalkerDecision | None, held: str) -> str:
+    def finished(self, call: TalkerCall, decision: TalkerDecision | None) -> str:
         """Act on the call's ``decision`` (``None`` for a line with no model call); return the words to let out."""
 
     def written(self) -> list[dict]:
@@ -349,8 +347,8 @@ class Calls(Protocol):
     def response_ended(self) -> int:
         """Return the number of the response the talker ends."""
 
-    def interrupted(self) -> None:
-        """Note an interruption that passed the talker: the responses started before it are dropped."""
+    def interrupted(self) -> int:
+        """Note the interruption and return the newest response started before it."""
 
     def caller_started(self) -> None:
         """Note that the caller started speaking."""
@@ -388,32 +386,49 @@ class DecisionReplyMixin:
         call = _current_call.get()
         if call is not None:
             params["messages"] = call.request.messages(params["messages"])
-            if not _out_of_band.get():
+            if _out_of_band.get():
+                params["stream"] = False
+                params.pop("stream_options", None)
+                if schema := call.response_schema():
+                    model = self.settings.model or ""
+                    if self.supports_response_schema and self.model_supports_response_schema(model):
+                        params["response_format"] = {
+                            "type": "json_schema",
+                            "json_schema": {"name": "response", "schema": schema, "strict": True},
+                        }
+                    else:
+                        logger.warning(f"{self}: response schema is not supported by model {model} and is ignored")
+            else:
                 params.update(call.request_fields())
             logger.debug(f"{call.role} request: {json.dumps(params['messages'], ensure_ascii=False)}")
         return params
 
     async def run_inference(self, *args, **kwargs) -> str | None:
         """Run one-shot inference with its own request and no decision format."""
-        return await self._one_shot(None, *args, **kwargs)
-
-    async def run_call(self, call: TalkerCall, context: LLMContext) -> str | None:
-        """Run ``call`` out of band on ``context``: its system text as the system instruction, its decision schema."""
-        reply = await self._one_shot(
-            call, context, system_instruction=call.request.system, response_schema=call.response_schema()
-        )
-        duration_ms = round((time.monotonic() - call.started) * 1000, 3)
-        logger.debug(f"{call.role} reply (one-shot, {duration_ms} ms in all): {json.dumps(reply, ensure_ascii=False)}")
-        return reply
-
-    async def _one_shot(self, call: TalkerCall | None, *args, **kwargs) -> str | None:
-        """Run Pipecat's one-shot inference out of band, adjusted as ``call``'s request, or as its arguments give."""
-        out_of_band, current = _out_of_band.set(True), _current_call.set(call)
+        current = _current_call.set(None)
         try:
             return await super().run_inference(*args, **kwargs)
         finally:
             _current_call.reset(current)
+
+    async def run_call(self, call: TalkerCall, context: LLMContext) -> TalkerDecision:
+        """Return a buffered Writer decision using the same cutoff policy as its streamed reply."""
+        out_of_band, current = _out_of_band.set(True), _current_call.set(call)
+        try:
+            # Use Pipecat's request path before NvidiaLLMService wraps its response in a stream.
+            response = cast("ChatCompletion", await BaseOpenAILLMService.get_chat_completions(self, context))
+        finally:
+            _current_call.reset(current)
             _out_of_band.reset(out_of_band)
+        choice = response.choices[0] if response.choices else None
+        reply = choice.message.content if choice is not None else None
+        finish = getattr(choice, "finish_reason", None)
+        duration_ms = round((time.monotonic() - call.started) * 1000, 3)
+        logger.debug(
+            f"{call.role} reply (one-shot, finish_reason={finish or 'unknown'}, {duration_ms} ms in all): "
+            f"{json.dumps(reply, ensure_ascii=False)}"
+        )
+        return decision_from_output_text(reply or "", {}, finish_reason=finish)
 
     async def get_chat_completions(self, context: LLMContext) -> AsyncIterator[ChatCompletionChunk]:
         """Run the call the voice chooses for this run: no request, a line with no model call, or the decision."""
@@ -421,7 +436,7 @@ class DecisionReplyMixin:
         if call is None:
             return self._line("")
         if call.spec is None:
-            return self._line(self.calls.finished(call, None, ""))
+            return self._line(self.calls.finished(call, None))
         token = _current_call.set(call)
         try:
             async with asyncio.timeout_at(call.deadline):
@@ -449,8 +464,8 @@ class DecisionReplyMixin:
 
     async def process_frame(self, frame, direction: FrameDirection):
         """Tell the voice when the caller starts and stops speaking, and when an interruption passes the talker."""
-        if isinstance(frame, InterruptionFrame):
-            self.calls.interrupted()
+        if isinstance(frame, InterruptionFrame) and direction is FrameDirection.DOWNSTREAM:
+            frame.metadata[RESPONSE_KEY] = self.calls.interrupted()
         elif isinstance(frame, UserStartedSpeakingFrame):
             self.calls.caller_started()
         elif isinstance(frame, UserStoppedSpeakingFrame):
@@ -500,7 +515,7 @@ class DecisionReplyMixin:
                 text = reply.feed(delta)
                 if text:
                     call.said += text
-                    self.calls.speaking(call, text)
+                    self.calls.speaking(text)
                 delta.content = text or None
                 if delta.tool_calls:
                     calls.append(chunk)
@@ -527,18 +542,26 @@ class DecisionReplyMixin:
             "response_format": call.format.name,
         }
         logger.debug(
-            f"{call.role} reply ({call.first_token_ms} ms to the first token, {duration_ms} ms in all): "
+            f"{call.role} reply ({call.first_token_ms} ms to the first token, "
+            f"finish_reason={finish or 'unknown'}, {duration_ms} ms in all): "
             f"{json.dumps(reply.raw, ensure_ascii=False)}"
         )
-        text = self.calls.finished(call, reply.decision(metadata, finish), reply.held)
-        for held in calls:
-            yield held
+        if call.cut and not call.said:
+            self.calls.dropped(call)
+            return
+        decision = reply.decision(metadata, finish)
+        text = self.calls.finished(call, decision)
+        if not decision.diagnostics.get("recovery"):
+            for held in calls:
+                yield held
         async for line in self._line(text):
             yield line
 
 
 class TalkerChat(DecisionReplyMixin, NvidiaLLMService):
     """``NvidiaLLMService`` that asks each run for the voice's decision (:class:`DecisionReplyMixin`)."""
+
+    routing_entries = JsonDecision.entries
 
     def __init__(self, *, reliability: ReliabilityConfig, response_format: ResponseFormat, **kwargs):
         """Create the service, asking at ``response_format``'s level."""
@@ -576,6 +599,8 @@ class TalkerChat(DecisionReplyMixin, NvidiaLLMService):
 class TalkerTools(TalkerChat):
     """``TalkerChat`` whose routing call moves by function calling; its endpoint must stream ``tool_calls``."""
 
+    routing_entries = ToolCalls.entries
+
     def bind(self, calls: Calls) -> None:
         """Ask ``calls`` about each run, and register a handler for each routing tool."""
         super().bind(calls)
@@ -585,7 +610,7 @@ class TalkerTools(TalkerChat):
 
     def routing_format(self, prompts: PromptSet) -> ToolCalls:
         """Return the routing tools of ``prompts``, as Pipecat's adapter converts them for the request."""
-        missing = prompts.missing([*ToolCalls.entries, *(f"tools.{name}" for name in TOOL_DECISIONS)])
+        missing = prompts.missing([*self.routing_entries, *(f"tools.{name}" for name in TOOL_DECISIONS)])
         if missing:
             raise ValueError(f"agent_prompts.Cascade has no {', '.join(missing)}: the tools talker style reads them")
         return ToolCalls(self.get_llm_adapter().from_standard_tools(routing_tools(prompts)))
@@ -616,18 +641,24 @@ CALL_FIELDS = ("tool_calls", "tool_call_id")
 
 @dataclass(frozen=True)
 class Request:
-    """What a call does to Pipecat's messages as its request goes out: its ``system`` text first, ``tail`` last."""
+    """Frame Pipecat's messages with ``system`` first and ``tail`` last; ``joiner=None`` keeps the tail separate."""
 
     system: str
     tail: str
-    joiner: str = "\n"
+    joiner: str | None = "\n"
     label: str = ""
     calls: bool = False
+    include_history: bool = True
+    prior_note: str = ""
 
     def messages(self, messages: Sequence[dict]) -> list[dict]:
         """Return the request's messages from Pipecat's ``messages``, which it leaves as they are."""
+        if not self.include_history:
+            messages = ()
         if messages and messages[0].get("role") == "system":
             messages = messages[1:]
+        if self.prior_note:
+            messages = (*messages, {"role": "developer", "content": self.prior_note})
         joined: list[dict] = []
         previous = None
         for message in messages:
@@ -644,7 +675,7 @@ class Request:
                 joined[-1]["content"] += "\n" + content
             else:
                 joined.append({"role": role, "content": content})
-        if joined and joined[-1]["role"] == "user":
+        if self.joiner is not None and joined and joined[-1]["role"] == "user":
             joined[-1]["content"] += self.joiner + self.tail
         else:
             joined.append({"role": "user", "content": self.tail})
@@ -721,25 +752,60 @@ class Layout:
         rules = self.routing_texts.rules.text
         return Request(text + "\n" + rules, runtime, "\n\n", self.prompts.caller_label, calls=True)
 
-    def note(self, told: str | None, newer_requests: Sequence[str] = ()) -> str:
+    def note(self, told: str | None, newer_requests: Sequence[dict] = ()) -> str:
         """Return the notes an update carries: what the caller already heard of it, and newer requests still open."""
         notes = self.prompts.writer_notes
         text = notes.told.format(told=told) if told else ""
         if newer_requests:
-            text += notes.newer.format(requests="; ".join(f'"{request}"' for request in newer_requests))
+            text += notes.newer.format(requests=json.dumps(newer_requests, ensure_ascii=False))
         return text
 
-    def relay(self, instructions: str, content: str, note: str) -> Request:
-        """Return the relay's request: the writer's frame and rules, the conversation, then the update to word."""
-        prompts = self.prompts
-        rules = prompts.writer_framed(instructions) + "\n" + prompts.commentary + prompts.answer
-        return Request(rules + "\n" + self.json_rules, prompts.update_label + content + note)
+    def relay(
+        self, instructions: str, content: str, note: str, *, turn: str = "", routing_question: bool = False
+    ) -> Request:
+        """Return the Writer's instructions and a distinct final message for the current update."""
+        parts = self.answer_parts([PromptPart("instructions", instructions)], routing_question=routing_question)
+        request = self._writer(parts, content, "")
+        if routing_question and self.prompts.routing_question:
+            return replace(request, prior_note=note.strip())
+        newest = self.prompts.newest_turn.format(turn=turn) if turn else ""
+        cue = self.prompts.answer_cue if note or newest else ""
+        tail = "\n\n".join(part for part in (cue, newest, request.tail) if part)
+        return replace(request, tail=tail, prior_note=note.strip("\n"))
 
     def progress(self, instructions: str, update: str, note: str) -> Request:
-        """Return the progress line's request: the writer's frame and progress rules, then the work's update."""
-        prompts = self.prompts
-        rules = prompts.writer_framed(instructions) + "\n" + prompts.progress
-        return Request(rules + "\n" + self.json_rules, prompts.update_label + update + note)
+        """Return progress instructions with a distinct final message for the work's update."""
+        return self._writer(self.progress_parts([PromptPart("instructions", instructions)]), update, note)
+
+    def answer_parts(self, instructions: Sequence[PromptPart], *, routing_question: bool = False) -> list[PromptPart]:
+        """Return the system instructions of an answer or a routing question in their request order."""
+        rules = (
+            ("routing_question",) if routing_question and self.prompts.routing_question else ("commentary", "answer")
+        )
+        return self._writer_parts(instructions, rules)
+
+    def progress_parts(self, instructions: Sequence[PromptPart]) -> list[PromptPart]:
+        """Return the progress system instructions in their request order."""
+        return self._writer_parts(instructions, ("progress",))
+
+    def _writer_parts(self, instructions: Sequence[PromptPart], rules: Sequence[str]) -> list[PromptPart]:
+        return [
+            self._part("writer_frame_before"),
+            *instructions,
+            self._part("writer_frame_after"),
+            *(self._part(name, "\n" if index == 0 else "") for index, name in enumerate(rules)),
+            PromptPart("agent_prompts.Cascade.json_rules", self.json_rules, "\n"),
+        ]
+
+    def _part(self, name: str, sep: str = "") -> PromptPart:
+        return PromptPart(f"agent_prompts.Cascade.{name}", getattr(self.prompts, name), sep)
+
+    def _writer(self, parts: Sequence[PromptPart], update: str, note: str) -> Request:
+        system = "".join(part.sep + part.text for part in parts)
+        context = note.strip("\n")
+        current = self.prompts.update_label + update
+        tail = f"{context}\n\n{current}" if context else current
+        return Request(system, tail, joiner=None, label=self.prompts.caller_label)
 
 
 def floored(decision: TalkerDecision, *, work_open: bool, holding: str) -> TalkerDecision:
@@ -755,39 +821,25 @@ def floored(decision: TalkerDecision, *, work_open: bool, holding: str) -> Talke
 
 
 def after_failure(diagnostics: dict, *, work_open: bool, holding: str) -> TalkerDecision:
-    """Return a failed turn's decision: the holding line while work is open, else a delegation with no lead-in.
+    """Keep a failed turn local while work is open, with a holding line when supplied.
 
-    A delegation would join the open work, and could restart it, for a turn nobody decided; with none open, no tool
-    has run at the talker stage, so delegating never repeats an action.
+    While work is open, a fallback delegation could steer it without a valid decision. With no open work,
+    the fallback can delegate the caller's request once.
     """
-    if work_open and holding:
-        held = {**diagnostics, "recovery": "holding", "failed": diagnostics.get("recovery")}
-        return TalkerDecision("speak", holding, held)
-    return TalkerDecision("delegate", "", diagnostics)
+    if not work_open:
+        return TalkerDecision("delegate", "", diagnostics)
+    if not holding.strip():
+        return TalkerDecision("wait", "", diagnostics)
+    held = {**diagnostics, "recovery": "holding", "failed": diagnostics.get("recovery")}
+    return TalkerDecision("speak", holding, held)
 
 
-def relay_line(decision: TalkerDecision, content: str, history: Sequence[dict]) -> str | None:
-    """Return the relay's worded line, or ``None`` when the update must be said as written.
+def relay_line(decision: TalkerDecision | None) -> str | None:
+    """Return valid Writer wording, including repetition and deliberate silence; ``None`` means failure.
 
-    Only a ``speak`` with words that are neither the update nor a line said already is worded; lines compare by
-    ``alnum_only``, so markup, punctuation, case and accents never tell them apart.
+    Repeating reference or previously spoken wording is the Writer's presentation decision. It must not
+    revive raw reference data that the current caller context made obsolete.
     """
-    line = decision.speech
-    said = {alnum_only(standard_message_text(entry)) for entry in history if entry["role"] == "assistant"}
-    if decision.action != "speak" or not line.strip() or alnum_only(line) in {alnum_only(content), *said}:
+    if decision is None or decision.action != "speak" or decision.diagnostics.get("recovery"):
         return None
-    return line
-
-
-def progress_line(decision: TalkerDecision, latest: str | None, history: Sequence[dict]) -> str:
-    """Return the progress line, or nothing when the call does not ``speak``, carries a ``recovery`` or repeats."""
-    line = decision.speech.strip()
-    said = {alnum_only(standard_message_text(entry)) for entry in history if entry["role"] == "assistant"}
-    if (
-        decision.action != "speak"
-        or decision.diagnostics.get("recovery")
-        or (line and latest and alnum_only(line) == alnum_only(latest))
-        or (line and alnum_only(line) in said)
-    ):
-        return ""
-    return line
+    return decision.speech

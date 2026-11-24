@@ -27,6 +27,8 @@ class Request:
     outcome: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
     # Set once the frontend has the delegation id: no event of the request reaches the frontend before it.
     returned: asyncio.Event = field(default_factory=asyncio.Event)
+    # Private first-event lifecycle identity; a control source can be unknown when its submission begins.
+    request_ref: str | None = None
 
 
 class RequestSender:

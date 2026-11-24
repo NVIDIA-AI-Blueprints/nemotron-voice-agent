@@ -9,14 +9,9 @@ import copy
 import json
 import unittest
 
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend import port
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.control import (
     ControlVocabulary,
-)
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import (
-    Answer,
-    Cancel,
-    Start,
-    Steer,
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.config import CoreSettings
 from nemotron_voice_agent.pipecat.shared.strict_settings import placed
@@ -39,49 +34,86 @@ def parsed(delegation=None, backend=None, **texts) -> CoreSettings:
 
 
 class CoreConfigTests(unittest.TestCase):
-    def test_each_control_call_makes_its_decision(self):
-        self.assertEqual([tool["name"] for tool in vocabulary().conductor_tools()], list(TEXTS.control_tools))
-        cases = [
-            ("start_work", {"delegations": ["d1"]}, Start(("d1",))),
-            # A key the tool does not take is ignored.
-            (
-                "start_work",
-                {"delegations": ["d1"], "tasks": ["menu", "hours"], "task_id": "W1.1"},
-                Start(("d1",), ("menu", "hours")),
-            ),
-            ("steer_work", {"work_id": "W1", "delegations": ["d2"], "task_id": "W1.2"}, Steer("W1", ("d2",), "W1.2")),
-            ("steer_work", {"work_id": "W1", "delegations": ["d2"]}, Steer("W1", ("d2",))),
-            # An empty task_id means every task of the work.
-            ("cancel_work", {"work_id": "W1", "task_id": ""}, Cancel("W1")),
-            ("answer_status", {"delegation_id": "d3", "text": "Still checking."}, Answer("d3", "Still checking.")),
+    def test_selected_agent_receives_only_its_prompt_defaults(self):
+        plain = {**BACKEND, "harness": {"agent": "acp"}}
+        self.assertNotIn("agents", parsed(backend=plain).backend.blocks["harness"])
+        acp = parsed(backend={**BACKEND, "harness": {"agent": "hermes"}})
+        self.assertTrue(acp.backend.blocks["harness"]["agents"]["hermes"]["command_guard"])
+        explicit = {**plain, "harness": {**plain["harness"], "agents": {"wrong-agent": {"x": 1}}}}
+        self.assertEqual(parsed(backend=explicit).backend.blocks["harness"]["agents"], {"wrong-agent": {"x": 1}})
+
+    def test_one_control_envelope_retains_each_typed_action(self):
+        self.assertEqual([tool["name"] for tool in vocabulary().conductor_tools()], ["submit_decision"])
+        actions = [
+            {
+                "action": "start",
+                "delegations": ["d1"],
+                "tasks": [{"brief": "menu"}, {"brief": "hours", "continues": "W0.1"}],
+            },
+            {"action": "steer", "delegations": ["d2"], "targets": [{"work_id": "W1", "task_ids": ["W1.1", "W1.3"]}]},
+            {"action": "stop", "delegations": ["d2"], "targets": [{"work_id": "W2"}]},
+            {"action": "caller_message", "kind": "status", "delegations": ["d3"], "targets": [{"work_id": "W1"}]},
+            {"action": "stop", "delegations": ["d4"], "scope": "all"},
         ]
-        for name, arguments, decision in cases:
-            with self.subTest(name=name, arguments=arguments):
-                self.assertEqual(vocabulary().decision(name, json.dumps(arguments)), decision)
-        for name, arguments, error in (
-            ("start_work", "{}", "start_work: missing delegations"),
-            ("start_work", '{"delegations": []}', "delegations must name at least one"),
-            ("start_work", '{"delegations": ["d1", 2]}', "delegations must be a list of non-empty strings"),
-            ("steer_work", '{"work_id": "W1"}', "steer_work: missing delegations"),
-            ("steer_work", '{"work_id": 7, "delegations": [""]}', "work_id must be a non-empty string"),
-            ("answer_status", '{"delegation_id": "d1", "text": ""}', "text must be non-empty text"),
-            ("answer_status", '{"delegation_id": "d1", "text": null}', "text must be non-empty text"),
-            ("cancel_work", "not json", "cancel_work: the arguments are not JSON"),
-            ("run_shell", "{}", "Unknown control tool 'run_shell'"),
-        ):
-            with self.subTest(name=name, arguments=arguments), self.assertRaisesRegex(ValueError, f"^{error}$"):
+        expected = port.CompleteDecision(
+            (
+                port.Start(("d1",), (port.TaskSpec("menu"), port.TaskSpec("hours", "W0.1"))),
+                port.Steer(("d2",), (port.WorkTarget("W1", ("W1.1", "W1.3")),)),
+                port.Cancel(("d2",), (port.WorkTarget("W2"),)),
+                port.CallerMessage(("d3",), "status", targets=(port.WorkTarget("W1"),)),
+                port.Cancel(("d4",), (), scope="all"),
+            )
+        )
+        self.assertEqual(vocabulary().decision("submit_decision", json.dumps({"actions": actions})), expected)
+        submitted_value = "private submitted value"
+        invalid = [
+            ({}, "actions: Field required"),
+            ({"actions": []}, "actions must contain 1 or more valid entries"),
+            ({"actions": submitted_value}, "actions must be a JSON array. Received a string."),
+            ({"actions": [{"action": submitted_value}]}, "actions.0 requires 'action' to be one of"),
+            (
+                {"actions": [actions[0], {"action": "stop", "delegations": ["d2"]}]},
+                "Stop requires exactly one of targets or scope: all",
+            ),
+            (
+                {"actions": [{**actions[2], "scope": "all"}]},
+                "Stop requires exactly one of targets or scope: all",
+            ),
+            (
+                {"actions": [{**actions[4], "delegations": ["d1", "d4"]}]},
+                "For scope: all, use only the caller's stop request in delegations",
+            ),
+            ({"actions": [{**actions[1], "targets": [{"work_id": "W1", "task_ids": []}]}]}, "targets.0.task_ids"),
+            ({"actions": [{**actions[0], "delegations": ["d1", "d1"]}]}, "delegations: identities must be unique"),
+            (
+                {"actions": [{**actions[0], "tasks": [{"brief": 1}]}]},
+                "tasks.0.brief must be a string. Received an integer.",
+            ),
+            ({"actions": [{**actions[0], "more_actions": True}]}, "start.more_actions: Extra inputs are not permitted"),
+            (
+                {"actions": [{**actions[3], "message": submitted_value}]},
+                "status.message: Extra inputs are not permitted",
+            ),
+        ]
+        for arguments, problem in invalid:
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(port.DecisionRejected) as refused:
+                    vocabulary().decision("submit_decision", json.dumps(arguments))
+                feedback = str(refused.exception)
+                self.assertIn(problem, feedback)
+                self.assertNotIn(submitted_value, feedback)
+                self.assertNotIn("https://errors.pydantic.dev", feedback)
+        for name, arguments in (("submit_decision", "not json"), ("run_shell", "{}")):
+            with self.subTest(name=name), self.assertRaises(ValueError):
                 vocabulary().decision(name, arguments)
 
     def test_schemas_that_drop_a_parameter_or_a_tool_are_refused(self):
         schemas = copy.deepcopy({name: dict(schema) for name, schema in TEXTS.control_tools.items()})
-        # An optional parameter may be left out; a parameter the tool does not take is refused.
-        del schemas["start_work"]["parameters"]["properties"]["tasks"]
-        del schemas["steer_work"]["parameters"]["properties"]["work_id"]
-        schemas["steer_work"]["parameters"]["properties"]["tasks"] = {"type": "array"}
-        with self.assertRaisesRegex(ValueError, r"steer_work: parameters missing \['work_id'\], not taken \['tasks'\]"):
+        del schemas["submit_decision"]["parameters"]["properties"]["actions"]
+        with self.assertRaisesRegex(ValueError, "complete actions envelope"):
             vocabulary(schemas)
         with self.assertRaisesRegex(ValueError, "exactly"):
-            vocabulary({name: schema for name, schema in schemas.items() if name != "cancel_work"})
+            vocabulary({})
 
     def test_unknown_keys_and_wrong_values_are_refused(self):
         cases = {
@@ -114,26 +146,20 @@ class CoreConfigTests(unittest.TestCase):
             "repeated_call_output": ("Again.", "must hold {output}"),
             "conductor_prompt": ("Place them.", "must hold {max_running}"),
             "cut_output": ("[cut]", "must hold {chars}"),
-            "no_task": (
-                {**reasons, "no_task": "no {task} in {work} {work[id]}"},
-                "no_task names a field it is not given",
-            ),
-            "no_work": ({**reasons, "no_work": "no such work"}, "no_work must hold {work}"),
-            "over_limit": ({**reasons, "over_limit": "too many"}, "over_limit must hold {max_running}"),
             "refusal_reasons": ({"ended": "ended"}, "refusal_reasons must hold exactly"),
-            "outcomes.started": (
-                {**outcomes, "started": "Started {work_id} with {tasks}."},
-                r"outcomes.started must hold \{work\}",
+            "outcomes.cancel_requested": (
+                {**outcomes, "cancel_requested": "Stopping {work_id} with {tasks}."},
+                r"outcomes.cancel_requested must hold \{work\}",
             ),
             "outcomes.refused": ({**outcomes, "refused": "Not applied."}, "outcomes.refused must hold {reason}"),
             "round_cap_note": (" ", "round_cap_note\n.*must be non-empty"),
             "work_tools": (
-                {name: tool for name, tool in tools.items() if name != "ask_caller"},
-                "work_tools must hold exactly show, cancel_work, ask_caller, continue_after_call",
+                {name: tool for name, tool in tools.items() if name != "caller_message"},
+                "work_tools must hold exactly",
             ),
         }
         for key, (value, message) in cases.items():
             with self.subTest(key), self.assertRaisesRegex(ValueError, message):
                 parsed(**{"refusal_reasons" if key in reasons else key.partition(".")[0]: value})
         settings = parsed(outcomes={**outcomes, "refused": "Not applied: {reason}"})
-        self.assertEqual(settings.texts.refusal("no_task", task="W1.7", work="W1"), "Not applied: no task W1.7 in W1")
+        self.assertEqual(settings.texts.refusal("ended"), f"Not applied: {reasons['ended']}")

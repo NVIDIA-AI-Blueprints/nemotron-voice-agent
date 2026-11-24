@@ -21,8 +21,7 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.tables import pick
 
-from .protocol import PERMISSIONS, PROTOCOLS, Agent, HarnessProtocol, PermissionAnswer, SteerStrategy
-from .steering import agent_steering
+from .protocol import PERMISSIONS, PROTOCOLS, Agent, HarnessProtocol, PermissionAnswer
 
 # The default lies outside any git checkout, and outside /tmp, where another program's stray .git could make /tmp the
 # project root that an agent searches for its project files.
@@ -96,9 +95,9 @@ class HarnessPrompts(Settings):
     @model_validator(mode="after")
     def names_only_its_fields(self) -> HarnessPrompts:
         """Refuse a template that names a field it is not given (:data:`FIELDS`)."""
-        for key, text in self:
+        for key, fields in FIELDS.items():
             try:
-                text.format(**dict.fromkeys(FIELDS.get(key, ()), ""))
+                getattr(self, key).format(**dict.fromkeys(fields, ""))
             except FORMAT_ERRORS as exc:
                 raise ValueError(f"backend.harness.prompts.{key} names a field it is not given: {exc}") from None
         return self
@@ -185,7 +184,6 @@ class HarnessSettings(Settings):
 
     _protocol: Any = PrivateAttr(None)
     _permission: Any = PrivateAttr(None)
-    _steering: Any = PrivateAttr(None)
 
     @model_validator(mode="after")
     def resolved(self) -> HarnessSettings:
@@ -194,9 +192,8 @@ class HarnessSettings(Settings):
         Raises:
             ValueError: A name no table has, a block the protocol refuses, or ``max_running`` over a process's turns.
         """
-        protocol = pick(PROTOCOLS, self.protocol_name, "harness protocol")().from_settings(
-            self.model_dump(by_alias=True)
-        )
+        block = self.model_dump(by_alias=True)
+        protocol = pick(PROTOCOLS, self.protocol_name, "harness protocol")().from_settings(block)
         permission = pick(PERMISSIONS, self.permission_name, "permission answer")()()
         turns = protocol.agent.turns_per_process if self.turns_per_process is None else self.turns_per_process
         if turns is not None and self.max_running > turns:
@@ -207,7 +204,6 @@ class HarnessSettings(Settings):
             )
         settings = self.model_copy(update={"turns_per_process": turns})
         settings._protocol, settings._permission = protocol, permission
-        settings._steering = agent_steering(protocol.agent)
         return settings
 
     @property
@@ -224,11 +220,6 @@ class HarnessSettings(Settings):
     def permission(self) -> PermissionAnswer:
         """The answer to the agent's permission requests."""
         return self._permission
-
-    @property
-    def steering(self) -> SteerStrategy:
-        """How a newer request reaches a running worker, as the agent class takes it."""
-        return self._steering
 
     def describe(self) -> dict:
         """Return the settings as plain JSON, without environment values or what in a URL may carry a credential."""

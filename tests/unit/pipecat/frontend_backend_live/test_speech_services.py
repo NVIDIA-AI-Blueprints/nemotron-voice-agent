@@ -19,9 +19,11 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     TextType,
     TTSAudioRawFrame,
+    TTSSpeakFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
     TTSTextFrame,
+    TTSUpdateSettingsFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.frame_processor import FrameDirection
@@ -31,6 +33,8 @@ from pipecat.tests.utils import SleepFrame, run_test
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.preroll import SpeechPreroll
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.services import (
     LineTextHold,
+    PlaybackTTSService,
+    StitchedSynthesisResult,
     build_stt,
     build_tts,
 )
@@ -66,7 +70,7 @@ def late_stitched_stream(requests, late: float):
 
 def late_stitched_tts(late: float, stop_timeout: float) -> NvidiaTTSService:
     """Build Pipecat's stitched NVIDIA text-to-speech on a stub server whose first audio is ``late`` seconds late."""
-    tts = NvidiaTTSService(
+    tts = PlaybackTTSService(
         server="magpie-tts:50051",
         use_ssl=False,
         settings=NvidiaTTSSettings(synthesis_mode="stitched"),
@@ -112,24 +116,57 @@ class SpeechTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(built(body, entry)["settings"].automatic_punctuation, punctuates, (body, entry))
 
-    def test_the_text_to_speech_speaks_the_language_with_no_markdown(self):
+    async def test_the_text_to_speech_formats_the_synthesis_text_for_its_language(self):
         self.assertEqual(build_tts({"tts_language_code": "DE-de"}, MAGPIE).settings.language, "de-DE")
         self.assertEqual(build_tts({}, {**MAGPIE, "language_code": "fr-FR"}).settings.language, "fr-FR")
-        with patch(f"{SERVICES}.NvidiaTTSService") as service:
+        with patch(f"{SERVICES}.PlaybackTTSService") as service:
             build_tts({}, MAGPIE)
         built = service.call_args.kwargs
         self.assertNotIn("max_consecutive_zero_audio_contexts", built)
         self.assertEqual(built["text_transforms"], [("*", nemotron_speech_markdown_text_transform)])
 
+        tts = build_tts({}, MAGPIE, expand_currency_amounts=True)
+        spoken = []
+
+        def synthesize(requests, metadata):
+            spoken.extend(request.text for request in requests)
+            yield SimpleNamespace(audio=b"\0\0" * 2400)
+
+        stub = SimpleNamespace(GetRivaSynthesisConfig=lambda request: None, SynthesizeOnline=synthesize)
+        tts._service = SimpleNamespace(stub=stub, auth=SimpleNamespace(get_auth_metadata=lambda: ()))
+        menu = "**Espresso** $3.00, latte $4.50, cappuccino $4.25, cold brew $4.75."
+        frames = [
+            TTSSpeakFrame(menu),
+            TTSUpdateSettingsFrame(delta=NvidiaTTSSettings(language="fr-FR"), service=tts),
+            TTSSpeakFrame(menu),
+        ]
+        down, _ = await run_test(tts, frames_to_send=frames)
+        self.assertEqual(
+            spoken,
+            [
+                "Espresso three dollars, latte four dollars and fifty cents, "
+                "cappuccino four dollars and twenty-five cents, cold brew four dollars and seventy-five cents.",
+                menu.replace("**", ""),
+            ],
+        )
+        self.assertEqual([frame.text for frame in down if isinstance(frame, TTSTextFrame)], [menu, menu])
+
     async def test_a_stitched_lines_text_follows_its_audio(self):
         one, two = (TTSTextFrame(text=text, text_type=TextType.SENTENCE) for text in ("One.", "Two."))
+        one.context_id = two.context_id = "stream"
+        complete = StitchedSynthesisResult("stream", True)
         line = [TTSStartedFrame(), one, audio(100), two, audio(100), TTSStoppedFrame()]
         down, _ = await run_test(LineTextHold(), frames_to_send=line)
         expected = [TTSStartedFrame, *[TTSAudioRawFrame] * 2, *[TTSTextFrame] * 2, TTSStoppedFrame]
         self.assertEqual([type(frame) for frame in down], expected)
         cut = [TTSStartedFrame(), one, audio(100), SleepFrame(0.05), InterruptionFrame(), TTSStartedFrame(), two]
-        down, _ = await run_test(LineTextHold(), frames_to_send=[*cut, TTSStoppedFrame()])
+        down, _ = await run_test(
+            LineTextHold(require_completion=True), frames_to_send=[*cut, complete, TTSStoppedFrame()]
+        )
         self.assertEqual([frame.text for frame in down if isinstance(frame, TTSTextFrame)], ["Two."])
+        failed = [TTSStartedFrame(), one, audio(50), TTSStoppedFrame(), StitchedSynthesisResult("stream", False)]
+        down, _ = await run_test(LineTextHold(require_completion=True), frames_to_send=failed)
+        self.assertFalse(any(isinstance(frame, TTSTextFrame) for frame in down))
 
     async def test_a_reopened_stitched_line_lets_its_text_out_at_its_end(self):
         # The first audio comes at 0.6 s, after the 0.3 s stop timeout: Pipecat reopens the audio context with no
@@ -137,7 +174,7 @@ class SpeechTests(unittest.IsolatedAsyncioTestCase):
         reply = [LLMFullResponseStartFrame(), LLMTextFrame("One."), LLMTextFrame(" Two"), SleepFrame(0.75)]
         reply += [LLMTextFrame("."), LLMFullResponseEndFrame(), SleepFrame(0.2)]
         tts = late_stitched_tts(late=0.6, stop_timeout=0.3)
-        down, _ = await run_test(Pipeline([tts, LineTextHold()]), frames_to_send=reply)
+        down, _ = await run_test(Pipeline([tts, LineTextHold(require_completion=True)]), frames_to_send=reply)
         audio = [i for i, frame in enumerate(down) if isinstance(frame, TTSAudioRawFrame)]
         stop = next(i for i, frame in enumerate(down) if isinstance(frame, TTSStoppedFrame))
         self.assertLess(stop, audio[0])

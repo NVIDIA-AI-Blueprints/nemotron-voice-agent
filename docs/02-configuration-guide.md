@@ -27,7 +27,7 @@ Unless a row names the Generic Assistant on LiveKit, the guides apply to the Pip
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
 | [Use the Live Gateway](how-to/use-live-gateway.md) | Live sessions at `/v1/live` for Pipecat apps and other clients of the Frontend/Backend Live example |
-| [Frontend/Backend Live](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) | The Frontend/Backend Live example's settings, such as its backend adapter, in the `config` block of its `examples_registry.yaml` entry |
+| [Frontend/Backend Live](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) | Choose a backend adapter and configure the talker and UI bot |
 | [Configure Models (Generic Assistant on LiveKit)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#configure-models) | Choose the ASR, LLM, and TTS models of the Generic Assistant on LiveKit per profile |
 | [Phone Calls (SIP)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md) | Connect a phone number to the Generic Assistant on LiveKit |
 | [Connect an Agent Harness](how-to/connect-an-agent-harness.md) | Deploy Hermes or another Agent Client Protocol (ACP) agent for the Frontend/Backend Live example's harness backend |

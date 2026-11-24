@@ -9,11 +9,19 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import Callable, Collection
+from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import Outcome, Phase
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.ledger.records import WorkLedger
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.work_provenance import (
+    Attribution,
+    Provenance,
+    encode_provenance,
+)
+from nemotron_voice_agent.pipecat.shared.delegation_contract import WORK_PROVENANCE_KEY
 from nemotron_voice_agent.pipecat.shared.ids import uid
 
 TERMINALS = {"response.completed": "completed", "response.failed": "failed", "response.incomplete": "incomplete"}
@@ -84,6 +92,18 @@ class ResponseWriter:
         self._open_calls: dict[str, dict] = {}
         self._end: Callable[[], None] | None = None
         self.earlier: ResponseWriter | None = None
+        self.provenance: Callable[[str, Attribution | None], Provenance] | None = None
+        self._attribution: Attribution | None = None
+        self._call_attributions: dict[str, Attribution | None] = {}
+
+    @contextmanager
+    def attributed(self, attribution: Attribution | None):
+        """Keep host attribution outside every item and retain its original publication binding."""
+        earlier, self._attribution = self._attribution, attribution
+        try:
+            yield
+        finally:
+            self._attribution = earlier
 
     def snapshot(self, status: str, output: list[dict] | None = None, **fields: Any) -> dict:
         """Return the response object as a lifecycle event carries it."""
@@ -98,10 +118,18 @@ class ResponseWriter:
             **deepcopy(fields),
         }
 
-    def _emit(self, kind: str, **fields: Any) -> None:
+    def _emit(self, kind: str, *, source_item: bool = False, routing_question: bool = False, **fields: Any) -> None:
         if self.ended:
             raise RuntimeError(f"Response {self.id} has ended; nothing more is written to it")
         self.sequence += 1
+        if self.provenance is not None:
+            item = fields.get("item")
+            has_item = bool(fields.get("item_id")) or isinstance(item, dict) and bool(item.get("id"))
+            attribution = self._attribution if has_item else None
+            provenance = self.provenance(self.id, attribution)
+            if source_item:
+                provenance = replace(provenance, source_item=True, routing_question=routing_question)
+            fields[WORK_PROVENANCE_KEY] = encode_provenance(provenance)
         self.stream.put({"type": kind, "sequence_number": self.sequence, **fields})
 
     def open_queued(self) -> None:
@@ -125,8 +153,9 @@ class ResponseWriter:
 
     def terminal(self, kind: str, *, status: str | None = None, **fields: Any) -> None:
         """Close what is still open, then write the terminal ``kind``; nothing is written after it."""
-        for item in self._open_calls.values():
-            self._done({**item, "status": "incomplete"})
+        for call_id, item in self._open_calls.items():
+            with self.attributed(self._call_attributions.pop(call_id, None)):
+                self._done({**item, "status": "incomplete"})
         self._open_calls.clear()
         usage = {"usage": self.usage} if self.usage else {}
         self._emit(kind, response=self.snapshot(status or TERMINALS[kind], self.output, **usage, **fields))
@@ -134,21 +163,33 @@ class ResponseWriter:
         self._end = None
         self.stream.end()
 
-    def _added(self, item: dict) -> int:
+    def _added(self, item: dict, *, source_item: bool = False, routing_question: bool = False) -> int:
         index, self._next_index = self._next_index, self._next_index + 1
-        self._emit("response.output_item.added", output_index=index, item=item)
+        self._emit(
+            "response.output_item.added",
+            output_index=index,
+            item=item,
+            source_item=source_item,
+            routing_question=routing_question,
+        )
         return index
 
-    def _done(self, item: dict) -> None:
+    def _done(self, item: dict, *, source_item: bool = False, routing_question: bool = False) -> None:
         index = item.pop("_index")
         self.output.append(item)
-        self._emit("response.output_item.done", output_index=index, item=item)
+        self._emit(
+            "response.output_item.done",
+            output_index=index,
+            item=item,
+            source_item=source_item,
+            routing_question=routing_question,
+        )
 
-    def message(self, text: str, phase: Phase) -> dict:
-        """Write one whole assistant message, with its ``phase``, and return the item."""
+    def message(self, text: str, phase: Phase, *, source_item: bool = False, routing_question: bool = False) -> dict:
+        """Write an assistant message, explicitly scoped to its response for source-level notices."""
         item_id = uid("msg")
         opened = {"id": item_id, "type": "message", "status": "in_progress", "role": "assistant", "phase": phase}
-        index = self._added({**opened, "content": []})
+        index = self._added({**opened, "content": []}, source_item=source_item, routing_question=routing_question)
         empty = {"type": "output_text", "text": "", "annotations": [], "logprobs": []}
         where = {"item_id": item_id, "output_index": index, "content_index": 0}
         self._emit("response.content_part.added", **where, part=empty)
@@ -156,7 +197,7 @@ class ResponseWriter:
         self._emit("response.output_text.done", **where, text=text, logprobs=[])
         item = output_message(item_id, text, phase)
         self._emit("response.content_part.done", **where, part=item["content"][0])
-        self._done({**item, "_index": index})
+        self._done({**item, "_index": index}, source_item=source_item, routing_question=routing_question)
         return item
 
     def function_call(self, call: dict) -> dict:
@@ -190,22 +231,32 @@ class ResponseWriter:
         }
         item["_index"] = self._added({key: value for key, value in item.items() if key != "_index"})
         self._open_calls[call.get("call_id", "")] = item
+        self._call_attributions[call.get("call_id", "")] = self._attribution
         self._emit("response.mcp_call.in_progress", item_id=item["id"], output_index=item["_index"])
 
-    def mcp_ended(self, call_id: str, output: str, outcome: Outcome) -> None:
-        """Write a backend call's end: its ``mcp_call`` event, then the item with its output or its error."""
+    def mcp_ended(
+        self, call_id: str, output: str, outcome: Outcome, *, on_written: Callable[[], None] | None = None
+    ) -> None:
+        """Write a backend call's end and record publication before any waiting response closes."""
         item = self._open_calls.pop(call_id, None)
         if item is None:
             return
         kind, status = MCP_ENDINGS[outcome]
-        self._emit(kind, item_id=item["id"], output_index=item["_index"])
-        error = {"type": "mcp_tool_execution_error", "content": output} if status != "completed" else None
-        self._done({**item, "status": status, "output": output, "error": error})
+        with self.attributed(self._call_attributions.pop(call_id, None)):
+            self._emit(kind, item_id=item["id"], output_index=item["_index"])
+            error = {"type": "mcp_tool_execution_error", "content": output} if status != "completed" else None
+            self._done({**item, "status": status, "output": output, "error": error})
+        if on_written is not None:
+            on_written()
         self.end_when_ready()
 
     def holds(self, call_id: str) -> bool:
         """Return whether the backend call ``call_id`` is open in this response."""
         return call_id in self._open_calls
+
+    def pending_calls(self) -> set[str]:
+        """Return original call identities whose closing item still belongs to this writer."""
+        return set(self._open_calls)
 
     def end_after_calls(self, end: Callable[[], None]) -> None:
         """Run ``end``, which writes the last items and the terminal, once :meth:`end_when_ready` finds it ready."""
@@ -215,7 +266,8 @@ class ResponseWriter:
     def drop(self, call_ids: Collection[str]) -> None:
         """Close the open items of these calls ``incomplete``: they report no end here."""
         for call_id in [each for each in self._open_calls if each in call_ids]:
-            self._done({**self._open_calls.pop(call_id), "status": "incomplete"})
+            with self.attributed(self._call_attributions.pop(call_id, None)):
+                self._done({**self._open_calls.pop(call_id), "status": "incomplete"})
         self.end_when_ready()
 
     def end_when_ready(self) -> None:
@@ -228,12 +280,17 @@ class ResponseWriter:
 class ResponseBook:
     """Every open response of one IM session, by delegation in acceptance order; only it writes a response."""
 
-    def __init__(self, ledger: WorkLedger):
+    def __init__(
+        self,
+        ledger: WorkLedger,
+        provenance: Callable[[str, str, Attribution | None], Provenance] | None = None,
+    ):
         """Keep the responses of the session whose records ``ledger`` holds."""
         self.ledger = ledger
         self._open: dict[str, ResponseWriter] = {}
         self._closing: list[ResponseWriter] = []
         self._dropped: set[str] = set()
+        self.provenance = provenance
 
     def open(
         self,
@@ -246,6 +303,8 @@ class ResponseBook:
     ) -> ResponseWriter:
         """Open the delegation's next response on ``stream``: queued at acceptance, or running at once (one-shot)."""
         writer = self._open[delegation_id] = ResponseWriter(uid("resp"), model, stream, instructions)
+        if self.provenance is not None:
+            writer.provenance = lambda response, attribution: self.provenance(delegation_id, response, attribution)
         self.ledger.new_response(writer.id, delegation_id)
         delegation = self.ledger.delegations.get(delegation_id)
         if delegation is not None:
@@ -283,6 +342,10 @@ class ResponseBook:
         """Return the delegations with an open response, in the order their requests were accepted."""
         return list(self._open)
 
+    def pending_calls(self) -> set[str]:
+        """Keep original closing-call owners reachable until their actual items close."""
+        return {call_id for writer in [*self._open.values(), *self._closing] for call_id in writer.pending_calls()}
+
     def start(self, delegation_id: str, previous: str | None = None) -> None:
         """Put the delegation's open response in progress (once), naming the response it takes over, if any."""
         writer = self._open.get(delegation_id)
@@ -314,6 +377,7 @@ class ResponseBook:
         *,
         last: Callable[[ResponseWriter], Any] | None = None,
         ended: Callable[[], Any] | None = None,
+        fields: dict | None = None,
     ) -> None:
         """End the delegation's open response while its work goes on, once the backend calls open in it have ended.
 
@@ -329,7 +393,7 @@ class ResponseBook:
         def end() -> None:
             if last is not None:
                 last(writer)
-            writer.terminal(kind)
+            writer.terminal(kind, **(fields or {}))
             self.ledger.responses[writer.id].move(TERMINALS[kind])
             self._closing.remove(writer)
             if ended is not None:
@@ -341,12 +405,14 @@ class ResponseBook:
         writer.drop(self._dropped)
         writer.end_after_calls(end)
 
-    def mcp_ended(self, call_id: str, output: str, outcome: Outcome) -> bool:
-        """Write a backend call's end into the response whose end waits for it; ``False`` when none holds it."""
-        writer = next((each for each in self._closing if each.holds(call_id)), None)
+    def mcp_ended(
+        self, call_id: str, output: str, outcome: Outcome, *, on_written: Callable[[], None] | None = None
+    ) -> bool:
+        """Write into the original holder, still open for siblings or closing; ``False`` when none holds it."""
+        writer = next((each for each in [*self._closing, *self._open.values()] if each.holds(call_id)), None)
         if writer is None:
             return False
-        writer.mcp_ended(call_id, output, outcome)
+        writer.mcp_ended(call_id, output, outcome, on_written=on_written)
         return True
 
     def drop(self, call_ids: list[str]) -> None:

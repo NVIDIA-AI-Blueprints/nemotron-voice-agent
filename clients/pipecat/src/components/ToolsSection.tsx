@@ -13,13 +13,13 @@ export function ToolsSection() {
   if (toolsLoading) {
     return <PanelSection label="TOOLS" loading loadingText="Loading..." />;
   }
-  if (tools.length === 0) return null;
-  if (enabled.size === 0) return null;
+  const promptTools = tools.filter((tool) => tool.scope !== "backend");
+  if (promptTools.length === 0 || enabled.size === 0) return null;
 
   return (
     <PanelSection label="TOOLS">
       <ul className="tools-list">
-        {tools.map((t) => {
+        {promptTools.map((t) => {
           const active = enabled.has(t.name);
           return (
             <li key={t.name} className={`tools-row${active ? " is-active" : ""}`} title={t.description}>

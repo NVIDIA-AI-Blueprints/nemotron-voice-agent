@@ -250,7 +250,7 @@ class FakeWebSocket:
         self.from_server.append(message)
         self._arrived.set()
 
-    async def close(self, code=1000):
+    async def close(self, code=1000, reason=None):
         if not self.closed:
             self.sent_at_close = [event["type"] for event in self.from_server]
         self.closed = True

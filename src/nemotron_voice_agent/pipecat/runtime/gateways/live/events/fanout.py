@@ -51,18 +51,19 @@ class Subscription:
         self.stopped = True
         self.room.set()
 
-    def put(self, message: dict) -> None:
+    def put(self, message: dict) -> bool:
         """Queue a message; a full queue means the peer is too slow and its connection is failed."""
         if self.stopped:
-            return
+            return False
         try:
             self.queue.put_nowait(message)
         except asyncio.QueueFull:
             self.task.cancel()
             self._fail(f"The {self.source} connection fell {self.queue.maxsize} events behind the session")
-            return
+            return False
         if self.queue.qsize() > self.half:
             self.room.clear()
+        return True
 
     async def _run(self) -> None:
         try:
@@ -78,7 +79,7 @@ class Subscription:
         except TimeoutError:
             self._fail(f"An event could not be sent to the {self.source} connection within {SEND_TIMEOUT_SECONDS} s")
         except Exception as exc:
-            logger.warning(f"An event could not be sent to a {self.source} connection: {exc!r}")
+            logger.warning(f"An event could not be sent to a {self.source} connection ({type(exc).__name__})")
             self._fail(f"An event could not be sent to the {self.source} connection")
         finally:
             self._stop()
@@ -115,7 +116,10 @@ class Fanout:
         async def failure(reason: str) -> None:
             logger.warning(reason)
             if source == "primary":
-                await self.on_primary_lost()
+                if close is not None:
+                    await close(reason)
+                else:
+                    await self.on_primary_lost()
                 return
             await self.unsubscribe(key)
             if close is not None:
@@ -131,21 +135,44 @@ class Fanout:
 
     async def unsubscribe(self, key: str) -> None:
         """Detach a connection."""
-        sub = self.subscribers.pop(key, None)
+        sub = self.detach(key)
         if sub:
             await sub.close()
 
-    async def publish(self, message: dict, audience: str = "all") -> None:
-        """Send ``message`` to every permitted connection of ``audience`` (``all``, ``primary`` or ``sideband``)."""
+    def detach(self, key: str) -> Subscription | None:
+        """Revoke authority and stop queued writes synchronously; the owner then awaits the writer's close."""
+        sub = self.subscribers.pop(key, None)
+        if sub is not None:
+            sub._stop()
+            sub.task.cancel()
+        return sub
+
+    async def publish(self, message: dict, audience: str = "all", *, require_primary: bool = False) -> bool:
+        """Queue an event for permitted connections and report admission by at least one connection."""
+        subscribers = tuple(
+            sub
+            for sub in self.subscribers.values()
+            if (audience == "all" or sub.source == audience)
+            and server_event_allowed(self.config(), self.transport, message, sub.source)
+        )
+        queued = False
         copy = None
-        for sub in tuple(self.subscribers.values()):
-            if audience != "all" and sub.source != audience:
+        primary = next((sub for sub in subscribers if sub.source == "primary"), None) if require_primary else None
+        if require_primary:
+            if primary is None:
+                return False
+            copy = deepcopy(message)
+            # Reconnectable tool results belong to the primary. Observers may see the call only when it queued there.
+            if not primary.put(copy):
+                return False
+            queued = True
+        for sub in subscribers:
+            if sub is primary:
                 continue
-            if server_event_allowed(self.config(), self.transport, message, sub.source):
-                # Every connection shares one copy, so a connection only sends it and never changes it.
-                if copy is None:
-                    copy = deepcopy(message)
-                sub.put(copy)
+            if copy is None:
+                copy = deepcopy(message)
+            queued = sub.put(copy) or queued
+        return queued
 
     async def send_to(self, key: str, message: dict) -> None:
         """Send ``message`` to the connection ``key`` only, if it may see it; nothing once it is detached."""

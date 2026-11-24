@@ -5,14 +5,17 @@
 
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import (
+    TEXT_PART_TYPES,
+    is_output_content,
+)
 from nemotron_voice_agent.pipecat.shared.ids import uid
 
 from .base import BrokenStreamError
 
-TEXT_PART_TYPES = {"input_text", "output_text", "text"}
-PART_TYPES = TEXT_PART_TYPES | {"input_image", "input_file"}
 ROLE_MAP = {"developer": "system", "system": "system", "user": "user", "assistant": "assistant"}
 
 
@@ -23,13 +26,6 @@ def item_text(content) -> str:
     return "\n".join(
         part.get("text", "") for part in content or [] if isinstance(part, dict) and part.get("type") in TEXT_PART_TYPES
     )
-
-
-def _is_parts(output) -> bool:
-    """Return whether a tool output is content parts, one or more of the ``PART_TYPES``; any other array is data."""
-    if not isinstance(output, list) or not output:
-        return False
-    return all(isinstance(part, dict) and part.get("type") in PART_TYPES for part in output)
 
 
 def user_content(content) -> str | list[dict]:
@@ -99,7 +95,7 @@ def responses_items_to_messages(instructions: str | None, items: list[dict]) -> 
             if "output" not in item:
                 raise ValueError(f"The result for call {item['call_id']} has no output")
             output = item["output"]
-            content = item_text(output) if isinstance(output, str) or _is_parts(output) else json.dumps(output)
+            content = item_text(output) if isinstance(output, str) or is_output_content(output) else json.dumps(output)
             messages.append({"role": "tool", "tool_call_id": item["call_id"], "content": content})
             previous_was_assistant_text = False
         # Reasoning items and other types carry nothing a chat model can consume.
@@ -119,6 +115,8 @@ def to_chat_tools(tools: list[dict] | None) -> tuple[list[dict], list[str]]:
         }
         if tool.get("description"):
             function["description"] = tool["description"]
+        if isinstance(tool.get("strict"), bool):
+            function["strict"] = tool["strict"]
         converted.append({"type": "function", "function": function})
     return converted, dropped
 
@@ -159,6 +157,32 @@ class _Call:
 
 # The finish reasons of a reply cut short: its calls may be cut too, so none is emitted to run.
 CUT_SHORT = {"length": "max_output_tokens", "content_filter": "content_filter"}
+CHAT_FINISH_REASONS = frozenset(("stop", "tool_calls", "function_call", *CUT_SHORT))
+
+
+def _reported_usage(usage) -> dict | None:
+    """Translate reported chat counters without supplying values for missing observations."""
+
+    def value(holder, name):
+        return holder.get(name) if isinstance(holder, Mapping) else getattr(holder, name, None)
+
+    result = {}
+    for source, target in (
+        ("prompt_tokens", "input_tokens"),
+        ("completion_tokens", "output_tokens"),
+        ("total_tokens", "total_tokens"),
+    ):
+        count = value(usage, source)
+        if type(count) is int and count >= 0:
+            result[target] = count
+    for source, target, counter in (
+        ("prompt_tokens_details", "input_tokens_details", "cached_tokens"),
+        ("completion_tokens_details", "output_tokens_details", "reasoning_tokens"),
+    ):
+        count = value(value(usage, source), counter)
+        if type(count) is int and count >= 0:
+            result[target] = {counter: count}
+    return result or None
 
 
 class ChatResponseTranslator:
@@ -245,13 +269,7 @@ class ChatResponseTranslator:
         if self.first_call_whole:
             return []
         events: list[dict] = []
-        usage = getattr(chunk, "usage", None)
-        if usage is not None:
-            self.usage = {
-                "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-            }
+        self.record_usage(chunk)
         if not chunk.choices:
             return events
         choice = chunk.choices[0]
@@ -303,15 +321,21 @@ class ChatResponseTranslator:
             self.finish_reason = choice.finish_reason
         return events
 
+    def record_usage(self, chunk) -> None:
+        """Record usage without changing the translated output."""
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            self.usage = _reported_usage(usage)
+
     def finish(self) -> list[dict]:
         """Close open items and emit the terminal event; call it once.
 
-        A reply cut short ends ``response.incomplete`` without its calls, and a stream that ends inside a call raises.
+        A reported cutoff ends ``response.incomplete`` without calls. A stream without a finish reason raises.
         """
+        if self.finish_reason is None:
+            raise BrokenStreamError("The backend's chat stream ended without a finish reason")
         # A call without a function name cannot be run, so it has no output index and is left out.
         calls = [call for call in sorted(self.calls.values(), key=lambda c: c.index) if call.output_index is not None]
-        if calls and self.finish_reason is None:
-            raise BrokenStreamError("The backend's stream ended inside a tool call, with no finish reason")
         if self.finish_reason in CUT_SHORT:
             calls = []
         events: list[dict] = []

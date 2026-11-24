@@ -7,81 +7,176 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
+
+from pydantic import Field, model_validator
+
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import ToolNotExecuted
+from nemotron_voice_agent.pipecat.shared.strict_settings import StrictSettings, Text
 
 if TYPE_CHECKING:
     from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.config import Texts
 
 
+@dataclass(frozen=True)
+class Invocation:
+    """One canonical work-tool invocation; never a mutable task-wide last-call variable."""
+
+    call_id: str
+    name: str
+    arguments: dict
+
+
+class CallerMessage(StrictSettings):
+    """A worker publication; an existing ID explicitly reissues an unpublished question."""
+
+    kind: Literal["question", "status"]
+    message: Text
+    question_id: Text | None = None
+
+    @model_validator(mode="after")
+    def question_only(self):
+        """Keep reissue identity exclusive to question publications."""
+        if self.kind != "question" and self.question_id is not None:
+            raise ValueError("Only a question can name question_id")
+        return self
+
+
+class QuestionResolution(StrictSettings):
+    """An explicit semantic disposition, distinct from publication or business permission."""
+
+    question_id: Text
+    disposition: Literal["answered", "no_longer_needed"]
+    input_ref: Text | None = None
+
+    @model_validator(mode="after")
+    def evidence(self):
+        """Require actual answer evidence and distinguish withdrawal from an answer."""
+        if self.disposition == "answered" and self.input_ref is None:
+            raise ValueError("An answered question requires input_ref")
+        if self.disposition == "no_longer_needed" and self.input_ref is not None:
+            raise ValueError("A withdrawal does not consume an answer input")
+        return self
+
+
+class QuestionResolutions(StrictSettings):
+    """The entire selected batch is checked before any question changes."""
+
+    resolutions: tuple[QuestionResolution, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique(self):
+        """Reject duplicate question selections before any resolution changes."""
+        ids = [row.question_id for row in self.resolutions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Each question may appear only once")
+        return self
+
+
+class WorkStateChange(StrictSettings):
+    """A worker's semantic choice of its own retained execution state."""
+
+    state: Literal["paused", "running"]
+
+
 class WorkTools:
-    """One task's work tools (``port.ToolSource``)."""
+    """One task's idempotent Core-owned tools (``port.ToolSource``)."""
 
     def __init__(
         self,
         names: tuple[str, ...],
         texts: Texts,
         cancel: Callable[[], str],
-        ask: Callable[[str], str],
+        publish: Callable[[Invocation], str],
         carry_on: Callable[[str], str],
         label: str,
+        *,
+        resolve: Callable[[Invocation], str],
+        set_state: Callable[[Invocation], str],
     ):
-        """Offer ``names`` as ``texts.work_tools`` words them.
-
-        ``cancel`` stops the task, ``ask`` hands its question for the caller to the IM, ``carry_on`` hands the IM the
-        message that the work goes on after the call, and ``label`` tags the display.
-        """
-        self.names, self.texts, self.cancel, self.ask, self.carry_on = names, texts, cancel, ask, carry_on
+        """Bind this session's existing records, tools, and execution callbacks."""
+        self.names, self.texts = names, texts
+        self.cancel, self.publish, self.carry_on, self.resolve = cancel, publish, carry_on, resolve
+        self.set_state = set_state
         self.label, self.schemas = label, texts.work_tools
-        self._run = {
-            "show": self._show,
-            "cancel_work": self._cancel_work,
-            "ask_caller": self._ask_caller,
-            "continue_after_call": self._continue_after_call,
-        }
+        self._bindings: dict[str, str] = {}
+        self._receipts: dict[str, str] = {}
+        self._failures: dict[str, BaseException] = {}
 
     def tools(self) -> list[dict]:
-        """Return the tools it offers, as Responses function tools."""
-        return [
-            {
-                "type": "function",
-                "name": name,
-                "description": self.schemas[name]["description"],
-                "parameters": dict(self.schemas[name]["parameters"]),
-            }
-            for name in self.names
-        ]
+        """Return the configured vocabulary as Responses function tools."""
+        return [{"type": "function", "name": name, **self.schemas[name]} for name in self.names]
 
     async def execute(self, call_id: str, name: str, arguments: str) -> str:
-        """Run one call; a tool it does not offer gives an error output, and bad arguments raise ``ValueError``."""
-        run = self._run.get(name) if name in self.names else None
-        if run is None:
-            offered = ", ".join(self.names) or self.texts.none
-            return json.dumps({"error": self.texts.unknown_tool_output.format(name=name, offered=offered)})
+        """Reserve immutable identity before validation; replay an exact result or its original failure."""
+        parse_error = None
         try:
             given = json.loads(arguments or "{}")
-        except ValueError:
-            raise ValueError(f"{name}: the arguments are not JSON") from None
+        except (ValueError, TypeError):
+            given = None
+            parse_error = ToolNotExecuted(f"{name}: the arguments are not JSON")
+        signature = json.dumps(
+            [name, {"raw": arguments} if parse_error is not None else {"json": given}], sort_keys=True
+        )
+        previous = self._bindings.get(call_id)
+        if previous is not None:
+            if previous != signature:
+                raise ValueError("A work-tool call ID cannot be reused with different arguments")
+            if call_id in self._receipts:
+                return self._receipts[call_id]
+            if call_id in self._failures:
+                raise self._failures[call_id]
+            raise RuntimeError("The work-tool operation is already executing")
+        self._bindings[call_id] = signature
+        try:
+            if parse_error is not None and name in self.names:
+                raise parse_error
+            result = self._execute_bound(Invocation(call_id, name, given))
+        except BaseException as error:
+            self._failures[call_id] = error
+            raise
+        self._receipts[call_id] = result
+        return result
+
+    def _execute_bound(self, invocation: Invocation) -> str:
+        """Execute one reserved invocation without changing its identity or validation-failure semantics."""
+        self._validate_bound(invocation)
+        name, given = invocation.name, invocation.arguments
+        if name == "caller_message":
+            return self.publish(invocation)
+        if name == "resolve_questions":
+            return self.resolve(invocation)
+        if name == "set_work_state":
+            return self.set_state(invocation)
+        if name == "cancel_work":
+            return self.cancel()
+        return given["display"] if name == "show" else self.carry_on(given["message"])
+
+    def _validate_bound(self, invocation: Invocation) -> None:
+        """Only this before-callback stage can certify that an operation was not executed."""
+        name, given = invocation.name, invocation.arguments
+        if name not in self.names:
+            offered = ", ".join(self.names) or self.texts.none
+            raise ToolNotExecuted(self.texts.unknown_tool_output.format(name=name, offered=offered))
         if not isinstance(given, dict):
-            raise ValueError(f"{name}: the arguments must be a JSON object")
-        return run(given)
-
-    def _show(self, given: dict) -> str:
-        display = given.get("display")
-        if not isinstance(display, str) or not display.strip():
-            raise ValueError("show: display must be non-empty text")
-        return display
-
-    def _cancel_work(self, given: dict) -> str:
-        return self.cancel()
-
-    def _ask_caller(self, given: dict) -> str:
-        question = given.get("question")
-        if not isinstance(question, str) or not question.strip():
-            raise ValueError("ask_caller: question must be non-empty text")
-        return self.ask(question.strip())
-
-    def _continue_after_call(self, given: dict) -> str:
-        message = given.get("message")
-        if not isinstance(message, str) or not message.strip():
-            raise ValueError("continue_after_call: message must be non-empty text")
-        return self.carry_on(message.strip())
+            raise ToolNotExecuted(f"{name}: the arguments must be a JSON object")
+        try:
+            if name == "caller_message":
+                CallerMessage.model_validate(given)
+            elif name == "resolve_questions":
+                QuestionResolutions.model_validate(given)
+            elif name == "set_work_state":
+                WorkStateChange.model_validate(given)
+            elif name == "cancel_work":
+                if given:
+                    raise ValueError("cancel_work takes no arguments")
+            elif name in ("show", "continue_after_call"):
+                key = "display" if name == "show" else "message"
+                value = given.get(key)
+                if set(given) != {key} or not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"{name}: {key} must be non-empty text")
+            else:
+                raise ValueError(f"Unsupported work tool {name}")
+        except (ValueError, TypeError) as error:
+            raise ToolNotExecuted(str(error)) from error

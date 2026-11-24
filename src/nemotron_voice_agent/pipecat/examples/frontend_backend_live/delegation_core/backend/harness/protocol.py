@@ -10,15 +10,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Literal, Protocol
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import (
-    Steering,
+    RefusalDetails,
     TaskContext,
 )
-
-if TYPE_CHECKING:
-    from .sessions import KeptSession
 
 
 class EventReader(Protocol):
@@ -45,8 +42,14 @@ class EventReader(Protocol):
     def prompt_ended(self, event: PromptEnded) -> None:
         """Read the end of one prompt the client sent."""
 
+    def prompt_dispatched(self, event: PromptDispatched) -> None:
+        """Read local submission of an exact prompt; this does not prove semantic input consumption."""
+
     def app_call(self, event: AppCall) -> None:
         """Read a call of the app's functions that the bridge holds."""
+
+    def admission_ready(self, event: AdmissionReady) -> None:
+        """Recheck a call held before admission after placement or its lifecycle changed."""
 
     def call_running(self, event: CallRunning) -> None:
         """Read a call the bridge runs itself (a tool source's or a work tool's), or refused."""
@@ -64,6 +67,7 @@ class MessageChunk:
 
     message_id: str | None
     text: str
+    prompt: int | None = None
 
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
@@ -75,6 +79,7 @@ class ThoughtChunk:
     """Reasoning of a model call; only its id is kept, naming the message the reasoning begins."""
 
     message_id: str | None
+    prompt: int | None = None
 
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
@@ -90,6 +95,7 @@ class ToolCard:
     arguments: Mapping[str, Any] | None = None
     bridged: bool = True
     ended: ToolCardEnd | None = None
+    prompt: int | None = None
 
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
@@ -103,6 +109,7 @@ class ToolCardEnd:
     call_id: str
     failed: bool
     output: str = ""
+    prompt: int | None = None
 
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
@@ -114,6 +121,7 @@ class PlanUpdate:
     """The agent's plan: one line per entry."""
 
     entries: tuple[str, ...]
+    prompt: int | None = None
 
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
@@ -125,6 +133,7 @@ class UserText:
     """A prompt the agent replays or drains itself (not one the client sent)."""
 
     text: str
+    prompt: int | None = None
 
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
@@ -133,24 +142,120 @@ class UserText:
 
 @dataclass(frozen=True)
 class PromptEnded:
-    """The end of one prompt: its stop reason and the session's running usage, or the error that ended it."""
+    """The end of one prompt: its stop reason, agent-reported counters, or the error that ended it.
+
+    Counter scope comes from the native contract. Exact invocation counters override the session snapshot
+    when present. An empty invocation mapping records unavailable usage. Completion calls are evidence of
+    model invocation independent of token usage.
+    """
 
     prompt: int
     stop_reason: str | None
     usage: Mapping[str, Any] | None = None
     error: str | None = None
+    completion_calls: int | None = None
+    invocation_usage: Mapping[str, Any] | None = None
+    invocation_id: str | None = None
+    dispatch: Literal["not_dispatched", "dispatched", "unknown"] = "unknown"
+    terminal_confirmed: bool = False
 
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
         reader.prompt_ended(self)
 
 
-def usage_total(usage: Mapping[str, Any] | None) -> int | None:
-    """Return the session's token total an agent reported (ACP ``totalTokens``), or ``None``."""
-    if not usage:
-        return None
-    total = usage.get("totalTokens")
-    return total if isinstance(total, int) else None
+@dataclass(frozen=True)
+class PromptDispatched:
+    """One prompt passed its final local fence and was submitted to the native connection."""
+
+    prompt: int
+    invocation_id: str
+
+    def apply(self, reader: EventReader) -> None:
+        """Hand the exact local submission receipt to ``reader``."""
+        reader.prompt_dispatched(self)
+
+
+@dataclass(frozen=True)
+class NativeCompletion:
+    """Typed invocation outcome, separately from a valid task result, inference, usage, or external effects."""
+
+    outcome: Literal["succeeded", "failed", "cancelled", "unknown"]
+    model_invoked: bool | None = None
+    error: str | None = None
+
+
+CancelDispatch = Literal["not_dispatched", "dispatched", "unknown"]
+
+
+@dataclass(frozen=True)
+class HarnessCapabilities:
+    """Native guarantees, bound to an initialized connection and refreshed for every created session."""
+
+    continuation: bool = True
+    stop_scope: Literal["foreground"] = "foreground"
+    stop_confirmation: Literal["terminal"] = "terminal"
+    tool_mediation: Literal["unknown", "bridge_only"] = "unknown"
+    event_attribution: Literal["serialized_session"] = "serialized_session"
+    counter_scope: Literal["invocation", "cumulative_epoch", "unscoped"] = "unscoped"
+
+
+@dataclass(frozen=True)
+class SessionBinding:
+    """The connection, native session, role, and peer for which the capabilities were selected."""
+
+    connection_id: str
+    session_id: str
+    protocol: str
+    protocol_version: int
+    transport: str
+    role: str
+    peer_name: str | None = None
+    peer_version: str | None = None
+
+
+@dataclass
+class PromptState:
+    """Local lifecycle of one native invocation; dispatched is not a remote consumption receipt."""
+
+    invocation_id: str
+    phase: Literal["scheduled", "dispatched", "ended"] = "scheduled"
+    dispatched: bool = False
+    terminal: PromptEnded | None = None
+
+
+@dataclass(frozen=True)
+class NativeCleanup:
+    """Cleanup evidence for its stated scope; a closed connection does not establish native runtime termination."""
+
+    scope: Literal["connection", "session", "runtime"]
+    confirmed: bool
+    workspace_safe: bool
+
+
+@dataclass(frozen=True)
+class RefusedReply:
+    """A bridge-owned refusal result; application strings never become this control record."""
+
+    text: str
+    details: RefusalDetails
+
+
+def refused_reply(task: TaskContext, call_id: str, *, fallback: str | None = None) -> str | RefusedReply:
+    """Keep legacy text when a context supplies no typed, exactly bound refusal snapshot."""
+    read = getattr(task, "refusal_details", None)
+    try:
+        details = read(call_id) if read is not None else None
+    except KeyError:
+        details = None
+    text = task.refusal(call_id) if fallback is None else fallback
+    if isinstance(details, RefusalDetails) and (details.work_id, details.task_id, details.call_id) == (
+        task.work_id,
+        task.task_id,
+        call_id,
+    ):
+        return RefusedReply(text, details)
+    return text
 
 
 @dataclass(eq=False)
@@ -165,7 +270,7 @@ class HeldCall:
         """The call's id (the bridge's own: the agent's protocol carries none)."""
         return self.call["call_id"]
 
-    def reply(self, text: str) -> None:
+    def reply(self, text: str | RefusedReply) -> None:
         """Answer the agent's call with ``text`` (a plain result: the bridge never flags an error)."""
         if not self.answer.done():
             self.answer.set_result(text)
@@ -180,6 +285,15 @@ class AppCall:
     def apply(self, reader: EventReader) -> None:
         """Hand the event to ``reader``."""
         reader.app_call(self)
+
+
+@dataclass(frozen=True)
+class AdmissionReady:
+    """Placement waiting changed; recheck queued calls and the turn's remaining reading budget."""
+
+    def apply(self, reader: EventReader) -> None:
+        """Hand the event to ``reader``."""
+        reader.admission_ready(self)
 
 
 @dataclass(frozen=True)
@@ -222,7 +336,9 @@ SessionEvent = (
     | PlanUpdate
     | UserText
     | PromptEnded
+    | PromptDispatched
     | AppCall
+    | AdmissionReady
     | CallRunning
     | CallSettled
     | Wake
@@ -254,6 +370,8 @@ class HarnessSession(Protocol):
     """One session of the agent: a worker's or a conductor's."""
 
     id: str
+    capabilities: HarnessCapabilities
+    binding: SessionBinding
 
     @property
     def outstanding(self) -> frozenset[int]:
@@ -263,20 +381,27 @@ class HarnessSession(Protocol):
     def alive(self) -> bool:
         """Whether it can still serve: not retired, and not ended or lost as far as its protocol can tell."""
 
-    def prompt(self, text: str) -> int:
+    @property
+    def quiescent(self) -> bool:
+        """Whether no submitted invocation remains active or has an uncertain native terminal."""
+
+    def prompt(self, text: str, *, may_dispatch: Callable[[], bool] | None = None) -> int:
         """Send ``text`` as a prompt (never as a command of the agent); return its number. Its end is a PromptEnded."""
 
-    def steer(self, text: str) -> int:
-        """Send ``text`` as the agent's own mid-turn steer (``Agent.native_steer``); return its number."""
+    def prompt_state(self, prompt: int) -> PromptState:
+        """Return the lifecycle of the exact scheduled invocation; an unknown number raises ``KeyError``."""
 
-    async def cancel(self) -> bool:
-        """Cancel the running prompt, if any, and return whether a cancel went out; it still ends with a PromptEnded."""
+    def on_prompt_terminal(self, prompt: int, callback: Callable[[PromptEnded], None]) -> Callable[[], None]:
+        """Subscribe to that exact recorded terminal; the subscriber decides which guarantee it establishes."""
+
+    async def cancel(self) -> CancelDispatch:
+        """Request cancellation of the active prompt and report local submission independently of its terminal."""
 
     async def ended(self, prompt: int) -> None:
         """Return once ``prompt`` has ended (its PromptEnded is in the mailbox)."""
 
     async def idle(self) -> None:
-        """Return once no prompt is outstanding."""
+        """Return once local prompt waiters settle; inspect ``quiescent`` for a native-idle guarantee."""
 
     def retire(self) -> bool:
         """Stop using it, and close it in the agent if the agent has a session close; return whether a close went out.
@@ -292,14 +417,22 @@ class HarnessClient(Protocol):
     def alive(self) -> bool:
         """Whether the connection is open and the process runs."""
 
+    def on_lost(self, callback: Callable[[], None]) -> None:
+        """Notify the runtime owner once the connection is lost, including loss before registration."""
+
     async def open(self) -> None:
         """Connect and initialize; raise if the agent does not answer or speaks another protocol version."""
 
-    async def new_session(self, cwd: Path, server: McpServer, mailbox: Mailbox) -> HarnessSession:
+    async def new_session(
+        self, cwd: Path, server: McpServer, mailbox: Mailbox, *, role: str = "worker"
+    ) -> HarnessSession:
         """Open a session working in ``cwd`` that reaches the bridge through ``server``; events go to ``mailbox``."""
 
     async def close(self) -> None:
-        """Close the connection and end the process; every prompt still outstanding ends with an error."""
+        """Close the connection; ``wait_closed`` reports what native termination scope was actually confirmed."""
+
+    async def wait_closed(self) -> NativeCleanup:
+        """Join owned connection cleanup and return what native scope was actually confirmed."""
 
 
 class Agent(Protocol):
@@ -307,7 +440,7 @@ class Agent(Protocol):
 
     name: str
     turns_per_process: int | None
-    native_steer: bool
+    capabilities: HarnessCapabilities
 
     def environment(self) -> Mapping[str, str]:
         """Return what its process needs in its environment when this side starts it (``stdio``)."""
@@ -315,8 +448,8 @@ class Agent(Protocol):
     def prepare(self, folder: Path, instructions: str) -> tuple[str, ...]:
         """Ready a session's folder (its ``cwd``) with its instructions; return what opens its first prompt."""
 
-    def no_answer(self, total: int | None, total_before: int | None) -> str | None:
-        """Return why an ``end_turn`` turn gave no answer, given the token totals after and before it; else ``None``."""
+    def completion(self, event: PromptEnded) -> NativeCompletion:
+        """Interpret typed terminal evidence without inferring model execution or task success from token counts."""
 
 
 class HarnessProtocol(Protocol):
@@ -348,6 +481,7 @@ class Runtime(Protocol):
 
     client: HarnessClient
     places: int
+    cleanup_receipt: NativeCleanup
 
     @property
     def folder(self) -> Path:
@@ -360,46 +494,13 @@ class Runtime(Protocol):
         """Make a new folder for one session inside the process's work folder."""
 
     def leave(self) -> None:
-        """Give back the place a session took (``Runtimes.shared``), once its prompts have ended."""
+        """Give back the place a session took, once its prompts have ended."""
 
     async def close(self) -> None:
         """End the process and delete its work folder."""
 
-
-class Runtimes(Protocol):
-    """Where a session's runtime comes from (the adapter): a process its role shares, or an idle session it keeps."""
-
-    async def shared(self, role: Role) -> Runtime:
-        """Return a process of ``role`` with a turn free, its place taken until ``Runtime.leave``."""
-
-    def take_place(self, runtime: Runtime) -> bool:
-        """Take a place in ``runtime`` for the session kept there, while it has a turn free and its client is alive."""
-
-    def candidates(self, task: TaskContext) -> list[KeptSession]:
-        """Return the idle sessions of ``task``'s thread in the order it tries them (``SessionPool``)."""
-
-    def take_kept(self, kept: KeptSession) -> None:
-        """Take ``kept`` out of the idle sessions, so two tasks never share it."""
-
-    def keep(self, kept: KeptSession) -> KeptSession | None:
-        """Keep ``kept``, the session of a task that answered; return the idle session over the bound, to retire."""
-
-
-class Steerable(Protocol):
-    """What a steering strategy asks of a worker's run (double dispatch: the strategy picks, the run carries out)."""
-
-    def steer_in_turn(self, steering: Steering) -> None:
-        """Send the batch as the agent's own mid-turn steer while the turn runs; else as the next prompt."""
-
-    def reprompt(self, steering: Steering) -> None:
-        """Cancel the turn once no bridged call runs; then the batch goes as the session's next prompt."""
-
-
-class SteerStrategy(Protocol):
-    """How a newer request reaches a running worker: the agent class picks it (``steering.agent_steering``)."""
-
-    def deliver(self, run: Steerable, steering: Steering) -> None:
-        """Hand ``steering`` to ``run`` the way this strategy does."""
+    async def wait_closed(self) -> NativeCleanup:
+        """Return cleanup evidence for this owner, without equating connection closure with physical shutdown."""
 
 
 class PermissionAnswer(Protocol):

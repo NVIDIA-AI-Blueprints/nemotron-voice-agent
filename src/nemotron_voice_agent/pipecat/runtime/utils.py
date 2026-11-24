@@ -67,7 +67,9 @@ def service_recipe() -> str:
     return recipe
 
 
-_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content", "tool_choice"})
+_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset(
+    {"pipeline_mode", "prompt_key", "prompt_content", "prompt_overrides", "tool_choice"}
+)
 
 
 def _example_binding(example: ExampleServiceConfig | None) -> _ExampleBinding:

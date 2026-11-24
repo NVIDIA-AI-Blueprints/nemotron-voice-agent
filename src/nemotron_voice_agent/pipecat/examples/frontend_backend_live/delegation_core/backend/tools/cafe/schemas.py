@@ -8,8 +8,8 @@ CAFE_TOOLS = [
         "type": "function",
         "name": "get_menu",
         "description": (
-            "Look up Bluebird Cafe menu items with prices, available sizes, and modifiers. "
-            "Call this before quoting any item or price."
+            "Look up Bluebird Cafe menu items with base prices, drink sizes and surcharges, and item notes. "
+            "Also returns the modifier catalog and tax rate."
         ),
         "parameters": {
             "type": "object",
@@ -21,7 +21,7 @@ CAFE_TOOLS = [
                 },
                 "query": {
                     "type": "string",
-                    "description": "Optional free-text filter matched against item names.",
+                    "description": "Optional case-insensitive substring match in item names or notes.",
                 },
             },
             "required": [],
@@ -33,17 +33,19 @@ CAFE_TOOLS = [
         "type": "function",
         "name": "manage_cart",
         "description": (
-            "Read or change the user's cart. Returns the full cart with line items, "
-            "subtotal, tax, and total after the change. This is the source of truth for "
-            "the order."
+            "Read or change the current cart. Returns the cart after the operation, including line items, "
+            "subtotal, tax, and total."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["view", "add", "update_quantity", "remove", "clear"],
-                    "description": "The cart operation to perform.",
+                    "enum": ["view", "add", "update_quantity", "update_options", "remove", "clear"],
+                    "description": (
+                        "update_quantity changes only the line's quantity. Use update_options with a size, "
+                        "modifiers, or both to edit an existing line in one call, keeping its ID and quantity."
+                    ),
                 },
                 "item_id": {
                     "type": "string",
@@ -51,16 +53,20 @@ CAFE_TOOLS = [
                 },
                 "line_id": {
                     "type": "string",
-                    "description": "Cart line id, required for update_quantity and remove.",
+                    "description": "Cart line id, required for update_quantity, update_options, and remove.",
                 },
                 "quantity": {
                     "type": "integer",
-                    "description": "Quantity for add or update_quantity. Defaults to 1.",
+                    "description": "Defaults to 1. Use 1 to 20 for add and 0 to 20 for update_quantity. "
+                    "Updating to zero removes the line.",
                 },
                 "size": {
                     "type": "string",
                     "enum": ["small", "medium", "large"],
-                    "description": "Drink size for add. Ignored for food and pastries.",
+                    "description": (
+                        "Drink size for add or update_options. Added drinks default to medium. "
+                        "Omit for food and pastries or to keep the current size when editing."
+                    ),
                 },
                 "modifiers": {
                     "type": "array",
@@ -68,7 +74,10 @@ CAFE_TOOLS = [
                         "type": "string",
                         "enum": ["oat_milk", "extra_shot", "decaf", "iced"],
                     },
-                    "description": "Optional modifiers for add.",
+                    "description": (
+                        "Optional modifiers for add or update_options. On edit, supply the full replacement list, "
+                        "use an empty list to clear it, or omit to keep current modifiers."
+                    ),
                 },
             },
             "required": ["action"],
@@ -80,20 +89,19 @@ CAFE_TOOLS = [
         "type": "function",
         "name": "place_order",
         "description": (
-            "Place the current cart as an order. Call with confirmed=false to get a "
-            "read-back summary to confirm with the user, and confirmed=true only after "
-            "the user has said yes. Takes a few seconds to complete."
+            "Preview the current cart or submit it as a pickup order. A preview returns the full current cart. "
+            "A successful submission returns the order receipt and clears the cart."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "customer_name": {
                     "type": "string",
-                    "description": "Name to call out when the order is ready.",
+                    "description": "Pickup name supplied by the caller, or 'guest' if they gave no name.",
                 },
                 "confirmed": {
                     "type": "boolean",
-                    "description": "True only if the user explicitly confirmed the order.",
+                    "description": "False previews the cart. Set true to order after the caller approves the readback.",
                 },
             },
             "required": ["customer_name", "confirmed"],

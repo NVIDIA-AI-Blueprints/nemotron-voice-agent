@@ -25,7 +25,12 @@ from nemotron_voice_agent.pipecat.runtime.gateways.live.events import (
 )
 from nemotron_voice_agent.pipecat.runtime.gateways.live.events.fanout import Close, Send
 from nemotron_voice_agent.pipecat.runtime.gateways.live.ports import Inspectable
-from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import BackendConfig, ProtocolError, SessionConfig
+from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import (
+    BackendConfig,
+    ProtocolError,
+    SessionConfig,
+    validate_client_event_id,
+)
 from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation import ServerDelegation
 from nemotron_voice_agent.pipecat.runtime.gateways.live.session import (
     appends,
@@ -45,10 +50,20 @@ if TYPE_CHECKING:
         PrimarySocket,
         SessionParts,
     )
+    from nemotron_voice_agent.pipecat.shared.delegation_contract import SettleCallerTurn
 
 COMMAND_WAIT_FOR_START_SECONDS = 30
 ADAPTER_EVENTS = frozenset({"session.input_transcript.delta", "session.output_transcript.delta"})
 DELEGATION_EVENTS = frozenset({"session.delegation.created", "response.event"})
+RETAINED_INPUTS = frozenset(
+    {
+        "response.item.create",
+        "response.create",
+        "session.instructions.append",
+        "session.thinking.append",
+        "session.commentary.append",
+    }
+)
 
 # Only a responses part calls the core hook, so a client-mode session never builds a core.
 DELEGATION_PARTS: dict[str, Callable[[CoreHook], DelegationPart]] = {
@@ -94,9 +109,9 @@ COMMANDS: dict[str, Command] = {
     "session.input_audio.append": audio_input.append,
     "session.input_audio.mute": audio_input.mute,
     "session.input_audio.unmute": audio_input.unmute,
-    "session.instructions.append": appends.instructions,
-    "session.thinking.append": appends.thinking,
-    "session.commentary.append": appends.commentary,
+    "session.instructions.append": appends.append,
+    "session.thinking.append": appends.append,
+    "session.commentary.append": appends.append,
     "response.item.create": tool_calling.item_create,
     "response.create": tool_calling.response_create,
     "session.close": close_requested,
@@ -131,6 +146,9 @@ class LiveProtocolSession:
         self.max_appends_per_minute = max_appends_per_minute
         self.recent_appends: deque[float] = deque()
         self.socket = socket
+        self.attachment_generation = 1
+        self.attachment_state = "active"
+        self.reconnect = None
         self.status = "created"
         self.created_at = time.time()
         self.expires_at = int(self.created_at + max_session_seconds)
@@ -138,15 +156,37 @@ class LiveProtocolSession:
         self.fanout = Fanout(
             lambda: self.config,
             transport,
-            lambda: self.close("connection_lost", asked_by="the gateway: the primary connection fell behind or failed"),
+            self.primary_lost,
         )
         self.timeline = Timeline()
+        self.input_muted = False
         self.tasks: set[asyncio.Task] = set()
         self.command_lock = asyncio.Lock()
         self.close_task: asyncio.Task | None = None
         self.ready, self.closed = asyncio.Event(), asyncio.Event()
         self.adapter_view, self.delegation_view = AdapterView(self), DelegationSideView(self)
-        self.delegation_port = DelegationPortView(self.delegation)
+        self.delegation_port = DelegationPortView(self)
+
+    def new_adapter_view(self) -> None:
+        """Give fresh media a generation-bound port; old callbacks never acquire the replacement's authority."""
+        self.adapter_view = AdapterView(self)
+        self.delegation_port = DelegationPortView(self)
+
+    async def primary_lost(self, socket: PrimarySocket | None = None) -> None:
+        """Classify a failed primary as accidental loss, independently of deliberate logical close."""
+        from nemotron_voice_agent.pipecat.runtime.gateways.live.session.reconnect import TRANSIENT_CLOSE_CODES
+
+        if socket is not None and socket is not self.socket:
+            return
+        source = self.socket if socket is None else socket
+        code = getattr(source, "code", None)
+        if code is not None and code not in TRANSIENT_CLOSE_CODES:
+            reason = "remote_hangup" if code in {1000, 1001} else "connection_lost"
+            await self.close(reason, asked_by="the primary connection closed")
+        elif self.reconnect is not None:
+            await self.reconnect.lost(source)
+        else:
+            await self.close("connection_lost", asked_by="the primary connection failed")
 
     @property
     def input_ms(self) -> int:
@@ -242,6 +282,8 @@ class LiveProtocolSession:
         self, reason: str = "close_requested", client_event_id: str | None = None, *, asked_by: str = "the gateway"
     ) -> None:
         """Close the session: close the adapter and the delegation part, emit ``session.closed``, then clean up."""
+        if self.reconnect is not None:
+            self.reconnect.revoke()
         with logger.contextualize(stream_id=self.id):
             await lifecycle.close(self, reason, client_event_id, asked_by)
 
@@ -251,14 +293,53 @@ class LiveProtocolSession:
         if source is None:
             logger.debug(f"session={self.id} drops a command from a detached connection")
             return
-        client_event_id = message.get("event_id") if isinstance(message, dict) else None
+        client_event_id = None
         token = COMMAND_CONNECTION.set(connection)
         with logger.contextualize(stream_id=self.id):
             try:
+                kind = message.get("type") if isinstance(message, dict) else None
+                if isinstance(message, dict):
+                    client_event_id = validate_client_event_id(message.get("event_id"))
                 async with self.command_lock:
+                    if self.fanout.role(connection) != source:
+                        return
                     if self.status in {"created", "starting"}:
                         await self._wait_until_ready()
-                    await self._dispatch(message, source)
+                    if self.fanout.role(connection) != source:
+                        return
+                    if self.attachment_state != "active" and kind != "session.close":
+                        raise ProtocolError(
+                            "The session is waiting for its caller to reconnect", "session_reconnecting"
+                        )
+                    retained = self.reconnect is not None and isinstance(kind, str) and kind in RETAINED_INPUTS
+                    if retained and source != "primary":
+                        raise ProtocolError(
+                            "Reconnectable call input requires its current primary attachment", "permission_denied"
+                        )
+                    prepared = None
+
+                    def prepare() -> None:
+                        nonlocal prepared
+                        self._command(command, source)
+                        kind = command["type"]
+                        if kind == "response.item.create":
+                            prepared = tool_calling.prepare_item_create(self, command, client_event_id)
+                        elif kind == "response.create":
+                            prepared = tool_calling.prepare_response_create(self, command, client_event_id)
+                        else:
+                            prepared = appends.prepare(self, command, client_event_id)
+
+                    command = (
+                        {key: value for key, value in message.items() if key != "operation_id"} if retained else message
+                    )
+                    if retained:
+                        if not await self.reconnect.operation(message, connection, prepare):
+                            return
+                        # New reservations and the first prepared mutation have no intervening wait.
+                        await prepared()
+                        await self.reconnect.operation_recorded(message, connection)
+                    else:
+                        await self._dispatch(command, source, client_event_id)
             except ProtocolError as exc:
                 await self.reply_error(exc, client_event_id)
             except Exception as exc:
@@ -278,18 +359,23 @@ class LiveProtocolSession:
         except TimeoutError as exc:
             raise ProtocolError("The session did not become active in time", "session_closed") from exc
 
-    async def _dispatch(self, message: Any, source: str) -> None:
+    async def _dispatch(self, message: Any, source: str, client_event_id: str | None) -> None:
+        command = self._command(message, source)
+        await command(self, message, source, client_event_id)
+
+    def _command(self, message: Any, source: str) -> Command:
+        """Check dispatch authority synchronously, without admitting or invoking a command."""
         if not isinstance(message, dict) or not isinstance(message.get("type"), str):
             raise ProtocolError("Expected a JSON event object")
         if self.status != "active":
             raise ProtocolError("Session is not active", "session_closed")
-        kind, client_event_id = message["type"], message.get("event_id")
+        kind = message["type"]
         if not client_event_allowed(self.config, self.transport, kind, source):
             raise ProtocolError("Client event is not permitted", "permission_denied")
         command = COMMANDS.get(kind)
         if command is None:
             raise ProtocolError("Unknown client event", param="type")
-        await command(self, message, source, client_event_id)
+        return command
 
 
 def _refuse_unless_allowed(kind: str, allowed: frozenset[str], part: str) -> None:
@@ -304,36 +390,47 @@ class AdapterView:
         """Give the frontend adapter its view of ``session``."""
         self._session = session
         self.id = session.id
+        self.generation = session.attachment_generation
+
+    def current(self) -> bool:
+        """Whether this attachment still owns the session's media and callback authority."""
+        return self.generation == self._session.attachment_generation
 
     @property
     def input_ms(self) -> int:
-        """Milliseconds of caller audio seen so far (the input media clock)."""
+        """Return the elapsed caller audio in milliseconds."""
         return self._session.input_ms
 
     @property
     def socket(self) -> PrimarySocket | None:
-        """A WebSocket session's primary socket, which the adapter's transport reads; ``None`` on WebRTC."""
+        """Return the primary WebSocket if this connection uses one."""
         return self._session.socket
 
     def is_active(self) -> bool:
-        """Return whether the session is active."""
-        return self._session.status == "active"
+        """Return whether the session and its current attachment are active."""
+        return self.current() and self._session.status == "active" and self._session.attachment_state == "active"
 
     async def emit(self, kind: str, **fields: Any) -> None:
         """Send a transcript event; refuse every other event type with ``ValueError``."""
         _refuse_unless_allowed(kind, ADAPTER_EVENTS, "frontend adapter")
+        if not self.is_active():
+            return
         await self._session.emit(kind, **fields)
 
     async def advance_input_clock(self, ms: int) -> None:
         """Record that the caller's audio reached ``ms``."""
-        await self._session.advance_input_clock(ms)
+        if self.is_active():
+            await self._session.advance_input_clock(ms)
 
     async def send_output_audio(self, audio: bytes) -> None:
         """Send reply audio, in the session's wire format, to the primary connection only; no ``event_id``."""
-        await self._session.send_output_audio(audio)
+        if self.is_active():
+            await self._session.send_output_audio(audio)
 
     async def report_error(self, message: str, client_event_id: str | None = None, *, fatal: bool = False) -> None:
         """Report a failure: an ``error`` for a command's or a fatal one, else a logged ``info`` notice."""
+        if not self.current():
+            return
         if fatal or client_event_id is not None:
             await self._session.report_error(message, client_event_id)
             return
@@ -342,7 +439,13 @@ class AdapterView:
 
     def request_close(self, reason: AdapterCloseReason) -> None:
         """Ask the session to close. The close is scheduled; this returns at once."""
-        self._session.spawn(self._session.close(reason, asked_by="the frontend adapter"), "adapter-close")
+        if not self.current() or self._session.attachment_state != "active":
+            return
+        if reason == "connection_lost":
+            socket = self._session.socket
+            self._session.spawn(self._session.primary_lost(socket), "adapter-connection-lost")
+        else:
+            self._session.spawn(self._session.close(reason, asked_by="the frontend adapter"), "adapter-close")
 
 
 class DelegationSideView:
@@ -376,13 +479,24 @@ class DelegationSideView:
     async def emit(self, kind: str, **fields: Any) -> None:
         """Send a delegation event; refuse every other event type with ``ValueError``."""
         _refuse_unless_allowed(kind, DELEGATION_EVENTS, "delegation part")
+        if self._session.reconnect is not None and self._session.attachment_state != "active":
+            return
         await self._session.emit(kind, **fields)
 
-    async def emit_paced(self, kind: str, **fields: Any) -> None:
-        """Send a delegation event once the primary connection's queue is at most half full."""
+    async def emit_paced(self, kind: str, *, before_publish: Callable[[], bool] | None = None, **fields: Any) -> bool:
+        """Check the current attachment after pacing, then queue the event without yielding during admission."""
         _refuse_unless_allowed(kind, DELEGATION_EVENTS, "delegation part")
+        generation = self._session.attachment_generation
         await self._session.fanout.wait_for_room()
-        await self._session.emit(kind, **fields)
+        if self._session.reconnect is not None and (
+            generation != self._session.attachment_generation or self._session.attachment_state != "active"
+        ):
+            return False
+        if before_publish is not None and (self._session.status in {"closing", "closed"} or not before_publish()):
+            return False
+        return await self._session.fanout.publish(
+            event(kind, **fields), require_primary=before_publish is not None and self._session.reconnect is not None
+        )
 
     def report_refusal(self, message: str, code: str, client_event_id: str | None, param: str | None = None) -> None:
         """Schedule the ``error`` event of the core's refusal of a client command's request or settings."""
@@ -392,9 +506,17 @@ class DelegationSideView:
 class DelegationPortView:
     """The frontend adapter's narrow view of the delegation part (:class:`gateways.live.ports.DelegationPort`)."""
 
-    def __init__(self, part: DelegationPart):
-        """Give the frontend adapter its view of the delegation ``part``."""
-        self._part = part
+    def __init__(self, session: LiveProtocolSession):
+        """Bind the frontend's delegation authority to the same attachment as its media port."""
+        self._session, self._part = session, session.delegation
+        self.generation = session.attachment_generation
+
+    def _check(self, *, listening: bool = False) -> None:
+        session = self._session
+        if self.generation != session.attachment_generation:
+            raise ProtocolError("The caller attachment is no longer current", "session_reconnecting")
+        if not listening and session.attachment_state != "active":
+            raise ProtocolError("The caller attachment is unavailable", "session_reconnecting")
 
     @property
     def target(self) -> str:
@@ -411,10 +533,28 @@ class DelegationPortView:
         """Milliseconds before the automatic spoken acknowledgement of a delegation, read when asked."""
         return self._part.acknowledgement_delay_ms
 
+    def begin_caller_turn(self) -> SettleCallerTurn | None:
+        """Accept a routing hold from the current frontend, including during its private restore."""
+        session = self._session
+        if (
+            self.generation == session.attachment_generation
+            and session.attachment_state in {"attaching", "active"}
+            and session.status not in {"closing", "closed"}
+            and callable(begin := getattr(self._part, "begin_caller_turn", None))
+        ):
+            return begin()
+        return None
+
     async def delegate(self, input: list[dict]) -> str:
         """Delegate a request and return its ``delegation_id``."""
+        if self._session.status in {"closing", "closed"}:
+            raise RuntimeError("Session is closing")
+        self._check()
         return await self._part.delegate(input)
 
     def listen(self, listener: DelegationEvents) -> None:
         """Hand every event of every delegation of the session to ``listener``."""
+        if self._session.status in {"closing", "closed"}:
+            return
+        self._check(listening=True)
         self._part.listen(listener)

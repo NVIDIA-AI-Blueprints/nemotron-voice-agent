@@ -67,10 +67,24 @@ export interface Prompt {
   multiSpeakerSupport?: boolean;
 }
 
+export interface PromptLayoutPart {
+  key?: string;
+  active?: boolean;
+  label?: string;
+  editable?: boolean;
+}
+
+export interface PromptLayoutGroup {
+  id: string;
+  label: string;
+  parts: PromptLayoutPart[];
+}
+
 export interface Tool {
   name: string;
   description: string;
   parameters?: Record<string, unknown>;
+  scope?: "backend";
 }
 
 export type SubagentReasoning = "on" | "off" | "on_demand";
@@ -140,6 +154,16 @@ export function useDefaultPrompts(pipelineMode = "", asrId = "") {
       tools: p.tools ?? [],
       multiSpeakerSupport: p.multiSpeakerSupport ?? false,
     })),
+  });
+}
+
+export function usePromptLayout(pipelineMode: string, llmId: string) {
+  const params = new URLSearchParams({ pipeline_mode: pipelineMode });
+  if (llmId) params.set("llm_id", llmId);
+  return useQuery<PromptLayoutGroup[]>({
+    queryKey: ["prompt-layout", pipelineMode, llmId],
+    queryFn: () => fetchJson<PromptLayoutGroup[]>(`/api/prompt-layout?${params}`),
+    enabled: Boolean(pipelineMode),
   });
 }
 
@@ -367,7 +391,9 @@ export function useVoiceCatalog(
   });
 }
 
-export async function createSessionConfig(config: Record<string, string>): Promise<string> {
+export type SessionConfig = Record<string, string | Record<string, string>>;
+
+export async function createSessionConfig(config: SessionConfig): Promise<string> {
   const res = await fetch("/api/session-config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -382,7 +408,7 @@ export async function createSessionConfig(config: Record<string, string>): Promi
   return data.session_id;
 }
 
-export async function createWebRTCSession(config: Record<string, string>): Promise<string> {
+export async function createWebRTCSession(config: SessionConfig): Promise<string> {
   const res = await fetch("/api/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

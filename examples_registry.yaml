@@ -115,6 +115,8 @@ pipecat:
       defaults:
         prompt: [cafe]
       bot: nemotron_voice_agent.pipecat.examples.frontend_backend_live.pipeline:bot
+      ui_backend_tools: nemotron_voice_agent.pipecat.examples.frontend_backend_live.factory:ui_backend_tools
+      ui_prompt_layout: nemotron_voice_agent.pipecat.examples.frontend_backend_live.pipeline:ui_prompt_layout
       config:
         frontend:
           adapter: cascade

@@ -17,7 +17,12 @@ from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol.config import (
     SessionConfig,
     StrictModel,
 )
-from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol.errors import ProtocolError, validation_error
+from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol.errors import (
+    ProtocolError,
+    is_utf8_text,
+    validate_client_event_id,
+    validation_error,
+)
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol.voices import LIVE_VOICES, TTS_VOICES
 
 __all__ = [
@@ -36,5 +41,7 @@ __all__ = [
     "ResponsesDelegationConfig",
     "SessionConfig",
     "StrictModel",
+    "is_utf8_text",
+    "validate_client_event_id",
     "validation_error",
 ]

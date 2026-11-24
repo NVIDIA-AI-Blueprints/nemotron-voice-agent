@@ -17,6 +17,7 @@ from tests.unit.pipecat.core_helpers import HARNESS_GROUP, NO_HARNESS_GROUP
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = "nemotron_voice_agent.pipecat.examples.frontend_backend_live"
 CORE, ADAPTER = f"{EXAMPLE}.delegation_core", f"{EXAMPLE}.adapter"
+PROVENANCE = f"{EXAMPLE}.work_provenance"
 HARNESS = f"{CORE}.backend.harness"
 ROOTS = (f"{EXAMPLE}.factory", f"{EXAMPLE}.pipeline")
 GATEWAYS = "nemotron_voice_agent.pipecat.runtime.gateways"
@@ -67,7 +68,7 @@ def outside_the_core(name: str) -> bool:
     """Return whether ``name`` is Pipecat, the gateway, or a module of the example outside its core."""
     if name.split(".")[0] == "pipecat" or within(name, GATEWAYS):
         return True
-    return name.startswith(EXAMPLE + ".") and not within(name, CORE)
+    return name.startswith(EXAMPLE + ".") and name != PROVENANCE and not within(name, CORE)
 
 
 def outside_the_gateway(name: str) -> bool:
@@ -115,6 +116,8 @@ class BoundaryTests(unittest.TestCase):
         loaded = self.loaded_by(packages=[CORE])
         self.assertIn(CORE + ".app", loaded)
         self.assertEqual([name for name in loaded if outside_the_core(name)], [])
+        contract = self.loaded_by([PROVENANCE])
+        self.assertEqual([name for name in contract if outside_the_core(name) or within(name, CORE)], [])
 
     def test_the_gateway_loads_no_pipecat_other_gateway_or_example(self):
         loaded = self.loaded_by(packages=[GATEWAY])

@@ -17,6 +17,9 @@ from unittest import mock
 
 import httpx
 import uvloop
+from jsonschema import Draft202012Validator
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.bridge import (
     ConductorDoor,
@@ -29,6 +32,7 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core
     CallSettled,
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.harness.settings import Bridge
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import DecisionRejected
 from tests.unit.pipecat.delegation_core.harness.doubles import vocabulary
 from tests.unit.pipecat.delegation_core.helpers import MENU, TEXTS, FakeTaskContext
 
@@ -110,7 +114,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         door = WorkerDoor("w1", self.task, (Tools(),), self.mailbox, tool_timeout_seconds=0.3)
         return door, await self.open(door)
 
-    async def test_only_post_with_a_live_doors_token_is_served(self):
+    async def test_retired_tokens_keep_alive_without_executing_tools_until_forgotten(self):
         # Stateless HTTP opens no server-sent stream. A runtime may probe the URL before it connects (Hermes sends
         # HEAD, then GET on a 405, waiting up to 5 s on each), so a stream left open would hold every session's start.
         door, client = await self.worker()
@@ -120,7 +124,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             response = await self.http.request(method, client.url, headers=client.headers(), timeout=2)
             self.assertEqual((response.status_code, response.headers.get("allow")), (405, "POST"))
         self.assertEqual((await client.names(self.http))[:1], ["get_menu"])
-        self.bridge.close(door, "")
+        self.bridge.close(door, "Not run: the task stopped.")
+        self.assertEqual((await client.post(self.http, "ping"))["result"], {})
+        self.assertEqual(await client.names(self.http), [])
+        answer = await client.call(self.http, "lookup", {})
+        self.assertEqual(answer["content"][0]["text"], "Not run: the task stopped.")
+        self.assertFalse(answer["isError"])
+        self.assertEqual(self.task.started, [])
+        await self.bridge.forget(door)
         self.assertEqual((await client.post(self.http, "tools/list", {})).status_code, 401)
 
     async def test_the_worker_door_lists_each_tool_name_once(self):
@@ -128,14 +139,43 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         _, client = await self.worker(task)
         self.assertEqual(await client.names(self.http), ["get_menu", "lookup", "broken", "slow"])
 
+    async def test_legacy_and_modern_clients_use_one_stateless_bridge(self):
+        _, client = await self.worker()
+
+        async def check_headers(response):
+            self.assertNotIn("mcp-session-id", response.headers)
+
+        async with httpx.AsyncClient(
+            headers=client.headers(), event_hooks={"response": [check_headers]}, timeout=10
+        ) as http:
+            for mode in ("initialize", "discover"):
+                with self.subTest(mode=mode):
+                    async with (
+                        streamable_http_client(client.url, http_client=http) as (read, write),
+                        ClientSession(read, write) as session,
+                    ):
+                        await getattr(session, mode)()
+                        self.assertIn("lookup", [tool.name for tool in (await session.list_tools()).tools])
+                        result = await session.call_tool("lookup", {})
+                        self.assertEqual(result.content[0].text, '{"found": "lookup"}')
+
+        call = {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "lookup", "arguments": {}}}
+        foreign = {**client.headers(), "origin": "https://unrelated.invalid"}
+        self.assertEqual((await self.http.post(client.url, headers=foreign, json=call)).status_code, 403)
+        duplicates = [*client.headers().items(), ("authorization", "Bearer invalid")]
+        self.assertEqual((await self.http.post(client.url, headers=duplicates, json=call)).status_code, 400)
+        origin = client.url.removesuffix("/mcp")
+        misplaced = await self.http.post(f"{origin}/unregistered", headers=client.headers(), json=call)
+        self.assertEqual(misplaced.status_code, 404)
+        self.assertEqual(len(self.task.started), 2)
+
     async def test_a_backend_call_is_answered_in_the_cores_words(self):
         _, client = await self.worker()
         found = json.dumps({"found": "lookup"})
-        failed = TEXTS.failed_output.format(name="broken", error="RuntimeError: the shop is closed")
         unknown = TEXTS.unknown_tool_output.format(name="nothing", offered="get_menu, lookup, broken, slow")
         cases = {
             "lookup": ("shop", "done", found),
-            "broken": ("shop", "failed", json.dumps({"error": failed})),
+            "broken": ("shop", "unclear", TEXTS.owed_output),
             "slow": ("shop", "unclear", TEXTS.owed_output),
             "nothing": ("harness", "failed", json.dumps({"error": unknown})),
         }
@@ -182,6 +222,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         placed = []
 
         async def place(decision):
+            if isinstance(decision, DecisionRejected):
+                return json.dumps({"status": "rejected", "error": str(decision)})
             placed.append(decision)
             if len(placed) > 1:
                 raise RuntimeError("the IM broke")
@@ -192,19 +234,27 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         words.failed = "{name} broke: {error}"
         door = ConductorDoor("c1", words)
         client = await self.open(door)
-        self.assertEqual(await client.names(self.http), ["start_work", "steer_work", "cancel_work", "answer_status"])
+        assert await client.names(self.http) == ["submit_decision"]
+        schema = Draft202012Validator(door.tools()[0]["input_schema"])
+        targeted = {"action": "stop", "delegations": ["d1", "d2"], "targets": [{"work_id": "W1"}]}
+        stop_all = {"action": "stop", "delegations": ["d3"], "scope": "all"}
+        self.assertTrue(schema.is_valid({"actions": [targeted, stop_all]}))
+        self.assertFalse(schema.is_valid({"actions": [{**targeted, "scope": "all"}]}))
+        self.assertFalse(schema.is_valid({"actions": [{**stop_all, "delegations": ["d1", "d2"]}]}))
 
         async def answer(name, arguments):
             result = await client.call(self.http, name, arguments)
             self.assertFalse(result["isError"])
             return result["content"][0]["text"]
 
-        start = {"delegations": ["d1"]}
-        self.assertEqual(await answer("start_work", start), TEXTS.refusal("idle"))
+        start = {"actions": [{"action": "start", "delegations": ["d1"], "tasks": [{"brief": "Caller request."}]}]}
+        self.assertEqual(await answer("submit_decision", start), TEXTS.refusal("idle"))
         door.bind(place)
-        self.assertEqual(await answer("start_work", start), "Started W1 with W1.1.")
-        self.assertEqual(json.loads(await answer("cancel_work", {})), {"error": "cancel_work: missing work_id"})
-        self.assertEqual(await answer("start_work", start), "start_work broke: RuntimeError: the IM broke")
+        self.assertEqual(await answer("submit_decision", start), "Started W1 with W1.1.")
+        malformed = json.loads(await answer("submit_decision", {}))
+        self.assertEqual(malformed["status"], "rejected")
+        self.assertIn("actions", malformed["error"])
+        self.assertEqual(await answer("submit_decision", start), "submit_decision broke: RuntimeError: the IM broke")
         self.assertEqual(len(placed), 2)
 
 
@@ -278,7 +328,15 @@ class DoorContextTests(unittest.TestCase):
                     bound = CALL.set(call)
                     door.bind(place)
                     CALL.reset(bound)
-                    await client.call(http, "start_work", {"delegations": ["d1"]})
+                    await client.call(
+                        http,
+                        "submit_decision",
+                        {
+                            "actions": [
+                                {"action": "start", "delegations": ["d1"], "tasks": [{"brief": "Caller request."}]}
+                            ]
+                        },
+                    )
             self.assertEqual(seen, ["call A", "call B"])
 
         self.on_each_loop(scenario)

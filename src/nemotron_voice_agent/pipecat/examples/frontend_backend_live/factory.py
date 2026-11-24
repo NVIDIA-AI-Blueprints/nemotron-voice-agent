@@ -20,14 +20,22 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.config_manager.
 )
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.api.local import LocalResponsesClient
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.api.service import ResponsesService
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.app import DelegationCore, build_core
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.app import (
+    DelegationCore,
+    build_core,
+    tool_sources,
+)
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import EndpointLookup
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.config import CoreSettings
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.im.input import BackendTask
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import message_text
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.tables import pick
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.prompts import Prompts, load_prompts
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.prompts import (
+    Prompts,
+    catalog_migration_hint,
+    load_prompts,
+)
 
 # Imported for its setup: it loads .env and, with ENABLE_TRACING on, starts OpenTelemetry.
 from nemotron_voice_agent.pipecat.runtime import tracing  # noqa: F401
@@ -84,12 +92,29 @@ def example_config() -> ExampleConfig:
 
 def core_settings(data: Mapping[str, Any]) -> CoreSettings:
     """Return the core's settings from ``data``, with the core's texts from the example's prompt file."""
-    return CoreSettings.parse(data, load_prompts().core)
+    prompts = load_prompts()
+    try:
+        return CoreSettings.parse(data, prompts.core)
+    except ValueError as error:
+        hint = catalog_migration_hint(prompts.path)
+        if not hint:
+            raise
+        raise ValueError(f"{error}{hint}") from None
 
 
 def ui_bot_core(config: ExampleConfig) -> CoreSettings:
     """Return the UI bot's core settings: the core's, with ``ui_bot.core`` merged over them."""
     return core_settings(config.ui_bot_core)
+
+
+def ui_backend_tools() -> list[dict]:
+    """List the browser bot's configured business tool schemas."""
+    sources = tool_sources(ui_bot_core(example_config()).backend.tools)
+    tools: dict[str, dict] = {}
+    for source in sources():
+        for tool in source.tools():
+            tools.setdefault(tool["name"], tool)
+    return list(tools.values())
 
 
 def frontend_adapters() -> Mapping[str, FrontendAdapterClass]:
@@ -135,7 +160,13 @@ def root() -> Root:
 
 def core_endpoint(endpoint: ModelEndpoint) -> CoreEndpoint:
     """Return a resolved endpoint as the delegation core takes it, without the frontend's own fields."""
-    return CoreEndpoint(endpoint.model, endpoint.base_url, endpoint.api_key, dict(endpoint.extra_params), endpoint.api)
+    return CoreEndpoint(
+        endpoint.model,
+        endpoint.base_url,
+        endpoint.api_key,
+        dict(endpoint.extra_params),
+        endpoint.api,
+    )
 
 
 def endpoint_lookup(catalog: ExampleCatalog, slot: str, overrides: dict | None = None) -> EndpointLookup:
@@ -168,7 +199,7 @@ def ui_bot_instructions(prompts: Prompts, channel: str) -> Callable[[str], str]:
 
 
 def core_client(core: DelegationCore) -> LocalResponsesClient:
-    """Return the in-process client of a core's endpoints, carrying the core's close budget and its close."""
+    """Return the in-process client with the Core's close budget and shutdown callback."""
     service = ResponsesService(core.session, stateless_session=core.one_shot_session, backend=core)
     return LocalResponsesClient(service, close_seconds=core.close_seconds, close_core=core.aclose)
 

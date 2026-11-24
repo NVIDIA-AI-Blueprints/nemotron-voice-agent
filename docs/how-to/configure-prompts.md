@@ -4,7 +4,7 @@ You can customize your voice agent's personality, behavior, and response format 
 
 ## Switching / Adding Prompts via the UI
 
-The client UI includes a prompt selector dropdown. Select any prompt to switch during a session. The change takes effect on the next conversation turn.
+Use the **Prompt** dropdown before connecting to choose the preset for your next browser session.
 
 You can add custom prompts directly from the UI's **Prompts** tab without editing any files or restarting the server. Custom prompts added in the UI are stored in the browser's localStorage, so they persist for that browser/profile and origin only.
 
@@ -45,7 +45,21 @@ my_custom_prompt:
     Define personality, rules, and response format.
 ```
 
+## Frontend/Backend Live Prompt Catalog
+
+The **Prompts** tab shows the configured prompt sections in request order for the Talker, Writer, backend worker, and conductor when enabled. It labels where the request includes runtime context such as conversation history, work status, and tool results.
+
+Before connecting, open an editable section and select **Edit**, then **Save**. Saved edits apply to new sessions for this example in the same browser. If a section appears in several calls, the edit applies to each call. Select **Reset** to restore the section’s built-in text. Edit the YAML to change the server defaults.
+
+A `PROMPT_FILE_PATH` override replaces the full catalog. When upgrading, copy the current [Live prompt catalog](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/prompts.yaml) and reapply your custom instructions. Keep its required `Cascade`, `Lines`, and `Core` entries and tool schemas. Restart the server after editing Core entries or the default backend prompt.
+
+Use `session.instructions` for speaking style and a short description of what to delegate, such as checking availability or changing a booking. In Responses mode, put business rules in `delegation.responses.instructions` and function schemas in `delegation.responses.tools`. Apply disclosure rules to both sides because the frontend can speak a current backend result as written if rewording fails. For session updates, refer to [Live Session Settings](use-live-gateway.md#session-settings).
+
+For the experimental `tools` talker style, keep `Cascade.tool_frame_before`, `tool_routing`, `tool_rules`, and the `tools.delegate` and `tools.wait` schemas. Reconnectable calls also need the `Cascade.attachment_note` template with its plain `{text}` placeholder. Refer to [Talker Style](../../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#talker-style) and [Resume a Dropped WebSocket Call](use-live-gateway.md#resume-a-dropped-websocket-call).
+
 ## Best Practices for Voice Prompts
+
+Use the following practices when writing voice prompts:
 
 - Keep responses concise (1-2 sentences).
 - Avoid special characters like `*`, `-`, `/` in output.

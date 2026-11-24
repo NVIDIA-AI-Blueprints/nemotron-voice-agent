@@ -40,10 +40,12 @@ async def append(session: LiveProtocolSession, message: dict, source: str, clien
 async def mute(session: LiveProtocolSession, message: dict, source: str, client_event_id: str | None) -> None:
     """Stop consuming caller audio, and say so (``session.input_audio.mute``)."""
     await session.frontend.set_muted(True)
+    session.input_muted = True
     await session.emit("session.input_audio.muted", client_event_id=client_event_id)
 
 
 async def unmute(session: LiveProtocolSession, message: dict, source: str, client_event_id: str | None) -> None:
     """Consume caller audio again, and say so (``session.input_audio.unmute``)."""
     await session.frontend.set_muted(False)
+    session.input_muted = False
     await session.emit("session.input_audio.unmuted", client_event_id=client_event_id)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -19,7 +20,7 @@ from pipecat.workers.runner import WorkerRunner
 
 import nemotron_voice_agent.pipecat.runtime.examples_registry as examples_registry
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.config_manager.schema import LiveConfig
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.app import build_core
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.app import build_core, log_trace
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.config import CoreSettings
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.items import message_text
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.tables import pick
@@ -44,7 +45,8 @@ from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.services 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.task_cards import RtviTaskCards
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.media.turns import SmartTurn
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.models.endpoints import ExampleCatalog
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.prompts import load_prompts
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.prompt_layout import backend_layout, frontend_layout
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.prompts import PromptSet, load_prompts
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.talker import LLM_SERVICES, RESPONSE_FORMATS
 from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation import ServerDelegation
 from nemotron_voice_agent.pipecat.runtime.tracing import IS_TRACING_ENABLED
@@ -89,6 +91,41 @@ def bot_root() -> BotRoot:
     return BotRoot(cascade, core, config.ui_bot.channel, ExampleCatalog.read())
 
 
+def ui_prompt_layout(*, llm_id: str = "") -> list[dict[str, Any]]:
+    """Show the prompt parts for this browser configuration and its selected routing style."""
+    state = bot_root()
+    entry = state.catalog.entry(state.cascade.slot, llm_id)
+    style = state.cascade.style_of(str(entry.get("key") or ""))
+    return _prompt_layout(state, load_prompts().cascade, style)
+
+
+def _prompt_layout(state: BotRoot, prompts: PromptSet, style: str) -> list[dict[str, Any]]:
+    talker = pick(LLM_SERVICES, style, "talker_style")
+    backend = state.core.backend
+    return [
+        *frontend_layout(prompts, routing_entries=talker.routing_entries, channel=state.channel),
+        *backend_layout(
+            prompt=backend.prompt,
+            channel=state.channel,
+            result_format=state.core.delegation.result_format,
+            model_conductor=_has_model_conductor(backend.adapter, backend.blocks.get(backend.adapter, {})),
+            harness=backend.adapter == "harness",
+        ),
+    ]
+
+
+def _has_model_conductor(adapter: str, settings: dict[str, Any]) -> bool:
+    if adapter == "llm-agent":
+        from .delegation_core.backend.agent.settings import AgentSettings
+
+        return settings.get("max_running", AgentSettings.model_fields["max_running"].default) > 1
+    if adapter == "harness":
+        from .delegation_core.backend.harness.settings import HarnessSettings
+
+        return settings.get("max_running", HarnessSettings.model_fields["max_running"].default) > 1
+    return False
+
+
 def backend_overrides(body: dict) -> dict:
     """Return the session body's settings of the backend's model, without their prefix."""
     return {
@@ -108,13 +145,19 @@ async def bot(runner_args: RunnerArguments) -> None:
     cascade, catalog = state.cascade, state.catalog
 
     prompt_key, talker_prompt = resolve_prompt(__file__, body.get("prompt_content", ""), body.get("prompt_key", ""))
-    prompts = load_prompts()
-    channel = prompts.text("Channel", state.channel)
-    core_settings, backend_instructions = state.core, ui_bot_instructions(prompts, channel)
-
     selected = str(body.get("llm_id") or "")
     frontend_endpoint = catalog.model(cascade.slot, body)
     talker_style = cascade.style_of(frontend_endpoint.service_key)
+    prompts = load_prompts()
+    if overrides := body.get("prompt_overrides"):
+        layout = _prompt_layout(state, prompts.cascade, talker_style)
+        editable = {
+            part["key"] for group in layout for part in group["parts"] if "key" in part and part.get("editable")
+        }
+        prompts = prompts.with_overrides(overrides, editable=editable)
+    channel = prompts.text("Channel", state.channel)
+    core_settings, backend_instructions = state.core, ui_bot_instructions(prompts, channel)
+
     talker = pick(LLM_SERVICES, talker_style, "talker_style")
     response_format = pick(RESPONSE_FORMATS, frontend_endpoint.response_format, "response_format")
     endpoints = endpoint_lookup(catalog, core_settings.backend.slot, backend_overrides(body))
@@ -125,7 +168,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info(f"Backend: adapter={core_settings.backend.adapter}, model={endpoints(None).model}")
     turn_end = SmartTurn(cascade.speech)
     stt = build_stt(body, catalog.service("asr"))
-    tts = build_tts(body, catalog.service("tts"))
+    tts = build_tts(body, catalog.service("tts"), expand_currency_amounts=state.channel == "cafe")
 
     talker_entry = catalog.entry(cascade.slot, selected)
     system_prompt = body.get("system_prompt", "") or talker_entry.get("system_prompt", "")
@@ -133,8 +176,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     seed = (system_prompt, f"{talker_prompt}\n\n{channel}")
     messages = [{"role": "system", "content": text} for text in seed if text]
 
+    cards = RtviTaskCards(lambda frame: task.queue_frame(frame))
+
+    def observe_core(kind: str, **fields: Any) -> None:
+        log_trace(kind, **fields)
+        cards.observe(kind, **fields)
+
     defaults = backend_defaults(core_settings, endpoints, backend_instructions)
-    core = build_core(core_settings, endpoints=endpoints, defaults=defaults)
+    core = build_core(core_settings, endpoints=endpoints, defaults=defaults, observe=observe_core)
     delegation = ServerDelegation(core_client(core))
     audio_recorder = create_audio_recorder()
 
@@ -193,7 +242,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             user_params=turn_end.user_params(welcome_enabled),
             delegation=delegation,
             item_text=message_text,
-            display=lambda worker: RtviTaskCards(worker.queue_frame),
+            display=lambda worker: cards,
         ),
         FrontendEdges(
             inputs=[transport.input()],

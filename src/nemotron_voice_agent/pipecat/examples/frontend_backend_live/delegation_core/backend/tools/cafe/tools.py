@@ -53,6 +53,7 @@ class CafeTools:
     """One IM session's cart and orders, in memory: a server tool source made fresh for each session."""
 
     label: ClassVar[str] = "cafe"
+    read_only_tools: ClassVar[frozenset[str]] = frozenset({"get_menu"})
 
     def __init__(self):
         """Start with an empty cart."""
@@ -146,17 +147,31 @@ class CafeTools:
         elif action == "clear":
             self.lines = []
             status = "cleared"
-        elif action in {"remove", "update_quantity"}:
+        elif action in {"remove", "update_quantity", "update_options"}:
             line = next((x for x in self.lines if x["line_id"] == args.get("line_id")), None)
             if line is None:
                 raise ValueError(f"Unknown line_id {args.get('line_id')!r}. View the cart for its lines.")
-            quantity = max(0, min(20, _whole_number(args.get("quantity"), 1)))
-            if action == "remove" or quantity == 0:
-                self.lines.remove(line)
-                status = "removed"
-            else:
-                line["quantity"] = quantity
+            if action == "update_options":
+                if "size" not in args and "modifiers" not in args:
+                    raise ValueError("Provide a size or modifiers to change.")
+                size = args.get("size", line["size"])
+                if "size" in args and (line["size"] is None or not isinstance(size, str) or size not in SIZES):
+                    raise ValueError("Choose a listed drink size for a drink line.")
+                modifiers = args.get("modifiers", line["modifiers"])
+                if not isinstance(modifiers, list) or any(
+                    not isinstance(modifier, str) or modifier not in MODIFIERS for modifier in modifiers
+                ):
+                    raise ValueError("Choose modifiers from the menu or provide an empty list to clear them.")
+                line.update(size=size, modifiers=list(modifiers))
                 status = "updated"
+            else:
+                quantity = max(0, min(20, _whole_number(args.get("quantity"), 1)))
+                if action == "remove" or quantity == 0:
+                    self.lines.remove(line)
+                    status = "removed"
+                else:
+                    line["quantity"] = quantity
+                    status = "updated"
         elif action != "view":
             raise ValueError("Unsupported cart action")
         result = {"action": action, "cart": self.snapshot()}

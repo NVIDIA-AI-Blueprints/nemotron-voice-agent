@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The backend LLM agent's conductor: one model call per ``decide()``, placing requests through the control tools."""
+"""The backend LLM agent's complete-decision producer."""
 
 from __future__ import annotations
 
@@ -17,23 +17,31 @@ from loguru import logger
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.port import (
     ConductorInput,
     ControlTools,
+    DecisionRejected,
     Place,
     function_call_item,
 )
-from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.providers import Backend
-from nemotron_voice_agent.pipecat.shared.delegation_contract import TERMINALS
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.providers import (
+    Backend,
+    BrokenStreamError,
+)
+from nemotron_voice_agent.pipecat.examples.frontend_backend_live.delegation_core.backend.providers.retry import (
+    StreamErrorEvent,
+)
+from nemotron_voice_agent.pipecat.shared.delegation_contract import CHAT_COMPLETIONS, TERMINALS
 
 from .memory import ConductorMemory, DecisionRound
 from .render import round_input
 from .settings import ConductorSettings
 
-# Every round is one placement call, which may name several requests.
 TOOL_CHOICE: Final = "required"
 PARALLEL_TOOL_CALLS: Final = False
 
 
 class LlmConductor:
     """The backend LLM agent's conductor (``port.Conductor``): one per IM session, with its own memory."""
+
+    model_placement = True
 
     def __init__(
         self,
@@ -48,12 +56,10 @@ class LlmConductor:
         self.max_running = max_running
         self.provider: Backend | None = None
         self.memory = ConductorMemory(settings.memory_tokens)
+        self.round = 0
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
-        """Place the new requests that the model's calls name; the IM's fallback rule places any left.
-
-        A round that fails, times out or whose ``place`` raises is logged as ``conductor.failed``; only a cancel raises.
-        """
+        """Submit one complete decision or propagate failure to bounded Core recovery."""
         if not given.arrivals:
             return
         decision_round: DecisionRound | None = None
@@ -66,8 +72,11 @@ class LlmConductor:
             raise
         except Exception as exc:
             logger.warning(f"conductor.failed model={self.model}: {type(exc).__name__}: {exc}")
-        # A failed round is remembered too: the next round shows only the conversation after it.
-        if decision_round is not None:
+            # Core supplies the current input and rejection on repair. Keep only possibly admitted failures.
+            if decision_round is not None and decision_round.placed:
+                self.memory.add(decision_round)
+            raise
+        else:
             self.memory.add(decision_round)
 
     async def close(self) -> None:
@@ -78,11 +87,25 @@ class LlmConductor:
 
     def payload(self, given: ConductorInput, decision_round: DecisionRound) -> dict:
         """Build the round's request: the instructions, the memory, this round's input and the control tools."""
+        tools = self.vocabulary.conductor_tools()
+        if not given.works:
+            (tool,) = tools
+            actions = tool["parameters"]["properties"]["actions"]
+            items = actions.get("items") if isinstance(actions, dict) else None
+            if isinstance(items, dict) and isinstance(choices := items.get("oneOf"), list):
+                eligible = [
+                    choice
+                    for choice in choices
+                    if not isinstance(choice, dict) or "targets" not in (choice.get("required") or ())
+                ]
+                items["oneOf"] = eligible or choices
+        if self.settings.strict_tool_arguments:
+            tools = [{**tool, "strict": True} for tool in tools]
         payload = {
             "model": self.model,
             "instructions": self.vocabulary.instructions(self.max_running),
             "input": [*self.memory.items(), deepcopy(decision_round.message)],
-            "tools": self.vocabulary.conductor_tools(),
+            "tools": tools,
             "tool_choice": TOOL_CHOICE,
             "parallel_tool_calls": PARALLEL_TOOL_CALLS,
         }
@@ -93,8 +116,15 @@ class LlmConductor:
         return payload
 
     async def _ask(self, given: ConductorInput, decision_round: DecisionRound, place: Place) -> None:
-        """Make one model call, placing each finished call at once; only the wait for the model is timed."""
+        """Validate one completed model envelope before submitting any action."""
         payload = self.payload(given, decision_round)
+        if self.provider is None:
+            self.provider = self.make_provider()
+        translated = self.provider.endpoint.api == CHAT_COMPLETIONS
+        if translated:
+            (tool,) = payload["tools"]
+            payload["tool_choice"] = {"type": "function", "name": tool["name"]}
+            del payload["parallel_tool_calls"]
         logger.debug(
             "conductor.request model={} requests={} memory_items={}",
             self.model,
@@ -102,41 +132,106 @@ class LlmConductor:
             len(payload["input"]) - 1,
         )
         logger.debug(f"conductor request: {json.dumps(payload, ensure_ascii=False)}")
-        if self.provider is None:
-            self.provider = self.make_provider()
+        self.round += 1
+        round_number = self.round
         deadline = asyncio.get_running_loop().time() + self.settings.timeout_seconds
-        async with aclosing(self.provider.stream(payload, retries=self.provider.limits.provider_retries)) as events:
-            while True:
-                try:
-                    async with asyncio.timeout_at(deadline):
-                        event = await anext(events)
-                except StopAsyncIteration:
-                    return
-                call = function_call_item(event)
-                if call is not None:
-                    await self._place(call, decision_round, place)
-                elif event.get("type") in TERMINALS:
-                    output = (event.get("response") or {}).get("output") or []
-                    logger.debug(f"conductor reply: {json.dumps(output, ensure_ascii=False)}")
-                    self._ended(event)
+        reported: dict = {}
+        terminal = None
+        calls: list[dict] = []
+        opened = False
+        try:
+            async with aclosing(self.provider.stream(payload, retries=self.provider.limits.provider_retries)) as events:
+                while True:
+                    try:
+                        async with asyncio.timeout_at(deadline):
+                            event = await anext(events)
+                    except (StopAsyncIteration, BrokenStreamError) as exc:
+                        raise DecisionRejected("Conductor stream ended without a completed decision") from exc
+                    except StreamErrorEvent as exc:
+                        if not opened:
+                            raise
+                        raise DecisionRejected("Conductor stream failed before a completed decision") from exc
+                    except TimeoutError as exc:
+                        terminal = "timeout"
+                        raise DecisionRejected("Conductor stream timed out before a completed decision") from exc
+                    opened = True
+                    response = event.get("response") or {}
+                    if isinstance(response, dict):
+                        for key in ("id", "model"):
+                            if response.get(key):
+                                reported[key] = response[key]
+                    call = function_call_item(event)
+                    if call is not None:
+                        calls.append(call)
+                    elif event.get("type") in TERMINALS:
+                        terminal = event["type"]
+                        reported["usage"] = response.get("usage")
+                        output = response.get("output") or []
+                        logger.debug(f"conductor reply: {json.dumps(output, ensure_ascii=False)}")
+                        self._ended(event)
+                        if terminal != "response.completed":
+                            raise DecisionRejected(f"Conductor response did not complete: {terminal}")
+                        if len(calls) != 1:
+                            raise DecisionRejected("Conductor response must contain one complete decision call")
+                        await self._place(calls[0], decision_round, place)
+                        return
+        except asyncio.CancelledError:
+            terminal = terminal or "cancelled"
+            raise
+        except Exception:
+            terminal = terminal or "stream_error"
+            raise
+        finally:
+            usage = reported.get("usage")
+            logger.debug(
+                "conductor.round.usage backend=llm-agent role=conductor model={} model_source={} round={} "
+                "attempt={} terminal={} conversation_ref={} delegation_ids={} response_id={} usage={} usage_missing={} "
+                "requested_model={} configured_model={} reported_model={} usage_authority=logical_conductor_round",
+                reported.get("model") or self.model,
+                ("translated_request" if translated else "provider_event")
+                if reported.get("model")
+                else "configured_model",
+                round_number,
+                given.attempt,
+                terminal or "exhausted",
+                given.conversation_ref,
+                [row.delegation_id for row in given.arrivals],
+                reported.get("id"),
+                usage,
+                usage is None,
+                self.model,
+                self.provider.endpoint.model,
+                None if translated else reported.get("model"),
+            )
 
     async def _place(self, call: dict, decision_round: DecisionRound, place: Place) -> None:
-        """Place one call's decision and keep its outcome line as the call's output; a malformed call is skipped."""
+        """Submit one validated envelope and retain the Core's complete action receipt."""
         name = call.get("name", "")
         try:
             decision = self.vocabulary.decision(name, call.get("arguments") or "{}")
-        except ValueError as exc:
+        except DecisionRejected as exc:
             logger.warning(f"conductor.malformed call={name!r}: {exc}")
-            decision_round.answered(call, json.dumps({"error": str(exc)}))
-            return
+            raise
         decision_round.placed = True
-        outcome = await place(decision)
+        try:
+            outcome = await place(decision)
+        except DecisionRejected:
+            decision_round.placed = False
+            raise
+        except BaseException:
+            decision_round.answered(call, json.dumps({"status": "unknown"}))
+            raise
         decision_round.answered(call, outcome)
 
     def _ended(self, terminal: dict) -> None:
         """Log a round that ended without completing; a cut round's calls never come."""
-        if terminal.get("type") == "response.completed":
+        ending = terminal.get("type")
+        if ending == "response.completed":
             return
         response = terminal.get("response") or {}
         reason = (response.get("incomplete_details") or {}).get("reason") or (response.get("error") or {}).get("code")
-        logger.warning(f"conductor.round_ended model={self.model} ending={terminal.get('type')} reason={reason}")
+        logger.warning(f"conductor.round_ended model={self.model} ending={ending} reason={reason}")
+        if ending == "response.failed" and reason in ("server_error", "rate_limit_exceeded"):
+            raise DecisionRejected(f"Conductor provider failed before a completed decision: {reason}")
+        if ending != "response.incomplete" or reason != "max_output_tokens":
+            raise RuntimeError(f"Conductor round failed: {reason or ending}")

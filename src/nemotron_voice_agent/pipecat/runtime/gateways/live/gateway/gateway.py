@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from fastapi import Request
@@ -23,11 +23,25 @@ from nemotron_voice_agent.pipecat.runtime.gateways.live.ports import (
     SessionParts,
 )
 from nemotron_voice_agent.pipecat.runtime.gateways.live.protocol import ProtocolError, SessionConfig
+from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation.responses_client import (
+    AttachmentClient,
+    CallerContextClient,
+)
 from nemotron_voice_agent.pipecat.runtime.gateways.live.session import LiveProtocolSession
 from nemotron_voice_agent.pipecat.runtime.gateways.live.session.session import no_core
 
 if TYPE_CHECKING:
-    from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation.responses_client import ResponsesClient
+    from nemotron_voice_agent.pipecat.runtime.gateways.live.server_delegation.responses_client import (
+        ResponsesClient,
+        ResponseStream,
+    )
+    from nemotron_voice_agent.pipecat.shared.delegation_contract import (
+        AppCallDelivery,
+        AppResultWindow,
+        CallerContext,
+        RetainedAppCall,
+        SettleCallerTurn,
+    )
 
 # The ICE servers of a request's WebRTC peer, shaped as ``RTCIceServer`` objects, TURN credentials included.
 IceServers = Callable[[Request], list[dict]]
@@ -86,6 +100,40 @@ class CoreClient:
         """Call ``DELETE /v1/conversations/{id}`` on the core."""
         return await (await self.client()).delete_conversation(conversation_id)
 
+    async def attachment_supported(self) -> bool:
+        """Check the actual core boundary rather than assuming every Responses implementation supports retention."""
+        return isinstance(await self.client(), AttachmentClient)
+
+    async def set_attachment(self, conversation_id: str, attached: bool) -> dict:
+        """Fence caller-dependent effects while retaining the logical conversation lease."""
+        client = await self.client()
+        change = getattr(client, "set_attachment", None)
+        if change is None:
+            raise ProtocolError("This core does not support attachment retention", "resume_unavailable")
+        return await change(conversation_id, attached)
+
+    def begin_caller_turn(self, conversation_id: str) -> SettleCallerTurn | None:
+        """Forward the local routing hold to the client that opened the conversation."""
+        begin = getattr(self._client, "begin_caller_turn", None)
+        return begin(conversation_id) if callable(begin) else None
+
+    @property
+    def wait_for_retained_app_calls(self) -> Callable[[str], Awaitable[None]] | None:
+        """Expose the Core's optional routing wait for unsent calls."""
+        return getattr(self._client, "wait_for_retained_app_calls", None)
+
+    @property
+    def track_app_call_delivery(self) -> Callable[[str, AppResultWindow], AppCallDelivery] | None:
+        """Expose optional local timing for app calls sent by this gateway."""
+        return getattr(self._client, "track_app_call_delivery", None)
+
+    @property
+    def check_retained_app_call(
+        self,
+    ) -> Callable[[str, str], tuple[RetainedAppCall, tuple[str, ResponseStream] | None]] | None:
+        """Expose the Core's optional synchronous check at app-call publication."""
+        return getattr(self._client, "check_retained_app_call", None)
+
     async def retrieve_model(self, model: str) -> dict:
         """Call ``GET /v1/models/{model}`` on the core."""
         return await (await self.client()).retrieve_model(model)
@@ -93,6 +141,18 @@ class CoreClient:
     async def create_response(self, params: dict):
         """Call ``POST /v1/responses`` on the core."""
         return await (await self.client()).create_response(params)
+
+    @property
+    def reconcile_tool_outputs(self) -> Callable[[str, list[dict]], Awaitable[dict]] | None:
+        """Expose late result reconciliation when the client that opened the conversation supports it."""
+        return getattr(self._client, "reconcile_tool_outputs", None)
+
+    async def create_response_with_caller_context(self, params: dict, context: CallerContext) -> ResponseStream:
+        """Forward private caller evidence to a core that accepts it."""
+        client = await self.client()
+        if isinstance(client, CallerContextClient):
+            return await client.create_response_with_caller_context(params, context)
+        return await client.create_response(params)
 
     async def list_conversation_items(self, conversation_id: str) -> dict:
         """Call ``GET /v1/conversations/{id}/items`` on the core."""
@@ -128,6 +188,7 @@ class LiveGateway:
         self.sessions: dict[str, LiveProtocolSession] = {}
         self.connections: dict[str, MediaConnection] = {}
         self.starting = 0
+        self.resume_leases = {}
 
     def authorize(self, connection) -> None:
         """Check the bearer token (when configured), reject cross-site browser origins, then check the host name."""
