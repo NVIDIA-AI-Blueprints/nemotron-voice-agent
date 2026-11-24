@@ -375,13 +375,15 @@ async def bot(runner_args: RunnerArguments) -> None:
     pipeline = Pipeline(
         [
             transport.input(),
+            *audio_recorder.inputs,
             stt,
             user_aggregator,
             reminder_processor,
             llm,
             tts,
+            *audio_recorder.outputs,
             transport.output(),
-            *([audio_recorder] if audio_recorder else []),
+            *audio_recorder.after,
             assistant_aggregator,
         ]
     )
@@ -480,8 +482,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         )
 
     async def _on_session_start() -> None:
-        if audio_recorder:
-            await audio_recorder.start_recording()
+        await audio_recorder.start_recording()
 
     register_session_start_handlers(
         transport=transport,

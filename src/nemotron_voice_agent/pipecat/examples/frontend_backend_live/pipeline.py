@@ -245,15 +245,15 @@ async def bot(runner_args: RunnerArguments) -> None:
             display=lambda worker: cards,
         ),
         FrontendEdges(
-            inputs=[transport.input()],
-            outputs=[transport.output()],
+            inputs=[transport.input(), *audio_recorder.inputs],
+            outputs=[*audio_recorder.outputs, transport.output()],
             worker={
                 "params": build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
                 "idle_timeout_secs": runner_args.pipeline_idle_timeout_secs,
                 "observers": with_realtime_observers(latency_observer, transport=transport),
                 "enable_tracing": IS_TRACING_ENABLED,
             },
-            after=[audio_recorder] if audio_recorder else [],
+            after=audio_recorder.after,
         ),
     )
     task, voice = frontend.worker, frontend.voice
@@ -280,8 +280,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         await send_rtvi_payloads(task, finalized_turn_payloads(None, message))
 
     async def _on_session_start() -> None:
-        if audio_recorder:
-            await audio_recorder.start_recording()
+        await audio_recorder.start_recording()
 
     async def _greet() -> None:
         voice.greet(prompts.lines.intro)

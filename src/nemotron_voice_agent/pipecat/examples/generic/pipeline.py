@@ -329,15 +329,17 @@ async def bot(runner_args: RunnerArguments) -> None:
     pipeline = Pipeline(
         [
             transport.input(),
+            *audio_recorder.inputs,
             stt,
             *([speaker_processor] if speaker_processor else []),
             user_aggregator,
             llm,
             *([silent_reply_filter] if silent_reply_filter else []),
             tts,
+            *audio_recorder.outputs,
             transport.output(),
             *([activity_check] if activity_check else []),
-            *([audio_recorder] if audio_recorder else []),
+            *audio_recorder.after,
             assistant_aggregator,
         ]
     )
@@ -433,8 +435,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         await send_rtvi_payloads(task, finalized_turn_payloads(speaker_processor, message))
 
     async def _on_session_start() -> None:
-        if audio_recorder:
-            await audio_recorder.start_recording()
+        await audio_recorder.start_recording()
         if activity_check:
             activity_check.start()
 

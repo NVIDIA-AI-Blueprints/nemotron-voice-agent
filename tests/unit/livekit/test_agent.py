@@ -3,9 +3,12 @@
 
 # ruff: noqa: D100, D103
 
+import asyncio
 import importlib
 
 import pytest
+
+from nemotron_voice_agent.core.session_audio import SessionAudio
 
 pytest.importorskip("livekit.plugins.nvidia")  # the plugins belong to the example's own environment
 
@@ -114,3 +117,44 @@ def test_the_session_recording_is_copied_out_of_the_job_folder(agent, tmp_path):
     assert target == tmp_path / "dumps" / "session_AJ_1.ogg"
     assert target.read_bytes() == b"OggS"
     assert agent.save_recording(tmp_path / "missing.ogg", tmp_path / "dumps", "session_AJ_2") is None
+
+
+def test_the_recorded_agent_records_what_stt_received_and_tts_produced(agent, monkeypatch):
+    def frame(sample):
+        return agent.rtc.AudioFrame(data=sample * 160, sample_rate=16000, num_channels=1, samples_per_channel=160)
+
+    async def stt_node(node_agent, audio, model_settings):
+        async for heard in audio:
+            yield len(heard.data)
+
+    async def tts_node(node_agent, text, model_settings):
+        async for _ in text:
+            yield frame(b"\x02\x02")
+
+    async def items(*values):
+        for value in values:
+            yield value
+
+    async def run(node):
+        return [item async for item in node]
+
+    monkeypatch.setattr(agent.Agent.default, "stt_node", stt_node)
+    monkeypatch.setattr(agent.Agent.default, "tts_node", tts_node)
+    heard, spoken = SessionAudio(), SessionAudio()
+    heard.start()
+    spoken.start()
+    recorded = agent.RecordedAgent(heard=heard, spoken=spoken, instructions="Help.")
+    assert asyncio.run(run(recorded.stt_node(items(frame(b"\x01\x01"), frame(b"\x01\x01")), None))) == [160, 160]
+    assert len(asyncio.run(run(recorded.tts_node(items("Hi."), None)))) == 1
+    assert bytes(heard._pcm).strip(b"\x00") == b"\x01\x01" * 320
+    assert bytes(spoken._pcm).strip(b"\x00") == b"\x02\x02" * 160
+
+
+def test_each_recorded_stream_is_saved_and_an_empty_one_is_skipped(agent, tmp_path):
+    heard, spoken = SessionAudio(), SessionAudio()
+    heard.start()
+    spoken.start()
+    heard.add(b"\x01\x01" * 160, 16000, 1)
+    saved = agent.save_streams({"asr": heard.finish(), "tts": spoken.finish()}, tmp_path / "dumps", "AJ_1")
+    assert saved == [tmp_path / "dumps" / "asr_AJ_1_session.wav"]
+    assert [path.name for path in (tmp_path / "dumps").iterdir()] == ["asr_AJ_1_session.wav"]

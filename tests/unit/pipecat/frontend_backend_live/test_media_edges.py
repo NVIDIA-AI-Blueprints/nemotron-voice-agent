@@ -9,6 +9,8 @@ import asyncio
 import os
 import time
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from pipecat.frames.frames import (
@@ -25,6 +27,7 @@ from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.filters.identity_filter import IdentityFilter
 from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.transports.base_output import BaseOutputTransport
 
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.adapter.adapter import LIVE_AUDIO_IN_RATE
 from nemotron_voice_agent.pipecat.examples.frontend_backend_live.adapter.bridge import (
@@ -173,22 +176,24 @@ class AudioTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(worker["idle_timeout_secs"])
                 self.assertEqual((worker["params"].enable_metrics, worker["params"].enable_usage_metrics), (True, True))
 
-    async def test_the_audio_recorder_follows_the_transcript_when_on(self):
+    async def test_the_audio_dumps_tap_after_the_gate_before_the_output_and_after_the_transcript(self):
         self.enterContext(patch.object(audio_recorder, "_write_wav"))
-        with (
-            patch.object(audio_recorder, "ENABLE_AUDIO_DUMP", True),
-            patch.object(audio_recorder, "_validate_dump_dir"),
-        ):
+        dump_dir = Path(self.enterContext(TemporaryDirectory()))
+        self.enterContext(patch.object(audio_recorder, "AUDIO_DUMP_PATH", dump_dir))
+        with patch.object(audio_recorder, "ENABLE_AUDIO_DUMP", True):
             host, port = TextHost(), RecordingPort(socket=FakeSocket(AudioFormat(rate=16000)))
             await host.start(port, None)
             self.addAsyncCleanup(host.stop_pipeline)
-            self.assertIsInstance(host.recorder, AudioBufferProcessor)
-            self.assertIs(host.processors[-1], host.recorder)
-            self.assertIsInstance(host.processors[-2], LiveOutputTranscript)
+            processors, dump = host.processors, host.recorder
+            self.assertIs(processors[processors.index(host.gate) + 1], dump.inputs[0])
+            self.assertIsInstance(processors[processors.index(dump.outputs[0]) + 1], BaseOutputTransport)
+            self.assertIsInstance(processors[-1], AudioBufferProcessor)
+            self.assertIs(processors[-1], dump.after[0])
+            self.assertIsInstance(processors[-2], LiveOutputTranscript)
             for index in range(3):
                 port.socket.send(f"audio {index}", audio=tone(100, rate=16000))
             async with asyncio.timeout(2):
-                while not host.recorder.has_audio():
+                while not dump.after[0].has_audio():
                     await asyncio.sleep(0.01)
 
 
