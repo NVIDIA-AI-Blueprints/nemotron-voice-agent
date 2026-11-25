@@ -329,12 +329,13 @@ class RealtimeLifecycleObserver(BaseObserver):
             try:
                 if frame.id in self._conversation.applied_interruption_ids:
                     # response.cancel / truncate already finished its response; a
-                    # newer response.create must not be cancelled by this frame.
+                    # newer response.create and its tracking must remain intact.
+                    # on_response_cancelled already cleared the old turn's work.
                     self._conversation.applied_interruption_ids.discard(frame.id)
                 else:
                     await self._finish_response(status="cancelled")
-                # Interruption cancels in-flight tool calls and the LLM run.
-                self._reset_turn_tracking()
+                    # A fresh interruption cancels in-flight tools and the LLM run.
+                    self._reset_turn_tracking()
             except Exception:
                 logger.exception("RealtimeLifecycleObserver failed while handling interruption")
             return
@@ -392,6 +393,8 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, UserStartedSpeakingFrame):
+            # A new turn supersedes an unanswered turn even without barge-in.
+            self._conversation.reply_pending = False
             item_id, audio_start_ms = self._conversation.begin_user_turn()
             await self._emit_speech_started(item_id, audio_start_ms)
             return

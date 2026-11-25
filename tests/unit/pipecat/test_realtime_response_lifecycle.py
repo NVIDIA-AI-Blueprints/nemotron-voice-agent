@@ -27,6 +27,8 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     TTSStoppedFrame,
     TTSTextFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection
@@ -267,6 +269,79 @@ class RealtimeResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.done_events()), 1)
         self.assertEqual(self.done_events()[0]["response"]["id"], response_id)
         self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+
+    async def test_delayed_applied_interruption_preserves_new_run_and_tools(self) -> None:
+        for event_type in ("response.cancel", "conversation.item.truncate"):
+            for has_tool in (False, True):
+                with self.subTest(event_type=event_type, has_tool=has_tool):
+                    self.new_session()
+                    await self.response_create()
+                    event = {"type": event_type}
+                    if event_type == "conversation.item.truncate":
+                        event.update(
+                            item_id=self.serializer.conversation.assistant_item_id,
+                            content_index=0,
+                            audio_end_ms=0,
+                        )
+                    interruption = await self.serializer.deserialize(json.dumps(event))
+                    self.assertIsInstance(interruption, InterruptionFrame)
+                    self.emitted.clear()
+
+                    await self.response_create()
+                    response_id = self.serializer.conversation.response_id
+                    await self.push(LLMFullResponseStartFrame())
+                    if has_tool:
+                        await self.push(tool_calls_started("new_call"))
+                    # The old cancellation reaches the observer after the new run starts.
+                    await self.push(interruption)
+                    await self.push(LLMFullResponseEndFrame())
+                    if has_tool:
+                        self.assertEqual(self.done_events(), [])
+                        await self.push(tool_result("new_call", run_llm=False))
+
+                    self.assertEqual(len(self.done_events()), 1)
+                    self.assertEqual(self.done_events()[0]["response"]["id"], response_id)
+                    self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                    self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_fresh_barge_in_still_cancels_after_an_old_cancellation(self) -> None:
+        await self.response_create()
+        old_interruption = await self.serializer.deserialize(json.dumps({"type": "response.cancel"}))
+        self.emitted.clear()
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(old_interruption)
+        await self.push(InterruptionFrame())
+
+        self.assertEqual(len(self.done_events()), 1)
+        self.assertEqual(self.done_events()[0]["response"]["status"], "cancelled")
+        self.assertIsInstance(await self.response_create(), LLMRunFrame)
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMFullResponseEndFrame())
+        self.assertEqual(self.done_events()[-1]["response"]["status"], "completed")
+
+    async def test_new_user_turn_clears_stale_pending_reply_without_interruption(self) -> None:
+        await self.push(UserStartedSpeakingFrame())
+        await self.push(UserStoppedSpeakingFrame())
+        # This committed turn gets no LLM run. While preparation is still pending,
+        # an idle cancellation must keep its existing no-op behavior.
+        self.emitted.clear()
+        self.assertIsNone(await self.serializer.deserialize(json.dumps({"type": "response.cancel"})))
+        self.assertEqual(self.emitted, [])
+
+        # With interruptions disabled, this new turn has no InterruptionFrame
+        # to retire the old pending reply.
+        await self.push(UserStartedSpeakingFrame())
+        self.emitted.clear()
+        self.assertIsNone(await self.serializer.deserialize(json.dumps({"type": "response.cancel"})))
+        self.assertEqual(self.types(), ["error"])
+        self.assertEqual(self.emitted[0]["error"]["code"], "response_cancel_not_active")
+
+        # A newly committed turn can legitimately wait for its own reply again.
+        await self.push(UserStoppedSpeakingFrame())
+        self.emitted.clear()
+        self.assertIsNone(await self.serializer.deserialize(json.dumps({"type": "response.cancel"})))
+        self.assertEqual(self.emitted, [])
 
     async def test_old_tool_result_does_not_finish_the_next_response(self) -> None:
         await self.response_create()

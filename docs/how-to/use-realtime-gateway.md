@@ -139,7 +139,7 @@ Clients can send the following events.
 | `conversation.item.create` | User text items; `function_call_output` is rejected |
 | `conversation.item.truncate` | Barge-in while a response is in progress. Idle truncate is ignored. Does not emit `conversation.item.truncated`. |
 | `response.create` | Start a model turn. The gateway emits `response.created` immediately; assistant item events follow when the reply first has speakable text or audio. Empty `response: {}` is accepted; non-empty per-response overrides are rejected. |
-| `response.cancel` | Cancel the in-progress response. Without an active response, the gateway returns an `error` with code `response_cancel_not_active`. Cancellation is ignored while a committed voice turn's reply is still being prepared. |
+| `response.cancel` | Cancel the in-progress response. Without an active response, the gateway returns an `error` with code `response_cancel_not_active`. Cancellation is ignored while a committed voice turn's reply is still being prepared. This exception ends when a new voice turn starts. |
 
 Conversation item delete/retrieve operations are not supported. There are no response-level instruction, tool, modality, audio, or generation overrides.
 
