@@ -31,7 +31,7 @@ The [Phoenix Compose service](../../docker/sidecars/docker-compose.phoenix.yaml)
 
 4. Run a voice turn in the Pipecat UI.
 5. Look for a new turn trace in Phoenix.
-6. In the same terminal, stop the recipe and its tracing overlay.
+6. Save any traces you need before stopping the stack. The bundled Compose service has no persistent volume configured for Phoenix. In the same terminal, stop the recipe and its tracing overlay.
 
     ```bash
     docker compose --profile "$recipe" --profile tracing down
