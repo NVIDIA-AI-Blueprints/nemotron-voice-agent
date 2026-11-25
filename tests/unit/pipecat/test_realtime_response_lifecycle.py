@@ -214,6 +214,12 @@ class RealtimeResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                             ]
                         )
                     )
+                    for call_id in ("followup", "no_followup"):
+                        await self.push(
+                            FunctionCallInProgressFrame(
+                                function_name="calculate_bmi", tool_call_id=call_id, arguments={}, group_id="same"
+                            )
+                        )
                     await self.push(LLMFullResponseEndFrame())
                     results = [tool_result("followup", run_llm=True), tool_result("no_followup", run_llm=False)]
                     for result in results if followup_first else reversed(results):
@@ -257,6 +263,40 @@ class RealtimeResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(self.done_events()), 1)
                 self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
                 self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_default_tool_follow_up_respects_pending_siblings_in_its_group(self) -> None:
+        for sibling_group in (None, "same", "other"):
+            for default_result_first in (True, False):
+                with self.subTest(sibling_group=sibling_group, default_result_first=default_result_first):
+                    self.new_session()
+                    await self.response_create()
+                    await self.push(LLMFullResponseStartFrame())
+                    for call_id, group_id in (
+                        ("default", "same" if sibling_group else None),
+                        ("explicit", sibling_group),
+                    ):
+                        await self.push(tool_calls_started(call_id))
+                        await self.push(
+                            FunctionCallInProgressFrame(
+                                function_name="calculate_bmi", tool_call_id=call_id, arguments={}, group_id=group_id
+                            )
+                        )
+                    await self.push(LLMFullResponseEndFrame())
+                    results = [tool_result("default"), tool_result("explicit", run_llm=False)]
+                    for result in results if default_result_first else reversed(results):
+                        await self.push(result)
+
+                    # Pipecat's default waits for the last result within a group.
+                    # An explicit false result does not itself request another run.
+                    expects_follow_up = not (sibling_group == "same" and default_result_first)
+                    if expects_follow_up:
+                        self.assertEqual(self.done_events(), [])
+                        await self.push(LLMFullResponseStartFrame())
+                        await self.push(LLMFullResponseEndFrame())
+                    self.assertEqual(self.types().count("response.created"), 1)
+                    self.assertEqual(len(self.done_events()), 1)
+                    self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                    self.assertIsInstance(await self.response_create(), LLMRunFrame)
 
     async def test_llm_error_fails_reply_without_speech(self) -> None:
         await self.response_create()

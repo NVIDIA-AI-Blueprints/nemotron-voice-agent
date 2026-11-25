@@ -94,7 +94,7 @@ def _is_speakable(text: str) -> bool:
     return any(char.isalnum() for char in text)
 
 
-def _tool_result_runs_llm(frame: FunctionCallResultFrame) -> bool:
+def _tool_result_runs_llm(frame: FunctionCallResultFrame, *, group_has_pending_siblings: bool = False) -> bool:
     """Return whether the assistant aggregator runs the LLM again for this result."""
     if not frame.result:
         return False
@@ -102,7 +102,7 @@ def _tool_result_runs_llm(frame: FunctionCallResultFrame) -> bool:
         return bool(frame.properties.run_llm)
     if frame.run_llm is not None:
         return bool(frame.run_llm)
-    return True
+    return not group_has_pending_siblings
 
 
 class RealtimeLifecycleObserver(BaseObserver):
@@ -144,6 +144,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         # result left over from an earlier turn cannot finish a newer response.
         self._run_generations: deque[int] = deque()
         self._tool_calls: dict[str, int] = {}
+        self._tool_call_groups: dict[str, str] = {}
         self._followup_generation: int | None = None
         self._failed_generation: int | None = None
 
@@ -161,6 +162,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         """Forget LLM runs and tool calls cancelled by an interruption."""
         self._run_generations.clear()
         self._tool_calls.clear()
+        self._tool_call_groups.clear()
         self._followup_generation = None
         self._failed_generation = None
         self._conversation.reply_pending = False
@@ -505,6 +507,8 @@ class RealtimeLifecycleObserver(BaseObserver):
 
         if isinstance(frame, FunctionCallInProgressFrame):
             self._track_tool_call(frame.tool_call_id or "")
+            if frame.tool_call_id and frame.group_id:
+                self._tool_call_groups[frame.tool_call_id] = frame.group_id
             await self._emit_server_tool_started(
                 tool_call_id=frame.tool_call_id or "",
                 function_name=frame.function_name or "",
@@ -530,7 +534,15 @@ class RealtimeLifecycleObserver(BaseObserver):
                 return
             if frame.tool_call_id:
                 self._emitted_function_calls.discard(frame.tool_call_id)
-            await self._settle_tool_call(frame.tool_call_id or "", runs_llm=_tool_result_runs_llm(frame))
+            group_id = self._tool_call_groups.get(frame.tool_call_id)
+            group_has_pending_siblings = bool(group_id) and any(
+                call_id != frame.tool_call_id and owner_group == group_id
+                for call_id, owner_group in self._tool_call_groups.items()
+            )
+            await self._settle_tool_call(
+                frame.tool_call_id or "",
+                runs_llm=_tool_result_runs_llm(frame, group_has_pending_siblings=group_has_pending_siblings),
+            )
             return
 
         if isinstance(frame, TTSStoppedFrame):
@@ -552,6 +564,7 @@ class RealtimeLifecycleObserver(BaseObserver):
     async def _settle_tool_call(self, tool_call_id: str, *, runs_llm: bool) -> None:
         """Account for a tool call that finished or was cancelled."""
         generation = self._tool_calls.pop(tool_call_id, None)
+        self._tool_call_groups.pop(tool_call_id, None)
         # Unknown ids belong to a turn this observer already moved past.
         if generation is None:
             return
@@ -636,6 +649,9 @@ class RealtimeLifecycleObserver(BaseObserver):
         # Keep frame dedupe across responses: a finished turn's frames can still
         # reach later pipeline edges and must not open a new response.
         self._tool_calls = {call_id: owner for call_id, owner in self._tool_calls.items() if owner != generation}
+        self._tool_call_groups = {
+            call_id: group_id for call_id, group_id in self._tool_call_groups.items() if call_id in self._tool_calls
+        }
         if self._followup_generation == generation:
             self._followup_generation = None
         if self._failed_generation == generation:
