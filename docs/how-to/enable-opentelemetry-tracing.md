@@ -14,13 +14,14 @@ The [Phoenix Compose service](../../docker/sidecars/docker-compose.phoenix.yaml)
     OTEL_EXPORTER_OTLP_ENDPOINT=phoenix:4317
     ```
 
-2. Start the stack with the `tracing` overlay added to your recipe profile. This brings up the `phoenix` collector alongside the pipeline app. For example, Generic Cascaded on a workstation:
+2. Set `recipe` to your Pipecat recipe profile. If the app is already running, use the profile you started it with. This example uses the Generic Assistant Server recipe.
 
     ```bash
-    docker compose --profile generic-assistant/server --profile tracing up -d
+    recipe=generic-assistant/server
+    docker compose --profile "$recipe" --profile tracing up -d
     ```
 
-    If the stack is already running, the same command recreates the app container with the new settings.
+    Compose starts the Phoenix collector and applies the tracing settings to the selected app.
 
 3. Open the Phoenix UI.
 
@@ -30,10 +31,10 @@ The [Phoenix Compose service](../../docker/sidecars/docker-compose.phoenix.yaml)
 
 4. Run a voice turn in the Pipecat UI.
 5. Look for a new turn trace in Phoenix.
-6. Stop the stack and overlay when finished:
+6. In the same terminal, stop the recipe and its tracing overlay.
 
     ```bash
-    docker compose --profile generic-assistant/server --profile tracing down
+    docker compose --profile "$recipe" --profile tracing down
     ```
 
 ## Configuration

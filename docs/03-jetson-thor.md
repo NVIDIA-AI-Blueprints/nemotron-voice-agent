@@ -44,7 +44,9 @@ Run these steps for one Pipecat recipe.
 
     `omni-assistant-subagents/single-gpu` is **not supported** on Jetson Thor. Use cloud `omni-assistant-subagents` for that example, which runs on NVIDIA cloud endpoints and needs `NVIDIA_API_KEY` (not `HF_TOKEN`). The no-`NVIDIA_API_KEY` rule above applies only to the `*/single-gpu` path.
 
-5. Download the NeMo-Speech.cpp model weights from your regular user account without `sudo`. Rerun this step after an upgrade. The script saves the ASR, Magpie TTS, and NanoCodec weights and Magpie TTS text-normalization grammars in `models/nemo-speech` by default. To keep these assets outside the repository, set `NEMO_SPEECH_MODEL_LOC` in `.env` to an absolute path before running the script. Both the script and the Compose sidecars use that directory.
+5. Download the NeMo-Speech.cpp model weights from your regular user account without `sudo`. Rerun this step after an upgrade. The script saves the ASR, Magpie TTS, and NanoCodec weights and Magpie TTS text-normalization grammars in `models/nemo-speech` by default.
+
+    To use a different directory, set `NEMO_SPEECH_MODEL_LOC` in `.env` to an absolute path. If you previously exported that variable in your shell, run `unset NEMO_SPEECH_MODEL_LOC` in the terminal you use for the download and Compose. Both then use the directory from `.env`.
 
     ```bash
     bash scripts/download-nemo-speech-models.sh
