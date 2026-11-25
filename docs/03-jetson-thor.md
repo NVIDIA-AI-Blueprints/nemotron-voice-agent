@@ -17,10 +17,10 @@ Deploy a Pipecat Single-GPU recipe on Jetson Thor. The cascaded examples run sep
 
 Run these steps for one Pipecat recipe.
 
-1. Clone the release branch.
+1. Clone the repository.
 
     ```bash
-    git clone --branch release_v2.4.0 https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    git clone https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
     ```
 
 2. Change to the repository root.

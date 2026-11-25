@@ -28,7 +28,7 @@ The blueprint provides reference pipelines for building and evaluating voice age
 
 ## 📣 News
 
-Highlights from the [2.4.0 changelog](CHANGELOG.md#240---tbd) include the following:
+Highlights from the [2.4.0 changelog](CHANGELOG.md#v2-4-0) include the following:
 
 - **v2.4.0**
   - Generic Assistant on LiveKit Agents with Cloud, Server, Single GPU, and optional SIP phone call profiles.
@@ -151,10 +151,10 @@ npx skills add .
 
 You need Docker Compose 2.24.4 or newer and an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com/). This cloud recipe does not require an NGC registry login.
 
-1. Clone the release branch over HTTPS.
+1. Clone the repository over HTTPS.
 
     ```bash
-    git clone --branch release_v2.4.0 https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    git clone https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
     ```
 
 2. Change to the repository root.

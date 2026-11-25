@@ -37,10 +37,10 @@ Single-GPU profiles support compatible workstations and DGX Spark. For Jetson Th
 
 Run the following steps for your selected Pipecat profile.
 
-1. Clone the release branch.
+1. Clone the repository.
 
     ```bash
-    git clone --branch release_v2.4.0 https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    git clone https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
     ```
 
 2. Change to the repository root.
@@ -114,7 +114,7 @@ The LiveKit example runs its own server, agent worker, and web UI. Its [deployme
 
 ## Optional: Local Development Without Docker
 
-Run the Pipecat app directly with NVIDIA Cloud endpoints. You need Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), and an NVIDIA Cloud API key. For the Pipecat web UI, use Node.js 22.14 or a later 22.x version to satisfy the engine declared by the locked `@daily-co/daily-js` dependency. Pipecat CI uses Node.js 20; the 22.x guidance is a local recommendation, not a minimum established by CI. Run the commands from the release checkout. Stop any Compose app using port `7860` first.
+Run the Pipecat app directly with NVIDIA Cloud endpoints. You need Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), and an NVIDIA Cloud API key. For the Pipecat web UI, use Node.js 22.14 or a later 22.x version to satisfy the engine declared by the locked `@daily-co/daily-js` dependency. Pipecat CI uses Node.js 20; the 22.x guidance is a local recommendation, not a minimum established by CI. Run the commands from the repository root. Stop any Compose app using port `7860` first.
 
 1. Install Python dependencies from the lockfile.
 
