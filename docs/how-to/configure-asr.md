@@ -118,9 +118,18 @@ Use `transcribe-asr-single-gpu` with the Generic or Multilingual Assistant. It s
 
 ### Transcribe Behavior
 
-Transcribe writes final transcripts in the spoken language without speaker labels. In the Multilingual Assistant, the session language list includes only languages that Transcribe, the TTS, and the LLM all support. Selecting a session language does not change the language of the transcript. In rare cases, Transcribe can follow an instruction spoken in the audio instead of transcribing it.
+Transcribe processes whole turns and returns final transcripts without speaker labels. In the Multilingual Assistant, **Voice Settings** lists languages supported by Transcribe, the selected TTS, and the selected LLM. The assistant sends your selected language with each transcription request. In rare cases, Transcribe can follow an instruction spoken in the audio instead of transcribing it.
 
-To use an external Transcribe NIM, set `server.asr.nemotron-transcribe.server` to its HTTP API URL, including `/v1`. Keep `asr_type: transcribe`. The endpoint must not require an API key because the pipeline does not pass one. In Generic Assistant, leave `transcription_prompt` unset for audio-only requests, or use an official NIM transcription template.
+To use an external Transcribe NIM, edit the entry for your active recipe in [`services.yaml`](../../services.yaml).
+
+| Recipe | Catalog entry | Stock `health_path` |
+| --- | --- | --- |
+| Server | `server.asr.nemotron-transcribe` | `/v1/health/ready` |
+| Single-GPU | `single-gpu.asr.nemotron-transcribe` | `/ready` |
+
+In that entry, set `server` to the external NIM's HTTP API URL, including `/v1`. Set `health_path` to the NIM's readiness path from the root of the same host. The app accepts a JSON response with `"status": "ready"` or `"ready": true`. Keep `asr_type: transcribe` and use an endpoint that accepts requests without an API key.
+
+In Generic Assistant, leave `transcription_prompt` unset for audio-only requests, or use an official NIM transcription template.
 
 > Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs require compute capability **≥ 8.0** and **≥ 16 GB** VRAM.
 

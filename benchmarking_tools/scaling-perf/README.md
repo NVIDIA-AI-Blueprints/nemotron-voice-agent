@@ -192,16 +192,16 @@ This setup is available as the dedicated Compose recipe
 
 4. Check service status with `docker compose --profile generic-assistant/server-perf ps`. Wait for the model services to finish loading.
 5. Change to `benchmarking_tools/scaling-perf`.
-6. Run a single-client smoke test. This recipe disables the welcome message, so pass `--skip-bot-intro`. Omit `--insecure` if the server has a trusted certificate.
+6. Run a single-client smoke test. Pass `--skip-bot-intro` because this recipe disables the welcome message. Use `--insecure` only for the local server's self-signed certificate.
 
    ```bash
-   uv run python3 benchmark.py --skip-bot-intro --insecure
+   uv run python3 benchmark.py --protocol rtvi --skip-bot-intro --insecure
    ```
 
 7. Run the sweep.
 
    ```bash
-   ./simulate_concurrency.sh --clients "1 2 4 8 16" --skip-bot-intro --insecure
+   ./simulate_concurrency.sh --protocol rtvi --clients "1 2 4 8 16" --skip-bot-intro --insecure
    ```
 
 8. Return to the repository root.
@@ -213,17 +213,17 @@ This setup is available as the dedicated Compose recipe
 
 ## Run
 
-Run these examples from this directory. The RTVI commands below assume the target sends a welcome message. For `generic-assistant/server-perf`, use the smoke test and sweep above instead.
+Run these examples from this directory. The RTVI commands target a local server that sends a welcome message, even when `OPENAI_REALTIME_WS_URL` is set. For `generic-assistant/server-perf`, use the smoke test and sweep above.
 
 ```bash
 # Single RTVI client (1 process)
-uv run python3 benchmark.py --insecure
+uv run python3 benchmark.py --protocol rtvi --insecure
 
 # Concurrent RTVI run (4 parallel processes, single concurrency level)
-./simulate_concurrency.sh --clients 4 --insecure
+./simulate_concurrency.sh --protocol rtvi --clients 4 --insecure
 
 # RTVI scaling sweep (one run per concurrency level, cooldown between levels)
-./simulate_concurrency.sh --clients "1 2 4 8 16" --insecure
+./simulate_concurrency.sh --protocol rtvi --clients "1 2 4 8 16" --insecure
 
 # Single Realtime client
 uv run python3 benchmark.py --protocol realtime --ws-url "$OPENAI_REALTIME_WS_URL"

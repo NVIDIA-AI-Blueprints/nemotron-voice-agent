@@ -46,7 +46,7 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 
 ## Run
 
-These commands target a local server with the built-in self-signed certificate. Omit `--insecure` for a server with a trusted certificate. To benchmark the OpenAI Realtime gateway instead of RTVI, follow [Realtime Endpoint](../../benchmarking_tools/scaling-perf/README.md#realtime-endpoint).
+The commands below use `--protocol rtvi` to target the local Pipecat server even when `OPENAI_REALTIME_WS_URL` is set. Use `--insecure` only for the local server's self-signed certificate. For a remote server, use a trusted certificate and omit that flag. To benchmark the OpenAI Realtime gateway, follow [Realtime Endpoint](../../benchmarking_tools/scaling-perf/README.md#realtime-endpoint).
 
 ### Run Against the Server Performance Recipe
 
@@ -56,13 +56,13 @@ The `generic-assistant/server-perf` recipe disables the welcome message. Use `--
 2. Run a single-client smoke test.
 
     ```bash
-    uv run python3 benchmark.py --skip-bot-intro --insecure
+    uv run python3 benchmark.py --protocol rtvi --skip-bot-intro --insecure
     ```
 
 3. Run a scaling sweep.
 
     ```bash
-    ./simulate_concurrency.sh --clients "1 2 4 8 16" --skip-bot-intro --insecure
+    ./simulate_concurrency.sh --protocol rtvi --clients "1 2 4 8 16" --skip-bot-intro --insecure
     ```
 
 ### Run Against a Target That Sends a Welcome Message
@@ -78,7 +78,7 @@ Keep the default intro drain for these targets. Each client waits for and discar
 2. Run a single-client smoke test.
 
     ```bash
-    uv run python3 benchmark.py --insecure
+    uv run python3 benchmark.py --protocol rtvi --insecure
     ```
 
 3. Choose one of these commands to run a load test:
@@ -86,13 +86,13 @@ Keep the default intro drain for these targets. Each client waits for and discar
     **One concurrency level:**
 
     ```bash
-    ./simulate_concurrency.sh --clients 4 --insecure
+    ./simulate_concurrency.sh --protocol rtvi --clients 4 --insecure
     ```
 
     **Scaling sweep with cooldown between levels:**
 
     ```bash
-    ./simulate_concurrency.sh --clients "1 2 4 8 16" --insecure
+    ./simulate_concurrency.sh --protocol rtvi --clients "1 2 4 8 16" --insecure
     ```
 
 ## Outputs

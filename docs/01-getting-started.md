@@ -140,7 +140,7 @@ Run the Pipecat app directly with NVIDIA Cloud endpoints. You need Python 3.12 o
     test -f .env || cp .env.example .env
     ```
 
-5. Set `NVIDIA_API_KEY` in `.env`.
+5. Set `NVIDIA_API_KEY` and `SERVICE_RECIPE=cloud` in `.env`. This keeps the app on NVIDIA Cloud endpoints even when local model services are running.
 6. Set `pipecat.selection` to `generic-assistant` in [`examples_registry.yaml`](../examples_registry.yaml) for this first run. The registry defaults to `all`, which exposes the example selector. An `EXAMPLE_SELECTION` environment override takes precedence. There is no example-selection command-line flag.
 7. Start the Pipecat server.
 
@@ -157,4 +157,4 @@ Run the Pipecat app directly with NVIDIA Cloud endpoints. You need Python 3.12 o
 12. Select **Disconnect** to end the session.
 13. Press Ctrl+C in the server terminal to stop the app.
 
-For a host-native app with local models, start only the named model services from your example's Compose recipe, not the full recipe. The server can detect reachable sidecars on published host ports. Refer to [How the Active Recipe Selects Entries](how-to/configure-services.md#how-the-active-recipe-selects-entries) for detection and `SERVICE_RECIPE` overrides.
+When you switch to local models or a Dynamo recipe, remove `SERVICE_RECIPE=cloud` from `.env` to restore automatic detection. For a host-native app, start only the model services from your example's Compose recipe so the app port stays free. Refer to [How the Active Recipe Selects Entries](how-to/configure-services.md#how-the-active-recipe-selects-entries).

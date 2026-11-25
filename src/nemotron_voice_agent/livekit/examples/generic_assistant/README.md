@@ -44,7 +44,7 @@ Complete the prerequisites in the [Getting Started guide](../../../../../docs/01
 - **Docker with Docker Compose 2.24.4 or newer.** Check the version with `docker compose version`. The Cloud profile needs no GPU.
 - **Git**, to clone the repository.
 - **An NVIDIA GPU and Docker GPU support** for the Single GPU and Server profiles. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), and verify that `nvidia-smi` works inside a container. The Single GPU profile also needs NVIDIA driver 580.x or newer for NeMo-Speech.cpp.
-- **[`uv`](https://docs.astral.sh/uv/) (or the Hugging Face `hf` CLI) and `curl` or `wget`** for the Single GPU profile, which uses them in its weights download script.
+- **Python 3, [`uv`](https://docs.astral.sh/uv/), and `curl` or `wget`** for the Single GPU speech download and Silero voice activity detection (VAD) model build. If you use the Hugging Face `hf` CLI without `uv`, install `gguf==0.19.0` and `numpy==2.2.6` for `python3`.
 
 The credentials depend on the profile:
 
@@ -76,6 +76,8 @@ Run every command from the repository root.
    ```bash
    bash scripts/download-nemo-speech-models.sh
    ```
+
+   If the script warns that it could not build the Silero VAD model, resolve the warning and rerun the script before starting the recipe. The `livekit-nemo-speech-asr` sidecar requires `vad/silero-v6.2.0.gguf` in the speech model directory.
 
 5. Start one recipe with the helper. Replace `<mode>` with `cloud`, `server`, or `single-gpu` from the table.
 

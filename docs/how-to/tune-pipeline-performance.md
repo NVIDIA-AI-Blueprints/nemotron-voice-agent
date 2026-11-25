@@ -52,7 +52,7 @@ The [Omni examples](../../src/nemotron_voice_agent/pipecat/examples/omni_assista
 
 `CHAT_HISTORY_RECENT_TURNS` controls when the Pipecat Generic and Multilingual assistants attempt to summarize older conversation history. It does not set a hard context or token limit. The Omni examples do not use this setting.
 
-Frontend/Backend Live uses separate token budgets: `frontend.cascade.memory.context_tokens` for the talker and `delegation.context_tokens` for the backend. For details, refer to [Use the Live Gateway: Errors and Limits](use-live-gateway.md#errors-and-limits).
+For Frontend/Backend Live, set the talker's token budget with `frontend.cascade.memory.context_tokens` and the backend's budget with `core.delegation.context_tokens` in the example's `config` block. Refer to [Live Gateway Errors and Limits](use-live-gateway.md#errors-and-limits).
 
 ### Configuration
 

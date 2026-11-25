@@ -68,7 +68,7 @@ For a [host-native run](../../../../../docs/01-getting-started.md#optional-local
 
 ## Transcribe ASR
 
-For whole-turn transcription instead of streaming ASR, follow [Run Transcribe With a Server Recipe](../../../../../docs/how-to/configure-asr.md#run-transcribe-with-a-server-recipe) or [Run Transcribe With a Single-GPU Recipe](../../../../../docs/how-to/configure-asr.md#run-transcribe-with-a-single-gpu-recipe). Transcribe writes transcripts in the spoken language regardless of your **Voice Settings** selection.
+For whole-turn transcription, follow [Run Transcribe With a Server Recipe](../../../../../docs/how-to/configure-asr.md#run-transcribe-with-a-server-recipe) or [Run Transcribe With a Single-GPU Recipe](../../../../../docs/how-to/configure-asr.md#run-transcribe-with-a-single-gpu-recipe). Choose the language you plan to speak in **Voice Settings** before connecting. The assistant sends that language with each Transcribe request.
 
 ## Customization
 
@@ -118,13 +118,10 @@ Multilingual behavior depends on the ASR model, the LLM, and the selected TTS vo
 
 ### Testing
 
-1. Start the app with the `multilingual-assistant` profile.
-2. In Voice Settings, pick the session language (for example German, French, or Spanish), then connect.
-3. Speak in the selected language and verify the bot responds in that same language.
-4. Verify that:
-   - the bot always responds in the selected session language, regardless of the language you speak
-   - the transcript shows the clean spoken text
-   - changing the language requires disconnecting, selecting a new language, and connecting again
+1. In the running app, open **Voice Settings**, choose a session language, and select **Connect**.
+2. Speak in the selected language. Verify that the transcript shows what you said and the assistant replies in that language.
+3. To test the reply language, speak in another language and check whether the assistant continues replying in the selected session language.
+4. To change the session language, select **Disconnect**, choose another language in **Voice Settings**, and reconnect.
 
 ### Troubleshooting
 
