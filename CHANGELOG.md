@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Omni vLLM upgraded to 0.33.0.** Updated from 0.20.0.
 - **Scaling benchmark metric names updated.** Renamed `llm_ttft` to `llm_ttfb` and `vad_smart_turn` to `turn_taking_latency`.
 - **Startup readiness checks cover all self-hosted LLMs.** The server now verifies every self-hosted LLM required by an example before starting a session.
+- **Realtime assistant events follow output.** An accepted `response.create` emits `response.created` immediately. Assistant item events follow when the reply first has speakable text or audio.
+- **Idle Realtime cancellation returns an error.** `response.cancel` returns `response_cancel_not_active` when no response is active. Cancellation remains a no-op while a committed voice turn's reply is being prepared.
+
+### Fixed
+
+- **Empty Realtime replies complete.** Client-requested responses with no speakable output finish with `response.done` and an empty `output` list, allowing the next response to start. These responses finish with status `failed` if the LLM request fails.
+- **Realtime cancellation preserves the next reply.** A `response.cancel` immediately followed by `response.create` no longer cancels the new response.
+- **Completed Realtime replies do not reopen.** Frames from a finished spoken reply no longer create a stray second response.
 
 ### Removed
 
