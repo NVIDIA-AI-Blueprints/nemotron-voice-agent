@@ -4,6 +4,8 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
 
 ## Start and Verify Phoenix
 
+The [Phoenix Compose service](../../docker/sidecars/docker-compose.phoenix.yaml) publishes the UI (port `6006`) and the OTLP gRPC collector (port `4317`) on all host interfaces. Traces can contain conversation data. Before starting the overlay, block direct access to both ports from untrusted networks. For remote UI access, use a trusted network or an authenticated HTTPS reverse proxy.
+
 1. Enable tracing in `.env` **before** starting the stack, so the app picks it up:
 
     ```env
@@ -18,17 +20,13 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
     docker compose --profile generic-assistant/server --profile tracing up -d
     ```
 
-    If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker/sidecars/docker-compose.phoenix.yaml` and included through `docker/pipecat/docker-compose.yaml`) exposes:
-    - **Port 6006**: Phoenix UI
-    - **Port 4317**: OTLP gRPC collector
+    If the stack is already running, the same command recreates the app container with the new settings.
 
 3. Open the Phoenix UI.
 
     ```
     http://localhost:6006
     ```
-
-    Use a trusted network or an authenticated proxy for remote access. Traces can contain conversation data.
 
 4. Run a voice turn in the Pipecat UI.
 5. Look for a new turn trace in Phoenix.

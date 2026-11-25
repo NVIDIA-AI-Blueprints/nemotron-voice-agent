@@ -9,7 +9,7 @@ Deploy a Pipecat Single-GPU recipe on Jetson Thor. The cascaded examples run sep
 - **Jetson Thor** flashed with **JetPack 7.0** using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) (with CUDA, CUDA-X, TensorRT, and NVIDIA Container Runtime components installed). Orin-class Jetsons are not supported.
 - [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and [Docker Compose](https://docs.docker.com/compose/install/linux/) 2.24.4 or newer
 - [HuggingFace API token](https://huggingface.co/docs/hub/en/security-tokens) for downloading LLM models
-- The [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/en/guides/cli) (`hf`) for downloading the speech GGUFs
+- Python 3 and either the [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/en/guides/cli) (`hf`) or `uvx` for downloading the speech weights. For the Generic Assistant, install the [voice activity detection (VAD) model converter prerequisites](01-getting-started.md#prerequisites).
 
 ---
 
@@ -44,19 +44,13 @@ Run these steps for one Pipecat recipe.
 
     `omni-assistant-subagents/single-gpu` is **not supported** on Jetson Thor. Use cloud `omni-assistant-subagents` for that example, which runs on NVIDIA cloud endpoints and needs `NVIDIA_API_KEY` (not `HF_TOKEN`). The no-`NVIDIA_API_KEY` rule above applies only to the `*/single-gpu` path.
 
-5. Download the NeMo-Speech.cpp model weights as your user, not with `sudo`. Rerun this step after an upgrade. The script
-   fetches the ASR, Magpie TTS, and NanoCodec GGUFs plus Magpie TTS
-   text-normalization grammars (`tn_configs`) into `models/nemo-speech`:
+5. Download the NeMo-Speech.cpp model weights from your regular user account without `sudo`. Rerun this step after an upgrade. The script saves the ASR, Magpie TTS, and NanoCodec weights and Magpie TTS text-normalization grammars in `models/nemo-speech` by default. To keep these assets outside the repository, set `NEMO_SPEECH_MODEL_LOC` in `.env` to an absolute path before running the script. Both the script and the Compose sidecars use that directory.
 
     ```bash
     bash scripts/download-nemo-speech-models.sh
     ```
 
-    The script reads `HF_TOKEN` from `.env`. For `generic-assistant/single-gpu`, resolve any VAD build warnings before startup. Refer to the [Single-GPU prerequisites](01-getting-started.md#prerequisites).
-
-    > To keep the weights outside the repo so they survive re-clones and worktrees, set
-    > `NEMO_SPEECH_MODEL_LOC` in `.env` to an absolute path, or pass that path as
-    > the script's first argument.
+    The script reads `HF_TOKEN` from `.env`. For `generic-assistant/single-gpu`, resolve any VAD build warnings before startup.
 
 6. Check available memory before starting. GPU, OS, containers, and page cache
    all share Thor's unified memory, so treat `MemAvailable` as the ceiling:

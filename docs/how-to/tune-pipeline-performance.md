@@ -111,7 +111,7 @@ When `UVICORN_WORKERS > 1`, the stock app disables session-config-based WebRTC a
 
 ## Transport Selection
 
-When both transports are enabled, Pipecat exposes them on different endpoints:
+Pipecat registers a separate endpoint for each transport.
 
 | Transport | Endpoint | Best For |
 |-----------|----------|----------|
@@ -120,17 +120,19 @@ When both transports are enabled, Pipecat exposes them on different endpoints:
 
 For a custom telephony bridge or server-to-server integration, the WebSocket endpoint uses the Pipecat client frame format. It is not a SIP endpoint. WebRTC provides media transport and jitter handling for browser clients. Compare playback gaps and interruption delay on your target client under load rather than assuming one transport always has lower latency.
 
-### Choosing Which Transports Are Exposed
+<a id="choosing-which-transports-are-exposed"></a>
 
-Pipecat exposes both transports by default. Set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) to restrict the server to one transport. `TRANSPORT_SELECTION` overrides the registry value. The following values apply to both settings:
+### Choose Transports for the Browser
 
-| Value | Exposes |
+Set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) to choose which transports the browser offers. `TRANSPORT_SELECTION` overrides the registry value. The server keeps both endpoints registered for every value.
+
+| Value | Browser choices |
 |-------|---------|
 | `all` (default) | WebRTC and WebSocket |
 | `webrtc` | WebRTC only |
 | `websocket` | WebSocket only |
 
-To expose only WebSocket using the environment override:
+To offer only WebSocket in the browser, use the environment override.
 
 1. Set `TRANSPORT_SELECTION` in `.env`.
 

@@ -59,7 +59,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
 
 6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for the browser and the scaling benchmark. For plain-HTTP browser testing, refer to [Browser Access](../../../../../docs/06-troubleshooting.md#browser-access).
 
-7. Select **Connect**.
+7. For Dynamo, [verify the self-hosted Dynamo model](../../../../../docs/01-getting-started.md#deployment-steps) first. Select **Connect**.
 8. Allow microphone access if prompted.
 9. Ask an English question after the greeting. The assistant should answer aloud.
 10. Select **Disconnect** to end the session.

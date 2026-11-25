@@ -141,7 +141,7 @@ Run the Pipecat Generic Assistant using NVIDIA Cloud endpoints, with no local GP
 
 ### With the Agent Skills
 
-Install the skills, then ask your coding agent to deploy or configure your chosen example:
+From the root of your local clone, install the skills. Then ask your coding agent to deploy or configure your example.
 
 ```bash
 npx skills add .
@@ -191,7 +191,7 @@ You need Docker Compose 2.24.4 or newer and an NVIDIA API key from [build.nvidia
 
 ## 🤖 Agent Skills
 
-This repository includes AI agent skills for deployment assistance. Install them for your coding agent with:
+To install the deployment skills for your coding agent, run the following command from the repository root.
 
 ```bash
 npx skills add .
@@ -222,6 +222,8 @@ npx skills add .
 Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-configuration-guide.md). They cover configuring .env, models, and prompts, enabling opentelemetry tracing, a TURN Server, and the audio recorder for debugging, plus the Realtime integrator gateway, the Live gateway, and connecting an agent harness.
 
 ---
+
+<a id="-roadmap"></a>
 
 ## 🗺️ Roadmap
 

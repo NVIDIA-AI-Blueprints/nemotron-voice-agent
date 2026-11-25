@@ -2,7 +2,7 @@
 
 Use a TURN server when a firewall or NAT prevents a direct WebRTC connection. Localhost typically does not need it. This guide applies to the Pipecat examples (`nva-pipecat`).
 
-Before enabling TURN, restrict access to the Pipecat app to trusted users. Its browser endpoint, `GET /api/ice-servers`, returns the configured TURN username and password to anyone who can reach it. `LIVE_API_TOKEN` protects only the `/v1/live` routes. For remote access, use a private network or an authenticated reverse proxy that covers the app, and block direct public access to the app port (default `7860`).
+Use HTTPS for remote browser access to the Pipecat app, including `GET /api/ice-servers`. This endpoint returns the configured TURN username and password to anyone who can reach it. `LIVE_API_TOKEN` protects only the `/v1/live` routes. Before enabling TURN, restrict the app to trusted users through a private network or an authenticated reverse proxy. Block direct public access to the app port (default `7860`).
 
 > **Architecture note:** The bundled `turn` profile uses the `instrumentisto/coturn` image, which is supported on **x86_64 (linux/amd64) only**. It is **not** supported on arm64 / aarch64 platforms (for example, NVIDIA Jetson Thor). On arm64 hosts, do not enable `--profile turn`. Instead, point the client at an externally hosted TURN server by setting `TURN_URL`, `TURN_USERNAME`, and `TURN_PASSWORD` in `.env` (see the snippet below).
 
@@ -26,7 +26,7 @@ The opt-in `turn` profile runs [Coturn](../../docker/sidecars/docker-compose.cot
    docker compose --profile generic-assistant --profile turn up -d
    ```
 
-5. Connect from the remote browser through the private network or authenticated proxy. The UI fetches its ICE configuration from the app.
+5. Open the Pipecat app's HTTPS URL in the remote browser. The UI fetches its ICE configuration from the app.
 6. Stop the recipe and overlay when finished:
 
    ```bash

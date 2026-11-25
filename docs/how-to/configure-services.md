@@ -18,7 +18,9 @@ Set the keys for your recipe in the repository's `.env`.
 
 The LiveKit profiles `generic-assistant-livekit`, `generic-assistant-livekit/server`, and `generic-assistant-livekit/single-gpu` use the same keys as Cloud, Server, and Single-GPU.
 
-`NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server, Performance Server, and Dynamo need `docker login nvcr.io` before `up`. The stock Single-GPU recipe uses `HF_TOKEN` for Hugging Face downloads and does not need `NVIDIA_API_KEY`.
+For Server, Performance Server, and Dynamo, run `docker login nvcr.io` before `up`. The stock Single-GPU recipe uses `HF_TOKEN` for Hugging Face downloads.
+
+When you supply `NVIDIA_API_KEY`, Pipecat lists NVIDIA Cloud entries alongside the available self-hosted services. Performance Server uses the same catalog for benchmarking and disables browser session setup. LiveKit uses built-in NVIDIA Cloud endpoints only in its Cloud recipe.
 
 ## Catalog Layout
 
@@ -51,7 +53,7 @@ server:
 
 ## How the Active Recipe Selects Entries
 
-Pipecat Compose app services set `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, except `generic-assistant-dynamo` and `multilingual-assistant-dynamo`. Those two services leave it unset to use `auto`, the same default as host-native runs (`uv run nva-pipecat`). A non-`auto` value skips recipe detection, not service status checks.
+Most Pipecat Compose app services set `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`. The Dynamo services (`generic-assistant-dynamo` and `multilingual-assistant-dynamo`) and host-native runs (`uv run nva-pipecat`) read this setting from the environment, including the repository's `.env`. They default to `auto`. When switching from Cloud to Dynamo, remove `SERVICE_RECIPE=cloud` from `.env` to restore automatic detection. With an explicit recipe, Pipecat skips detection and continues checking service status.
 
 In `auto`, Pipecat probes the `server` and `single-gpu` endpoints in parallel and caches reachability results for 5 seconds. It selects the section with the most reachable entries, preferring `server` on a tie. If a slot in that section has no reachable entries, Pipecat keeps all entries in that slot so the session readiness check can report the unavailable service.
 
@@ -60,7 +62,7 @@ For host-native runs with local models, start only the named model services so C
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |
 | `auto` (unset) | Reachable entries per slot in the detected section. If none in a slot are reachable, all entries in that slot. If no endpoint in either section is reachable, no self-hosted entries when `NVIDIA_API_KEY` is set, or the example's `server` entries otherwise. | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
-| `cloud` | none | `server` entries with `nvcf` |
+| `cloud` | none | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 | `server` | `server` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 | `single-gpu` | `single-gpu` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 
@@ -92,7 +94,7 @@ The defaults are the first keys of each slot under `livekit.examples.generic-ass
 
 ## Switching Services in the UI
 
-The Services tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Each self-hosted card shows its endpoint's status: **Starting…** while it loads, **Ready** once its HTTP readiness check or TCP port probe passes, and **Error** if it goes offline after the app server has seen it, until it is ready again. A TCP probe confirms the port is open, not that the model is loaded. Offline entries that the app server has never seen are hidden, unless that would leave the slot empty. In that case they show **Not running**. Until you click an entry, the first visible one is used, so a scaled-down Lightning does not stay the default. An entry you clicked stays selected while its card is visible, including when it shows **Starting…** or **Error**. Click another entry to change it. Statuses refresh every five seconds with any `SERVICE_RECIPE`, so a sidecar started later appears without a page refresh. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
+In Pipecat, the **Services** tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Each self-hosted card shows its endpoint's status: **Starting…** while it loads, **Ready** once its HTTP readiness check or TCP port probe passes, and **Error** if it goes offline after the app server has seen it, until it is ready again. A TCP probe confirms the port is open, not that the model is loaded. Offline entries that the app server has never seen are hidden, unless that would leave the slot empty. In that case they show **Not running**. Until you click an entry, the first visible one is used, so a scaled-down Lightning does not stay the default. An entry you clicked stays selected while its card is visible, including when it shows **Starting…** or **Error**. Click another entry to change it. Statuses refresh every five seconds with any `SERVICE_RECIPE`, so a sidecar started later appears without a page refresh. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
 
 ## Editable Settings
 

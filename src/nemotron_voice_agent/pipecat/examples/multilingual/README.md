@@ -58,9 +58,9 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), uni
    | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-asr-multilingual`, `nemo-speech-tts` |
    | `multilingual-assistant/dynamo` | `multilingual-assistant-dynamo` | `dynamo-frontend`, `dynamo-lightning-worker`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
 
-6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
+6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for the browser and the scaling benchmark. For plain-HTTP API testing, refer to [Browser Access](../../../../../docs/06-troubleshooting.md#browser-access).
 
-7. Test the session language using [Testing](#testing).
+7. For Dynamo, [verify the self-hosted Dynamo model](../../../../../docs/01-getting-started.md#deployment-steps) before connecting. Then follow [Testing](#testing) to check the session language.
 8. Select **Disconnect** to end the session.
 9. Stop the deployment with `docker compose --profile <recipe> down` using the same recipe.
 

@@ -98,10 +98,10 @@ Run every command from the repository root.
    The [helper](run.sh) checks prerequisites and waits for the sidecars and agent registration. With plain Compose, use `docker compose --profile <profile> up -d` instead, then run the helper's `wait <mode>` command. Phone calls use a separate, optional [Linux SIP setup](SIP.md).
 
 6. Wait for `Ready to connect`. The first startup can take time to download and load models. If you interrupt the wait with Ctrl+C, the containers keep running. Resume with `src/nemotron_voice_agent/livekit/examples/generic_assistant/run.sh wait <mode>`.
-7. Open `http://localhost:3000/` on the Docker host. For another computer, follow [Remote Browser Access](#remote-browser-access). The **DEFAULT PIPELINE** panel shows the active models.
+7. Open `http://localhost:3000/` on the Docker host. For another computer, follow [Remote Browser Access](#remote-browser-access). Before you connect, **DEFAULT PIPELINE** shows the deployment's default models.
 8. Select **Connect**.
 9. Allow microphone access if prompted.
-10. Ask a question. Expect a spoken reply from the agent.
+10. Ask a question. Expect a spoken reply from the agent. **PIPELINE IN USE** shows the models the agent reports for your session.
 11. Select **Disconnect** to leave the room.
 12. Stop the recipe with the mode you started:
 

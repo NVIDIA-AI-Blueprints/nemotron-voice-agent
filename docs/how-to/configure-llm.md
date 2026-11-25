@@ -164,9 +164,10 @@ The single-GPU vLLM service and the server NIM read the **Reasoning Budget** fro
 
 The `generic-assistant/dynamo` and `multilingual-assistant/dynamo` recipes serve Lightning with Dynamo and pair it with the ASR and TTS NIMs from the matching `/server` recipe. The `dynamo-frontend` service routes requests to the vLLM workers, and the recipe starts one worker, `dynamo-lightning-worker`, on GPU `0`. The workers register through file-based discovery on the shared `dynamo_kv` volume, so the recipe needs no etcd or NATS.
 
+Leave `SERVICE_RECIPE` unset or set it to `auto` in `.env`. Start one recipe. The following command starts the Generic Assistant. To use the Multilingual Assistant, substitute `multilingual-assistant/dynamo`.
+
 ```bash
 docker compose --profile generic-assistant/dynamo up -d
-docker compose --profile multilingual-assistant/dynamo up -d
 ```
 
 Each worker runs with `--endpoint-types chat,realtime`, so one engine serves chat completions at `http://dynamo-frontend:8000/v1` and OpenAI Realtime text sessions at `ws://dynamo-frontend:8000/v1/realtime`. The `nemotron-lightning-dynamo` entry declares them as its `base_url` and `streaming_url`. With **Streaming Input** off, the pipeline sends chat completions. With it on, `NvidiaStreamingLLMService` streams ASR updates into the session as prefill, as it does for the [vLLM services](#deployment-tuning-parameters). The Multilingual Assistant has no **Streaming Input**, so it always sends chat completions.
@@ -176,7 +177,7 @@ Each worker runs with `--endpoint-types chat,realtime`, so one engine serves cha
 - **GPU memory.** The ASR and TTS NIMs share GPU `0`, so the worker takes a `0.45` share of GPU memory. The LLM needs about 28 GB, so the default share needs a GPU with at least 64 GB. Change `GPU_MEMORY_UTILIZATION` in the worker's `environment` to change the share.
 - **Routing.** The frontend spreads requests across the workers in turn (`--router-mode round-robin`). Each realtime session stays on the worker that it starts on. Dynamo supports only `round-robin` and `random` for realtime sessions so far ([ai-dynamo/dynamo#10320](https://github.com/ai-dynamo/dynamo/issues/10320)). When a worker stops, `--migration-limit 2` moves its in-flight chat completions to another worker.
 - **Multi-speaker mode.** Dynamo does not accept `response_format` in `chat_completion_options` yet, so multi-speaker mode works only with **Streaming Input** off.
-- **Startup.** Loading the Lightning model takes several minutes on the first start. The frontend turns healthy, and the Services tab lists the entry, once a worker serves the model.
+- **Startup.** Wait for `dynamo-frontend` and the ASR and TTS NIMs to show `healthy`. Before connecting, [verify the self-hosted Dynamo model in the Services tab](../01-getting-started.md#deployment-steps). The app can offer NVIDIA Cloud services while the local models start.
 
 #### Add Dynamo Workers
 
@@ -220,7 +221,9 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 
 **Lightning vLLM sizing (`nvidia-llm-vllm-lightning`).** The Single-GPU service loads `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` on every supported GPU. Blackwell workstations, DGX Spark, and Jetson Thor serve native NVFP4. Hopper and Ada serve the same checkpoint as W4A16 through Marlin (`--quantization modelopt_fp4`).
 
-**Streaming input.** The Lightning vLLM service also serves OpenAI Realtime text sessions at `ws://nvidia-llm-vllm:8000/v1/realtime`, next to chat completions. The single-GPU Super VL service (`nemotron-35-super-vl-vllm`), the Bolt 74B service (`nemotron-35-bolt-vllm`), and the Bolt E4B service (`nemotron-35-bolt-e4b-vllm`) serve the same endpoint on their own ports. The single-GPU `nemotron-lightning`, `nemotron-super`, `nemotron-bolt-74b`, and `nemotron-bolt-4b` entries declare it as `streaming_url`. When an example lists `streaming_input` under `capabilities` in `examples_registry.yaml`, each of those cards shows a **Streaming Input** toggle, and turning it on sends the session to that URL. The Generic Assistant then prefills every ASR update while the user speaks, so the answer starts from a warm KV cache. The toggle appears for supported self-hosted entries with a `streaming_url`, including [Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo). Streaming Input sends text to the model sidecar. It does not connect a voice client to the app's [Realtime gateway](use-realtime-gateway.md) or [Live gateway](use-live-gateway.md). With Streaming Input enabled, the sidecar does not stream reasoning text.
+**Streaming input.** The Lightning vLLM service also serves OpenAI Realtime text sessions at `ws://nvidia-llm-vllm:8000/v1/realtime`, next to chat completions. The single-GPU Super VL service (`nemotron-35-super-vl-vllm`), the Bolt 74B service (`nemotron-35-bolt-vllm`), and the Bolt E4B service (`nemotron-35-bolt-e4b-vllm`) serve the same endpoint on their own ports. The single-GPU `nemotron-lightning`, `nemotron-super`, `nemotron-bolt-74b`, and `nemotron-bolt-4b` entries declare it as `streaming_url`. When an example lists `streaming_input` under `capabilities` in `examples_registry.yaml`, each of those cards shows a **Streaming Input** toggle, and turning it on sends the session to that URL. The toggle appears for supported self-hosted entries with a `streaming_url`, including [Dynamo](#run-nemotron-35-lightning-on-nvidia-dynamo). Streaming Input sends text to the model sidecar. It does not connect a voice client to the app's [Realtime gateway](use-realtime-gateway.md) or [Live gateway](use-live-gateway.md). With Streaming Input enabled, the sidecar does not stream reasoning text.
+
+With streaming ASR, the Generic Assistant sends partial transcripts to the LLM, which can start processing the prompt while the user speaks. Whole-turn Transcribe sends its first transcript after the user finishes speaking. If early prefill fails, the assistant sends the turn text when it commits the turn.
 
 The streaming server holds the latest word until another word arrives or the turn commits. If an ASR correction changes previously queued prompt tokens, the engine request restarts with the updated prompt. Voice activity detection (VAD) stopping does not guarantee that prefill is complete: final ASR updates or pending chunks can still require processing.
 

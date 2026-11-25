@@ -15,7 +15,7 @@ Choose credentials for your recipe:
 | Single-GPU (`<example>/single-gpu`) | [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) | Not required |
 | Dynamo (`<example>/dynamo`) | `NVIDIA_API_KEY` with NGC access for the speech NIMs **and** `HF_TOKEN` for the Lightning weights | Required |
 
-Single-GPU recipes also need NVIDIA driver 580.x or newer for NeMo-Speech.cpp. The speech download script needs Python 3 and either the Hugging Face `hf` CLI or `uvx`. The Generic Assistant also needs `uv`, or Python with `gguf==0.19.0` and `numpy==2.2.6`, to build the voice activity detection (VAD) model used by diarization.
+Single-GPU recipes also need NVIDIA driver 580.x or newer for NeMo-Speech.cpp. To download speech weights, install Python 3 and either the Hugging Face `hf` CLI or `uvx`. For the Generic Assistant, the script uses `curl` or `wget` to download the voice activity detection (VAD) model converter. To run the converter, install `uv` or make `gguf==0.19.0` and `numpy==2.2.6` available to `python3`.
 
 ## Docker Based Deployment
 
@@ -55,7 +55,7 @@ Run the following steps for your selected Pipecat profile.
     test -f .env || cp .env.example .env
     ```
 
-4. Set the key or keys for your recipe in `.env`. An exported shell variable alone does not populate the app's `.env` file.
+4. Set the key or keys for your recipe in `.env`. An exported shell variable alone does not populate the app's `.env` file. For Dynamo, leave `SERVICE_RECIPE` unset or set it to `auto` so the app can detect the local services.
 5. [Log in to the NGC registry](#log-in-to-the-ngc-registry) for Server or Dynamo only.
 
 6. Download the speech weights for Single-GPU only. Run the script as your user, not with `sudo`, and rerun it after upgrading to refresh the assets. Omni recipes use the speech sidecar for text-to-speech (TTS) only.
@@ -79,10 +79,13 @@ Run the following steps for your selected Pipecat profile.
     docker compose --profile <recipe> ps
     ```
 
-    Wait for the app to become healthy. A healthy app does not guarantee that all model services are ready. For startup failures, refer to [Troubleshooting](06-troubleshooting.md).
+    Wait for the app to become healthy. For Dynamo, also wait for `dynamo-frontend` and the ASR and TTS NIM containers to show `healthy`. The app can select NVIDIA Cloud services while local models are starting. For startup failures, refer to [Troubleshooting](06-troubleshooting.md).
 
 10. Open `https://localhost:7860/` on the Docker host, or `https://<machine-ip>:7860/` from another machine. If you changed `PIPELINE_APP_PORT`, use that host port. For TLS warnings or microphone problems, refer to [Browser Access](06-troubleshooting.md#browser-access). Remote WebRTC clients can need [a TURN server](how-to/enable-turn-server.md).
-11. Select **Connect**. The default local services must be ready before a session can start.
+
+    For Dynamo, refresh the page if you opened it during startup. Under **SERVICES > LLM Services**, select **Nemotron 3.5 Lightning 30B A3B (Dynamo)** and confirm that it shows **Self-hosted** and **Ready**.
+
+11. Select **Connect**. The app checks the selected local services before it starts the session.
 12. Allow microphone access if prompted.
 13. Ask a question after the greeting finishes. You should hear a spoken reply. The first turn on a local recipe can take longer while the models warm up.
 14. Select **Disconnect** to end the session.
