@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Empty Realtime replies complete.** Client-requested responses with no speakable output finish with `response.done` and an empty `output` list, allowing the next response to start. These responses finish with status `failed` if the LLM request fails.
+- **Realtime tool follow-up stays in the response.** Mixed tool results no longer finish an empty response before a requested follow-up LLM run.
 - **Realtime cancellation preserves the next reply.** A `response.cancel` or `conversation.item.truncate` immediately followed by `response.create` no longer cancels the new response or prevents it from finishing.
 - **Completed Realtime replies do not reopen.** Frames from a finished spoken reply no longer create a stray second response.
 - **Pipecat evaluation judge imports.** Service evaluation scenarios use the current package path for the judge factory after the repository restructure.

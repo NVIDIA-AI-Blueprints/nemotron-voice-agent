@@ -198,6 +198,66 @@ class RealtimeResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(done[0]["response"]["status"], "completed")
                 self.assertEqual(done[0]["response"]["output"], [])
 
+    async def test_sibling_tool_results_preserve_requested_follow_up(self) -> None:
+        for followup_first in (True, False):
+            for followup_text in (None, "Your BMI is 22.9."):
+                with self.subTest(followup_first=followup_first, followup_text=followup_text):
+                    self.new_session()
+                    await self.response_create()
+                    response_id = self.serializer.conversation.response_id
+                    await self.push(LLMFullResponseStartFrame())
+                    await self.push(
+                        FunctionCallsStartedFrame(
+                            function_calls=[
+                                SimpleNamespace(tool_call_id=call_id, function_name="calculate_bmi", arguments={})
+                                for call_id in ("followup", "no_followup")
+                            ]
+                        )
+                    )
+                    await self.push(LLMFullResponseEndFrame())
+                    results = [tool_result("followup", run_llm=True), tool_result("no_followup", run_llm=False)]
+                    for result in results if followup_first else reversed(results):
+                        await self.push(result)
+                        self.assertEqual(self.done_events(), [])
+
+                    await self.push(LLMFullResponseStartFrame())
+                    if followup_text is not None:
+                        await self.push(LLMTextFrame(text=followup_text))
+                    await self.push(LLMFullResponseEndFrame())
+                    if followup_text is not None:
+                        self.assertEqual(self.done_events(), [])
+                        await self.push(TTSTextFrame(text=followup_text, text_type=TextType.SENTENCE))
+                        await self.push_output_stop()
+
+                    self.assertEqual(self.types().count("response.created"), 1)
+                    self.assertEqual(len(self.done_events()), 1)
+                    self.assertEqual(self.done_events()[0]["response"]["id"], response_id)
+                    self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                    self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_follow_up_can_start_before_sibling_tool_finishes(self) -> None:
+        for llm_finishes_first in (True, False):
+            with self.subTest(llm_finishes_first=llm_finishes_first):
+                self.new_session()
+                await self.response_create()
+                await self.push(LLMFullResponseStartFrame())
+                await self.push(tool_calls_started("followup"))
+                await self.push(tool_calls_started("no_followup"))
+                await self.push(LLMFullResponseEndFrame())
+                await self.push(tool_result("followup", run_llm=True))
+                await self.push(LLMFullResponseStartFrame())
+                completions = [LLMFullResponseEndFrame(), tool_result("no_followup", run_llm=False)]
+                if not llm_finishes_first:
+                    completions.reverse()
+                await self.push(completions[0])
+                self.assertEqual(self.done_events(), [])
+                await self.push(completions[1])
+
+                self.assertEqual(self.types().count("response.created"), 1)
+                self.assertEqual(len(self.done_events()), 1)
+                self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
     async def test_llm_error_fails_reply_without_speech(self) -> None:
         await self.response_create()
         await self.push(LLMFullResponseStartFrame())

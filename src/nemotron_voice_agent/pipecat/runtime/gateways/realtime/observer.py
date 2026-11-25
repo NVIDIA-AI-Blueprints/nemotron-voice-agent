@@ -480,7 +480,8 @@ class RealtimeLifecycleObserver(BaseObserver):
         if isinstance(frame, LLMFullResponseStartFrame):
             generation = self._open_generation()
             self._run_generations.append(generation)
-            if self._followup_generation == generation and generation not in self._tool_calls.values():
+            if self._followup_generation == generation:
+                # The requested run has started even if sibling tools are still running.
                 self._followup_generation = None
             return
 
@@ -552,9 +553,10 @@ class RealtimeLifecycleObserver(BaseObserver):
         """Account for a tool call that finished or was cancelled."""
         generation = self._tool_calls.pop(tool_call_id, None)
         # Unknown ids belong to a turn this observer already moved past.
-        if generation is None or generation in self._tool_calls.values():
+        if generation is None:
             return
         if runs_llm:
+            # A later sibling result without a follow-up must not lose this request.
             self._followup_generation = generation
             return
         await self._settle_generation(generation)
