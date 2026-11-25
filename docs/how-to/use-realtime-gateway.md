@@ -501,11 +501,10 @@ not by a prefix, description, or regular expression.
 
 A server or delegate call is the pipeline's own internal mechanics, and it
 never reaches the client. No `function_call` item ever announces it, no
-published field names it or its owner, and the response it runs inside closes
-with an empty output array -- indistinguishable on the wire from a response
-that legitimately produced nothing. The pipeline still executes the call,
-applies its result to the model's own context, and can speak a short
-acknowledgement from it ahead of the grounded final answer, but none of that
+published field names it or its owner, and a response with only that call
+closes with status `completed` and an empty output array. The pipeline still
+executes the call, applies its result to the model's own context, and can speak
+a short acknowledgement ahead of the grounded final answer, but none of that
 requires the client to do anything. A standard OpenAI Realtime client needs no
 special handling to avoid answering a call it never sees, and no configuration
 naming the trusted tools to filter them out.
@@ -697,6 +696,10 @@ is suppressed, the gateway emits a `server_error`. An accepted manual response
 request, or automatic response creation with a free response slot, ends as
 `failed` with empty output. An unrelated response that already occupies the slot
 is not cancelled or replaced.
+
+When an accepted language model response ends normally without answer text,
+audio, or a tool call, the gateway sends `response.done` with status `failed`.
+The error code is `empty_llm_response` in `response.status_details.error.code`.
 
 If TTS finishes an announced audio item without producing wire audio, the
 gateway emits `tts_provider_error` and ends that response as `failed`.

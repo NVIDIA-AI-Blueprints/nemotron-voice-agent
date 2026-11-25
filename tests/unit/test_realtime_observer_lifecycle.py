@@ -32,6 +32,7 @@ from pipecat.services.llm_service import FunctionCallFromLLM, FunctionCallResult
 from pipecat.services.tts_service import TTSService
 from pipecat.transports.base_output import BaseOutputTransport
 
+from examples.shared.frames import LLMProviderCompletionReasonFrame
 from realtime.controller import RealtimeSessionController
 from realtime.frames import RealtimeOwnedLLMFullResponseStartFrame
 from realtime.observer import RealtimeLifecycleObserver, _serialize_tool_result
@@ -189,6 +190,46 @@ class ObserverAudioLifecycleTests(unittest.IsolatedAsyncioTestCase):
             done["response"]["output"][0]["content"],
             [{"type": "output_audio", "transcript": "Hello world."}],
         )
+
+    async def test_empty_model_turn_terminal_status(self) -> None:
+        for output_kind in ("audio", "text"):
+            for finish_reason in ("stop", "length", "content_filter"):
+                with self.subTest(output_kind=output_kind, finish_reason=finish_reason):
+                    recorder = _Recorder()
+                    controller = _controller(output_kind=output_kind)
+                    observer = RealtimeLifecycleObserver(
+                        emit=recorder.emit,
+                        emit_batch=recorder.emit_batch,
+                        controller=controller,
+                    )
+                    start = _owned_start(controller, "empty-model-turn")
+                    await _push(observer, start, source=self.llm, destination=self.destination)
+                    terminal_source = self.tts if output_kind == "audio" else self.output
+                    await _push(observer, start, source=terminal_source, destination=self.destination)
+                    await _push(
+                        observer,
+                        LLMProviderCompletionReasonFrame(finish_reason=finish_reason),
+                        source=self.llm,
+                        destination=self.destination,
+                    )
+                    end = LLMFullResponseEndFrame()
+                    await _push(observer, end, source=self.llm, destination=self.destination)
+                    await _push(observer, end, source=terminal_source, destination=self.destination)
+                    await _push(observer, end, source=terminal_source, destination=self.destination)
+
+                    self.assertEqual(recorder.types, ["response.created", "response.done"])
+                    created, done = (event["response"] for event in recorder.events)
+                    self.assertEqual(done["id"], created["id"])
+                    self.assertEqual(done["output"], [])
+                    self.assertIsNone(controller.active_response_id)
+                    if finish_reason == "stop":
+                        self.assertEqual(done["status"], "failed")
+                        self.assertEqual(done["status_details"]["error"]["code"], "empty_llm_response")
+                    else:
+                        self.assertEqual(done["status"], "incomplete")
+                        reason = "max_output_tokens" if finish_reason == "length" else "content_filter"
+                        self.assertEqual(done["status_details"], {"type": "incomplete", "reason": reason})
+                    observer.shutdown()
 
     async def test_audio_response_without_wire_audio_is_a_provider_failure(self) -> None:
         recorder = _Recorder()

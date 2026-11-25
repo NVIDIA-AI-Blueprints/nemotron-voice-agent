@@ -495,6 +495,17 @@ class RealtimeSessionController:
         """Return the most recently terminal assistant message item ID."""
         return self._last_assistant_item_id
 
+    @property
+    def active_response_has_output(self) -> bool:
+        """Return whether the active response has text, audio, or an owned tool call."""
+        response_id = self.active_response_id
+        return response_id is not None and (
+            bool(self.assistant_text.strip())
+            or bool(self.active_output_audio_duration_ms)
+            # Server-only tool calls can be useful without a public output item.
+            or any(call.response_id == response_id for call in self._tool_calls.values())
+        )
+
     def is_active_output_item(self, item_id: str) -> bool:
         """Return whether an item belongs to the response being generated."""
         return self.response_in_progress and item_id in self._active_output_ids

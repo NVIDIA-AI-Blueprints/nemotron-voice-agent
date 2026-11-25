@@ -213,10 +213,9 @@ class DelegateCallWireContractTests(unittest.TestCase):
     A delegate call is the pipeline's own internal mechanics, so a client
     following the OpenAI Realtime contract needs zero special handling to
     avoid it: no function_call ever announces it, no field hints it exists,
-    and Response A -- the delegate's own response lifecycle -- closes with an
-    empty output array. Only the response envelope (created, then done) is
-    observable, and it is indistinguishable from a response that produced no
-    output for any other reason.
+    and Response A, the delegate's own response lifecycle, closes as completed
+    with an empty output array. The client only sees the created and done
+    response events.
 
     These tests exist so that contract is discoverable in this repository and
     cannot change silently. If the gateway ever starts publishing trusted

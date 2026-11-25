@@ -1141,6 +1141,9 @@ class RealtimeLifecycleObserver(BaseObserver):
             self._sealed_tts_responses.add(response_id)
             if not self._pending_tts_contexts.get(response_id):
                 status, reason = self._provider_terminal(response_id)
+                buffered_text = self._llm_text_response_id == response_id and self._llm_text_buffer.strip()
+                if status == "completed" and not buffered_text and not self._controller.active_response_has_output:
+                    status, reason = "failed", "empty_llm_response"
                 await self._finish_response(status=status, reason=reason)
             return
 
