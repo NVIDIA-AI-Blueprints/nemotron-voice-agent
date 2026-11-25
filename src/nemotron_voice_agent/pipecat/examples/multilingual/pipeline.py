@@ -28,7 +28,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
@@ -63,6 +63,7 @@ from nemotron_voice_agent.pipecat.runtime.utils import (
 )
 from nemotron_voice_agent.pipecat.shared.audio_recorder import create_audio_recorder
 from nemotron_voice_agent.pipecat.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
+from nemotron_voice_agent.pipecat.shared.nvidia_stt_isolated import IsolatedNvidiaSTTService
 from nemotron_voice_agent.pipecat.shared.nvidia_transcribe_stt import NvidiaTranscribeSTTService
 from nemotron_voice_agent.pipecat.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
@@ -227,7 +228,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             settings=NvidiaTranscribeSTTService.Settings(model=asr_model, language=fixed_session_language),
         )
     else:
-        stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
+        stt = IsolatedNvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={fixed_session_language}, punctuation={asr_automatic_punctuation}"
