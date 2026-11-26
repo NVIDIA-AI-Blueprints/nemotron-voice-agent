@@ -52,6 +52,7 @@ services:
     <<: *nemotron-asr
     profiles:
       - generic-assistant/server-perf
+      - generic-assistant/server-perf-replicas
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=en-US,mode=str,batch_size=128
