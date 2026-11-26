@@ -13,12 +13,14 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     ErrorFrame,
     Frame,
+    FunctionCallCancelFrame,
     FunctionCallInProgressFrame,
     FunctionCallResultFrame,
     FunctionCallsStartedFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     LLMTextFrame,
     MetricsFrame,
     TranscriptionFrame,
@@ -33,7 +35,9 @@ from pipecat.metrics.metrics import TTFBMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
+from pipecat.services.llm_service import LLMService
 from pipecat.transports.base_output import BaseOutputTransport
+from pipecat.utils.errors import ErrorCategory
 
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.conversation import ConversationState
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.events import (
@@ -51,7 +55,11 @@ from nemotron_voice_agent.pipecat.runtime.gateways.realtime.events import (
     error_event,
     server_event,
 )
-from nemotron_voice_agent.pipecat.runtime.gateways.realtime.lifecycle import announce_response, finish_response
+from nemotron_voice_agent.pipecat.runtime.gateways.realtime.lifecycle import (
+    announce_response,
+    announce_response_created,
+    finish_response,
+)
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.metrics import (
     RealtimeMetricsAccumulator,
     RealtimeResponseTelemetry,
@@ -72,6 +80,8 @@ _OBSERVED_FRAME_TYPES = (
     FunctionCallsStartedFrame,
     FunctionCallInProgressFrame,
     FunctionCallResultFrame,
+    FunctionCallCancelFrame,
+    LLMFullResponseStartFrame,
     LLMFullResponseEndFrame,
     TTSStoppedFrame,
     ErrorFrame,
@@ -79,11 +89,29 @@ _OBSERVED_FRAME_TYPES = (
 )
 
 
+def _is_speakable(text: str) -> bool:
+    """Return whether TTS would voice ``text`` (same rule as ``NvidiaTTSService``)."""
+    return any(char.isalnum() for char in text)
+
+
+def _tool_result_runs_llm(frame: FunctionCallResultFrame, *, group_has_pending_siblings: bool = False) -> bool:
+    """Return whether the assistant aggregator runs the LLM again for this result."""
+    if not frame.result:
+        return False
+    if frame.properties is not None and frame.properties.run_llm is not None:
+        return bool(frame.properties.run_llm)
+    if frame.run_llm is not None:
+        return bool(frame.run_llm)
+    return not group_has_pending_siblings
+
+
 class RealtimeLifecycleObserver(BaseObserver):
     """Emit OpenAI Realtime–shaped events from Pipecat frame traffic.
 
     Spoken turns finish on the output transport's re-pushed ``TTSStoppedFrame``
-    after queued audio has been serialized. Pipeline barge-in finishes on
+    after queued audio has been serialized. A response that produced no speech
+    (for example an empty reply to ``response.create``) finishes when its LLM
+    run ends and no tool follow-up is pending. Pipeline barge-in finishes on
     ``InterruptionFrame``.
     """
 
@@ -111,10 +139,33 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._waiting_for_metrics_scope_after_cancel = False
         self._speech_started_emitted = False
         self._speech_stopped_emitted = False
+        # LLM runs and tool calls are tied to the response generation that was in
+        # progress when they started (0 when none was), so that a run or tool
+        # result left over from an earlier turn cannot finish a newer response.
+        self._run_generations: deque[int] = deque()
+        self._tool_calls: dict[str, int] = {}
+        self._tool_call_groups: dict[str, str] = {}
+        self._followup_generation: int | None = None
+        self._failed_generation: int | None = None
 
     def _clear_frame_dedupe(self) -> None:
         self._processed_frames.clear()
         self._frame_history.clear()
+
+    def _open_generation(self) -> int:
+        """Return the in-progress response generation, or 0 when none is open."""
+        if self._conversation.response_status == "in_progress":
+            return self._conversation.response_generation
+        return 0
+
+    def _reset_turn_tracking(self) -> None:
+        """Forget LLM runs and tool calls cancelled by an interruption."""
+        self._run_generations.clear()
+        self._tool_calls.clear()
+        self._tool_call_groups.clear()
+        self._followup_generation = None
+        self._failed_generation = None
+        self._conversation.reply_pending = False
 
     def _remember_metric_frame(self, frame_id: int) -> bool:
         """Deduplicate metric frames without changing lifecycle dedupe state."""
@@ -130,10 +181,10 @@ class RealtimeLifecycleObserver(BaseObserver):
         """Return True if this frame id is new and should be handled."""
         if frame_id in self._processed_frames:
             return False
+        if len(self._frame_history) == self._frame_history.maxlen:
+            self._processed_frames.discard(self._frame_history[0])
         self._processed_frames.add(frame_id)
         self._frame_history.append(frame_id)
-        if len(self._processed_frames) > len(self._frame_history):
-            self._processed_frames = set(self._frame_history)
         return True
 
     async def _emit_event(self, event: dict[str, Any]) -> None:
@@ -234,7 +285,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._llm_text_generation = 0
         self._bot_transcript_from_tts = False
         self._waiting_for_metrics_scope_after_cancel = True
-        self._clear_frame_dedupe()
+        self._reset_turn_tracking()
         return text
 
     def shutdown(self) -> None:
@@ -247,6 +298,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._metric_frame_history.clear()
         self._reset_speech_events()
         self._clear_frame_dedupe()
+        self._reset_turn_tracking()
 
     async def on_push_frame(self, data: FramePushed) -> None:
         """Map relevant frames to Realtime server events.
@@ -262,9 +314,12 @@ class RealtimeLifecycleObserver(BaseObserver):
                 await self._emit_event(error_event(frame.error, code="pipeline_error"))
                 if frame.fatal:
                     if self._conversation.response_requested:
-                        await self._ensure_response_announced()
+                        await announce_response_created(self._conversation, self._emit_fn)
                     await self._finish_response(status="failed")
                 else:
+                    if self._is_completion_failure(frame):
+                        # The LLM run still ends normally; a reply without speech then fails.
+                        self._failed_generation = self._run_generations[0]
                     self._conversation.release_response_request()
             except Exception:
                 logger.exception("RealtimeLifecycleObserver failed while handling pipeline error")
@@ -274,7 +329,15 @@ class RealtimeLifecycleObserver(BaseObserver):
             if not self._remember_frame(frame.id):
                 return
             try:
-                await self._finish_response(status="cancelled")
+                if frame.id in self._conversation.applied_interruption_ids:
+                    # response.cancel / truncate already finished its response; a
+                    # newer response.create and its tracking must remain intact.
+                    # on_response_cancelled already cleared the old turn's work.
+                    self._conversation.applied_interruption_ids.discard(frame.id)
+                else:
+                    await self._finish_response(status="cancelled")
+                    # A fresh interruption cancels in-flight tools and the LLM run.
+                    self._reset_turn_tracking()
             except Exception:
                 logger.exception("RealtimeLifecycleObserver failed while handling interruption")
             return
@@ -332,6 +395,8 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, UserStartedSpeakingFrame):
+            # A new turn supersedes an unanswered turn even without barge-in.
+            self._conversation.reply_pending = False
             item_id, audio_start_ms = self._conversation.begin_user_turn()
             await self._emit_speech_started(item_id, audio_start_ms)
             return
@@ -346,6 +411,8 @@ class RealtimeLifecycleObserver(BaseObserver):
                     previous_item_id=None,
                 )
             )
+            # The committed turn's reply is on its way; it becomes a response on first speech.
+            self._conversation.reply_pending = True
             await self._emit_user_item_if_needed(item_id)
             await self._emit_user_transcript_if_ready()
             self._reset_speech_events()
@@ -383,7 +450,10 @@ class RealtimeLifecycleObserver(BaseObserver):
             text = frame.text or ""
             if not text:
                 return
-            await self._ensure_response_announced()
+            if _is_speakable(text):
+                await self._ensure_response_announced()
+            elif not self._conversation.output_item_announced or self._conversation.response_status != "in_progress":
+                return
             if self._conversation.assistant_transcript.endswith(text):
                 self._bot_transcript_from_tts = True
                 self._llm_text_buffer = ""
@@ -400,18 +470,34 @@ class RealtimeLifecycleObserver(BaseObserver):
             text = frame.text or ""
             if not text:
                 return
-            await self._ensure_response_announced()
+            if _is_speakable(text):
+                await self._ensure_response_announced()
+            elif self._conversation.response_status != "in_progress":
+                # Whitespace or punctuation alone is never voiced, so it opens no response.
+                return
             self._llm_text_buffer += text
             self._llm_text_generation = self._conversation.response_generation
             return
 
+        if isinstance(frame, LLMFullResponseStartFrame):
+            generation = self._open_generation()
+            self._run_generations.append(generation)
+            if self._followup_generation == generation:
+                # The requested run has started even if sibling tools are still running.
+                self._followup_generation = None
+            return
+
         if isinstance(frame, LLMFullResponseEndFrame):
+            generation = self._run_generations.popleft() if self._run_generations else 0
             if frame.skip_tts is True:
                 await self._finish_response(status="completed")
+                return
+            await self._settle_generation(generation)
             return
 
         if isinstance(frame, FunctionCallsStartedFrame):
             for call in frame.function_calls or []:
+                self._track_tool_call(getattr(call, "tool_call_id", "") or "")
                 await self._emit_server_tool_started(
                     tool_call_id=getattr(call, "tool_call_id", "") or "",
                     function_name=getattr(call, "function_name", "") or "",
@@ -420,11 +506,18 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, FunctionCallInProgressFrame):
+            self._track_tool_call(frame.tool_call_id or "")
+            if frame.tool_call_id and frame.group_id:
+                self._tool_call_groups[frame.tool_call_id] = frame.group_id
             await self._emit_server_tool_started(
                 tool_call_id=frame.tool_call_id or "",
                 function_name=frame.function_name or "",
                 arguments=frame.arguments,
             )
+            return
+
+        if isinstance(frame, FunctionCallCancelFrame):
+            await self._settle_tool_call(frame.tool_call_id or "", runs_llm=bool(frame.run_llm))
             return
 
         if isinstance(frame, FunctionCallResultFrame):
@@ -437,13 +530,67 @@ class RealtimeLifecycleObserver(BaseObserver):
                     result=frame.result,
                 )
             )
+            if frame.properties is not None and not frame.properties.is_final:
+                return
             if frame.tool_call_id:
                 self._emitted_function_calls.discard(frame.tool_call_id)
+            group_id = self._tool_call_groups.get(frame.tool_call_id)
+            group_has_pending_siblings = bool(group_id) and any(
+                call_id != frame.tool_call_id and owner_group == group_id
+                for call_id, owner_group in self._tool_call_groups.items()
+            )
+            await self._settle_tool_call(
+                frame.tool_call_id or "",
+                runs_llm=_tool_result_runs_llm(frame, group_has_pending_siblings=group_has_pending_siblings),
+            )
             return
 
         if isinstance(frame, TTSStoppedFrame):
             await self._finish_response(status="completed")
             return
+
+    def _track_tool_call(self, tool_call_id: str) -> None:
+        if tool_call_id:
+            self._tool_calls.setdefault(tool_call_id, self._open_generation())
+
+    def _is_completion_failure(self, frame: ErrorFrame) -> bool:
+        """Return whether ``frame`` reports a failed LLM completion (not a tool error)."""
+        return (
+            bool(self._run_generations)
+            and isinstance(getattr(frame, "processor", None), LLMService)
+            and getattr(frame, "category", None) != ErrorCategory.APPLICATION
+        )
+
+    async def _settle_tool_call(self, tool_call_id: str, *, runs_llm: bool) -> None:
+        """Account for a tool call that finished or was cancelled."""
+        generation = self._tool_calls.pop(tool_call_id, None)
+        self._tool_call_groups.pop(tool_call_id, None)
+        # Unknown ids belong to a turn this observer already moved past.
+        if generation is None:
+            return
+        if runs_llm:
+            # A later sibling result without a follow-up must not lose this request.
+            self._followup_generation = generation
+            return
+        await self._settle_generation(generation)
+
+    async def _settle_generation(self, generation: int) -> None:
+        """React to the end of an LLM run or tool round owned by ``generation``.
+
+        A response with an announced assistant item finishes on
+        ``TTSStoppedFrame``. One without an item (nothing speakable yet) has no
+        audio to wait for, so it finishes once its own LLM runs and tool calls
+        are done and no tool follow-up run is due.
+        """
+        if self._run_generations or generation in self._tool_calls.values() or self._followup_generation == generation:
+            return
+        if generation == 0:
+            # A user turn's reply ended without speech; nothing is pending any more.
+            self._conversation.reply_pending = False
+            return
+        if generation != self._open_generation() or self._conversation.output_item_announced:
+            return
+        await self._finish_response(status="failed" if self._failed_generation == generation else "completed")
 
     async def _ensure_response_announced(self) -> tuple[str, bool]:
         return await announce_response(self._conversation, self._emit_fn)
@@ -480,10 +627,16 @@ class RealtimeLifecycleObserver(BaseObserver):
         if self._llm_text_generation != self._conversation.response_generation:
             buffer = ""
 
-        if not self._bot_transcript_from_tts and buffer and not self._conversation.assistant_transcript:
+        if (
+            not self._bot_transcript_from_tts
+            and buffer
+            and not self._conversation.assistant_transcript
+            and self._conversation.output_item_announced
+        ):
             self._conversation.append_assistant_transcript(buffer)
             await self._emit_transcript_delta(buffer)
 
+        generation = self._conversation.response_generation
         await finish_response(
             self._conversation,
             self._emit_fn,
@@ -493,4 +646,13 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._bot_transcript_from_tts = False
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
-        self._clear_frame_dedupe()
+        # Keep frame dedupe across responses: a finished turn's frames can still
+        # reach later pipeline edges and must not open a new response.
+        self._tool_calls = {call_id: owner for call_id, owner in self._tool_calls.items() if owner != generation}
+        self._tool_call_groups = {
+            call_id: group_id for call_id, group_id in self._tool_call_groups.items() if call_id in self._tool_calls
+        }
+        if self._followup_generation == generation:
+            self._followup_generation = None
+        if self._failed_generation == generation:
+            self._failed_generation = None

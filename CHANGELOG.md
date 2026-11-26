@@ -26,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **NeMo-Speech.cpp upgraded to 26.10 on single-GPU hosts.** The streaming ASR and Magpie TTS services of the `*/single-gpu` recipes use `nvcr.io/nvidia/nemo-speech.cpp:26.10`, up from `0.2.0`, so they run the same image as Nemotron 3.5 Transcribe.
 - **Scaling benchmark metric names updated.** Renamed `llm_ttft` to `llm_ttfb` and `vad_smart_turn` to `turn_taking_latency`.
 - **Startup readiness checks cover all self-hosted LLMs.** The server now verifies every self-hosted LLM required by an example before starting a session.
+- **Realtime assistant events follow output.** An accepted `response.create` emits `response.created` immediately. Assistant item events follow when the reply first has speakable text or audio.
+- **Idle Realtime cancellation returns an error.** `response.cancel` returns `response_cancel_not_active` when no response is active. Cancellation remains a no-op while a committed voice turn's reply is being prepared. This exception ends when a new voice turn starts.
+
+### Fixed
+
+- **Empty Realtime replies complete.** Client-requested responses with no speakable output finish with `response.done` and an empty `output` list, allowing the next response to start. These responses finish with status `failed` if the LLM request fails.
+- **Realtime tool follow-up stays in the response.** Mixed tool results no longer finish an empty response before a requested follow-up LLM run.
+- **Realtime cancellation preserves the next reply.** A `response.cancel` or `conversation.item.truncate` immediately followed by `response.create` no longer cancels the new response or prevents it from finishing.
+- **Completed Realtime replies do not reopen.** Frames from a finished spoken reply no longer create a stray second response.
+- **Pipecat evaluation judge imports.** Service evaluation scenarios use the current package path for the judge factory after the repository restructure.
 
 ### Removed
 

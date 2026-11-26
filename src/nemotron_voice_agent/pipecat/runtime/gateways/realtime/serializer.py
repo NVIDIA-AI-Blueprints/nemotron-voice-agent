@@ -55,7 +55,11 @@ from nemotron_voice_agent.pipecat.runtime.gateways.realtime.events import (
     error_event,
     server_event,
 )
-from nemotron_voice_agent.pipecat.runtime.gateways.realtime.lifecycle import announce_response, finish_response
+from nemotron_voice_agent.pipecat.runtime.gateways.realtime.lifecycle import (
+    announce_response,
+    announce_response_created,
+    finish_response,
+)
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.metrics import RealtimeResponseTelemetry
 from nemotron_voice_agent.pipecat.runtime.gateways.realtime.session import (
     live_session_patch,
@@ -251,14 +255,27 @@ class RealtimeFrameSerializer(FrameSerializer):
                     )
                 )
                 return None
-            await announce_response(self._conversation, self._emit)
+            # The assistant item is announced on the first speech, so a reply
+            # that produces no speech finishes without an output item.
+            await announce_response_created(self._conversation, self._emit)
             return LLMRunFrame()
 
         if event_type == CLIENT_RESPONSE_CANCEL:
             response_id = message.get("response_id")
             active_id = self._conversation.response_id
-            # Idle cancel is a no-op (clients often send this on speech_started).
             if self._conversation.response_status != "in_progress" or not active_id:
+                if self._conversation.reply_pending:
+                    # A committed turn's reply is still being prepared and has
+                    # no active response to cancel yet.
+                    return None
+                # OpenAI answers an idle cancel with this error; clients wait for it.
+                await self._emit_event(
+                    error_event(
+                        "Cancellation failed: no active response found.",
+                        code="response_cancel_not_active",
+                        event_id=echo_id,
+                    )
+                )
                 return None
             if isinstance(response_id, str) and response_id and response_id != active_id:
                 await self._emit_event(
@@ -271,7 +288,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                 )
                 return None
             await self._emit_cancelled_response()
-            return InterruptionFrame()
+            return self._applied_interruption()
 
         if event_type == CLIENT_ITEM_TRUNCATE:
             return await self._deserialize_truncate(message, echo_id)
@@ -428,7 +445,7 @@ class RealtimeFrameSerializer(FrameSerializer):
             return None
 
         await self._emit_cancelled_response(status_if_active="cancelled")
-        return InterruptionFrame()
+        return self._applied_interruption()
 
     async def _deserialize_commit(self, echo_id: str | None) -> Frame | None:
         if self._bytes_since_commit <= 0:
@@ -623,6 +640,16 @@ class RealtimeFrameSerializer(FrameSerializer):
             delta=encode_base64_audio(client_pcm),
         )
         await self._emit_event(event)
+
+    def _applied_interruption(self) -> InterruptionFrame:
+        """Return an InterruptionFrame for a response this serializer already finished.
+
+        The frame reaches the observer later, possibly after the client's next
+        response.create; marking it keeps it from cancelling that new response.
+        """
+        frame = InterruptionFrame()
+        self._conversation.applied_interruption_ids.add(frame.id)
+        return frame
 
     async def _emit_cancelled_response(self, *, status_if_active: str = "cancelled") -> None:
         if self._emit is None:

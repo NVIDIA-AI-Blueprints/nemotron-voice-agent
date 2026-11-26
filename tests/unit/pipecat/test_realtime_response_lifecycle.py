@@ -1,0 +1,493 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# ruff: noqa: D100, D101, D102, D103
+
+"""Realtime responses finish whether or not the reply is spoken."""
+
+from __future__ import annotations
+
+import json
+import unittest
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock
+
+from pipecat.frames.frames import (
+    ErrorFrame,
+    Frame,
+    FunctionCallInProgressFrame,
+    FunctionCallResultFrame,
+    FunctionCallResultProperties,
+    FunctionCallsStartedFrame,
+    InterruptionFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    LLMRunFrame,
+    LLMTextFrame,
+    TTSStoppedFrame,
+    TTSTextFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
+from pipecat.observers.base_observer import FramePushed
+from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.llm_service import LLMService
+from pipecat.transports.base_output import BaseOutputTransport
+from pipecat.utils.text.base_text_aggregator import TextType
+
+from nemotron_voice_agent.pipecat.runtime.gateways.realtime.observer import RealtimeLifecycleObserver
+from nemotron_voice_agent.pipecat.runtime.gateways.realtime.serializer import RealtimeFrameSerializer
+
+ITEM_EVENTS = {"conversation.item.created", "response.output_item.added", "response.content_part.added"}
+
+
+def tool_calls_started(call_id: str = "call_1") -> FunctionCallsStartedFrame:
+    return FunctionCallsStartedFrame(
+        function_calls=[SimpleNamespace(tool_call_id=call_id, function_name="calculate_bmi", arguments={})]
+    )
+
+
+def tool_result(call_id: str = "call_1", **kwargs: Any) -> FunctionCallResultFrame:
+    kwargs.setdefault("result", {"bmi": 22.86})
+    return FunctionCallResultFrame(function_name="calculate_bmi", tool_call_id=call_id, arguments={}, **kwargs)
+
+
+class RealtimeResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.new_session()
+
+    def new_session(self) -> None:
+        self.emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            self.emitted.append(event)
+
+        self.serializer = RealtimeFrameSerializer()
+        self.serializer.set_emit(emit)
+        self.serializer.conversation.open_client_text()
+        self.observer = RealtimeLifecycleObserver(emit=emit, conversation=self.serializer.conversation)
+        self.serializer.set_on_response_cancel(self.observer.on_response_cancelled)
+
+    async def push(self, frame: Frame, *, source: Any = None) -> None:
+        await self.observer.on_push_frame(
+            FramePushed(
+                source=source or MagicMock(),
+                destination=MagicMock(),
+                frame=frame,
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=0,
+            )
+        )
+
+    async def push_output_stop(self) -> None:
+        # The output transport re-pushes TTSStoppedFrame after its audio drains.
+        await self.push(TTSStoppedFrame(), source=MagicMock(spec=BaseOutputTransport))
+
+    async def response_create(self) -> Frame | None:
+        return await self.serializer.deserialize(json.dumps({"type": "response.create"}))
+
+    def types(self) -> list[str]:
+        return [event["type"] for event in self.emitted]
+
+    def done_events(self) -> list[dict[str, Any]]:
+        return [event for event in self.emitted if event["type"] == "response.done"]
+
+    async def test_response_create_announces_only_the_response(self) -> None:
+        frame = await self.response_create()
+
+        self.assertIsInstance(frame, LLMRunFrame)
+        self.assertEqual(self.types(), ["response.created"])
+
+    async def test_reply_without_speech_finishes_when_the_llm_run_ends(self) -> None:
+        for text in (None, "", "  \n ", "..."):
+            with self.subTest(text=text):
+                self.new_session()
+                await self.response_create()
+                await self.push(LLMFullResponseStartFrame())
+                if text is not None:
+                    await self.push(LLMTextFrame(text=text))
+                await self.push(LLMFullResponseEndFrame())
+
+                done = self.done_events()
+                self.assertEqual(len(done), 1)
+                self.assertEqual(done[0]["response"]["status"], "completed")
+                self.assertEqual(done[0]["response"]["output"], [])
+                self.assertFalse(ITEM_EVENTS & set(self.types()))
+                self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_spoken_reply_announces_item_on_first_speakable_text_and_waits_for_audio(self) -> None:
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMTextFrame(text="\n\n"))
+        self.assertEqual(self.types(), ["response.created"])
+
+        await self.push(LLMTextFrame(text="Hello there."))
+        self.assertEqual(
+            self.types(),
+            [
+                "response.created",
+                "conversation.item.created",
+                "response.output_item.added",
+                "response.content_part.added",
+            ],
+        )
+        await self.push(LLMFullResponseEndFrame())
+        self.assertEqual(self.done_events(), [])
+
+        await self.push(TTSTextFrame(text="Hello there.", text_type=TextType.SENTENCE))
+        await self.push_output_stop()
+        done = self.done_events()
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["response"]["status"], "completed")
+        self.assertEqual(done[0]["response"]["output"][0]["content"][0]["transcript"], "Hello there.")
+
+    async def test_server_tool_round_stays_in_one_response(self) -> None:
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(tool_calls_started())
+        await self.push(LLMFullResponseEndFrame())
+        await self.push(FunctionCallInProgressFrame(function_name="calculate_bmi", tool_call_id="call_1", arguments={}))
+        await self.push(tool_result())
+        self.assertEqual(self.done_events(), [])
+
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMTextFrame(text="Your BMI is 22.9."))
+        await self.push(LLMFullResponseEndFrame())
+        await self.push(TTSTextFrame(text="Your BMI is 22.9.", text_type=TextType.SENTENCE))
+        await self.push_output_stop()
+
+        self.assertEqual(self.types().count("response.created"), 1)
+        done = self.done_events()
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["response"]["status"], "completed")
+        self.assertEqual(done[0]["response"]["output"][0]["content"][0]["transcript"], "Your BMI is 22.9.")
+
+    async def test_tool_result_received_before_llm_run_ends_still_waits_for_follow_up(self) -> None:
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(tool_calls_started())
+        await self.push(tool_result())
+        await self.push(LLMFullResponseEndFrame())
+        self.assertEqual(self.done_events(), [])
+
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMFullResponseEndFrame())
+        done = self.done_events()
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["response"]["output"], [])
+
+    async def test_tool_result_without_follow_up_finishes_reply_without_speech(self) -> None:
+        cases = {
+            "run_llm=False": {"run_llm": False},
+            "properties.run_llm=False": {"properties": FunctionCallResultProperties(run_llm=False)},
+            "empty result": {"result": None},
+        }
+        for case, result_kwargs in cases.items():
+            with self.subTest(case=case):
+                self.new_session()
+                await self.response_create()
+                await self.push(LLMFullResponseStartFrame())
+                await self.push(tool_calls_started())
+                await self.push(LLMFullResponseEndFrame())
+                self.assertEqual(self.done_events(), [])
+
+                await self.push(tool_result(**result_kwargs))
+                done = self.done_events()
+                self.assertEqual(len(done), 1)
+                self.assertEqual(done[0]["response"]["status"], "completed")
+                self.assertEqual(done[0]["response"]["output"], [])
+
+    async def test_sibling_tool_results_preserve_requested_follow_up(self) -> None:
+        for followup_first in (True, False):
+            for followup_text in (None, "Your BMI is 22.9."):
+                with self.subTest(followup_first=followup_first, followup_text=followup_text):
+                    self.new_session()
+                    await self.response_create()
+                    response_id = self.serializer.conversation.response_id
+                    await self.push(LLMFullResponseStartFrame())
+                    await self.push(
+                        FunctionCallsStartedFrame(
+                            function_calls=[
+                                SimpleNamespace(tool_call_id=call_id, function_name="calculate_bmi", arguments={})
+                                for call_id in ("followup", "no_followup")
+                            ]
+                        )
+                    )
+                    for call_id in ("followup", "no_followup"):
+                        await self.push(
+                            FunctionCallInProgressFrame(
+                                function_name="calculate_bmi", tool_call_id=call_id, arguments={}, group_id="same"
+                            )
+                        )
+                    await self.push(LLMFullResponseEndFrame())
+                    results = [tool_result("followup", run_llm=True), tool_result("no_followup", run_llm=False)]
+                    for result in results if followup_first else reversed(results):
+                        await self.push(result)
+                        self.assertEqual(self.done_events(), [])
+
+                    await self.push(LLMFullResponseStartFrame())
+                    if followup_text is not None:
+                        await self.push(LLMTextFrame(text=followup_text))
+                    await self.push(LLMFullResponseEndFrame())
+                    if followup_text is not None:
+                        self.assertEqual(self.done_events(), [])
+                        await self.push(TTSTextFrame(text=followup_text, text_type=TextType.SENTENCE))
+                        await self.push_output_stop()
+
+                    self.assertEqual(self.types().count("response.created"), 1)
+                    self.assertEqual(len(self.done_events()), 1)
+                    self.assertEqual(self.done_events()[0]["response"]["id"], response_id)
+                    self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                    self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_follow_up_can_start_before_sibling_tool_finishes(self) -> None:
+        for llm_finishes_first in (True, False):
+            with self.subTest(llm_finishes_first=llm_finishes_first):
+                self.new_session()
+                await self.response_create()
+                await self.push(LLMFullResponseStartFrame())
+                await self.push(tool_calls_started("followup"))
+                await self.push(tool_calls_started("no_followup"))
+                await self.push(LLMFullResponseEndFrame())
+                await self.push(tool_result("followup", run_llm=True))
+                await self.push(LLMFullResponseStartFrame())
+                completions = [LLMFullResponseEndFrame(), tool_result("no_followup", run_llm=False)]
+                if not llm_finishes_first:
+                    completions.reverse()
+                await self.push(completions[0])
+                self.assertEqual(self.done_events(), [])
+                await self.push(completions[1])
+
+                self.assertEqual(self.types().count("response.created"), 1)
+                self.assertEqual(len(self.done_events()), 1)
+                self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_default_tool_follow_up_respects_pending_siblings_in_its_group(self) -> None:
+        for sibling_group in (None, "same", "other"):
+            for default_result_first in (True, False):
+                with self.subTest(sibling_group=sibling_group, default_result_first=default_result_first):
+                    self.new_session()
+                    await self.response_create()
+                    await self.push(LLMFullResponseStartFrame())
+                    for call_id, group_id in (
+                        ("default", "same" if sibling_group else None),
+                        ("explicit", sibling_group),
+                    ):
+                        await self.push(tool_calls_started(call_id))
+                        await self.push(
+                            FunctionCallInProgressFrame(
+                                function_name="calculate_bmi", tool_call_id=call_id, arguments={}, group_id=group_id
+                            )
+                        )
+                    await self.push(LLMFullResponseEndFrame())
+                    results = [tool_result("default"), tool_result("explicit", run_llm=False)]
+                    for result in results if default_result_first else reversed(results):
+                        await self.push(result)
+
+                    # Pipecat's default waits for the last result within a group.
+                    # An explicit false result does not itself request another run.
+                    expects_follow_up = not (sibling_group == "same" and default_result_first)
+                    if expects_follow_up:
+                        self.assertEqual(self.done_events(), [])
+                        await self.push(LLMFullResponseStartFrame())
+                        await self.push(LLMFullResponseEndFrame())
+                    self.assertEqual(self.types().count("response.created"), 1)
+                    self.assertEqual(len(self.done_events()), 1)
+                    self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                    self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_llm_error_fails_reply_without_speech(self) -> None:
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        error = ErrorFrame(error="Error during completion: upstream returned 500")
+        error.processor = MagicMock(spec=LLMService)
+        await self.push(error)
+        await self.push(LLMFullResponseEndFrame())
+
+        self.assertIn("error", self.types())
+        done = self.done_events()
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["response"]["status"], "failed")
+        self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_error_from_another_processor_does_not_fail_the_reply(self) -> None:
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(ErrorFrame(error="ASR stream reconnecting"))
+        await self.push(LLMFullResponseEndFrame())
+
+        self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+
+    async def test_voice_turn_reply_without_speech_opens_no_response(self) -> None:
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMTextFrame(text="  "))
+        await self.push(TTSTextFrame(text="...", text_type=TextType.SENTENCE))
+        await self.push(LLMFullResponseEndFrame())
+
+        self.assertEqual(self.emitted, [])
+        self.assertIsNone(self.serializer.conversation.response_id)
+
+    async def test_interruption_during_tool_round_cancels_and_resets_tracking(self) -> None:
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(tool_calls_started())
+        await self.push(LLMFullResponseEndFrame())
+        await self.push(InterruptionFrame())
+        self.assertEqual(self.done_events()[0]["response"]["status"], "cancelled")
+
+        self.emitted.clear()
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMFullResponseEndFrame())
+        done = self.done_events()
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["response"]["status"], "completed")
+
+    async def test_response_cancel_before_speech_finishes_without_output(self) -> None:
+        await self.response_create()
+        frame = await self.serializer.deserialize(json.dumps({"type": "response.cancel"}))
+
+        self.assertIsInstance(frame, InterruptionFrame)
+        done = self.done_events()
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["response"]["status"], "cancelled")
+        self.assertEqual(done[0]["response"]["output"], [])
+
+    async def test_cancel_frame_does_not_cancel_the_next_response(self) -> None:
+        await self.response_create()
+        interruption = await self.serializer.deserialize(json.dumps({"type": "response.cancel"}))
+        self.emitted.clear()
+
+        await self.response_create()
+        response_id = self.serializer.conversation.response_id
+        await self.push(interruption)
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMFullResponseEndFrame())
+
+        self.assertEqual(len(self.done_events()), 1)
+        self.assertEqual(self.done_events()[0]["response"]["id"], response_id)
+        self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+
+    async def test_delayed_applied_interruption_preserves_new_run_and_tools(self) -> None:
+        for event_type in ("response.cancel", "conversation.item.truncate"):
+            for has_tool in (False, True):
+                with self.subTest(event_type=event_type, has_tool=has_tool):
+                    self.new_session()
+                    await self.response_create()
+                    event = {"type": event_type}
+                    if event_type == "conversation.item.truncate":
+                        event.update(
+                            item_id=self.serializer.conversation.assistant_item_id,
+                            content_index=0,
+                            audio_end_ms=0,
+                        )
+                    interruption = await self.serializer.deserialize(json.dumps(event))
+                    self.assertIsInstance(interruption, InterruptionFrame)
+                    self.emitted.clear()
+
+                    await self.response_create()
+                    response_id = self.serializer.conversation.response_id
+                    await self.push(LLMFullResponseStartFrame())
+                    if has_tool:
+                        await self.push(tool_calls_started("new_call"))
+                    # The old cancellation reaches the observer after the new run starts.
+                    await self.push(interruption)
+                    await self.push(LLMFullResponseEndFrame())
+                    if has_tool:
+                        self.assertEqual(self.done_events(), [])
+                        await self.push(tool_result("new_call", run_llm=False))
+
+                    self.assertEqual(len(self.done_events()), 1)
+                    self.assertEqual(self.done_events()[0]["response"]["id"], response_id)
+                    self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+                    self.assertIsInstance(await self.response_create(), LLMRunFrame)
+
+    async def test_fresh_barge_in_still_cancels_after_an_old_cancellation(self) -> None:
+        await self.response_create()
+        old_interruption = await self.serializer.deserialize(json.dumps({"type": "response.cancel"}))
+        self.emitted.clear()
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(old_interruption)
+        await self.push(InterruptionFrame())
+
+        self.assertEqual(len(self.done_events()), 1)
+        self.assertEqual(self.done_events()[0]["response"]["status"], "cancelled")
+        self.assertIsInstance(await self.response_create(), LLMRunFrame)
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMFullResponseEndFrame())
+        self.assertEqual(self.done_events()[-1]["response"]["status"], "completed")
+
+    async def test_new_user_turn_clears_stale_pending_reply_without_interruption(self) -> None:
+        await self.push(UserStartedSpeakingFrame())
+        await self.push(UserStoppedSpeakingFrame())
+        # This committed turn gets no LLM run. While preparation is still pending,
+        # an idle cancellation must keep its existing no-op behavior.
+        self.emitted.clear()
+        self.assertIsNone(await self.serializer.deserialize(json.dumps({"type": "response.cancel"})))
+        self.assertEqual(self.emitted, [])
+
+        # With interruptions disabled, this new turn has no InterruptionFrame
+        # to retire the old pending reply.
+        await self.push(UserStartedSpeakingFrame())
+        self.emitted.clear()
+        self.assertIsNone(await self.serializer.deserialize(json.dumps({"type": "response.cancel"})))
+        self.assertEqual(self.types(), ["error"])
+        self.assertEqual(self.emitted[0]["error"]["code"], "response_cancel_not_active")
+
+        # A newly committed turn can legitimately wait for its own reply again.
+        await self.push(UserStoppedSpeakingFrame())
+        self.emitted.clear()
+        self.assertIsNone(await self.serializer.deserialize(json.dumps({"type": "response.cancel"})))
+        self.assertEqual(self.emitted, [])
+
+    async def test_old_tool_result_does_not_finish_the_next_response(self) -> None:
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(tool_calls_started())
+        await self.push(LLMFullResponseEndFrame())
+        await self.push(InterruptionFrame())
+        self.emitted.clear()
+
+        await self.response_create()
+        await self.push(tool_result(run_llm=False))
+        self.assertEqual(self.done_events(), [])
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMFullResponseEndFrame())
+        self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+
+    async def test_overlapping_voice_run_error_does_not_fail_client_response(self) -> None:
+        # A committed voice turn starts before the client requests another run.
+        await self.push(LLMFullResponseStartFrame())
+        await self.response_create()
+        await self.push(LLMFullResponseStartFrame())
+        error = ErrorFrame(error="The older voice-turn completion failed")
+        error.processor = MagicMock(spec=LLMService)
+        await self.push(error)
+        await self.push(LLMFullResponseEndFrame())
+        self.assertEqual(self.done_events(), [])
+
+        await self.push(LLMFullResponseEndFrame())
+        self.assertEqual(len(self.done_events()), 1)
+        self.assertEqual(self.done_events()[0]["response"]["status"], "completed")
+
+    async def test_finished_turn_frames_at_later_edges_open_no_new_response(self) -> None:
+        tts_text = TTSTextFrame(text="Hi there.", text_type=TextType.SENTENCE)
+        await self.push(LLMFullResponseStartFrame())
+        await self.push(LLMTextFrame(text="Hi there."))
+        await self.push(LLMFullResponseEndFrame())
+        await self.push(tts_text)
+        await self.push_output_stop()
+        self.assertEqual(len(self.done_events()), 1)
+
+        self.emitted.clear()
+        # The output transport forwards the same frame to the next processor.
+        await self.push(tts_text)
+        self.assertEqual(self.emitted, [])
+        self.assertIsNone(self.serializer.conversation.response_id)
+
+
+if __name__ == "__main__":
+    unittest.main()
