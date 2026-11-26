@@ -1,5 +1,5 @@
 x-nemo-speech: &nemo-speech
-  image: nvcr.io/nvidia/nemo-speech.cpp:0.2.0
+  image: nvcr.io/nvidia/nemo-speech.cpp:26.10
   entrypoint: /opt/nemo-speech/bin/riva_server
   ipc: host
   volumes:
