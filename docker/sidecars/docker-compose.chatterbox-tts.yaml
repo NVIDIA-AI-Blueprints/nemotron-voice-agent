@@ -7,7 +7,7 @@
 
 services:
   chatterbox-tts-service:
-    image: nvcr.io/nim/nvidia/chatterbox-tts-multilingual:1.1.0
+    image: nvcr.io/nim/nvidia/chatterbox-tts-multilingual:1.1.1
     user: "0:0"
     profiles:
       - chatterbox-tts

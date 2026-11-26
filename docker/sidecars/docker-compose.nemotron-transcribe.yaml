@@ -43,7 +43,7 @@ services:
 
   # Opt-in NeMo-Speech.cpp service for Generic and Multilingual single-GPU recipes.
   nemotron-transcribe-single-gpu:
-    image: ${NEMO_SPEECH_TRANSCRIBE_IMAGE:-nvcr.io/nvidia/nemo-speech.cpp:26.10}
+    image: ${NEMO_SPEECH_TRANSCRIBE_IMAGE:-nvcr.io/nvidia/nemo-speech.cpp:0.2.0}
     profiles:
       - transcribe-asr-single-gpu
     command:
