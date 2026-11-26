@@ -37,7 +37,7 @@ from loguru import logger
 
 BALANCE_ENV = "NVA_WORKER_BALANCE"
 INTERVAL_ENV = "NVA_WORKER_BALANCE_INTERVAL_MS"
-DEFAULT_INTERVAL_MS = 5
+DEFAULT_INTERVAL_MS = 10
 # An accepted connection that never reaches the app (a port scan, a failed TLS handshake) stops counting after this.
 PENDING_EXPIRY_S = 3.0
 
@@ -66,8 +66,10 @@ class SlotTable:
             self._map = mmap.mmap(fd, slots * _SLOT.size)
         finally:
             os.close(fd)
+        self._cells = memoryview(self._map).cast("i")
         self.index: int | None = None
-        self._liveness: dict[int, tuple[float, bool]] = {}
+        self._live_slots: list[int] = []
+        self._live_checked = 0.0
 
     def claim(self) -> int:
         """Take a free slot (or one left by a dead worker) and return its index."""
@@ -105,18 +107,12 @@ class SlotTable:
     def counts(self) -> list[int]:
         """Return the session counts of every live worker, this one included."""
         now = time.monotonic()
-        live: list[int] = []
-        for index in range(self.slots):
-            pid, count = _SLOT.unpack_from(self._map, index * _SLOT.size)
-            if pid == _EMPTY_PID:
-                continue
-            checked, alive = self._liveness.get(pid, (0.0, True))
-            if now - checked > 1.0:
-                alive = _pid_alive(pid)
-                self._liveness[pid] = (now, alive)
-            if alive:
-                live.append(count)
-        return live
+        if now - self._live_checked > 1.0:
+            self._live_checked = now
+            pids = self._cells[0::2]
+            self._live_slots = [i for i, pid in enumerate(pids) if pid != _EMPTY_PID and _pid_alive(pid)]
+        counts = self._cells[1::2]
+        return [counts[i] for i in self._live_slots]
 
     def release(self) -> None:
         """Give the slot back when the worker stops."""
