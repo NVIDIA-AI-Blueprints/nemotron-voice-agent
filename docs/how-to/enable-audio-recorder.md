@@ -1,26 +1,30 @@
 # Enable the Audio Recorder
 
-The audio recorder captures session audio for debugging and issue reproduction. Each session is saved as a stereo playback file, with the user on the left channel and the agent on the right channel. It is also saved as the audio that ASR received and that TTS produced, at their own sample rates, so you can replay a session against ASR or TTS in a standalone setup. This guide applies to the Pipecat examples (`nva-pipecat`) and the LiveKit Generic Assistant.
+Capture session audio to diagnose speech recognition, synthesis, and playback issues. This guide applies to Pipecat (`nva-pipecat`) and the Generic Assistant on LiveKit. Recordings can contain sensitive conversation data. Limit access to the output directory and retain only what you need for debugging.
 
 ## Configuration
+
+These settings control both frameworks. In 2.4.0, `ENABLE_AUDIO_DUMP` replaces `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENABLE_AUDIO_DUMP` | `false` | Turn on session recording |
 | `AUDIO_DUMP_PATH` | `audio_dumps` | Output directory (relative to project root, or absolute) |
 
-To enable the audio recorder, set the environment variables in the `.env` file:
+1. Enable recording in `.env`:
 
-```bash
-ENABLE_AUDIO_DUMP=true
-AUDIO_DUMP_PATH=audio_dumps
-```
+    ```dotenv
+    ENABLE_AUDIO_DUMP=true
+    AUDIO_DUMP_PATH=audio_dumps
+    ```
 
-For Docker Compose runs, recreate the app service so that it reads the new `.env` values. `docker compose restart` keeps the old environment. Use the app service of your recipe, for example `generic-assistant-single-gpu` for `--profile generic-assistant/single-gpu`:
+2. Apply the environment change. For a host-native run, restart the app. For Compose, use `up -d` so Compose can recreate the app service. `docker compose restart` keeps the old environment. For example, the Pipecat `generic-assistant/single-gpu` profile uses the `generic-assistant-single-gpu` service:
 
-```bash
-docker compose --profile <recipe> up -d <app-service>
-```
+    ```bash
+    docker compose --profile <recipe> up -d <app-service>
+    ```
+
+3. Run a voice session and end it to flush captured audio to disk.
 
 The shipped examples already create and wire the shared recorder, so the `.env` settings are enough to enable capture for those examples. To add the recorder to a **new custom example**, mirror [`src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py`](../../src/nemotron_voice_agent/pipecat/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
 
@@ -57,19 +61,19 @@ With those in place, the `ENABLE_AUDIO_DUMP` and `AUDIO_DUMP_PATH` settings abov
 
 ## Output Format
 
-Each session is saved as three files when the session ends.
+At session end, the recorder writes files for the streams it captured. An empty stream can leave no file. Expect at most one server-side conversation mix per session, in the format for your framework:
 
 ```text
 audio_dumps/
-├── session_<id>.wav       # Pipecat: stereo playback, 16-bit PCM WAV
-├── session_<id>.ogg       # LiveKit: stereo playback, Ogg Opus
+├── session_<id>.wav       # Pipecat: stereo mix, 16-bit PCM WAV
+├── session_<id>.ogg       # LiveKit: stereo mix, Ogg Opus
 ├── asr_<id>_session.wav   # the audio that ASR received, 16-bit PCM WAV
 └── tts_<id>_session.wav   # the audio that TTS produced, 16-bit PCM WAV
 ```
 
 | File | What it holds |
 |------|---------------|
-| `session_<id>` | The conversation as the user heard it, for playback. Pipecat uses the stereo recording of its `AudioBufferProcessor`. LiveKit uses the session recorder of LiveKit Agents. Both resample the audio. |
+| `session_<id>` | A server-side conversation mix for playback, not a record of what reached the listener. Pipecat uses the stereo output of `AudioBufferProcessor`. LiveKit uses the LiveKit Agents session recorder. Both resample the audio. |
 | `asr_<id>_session.wav` | Every audio frame that ASR received in the session, at its own sample rate, before turn handling filters any audio. It also holds the microphone audio from before the user speaks. Use it to replay a session against ASR. In the Omni Assistant, it holds the audio that the Omni model received. |
 | `tts_<id>_session.wav` | Every audio frame that TTS sent toward the output in the session, at its own sample rate. |
 

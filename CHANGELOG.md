@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.0] - TBD
+<a id="v2-4-0"></a>
+
+## [2.4.0]
 
 ### Added
 
@@ -12,12 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Nemotron 3.5 Transcribe ASR.** Self-hosted whole-turn speech recognition for the Generic and Multilingual Assistants on Server and Single GPU recipes, with optional transcription prompts in the Generic Assistant.
 - **NVIDIA Dynamo recipes.** Run Nemotron 3.5 Lightning through NVIDIA Dynamo for the Generic and Multilingual Assistants, including Streaming Input in the Generic Assistant and multi-GPU worker scaling.
 - **Frontend/Backend Live example and Live gateway.** A voice assistant that stays responsive while delegating work to a backend LLM, agent, or external harness such as Hermes, with Cloud, Server, and Single GPU recipes and `/v1/live` WebRTC and WebSocket support.
-- **Nemotron 3.5 Super VL on NVIDIA Cloud.** Available on NVIDIA Cloud with a Reasoning Effort setting, and used as the default backend for Frontend/Backend Live on Cloud and Server recipes.
+- **Nemotron 3.5 Super VL on NVIDIA Cloud.** The Cloud endpoint exposes a Reasoning Effort setting. Frontend/Backend Live uses this endpoint as its Cloud backend default. The stock Server recipe instead starts a local Super VL NIM on GPUs `1` and `2`, with the talker and speech services on GPU `0`.
 - **LLM time to first answer token (TTFAT).** Shown per LLM in the client Metrics tab and reported in the scaling benchmark.
 
 ### Changed
 
-- **Audio recorder uses one flag.** Set `ENABLE_AUDIO_DUMP=true` instead of `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`. Each session is saved as a stereo playback file, and as full-session files of the audio that ASR received and TTS produced.
+- **Audio recorder uses one flag.** Set `ENABLE_AUDIO_DUMP=true` instead of `ENABLE_ASR_AUDIO_DUMP` and `ENABLE_TTS_AUDIO_DUMP`. The recorder saves the streams it captures: a server-side stereo conversation mix, ASR input, and TTS output. Refer to [Enable the Audio Recorder](docs/how-to/enable-audio-recorder.md) for formats and storage.
+- **Separate NeMo-Speech.cpp services for Pipecat Single-GPU recipes.** Use `nemo-speech-tts` for TTS logs and the recipe's `nemo-speech-asr*` service for ASR logs. Omni recipes use only the TTS sidecar. If you switch to Transcribe, you can now scale streaming ASR to zero without stopping TTS. Recreate the stack with `--remove-orphans` on upgrade to remove the old combined service.
 - **Repository layout organized by framework.** Code and configuration are now grouped by framework (Pipecat and LiveKit), and the Pipecat server starts with `uv run nva-pipecat`.
 - **Docker Compose 2.24.4 or newer required.** Needed for the unified Compose setup that includes LiveKit.
 - **Pipecat upgraded to 1.15.0.** Updated server and browser client packages, and switched Omni examples to Pipecat's built-in NVIDIA Omni service.

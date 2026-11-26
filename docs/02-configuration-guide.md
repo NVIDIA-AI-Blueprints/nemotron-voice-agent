@@ -1,10 +1,20 @@
 # Configuration Guide
 
-This is the index of everything you can configure in the Nemotron Voice Agent. Configuration lives in a small set of root YAML files (`examples_registry.yaml`, `services.yaml`, `settings.yaml`), example-local prompts, and root `.env` settings. The sections below index each area. For how the service catalog works, see [Configure Services](how-to/configure-services.md).
+Use this guide to find where to configure your deployment. For recipe selection and credentials, start with [Getting Started](01-getting-started.md).
 
-## Model Service
+## Where to Make Changes
 
-What ASR / LLM / TTS models are available, their VRAM, precision, and known issues:
+Choose the scope of your change before editing configuration:
+
+| Scope | Where to Make the Change |
+| --- | --- |
+| Try a different service or prompt | Use the browser controls before connecting. Pipecat selections survive reconnecting in the same tab but reset on refresh. |
+| Change the defaults | Use `examples_registry.yaml` for example selection and service order, `services.yaml` for endpoints, `settings.yaml` for service controls, and example-local prompt catalogs for presets. Follow the relevant guide below for reload or restart requirements. |
+| Change a Compose app environment variable | Edit `.env` and rerun `docker compose --profile <recipe> up -d` with the same profiles. `docker compose restart` does not apply changed environment values. |
+
+## Model Services
+
+Use these references to compare automatic speech recognition (ASR), large language models (LLMs), and text-to-speech (TTS) models.
 
 | Reference | Covers |
 |-----------|--------|
@@ -12,7 +22,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Configure ASR](how-to/configure-asr.md) | ASR models, VRAM, hardware support, Domain Adaptation & endpointing |
 | [Configure TTS](how-to/configure-tts.md) | TTS models, VRAM, hardware support, voice selection, pronunciation (IPA), and text filters |
 
-## Configuration how-to guides
+## Configuration How-To Guides
 
 Unless a row names the Generic Assistant on LiveKit, the guides apply to the Pipecat examples.
 
@@ -25,8 +35,9 @@ Unless a row names the Generic Assistant on LiveKit, the guides apply to the Pip
 | [Enable OpenTelemetry Tracing](how-to/enable-opentelemetry-tracing.md) | Monitor latency and conversation flows with Phoenix or any OTLP backend |
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Record session audio for debugging |
-| [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
-| [Use the Live Gateway](how-to/use-live-gateway.md) | Live sessions at `/v1/live` for Pipecat apps and other clients of the Frontend/Backend Live example |
+| [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | Application-facing OpenAI Realtime–compatible `WS /v1/realtime` on the Pipecat app server |
+| [Use the Live Gateway](how-to/use-live-gateway.md) | Application-facing WebRTC and WebSocket sessions at `/v1/live` for Frontend/Backend Live |
+| [Configure Streaming Input](how-to/configure-llm.md#deployment-tuning-parameters) | Pipeline-to-LLM text prefill over the model sidecar's own `/v1/realtime` endpoint, not a client voice connection |
 | [Frontend/Backend Live](../src/nemotron_voice_agent/pipecat/examples/frontend_backend_live/README.md#configuration) | Choose a backend adapter and configure the talker and UI bot |
 | [Configure Models (Generic Assistant on LiveKit)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#configure-models) | Choose the ASR, LLM, and TTS models of the Generic Assistant on LiveKit per profile |
 | [Phone Calls (SIP)](../src/nemotron_voice_agent/livekit/examples/generic_assistant/SIP.md) | Connect a phone number to the Generic Assistant on LiveKit |
@@ -49,6 +60,6 @@ pipecat:
 
 While the welcome message is enabled, the user is muted until the bot finishes its opening turn (`MuteUntilFirstBotCompleteUserMuteStrategy`), which prevents interruption. When you disable the welcome message, the pipeline removes that mute strategy because there is no first bot turn. The user is unmuted immediately.
 
-## Performance tuning
+## Performance Tuning
 
 This section applies to the Pipecat examples. Pipeline tuning knobs (smart turn, chat-history window, audio buffering, transport) live in [Tune Pipeline Performance](how-to/tune-pipeline-performance.md). For benchmark results, refer to [Evaluation and Performance](04-evaluation-and-performance.md).

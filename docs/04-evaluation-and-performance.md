@@ -8,11 +8,11 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 
 ### Reference Results
 
-The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x B200 GPU** setup (one GPU for Nemotron ASR Streaming (English), one for Magpie Multilingual TTS, and two for the Nemotron 3.5 Lightning LLM). E2E latency stays below one second through 64 concurrent streams. All latencies are in seconds.
+The historical four-B200 benchmark used one GPU for Nemotron ASR Streaming English, one for Magpie Multilingual TTS, and two for Nemotron 3.5 Lightning. The table reports server-side RTVI metrics in seconds, not browser-observed latency. The checkout does not include the run manifest or raw results, so the statistic used for each concurrency row is unknown. Do not interpret the values as percentiles or latency guarantees.
 
 > **Note:** This benchmark uses a 4-GPU setup to measure scalability. Deployment options include cloud-only with no local GPUs, about 80 GB VRAM for the default all-on-one-GPU `*/server` NIM layout, or a supported one-GPU host for `*/single-gpu`. See [Configure LLM](how-to/configure-llm.md#vram--hardware-support) for the automatic VRAM plan.
 >
-> The current `generic-assistant/server-perf` Compose recipe pins the `vllm-nvfp4-tp2-pp1-18.0` profile for Nemotron 3.5 Lightning. Other architectures require listing and benchmarking their compatible TP2 profiles before pinning a hardware-specific winner. See the [scaling benchmark](../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
+> The current `generic-assistant/server-perf` recipe pins `vllm-nvfp4-tp2-pp1-18.0`. The repository history records its selection on two RTX PRO 6000 Blackwell GPUs. The historical B200 table does not establish that it used or validated this pin. To choose a compatible profile for your hardware, refer to the [scaling benchmark](../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
 
 | Parallel Streams | Server E2E Latency | ASR TTFB | LLM Processing Time | LLM TTFT | TTS TTFB |
 | --- | --- | --- | --- | --- | --- |

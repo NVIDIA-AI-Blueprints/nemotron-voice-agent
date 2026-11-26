@@ -1,4 +1,4 @@
-# Nemotron Omni Assistant - cascaded pipeline example
+# Nemotron Omni Assistant Example
 
 Cascaded voice pipeline that uses Nemotron 3 Nano Omni as a single model for ASR and the LLM, then hands the text reply to Magpie TTS. Nemotron Omni consumes user audio directly and produces the assistant text that Magpie TTS speaks. This example enables only text and audio inputs. Uploaded media and webcam vision are covered by [`omni-assistant-subagents`](../omni_assistant_subagents/README.md).
 
@@ -18,35 +18,32 @@ The `services` lists under `pipecat.examples` in [`examples_registry.yaml`](../.
 
 Nemotron Omni handles both speech recognition and response generation, so this example does not configure a separate ASR model.
 
-## Running the example
+## Running the Example
 
 This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
-1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile:
+1. Create `.env` only if it does not exist:
 
    ```bash
    test -f .env || cp .env.example .env
    ```
 
-   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
+2. Set `NVIDIA_API_KEY` in `.env` for Cloud or Server, or `HF_TOKEN` for Single-GPU. The Single-GPU vLLM service downloads Omni weights from Hugging Face.
+3. [Log in to the NGC registry](../../../../../docs/01-getting-started.md#log-in-to-the-ngc-registry) for Server only.
 
-2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
-
-   ```bash
-   set -a; . ./.env; set +a
-   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-   ```
-
-3. Deploy the profile that matches your hardware:
+4. Download the speech assets for Single-GPU only. Run the script as your user, not with `sudo`.
 
    ```bash
-   docker compose --profile omni-assistant up -d              # Cloud (no local GPU)
-   docker compose --profile omni-assistant/server up -d  # Server (Omni NIM + NIM TTS, recommended for scaling)
-
-   # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
-   docker compose --profile omni-assistant/single-gpu up -d
    ```
+
+5. Start one recipe from the table. Substitute its profile for `<recipe>`.
+
+   ```bash
+   docker compose --profile <recipe> up -d
+   ```
+
+   Each recipe starts the following services:
 
    | Recipe profile | App service | Shared sidecars pulled from `docker/sidecars/` |
    | --- | --- | --- |
@@ -56,17 +53,15 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
 
    > The single-GPU recipe uses the Omni vLLM sidecar and takes TTS from the on-device NeMo-Speech.cpp `nemo-speech-tts` service instead of the NIM sidecars. Jetson Thor (128 GB unified memory) fits the 30B Omni NVFP4 model. Follow the [Jetson Thor guide](../../../../../docs/03-jetson-thor.md). Orin-class Jetson hardware is not supported because the models do not fit.
 
-4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
+6. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../../../docs/06-troubleshooting.md#browser-access).
 
-5. Clean up when you are done by tearing down with the same profile you started with:
+7. Select **Connect**.
+8. Allow microphone access if prompted.
+9. Ask a question after the greeting. Expect a spoken reply from Magpie TTS without a separate ASR service.
+10. Select **Disconnect** to end the session.
+11. Stop the deployment with `docker compose --profile <recipe> down` using the same recipe.
 
-   ```bash
-   docker compose --profile omni-assistant down              # Cloud (no local GPU)
-   docker compose --profile omni-assistant/server down       # Server
-   docker compose --profile omni-assistant/single-gpu down   # One GPU (incl. DGX Spark and Jetson Thor)
-   ```
-
-To run host-native without Docker, set `pipecat.selection` to `omni-assistant` in [`examples_registry.yaml`](../../../../../examples_registry.yaml), then run `uv run nva-pipecat`.
+For a [host-native run](../../../../../docs/01-getting-started.md#optional-local-development-without-docker), use `omni-assistant` as `pipecat.selection`.
 
 ## Customization
 
@@ -88,7 +83,7 @@ Environment variables read by [`pipeline.py`](pipeline.py):
 
 For model selection, voices, and shared service-catalog mechanics, see [Configure LLM](../../../../../docs/how-to/configure-llm.md), [Configure TTS](../../../../../docs/how-to/configure-tts.md), and [Configure Services](../../../../../docs/how-to/configure-services.md).
 
-## Tips & best practices
+## Tips and Best Practices
 
 - **Omni model and hardware.** The Server recipe uses the `nvidia-llm-omni` NIM sidecar with automatic model-profile selection. The Single-GPU recipe uses `nvidia-llm-vllm-omni` and selects the model precision from the GPU at startup. Blackwell workstations, DGX Spark, and Jetson Thor use NVFP4. Hopper and Ada use FP8. See [Configure LLM](../../../../../docs/how-to/configure-llm.md#vram--hardware-support).
 - **Tune Omni behavior** with the environment variables in the table above: raise the minimum-audio threshold if noise triggers spurious turns, and adjust max-tokens and sampling for your latency and verbosity targets.

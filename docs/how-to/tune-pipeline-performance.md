@@ -50,57 +50,51 @@ The [Omni examples](../../src/nemotron_voice_agent/pipecat/examples/omni_assista
 
 ## Chat History Limit
 
-Every turn appends to the LLM's context. Left unbounded, that context keeps growing, which raises latency (more tokens to process means a higher time-to-first-token), increases cost, and eventually overflows the model's context window. For real-time voice, a small, bounded context is what keeps replies fast. Pipecat manages history through its [context aggregators](https://docs.pipecat.ai/guides/learn/context-management) and built-in [context summarization](https://docs.pipecat.ai/pipecat/fundamentals/context-summarization). The examples wire a **turn-count** window (`CHAT_HISTORY_RECENT_TURNS`) on top for a predictable per-turn budget.
+`CHAT_HISTORY_RECENT_TURNS` controls when the Pipecat Generic and Multilingual assistants attempt to summarize older conversation history. It does not set a hard context or token limit. The Omni examples do not use this setting.
 
-We use context summarization logic for our examples to always **pin the initial prompt / system messages** loaded at session start. Nemotron's chat template carries the assistant instructions and tool definitions in the *user* section, so those must stay verbatim. Evicting them (as a token-based window might) would degrade tool-calling and persona. Only the older **conversational** turns are trimmed, and the handling differs by example:
-
-- **Generic** and **Multilingual** assistants **summarize** older history: once the conversation grows past the recent window, the older turns are condensed into a single pinned summary message (an additional LLM call after the turn), and the most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-- **Frontend/Backend Live** does not read `CHAT_HISTORY_RECENT_TURNS`. Its talker keeps a token budget, `frontend.cascade.memory.context_tokens` in the example's settings, and drops the oldest turns, never the prompt, after the history passes the `compact_at` share of that budget. The backend's history budget is the core's `delegation.context_tokens`. For details, refer to [Use the Live Gateway → Errors and Limits](use-live-gateway.md#errors-and-limits).
+For Frontend/Backend Live, set the talker's token budget with `frontend.cascade.memory.context_tokens` and the backend's budget with `core.delegation.context_tokens` in the example's `config` block. Refer to [Live Gateway Errors and Limits](use-live-gateway.md#errors-and-limits).
 
 ### Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHAT_HISTORY_RECENT_TURNS` | `10` (Generic / Multilingual) | Most recent non-prompt turns kept before older history is summarized |
+The default window is 10 user turns. To change it for a Generic or Multilingual deployment:
 
-```bash
-# Override the per-example default (applies to whichever example is running, except Frontend/Backend Live)
-CHAT_HISTORY_RECENT_TURNS=10
-```
+1. Set `CHAT_HISTORY_RECENT_TURNS` in `.env`.
+
+   ```dotenv
+   # Applies only to the Pipecat Generic and Multilingual assistants.
+   CHAT_HISTORY_RECENT_TURNS=10
+   ```
+
+   Values below `1` disable this summarization.
+
+2. Apply the change by restarting the host-native app or [recreating the Compose app container](../02-configuration-guide.md#where-to-make-changes).
 
 ### How It Works
 
-When the message count exceeds `CHAT_HISTORY_RECENT_TURNS`:
-
-1. Initial prompt messages loaded at session start are always preserved.
-2. The most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-3. Older non-prompt turns are **summarized into one pinned summary message** (Generic / Multilingual).
+After each assistant turn, the pipeline finds the recent window by counting backward through user-role messages, excluding the initial prompt. If non-prompt history precedes that window, the pipeline makes a separate LLM call to summarize it. On success, it replaces the older history with one summary message and keeps the initial prompt and recent messages unchanged. If summarization fails or the context changes during the call, the pipeline leaves the existing history intact.
 
 ### Recommendations
 
-| Use Case | Value |
-|----------|-------|
-| Standard conversations | `10`–`20` |
-| Multilingual mode | `5-10` |
+Start with the default. Use a larger window if the assistant needs more verbatim history, or a smaller one if older turns can be summarized sooner.
 
 ## Audio Output Buffering
 
-`AUDIO_OUT_10MS_CHUNKS` sets how many 10 ms audio frames the server batches per outbound send (the output buffer depth). The default is `5` (50 ms) for WebRTC and `10` (100 ms) for WebSocket.
+`AUDIO_OUT_10MS_CHUNKS` sets the size of each server output batch in units of 10 ms of audio. Pipecat defaults to `5` (50 ms) for WebRTC and `10` (100 ms) for WebSocket. The `generic-assistant/server-perf` benchmark recipe sets `40` (400 ms); this is a benchmark setting, not a client latency target.
 
-```bash
-# In .env: override the transport default
-AUDIO_OUT_10MS_CHUNKS=10
-```
+Larger batches send the same amount of audio in fewer chunks but can delay playback while the server fills each batch. The setting does not control the client playback queue. Audio already queued on the client can continue playing after a user interrupts unless the client discards it.
 
-- **WebRTC, `5` (50 ms):** lowest latency.
-- **WebSocket, `10` (100 ms):** smoother over a plain stream.
-- **High concurrency, `10`–`40` (100–400 ms):** prevents glitches under load.
+To tune a recipe that reads this setting from `.env`, use your client and expected concurrent load. Measure interruption delay from the start of user speech to the end of assistant playback.
 
-**Why buffer, and why more for WebSocket.** WebRTC ships its own jitter buffer and paces media for you, so a small buffer stays glitch-free at low latency. A raw WebSocket stream has no media-layer jitter buffer (frames ride a plain TCP connection), so under network jitter or many concurrent sessions, too-small chunks starve the client and you hear gaps or crackle. A larger buffer absorbs that variance, trading a little added latency for stable playback. Raise it further as concurrency grows.
+1. Measure playback gaps and interruption delay with the transport default.
+2. Set a different batch size in `.env`. For example, try 20 units (200 ms) for WebSocket.
 
-**Telephony / server-side: send in bursts.** When the consumer is a telephony gateway (SIP/PSTN) or another server that does its own buffering and pacing, real-time chunking on our side only adds latency. Use a custom transport to send audio as soon as it is generated, and let the downstream handle playout timing.
+   ```dotenv
+   AUDIO_OUT_10MS_CHUNKS=20
+   ```
 
-**Barge-in trade-off.** Buffering works against fast barge-in: when the user interrupts, audio already queued downstream keeps playing until it drains, so the bot talks over the user for up to the buffer's duration. The bigger the buffer, the longer that tail. For low barge-in latency with a large buffer, the client must **flush its playback queue** on interruption (drop the buffered audio) rather than play it out. Custom and telephony clients (typically on the WebSocket path) should implement this flush.
+3. Apply the change by restarting the host-native app or [recreating the Compose app container](../02-configuration-guide.md#where-to-make-changes).
+4. Repeat the client measurements under the same load.
+5. Choose the batch size that meets your playback and interruption targets.
 
 ## Uvicorn Worker Scaling
 
@@ -113,34 +107,37 @@ UVICORN_WORKERS=<workers>
 
 Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the recommended scaling deployment shape and its companion tuning values, see [Reproducing the recommended scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
 
-When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows are disabled** because that state is process-local. For multi-worker deployments, use one of these patterns:
-
-- keep a **single worker** if you depend on per-process session config
-- use **sticky routing** so a session stays on the same worker
-- move session state into **shared storage**
+When `UVICORN_WORKERS > 1`, the stock app disables session-config-based WebRTC and WebSocket flows and does not serve `/v1/live`. Keep one worker for those flows. Sticky routing alone does not reenable the disabled routes. Use the [scaling benchmark](../../benchmarking_tools/scaling-perf/README.md) for the supported multi-worker test path.
 
 ## Transport Selection
 
-The server supports both WebRTC and WebSocket transports simultaneously on different endpoints:
+Pipecat registers a separate endpoint for each transport.
 
 | Transport | Endpoint | Best For |
 |-----------|----------|----------|
-| **WebRTC** | `POST /api/offer` | Production voice interactions, lowest latency |
-| **WebSocket** | `WS /api/ws` | Telephony / server-side integrations, testing, firewall-restricted environments, simpler deployments |
+| **WebRTC** | `POST /api/offer` | Direct browser sessions using WebRTC media transport |
+| **WebSocket** | `WS /api/ws` | RTVI testing and integrations that handle audio framing and playback |
 
-**For telephony (SIP/PSTN) and server-to-server use cases, use the WebSocket endpoint.** It streams raw audio frames you can bridge to a gateway or another service. WebRTC is best for direct browser clients, where its built-in jitter buffering and NAT traversal give the lowest latency.
+For a custom telephony bridge or server-to-server integration, the WebSocket endpoint uses the Pipecat client frame format. It is not a SIP endpoint. WebRTC provides media transport and jitter handling for browser clients. Compare playback gaps and interruption delay on your target client under load rather than assuming one transport always has lower latency.
 
-### Choosing which transports are exposed
+<a id="choosing-which-transports-are-exposed"></a>
 
-Both transports are exposed by default and the browser UI picks one. To restrict the server to a single transport, set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) or override it at runtime with the `TRANSPORT_SELECTION` environment variable (the env var wins):
+### Choose Transports for the Browser
 
-| Value | Exposes |
+Set `pipecat.transports` in [`examples_registry.yaml`](../../examples_registry.yaml) to choose which transports the browser offers. `TRANSPORT_SELECTION` overrides the registry value. The server keeps both endpoints registered for every value.
+
+| Value | Browser choices |
 |-------|---------|
 | `all` (default) | WebRTC and WebSocket |
 | `webrtc` | WebRTC only |
 | `websocket` | WebSocket only |
 
-```bash
-# .env: e.g. expose only WebSocket for a telephony / server-side deployment
-TRANSPORT_SELECTION=websocket
-```
+To offer only WebSocket in the browser, use the environment override.
+
+1. Set `TRANSPORT_SELECTION` in `.env`.
+
+   ```dotenv
+   TRANSPORT_SELECTION=websocket
+   ```
+
+2. Apply the change by restarting the host-native app or [recreating the Compose app container](../02-configuration-guide.md#where-to-make-changes).

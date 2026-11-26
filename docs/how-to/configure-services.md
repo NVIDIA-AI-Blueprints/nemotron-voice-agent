@@ -4,9 +4,9 @@ The Nemotron Voice Agent keeps every built-in LLM, ASR, and TTS service in one c
 
 This guide covers the **mechanics**: how the catalog is laid out, how the active recipe selects entries, and how to extend it. For the differences in the LiveKit example, refer to [Use the Catalog with LiveKit](#use-the-catalog-with-livekit).
 
-## Required credentials
+## Required Credentials
 
-Set one key per recipe family. Do not mix them.
+Set the keys for your recipe in the repository's `.env`.
 
 | Recipe family | Required `.env` key |
 | --- | --- |
@@ -14,12 +14,15 @@ Set one key per recipe family. Do not mix them.
 | Server (`<example>/server`) | `NVIDIA_API_KEY` |
 | Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` |
 | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` |
+| Dynamo (`<example>/dynamo`) | `NVIDIA_API_KEY` for the speech NIMs and `HF_TOKEN` for the Lightning weights |
 
 The LiveKit profiles `generic-assistant-livekit`, `generic-assistant-livekit/server`, and `generic-assistant-livekit/single-gpu` use the same keys as Cloud, Server, and Single-GPU.
 
-`NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server and Performance Server additionally need `docker login nvcr.io` before `up`. Single-GPU requires `HF_TOKEN` for Hugging Face model downloads and does not use `NVIDIA_API_KEY`.
+For Server, Performance Server, and Dynamo, run `docker login nvcr.io` before `up`. The stock Single-GPU recipe uses `HF_TOKEN` for Hugging Face downloads.
 
-## Catalog layout
+When you supply `NVIDIA_API_KEY`, Pipecat lists NVIDIA Cloud entries alongside the available self-hosted services. Performance Server uses the same catalog for benchmarking and disables browser session setup. LiveKit uses built-in NVIDIA Cloud endpoints only in its Cloud recipe.
+
+## Catalog Layout
 
 `services.yaml` has one section per self-hosted stack:
 
@@ -48,20 +51,24 @@ server:
       nvcf: {}
 ```
 
-## How the active recipe selects entries
+## How the Active Recipe Selects Entries
 
-This section describes the Pipecat backend. Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). The `*-dynamo` app services leave it unset and select the reachable `server` entries. Host-native runs (`uv run nva-pipecat`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
+Most Pipecat Compose app services set `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`. The Dynamo services (`generic-assistant-dynamo` and `multilingual-assistant-dynamo`) and host-native runs (`uv run nva-pipecat`) read this setting from the environment, including the repository's `.env`. They default to `auto`. When switching from Cloud to Dynamo, remove `SERVICE_RECIPE=cloud` from `.env` to restore automatic detection. With an explicit recipe, Pipecat skips detection and continues checking service status.
+
+In `auto`, Pipecat probes the `server` and `single-gpu` endpoints in parallel and caches reachability results for 5 seconds. It selects the section with the most reachable entries, preferring `server` on a tie. If a slot in that section has no reachable entries, Pipecat keeps all entries in that slot so the session readiness check can report the unavailable service.
+
+For host-native runs with local models, start only the named model services so Compose does not also launch an app on the same port. The following table shows which entries each recipe lists.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |
-| `auto` (unset) | reachable entries of the detected section, or the whole `server` section when nothing is reachable and `NVIDIA_API_KEY` is not set | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
-| `cloud` | none | `server` entries with `nvcf` |
+| `auto` (unset) | Reachable entries per slot in the detected section. If none in a slot are reachable, all entries in that slot. If no endpoint in either section is reachable, no self-hosted entries when `NVIDIA_API_KEY` is set, or the example's `server` entries otherwise. | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
+| `cloud` | none | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 | `server` | `server` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 | `single-gpu` | `single-gpu` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 
 `NVIDIA_API_KEY` counts as set only when it is a real key. Empty, unset, and the Compose placeholder `not-needed` hide NVIDIA Cloud entries. With an explicit recipe, the catalog lists every entry of the section except hidden offline ones. The backend checks the selected services when a session starts and reports a clear error when one is not running.
 
-## Per-example services and defaults
+## Per-Example Services and Defaults
 
 Each Pipecat example lists the catalog keys it offers per slot under `pipecat.examples.<example>.services` in `examples_registry.yaml`. The LiveKit example reads `livekit.examples.<example>.services`, as [Use the Catalog with LiveKit](#use-the-catalog-with-livekit) describes. The slot order is the UI order, and the list order is the order inside each slot. A slot reads the catalog category of the same name. To add a slot that reuses another category, map it under `categories`. The first key that is available for the active recipe becomes the default, with self-hosted entries preferred over NVIDIA Cloud.
 
@@ -85,11 +92,11 @@ The Generic Assistant on LiveKit reads the same `services.yaml` entries and the 
 
 The defaults are the first keys of each slot under `livekit.examples.generic-assistant.services` in `examples_registry.yaml`. To pick another catalog key, set `LLM_SERVICE`, `ASR_SERVICE`, or `TTS_SERVICE` in `.env`, and then recreate the agent service. These variables set the defaults. The **SERVICES** tab of the example's web UI changes the services and their `settings.yaml` settings for a session, and adds custom endpoints when `LIVEKIT_UI_CUSTOM_ENDPOINTS=1` turns them on, as [Services Tab](../../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#services-tab) describes. The example does not support ASR entries that use the Transcribe HTTP API, such as `nemotron-transcribe`. For the commands and the Server and Single GPU sidecar setup, refer to [Configure Models](../../src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md#configure-models) in the LiveKit example README.
 
-## Switching services in the UI
+## Switching Services in the UI
 
-The Services tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Each self-hosted card shows its endpoint's status: **Starting…** while it loads, **Ready** once its HTTP readiness check or TCP port probe passes, and **Error** if it goes offline after the app server has seen it, until it is ready again. A TCP probe confirms the port is open, not that the model is loaded. Offline entries that the app server has never seen are hidden, unless that would leave the slot empty. In that case they show **Not running**. Until you click an entry, the first visible one is used, so a scaled-down Lightning does not stay the default. An entry you clicked stays selected while its card is visible, including when it shows **Starting…** or **Error**. Click another entry to change it. Statuses refresh every five seconds with any `SERVICE_RECIPE`, so a sidecar started later appears without a page refresh. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
+In Pipecat, the **Services** tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Each self-hosted card shows its endpoint's status: **Starting…** while it loads, **Ready** once its HTTP readiness check or TCP port probe passes, and **Error** if it goes offline after the app server has seen it, until it is ready again. A TCP probe confirms the port is open, not that the model is loaded. Offline entries that the app server has never seen are hidden, unless that would leave the slot empty. In that case they show **Not running**. Until you click an entry, the first visible one is used, so a scaled-down Lightning does not stay the default. An entry you clicked stays selected while its card is visible, including when it shows **Starting…** or **Error**. Click another entry to change it. Statuses refresh every five seconds with any `SERVICE_RECIPE`, so a sidecar started later appears without a page refresh. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
 
-## Editable settings
+## Editable Settings
 
 An entry with `settings: <profile>` shows the controls of that `settings.yaml` profile inside the service's card in the Services tab. Click the card to expand them. Values are kept per example, per slot, and per service, so they survive switching between Self-hosted and NVIDIA Cloud. Numbers with `min` and `max` render as a slider with a value box, other numbers as a value box, enums as a dropdown, and booleans as a toggle. The backend validates each value against its `type` or `options` and falls back to the default for invalid or missing values. It clamps a number outside `min`/`max` to the nearest bound. It then writes the value at `path`: inside `extra_params` for an LLM entry, or into the ASR or TTS entry field of that name, such as `synthesis_mode`. `path` defaults to the setting name, so only nested fields set it. A setting with `requires` is sent only while that setting is true. A setting with `below` stays at least `reserve` under the named setting while that setting is set. When that leaves less than its `min`, the backend turns its `requires` setting off, and the Services tab shows that setting as off.
 
@@ -150,7 +157,7 @@ pipecat:
             reasoning_budget: 256
 ```
 
-## Adding a self-hosted service
+## Adding a Self-Hosted Service
 
 To configure a specific local model, check its Docker Compose file under [`docker/sidecars/`](../../docker/sidecars/) for the **service name**, **port**, and the **profile** that launches it, then point a catalog entry at that endpoint. For example, Nemotron ASR Streaming (English) is defined in [`docker/sidecars/docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml):
 
@@ -186,7 +193,7 @@ When two containers serve the same model for different profiles, give them the s
 
 To run models locally for a **new example**, add your example's profile (for example `my-example/server`) to the relevant service(s) under `docker/sidecars/`, add the app service with `SERVICE_RECIPE` in `docker/pipecat/docker-compose.yaml`, and list the catalog keys under `pipecat.examples.<example>.services` in `examples_registry.yaml`. Refer to [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
 
-## Adding an NVIDIA Cloud service
+## Adding an NVIDIA Cloud Service
 
 Add `nvcf` to the matching `server` entry. Refresh the browser for host-run development, or restart the app container. `services.yaml` is bind-mounted.
 

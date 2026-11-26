@@ -10,9 +10,11 @@ Nemotron Voice Agent Blueprint provides a comprehensive, end-to-end voice agent 
 
 Built on the open-source [Pipecat](https://github.com/pipecat-ai/pipecat) and [LiveKit Agents](https://github.com/livekit/agents) frameworks and leveraging NVIDIA NIM microservices, this example helps teams accelerate the deployment of high-performance voice AI solutions.
 
-## ✨ Why this blueprint
+## ✨ Why This Blueprint
 
-- **Sub-second E2E latency**: sub-second end-to-end latency with support for multiple concurrent streams, designed for production scale.
+The blueprint provides reference pipelines for building and evaluating voice agents.
+
+- **Measured latency at scale**: the [historical four-B200 benchmark table](docs/04-evaluation-and-performance.md#reference-results) reports server-side end-to-end latency below one second at each tested concurrency, up to 64 streams. This is not a measurement of browser playback latency.
 - **Fully open models**: Nemotron Streaming and Parakeet ASR, Magpie TTS and Nemotron LLM models. Swap any component, self-host, no lock-in.
 - **Interruption Handling**: Voice Activity Detection (VAD) and End-of-Utterance (EOU) logic to guide the agent on exactly when to start and stop speaking, ensuring a natural conversational flow.
 - **Multilingual Capabilities**: native support for multiple languages provided by NVIDIA Magpie TTS and Multilingual ASR.
@@ -26,7 +28,9 @@ Built on the open-source [Pipecat](https://github.com/pipecat-ai/pipecat) and [L
 
 ## 📣 News
 
-- **[November 2026] v2.4.0**
+Highlights from the [2.4.0 changelog](CHANGELOG.md#v2-4-0) include the following:
+
+- **v2.4.0**
   - Generic Assistant on LiveKit Agents with Cloud, Server, Single GPU, and optional SIP phone call profiles.
   - Frontend/Backend Live example and `/v1/live` gateway for responsive voice interaction with delegated backend work.
   - Nemotron 3.5 Transcribe ASR on Server and Single GPU recipes, and NVIDIA Dynamo recipes.
@@ -127,62 +131,67 @@ Credentials depend on the deployment profile. Do not mix them, except for Dynamo
 - **Cloud, Server, and Performance Server**: an **NVIDIA API Key** (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server (`*/server`) and Performance Server (`generic-assistant/server-perf`) also need valid **NVIDIA NGC** credentials to pull NIM container images (refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
 - **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads and NVIDIA driver 580.x or newer for NeMo-Speech.cpp. It does not require `NVIDIA_API_KEY` or authentication with `docker login nvcr.io`.
 - **Dynamo**: the `*/dynamo` recipes need both the Server credentials (`NVIDIA_API_KEY` and `docker login nvcr.io`) for the speech NIMs and `HF_TOKEN` for the LLM weights.
-- **Docker**: Docker Compose 2.24.4 or newer. Cloud needs Docker only. Server, Performance Server, and Single GPU also need Docker with NVIDIA GPU support ([NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)).
+- **Docker**: Docker Compose 2.24.4 or newer. Cloud needs Docker only. Server, Performance Server, Single GPU, and Dynamo also need Docker with NVIDIA GPU support ([NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)).
 
 ---
 
 ## 🚀 Quick Start
 
-Deploy with the bundled **agent skills** (recommended), or follow the manual steps below. In below steps, we deploy the **Generic Assistant on a workstation GPU**. For other examples or deployment profiles, refer to the [Examples](#-examples) table and each example's README. For a Jetson Thor quickstart on the `*/single-gpu` recipes, follow the [Jetson Thor guide](docs/03-jetson-thor.md). To deploy the Generic Assistant on LiveKit, follow its [README](src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md).
+Run the Pipecat Generic Assistant using NVIDIA Cloud endpoints, with no local GPU required. For local Server, Single-GPU, and Dynamo recipes, refer to [Getting Started](docs/01-getting-started.md). For LiveKit, follow the [Generic Assistant on LiveKit guide](src/nemotron_voice_agent/livekit/examples/generic_assistant/README.md).
 
-### With the agent skills
+### With the Agent Skills
 
-Install the skills, then ask your coding agent to deploy or configure your chosen example:
+From the root of your local clone, install the skills. Then ask your coding agent to deploy or configure your example.
 
 ```bash
 npx skills add .
 ```
 
-### Manual steps
+### Manual Steps
 
-1. Clone the repository, navigate to the root directory, and copy the example environment file only if `.env` does not exist.
+You need Docker Compose 2.24.4 or newer and an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com/). This cloud recipe does not require an NGC registry login.
+
+1. Clone the repository over HTTPS.
 
     ```bash
-    git clone git@github.com:NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    git clone https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    ```
+
+2. Change to the repository root.
+
+    ```bash
     cd nemotron-voice-agent
+    ```
+
+3. Create `.env` only if it does not exist.
+
+    ```bash
     test -f .env || cp .env.example .env
     ```
 
-2. Set `NVIDIA_API_KEY` in `.env`. This Quick Start uses the Server profile, which requires that key (the same key is required for cloud-only and `generic-assistant/server-perf`). Single-GPU uses `HF_TOKEN` instead. Docker Compose passes values from this file into the application and model services.
-
-3. Log in to the NVIDIA NGC Docker Registry (required for Server and Performance Server, not needed for cloud-only and Single-GPU).
-
-    ```bash
-    set -a; . ./.env; set +a
-    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-    ```
-
-4. Deploy the Generic Assistant on a local workstation GPU (about 80 GB VRAM for the default all-on-one-GPU NIM layout). NIM selects a compatible LLM profile automatically:
+4. Set `NVIDIA_API_KEY` in `.env`.
+5. Start the cloud recipe.
 
     ```bash
-    docker compose --profile generic-assistant/server up -d
+    docker compose --profile generic-assistant up -d
     ```
 
-    > **Note:** Deployment may take 30-60 minutes on first run. This runs the Generic Cascaded pipeline with local NIM ASR, LLM, and TTS sidecars. On local recipes, the **first voice interaction** may have higher latency while GPU sidecars warm up. Later turns are much faster. If you have one supported GPU but not enough memory for the NIM server layout, use `--profile generic-assistant/single-gpu` and follow the [single-GPU setup](docs/01-getting-started.md#docker-based-deployment). If you have no local GPU, run the cloud profile `--profile generic-assistant`.
+6. Open `https://localhost:7860/` on the Docker host. For a remote browser, use `https://<machine-ip>:7860/`. Keep TLS enabled for browser microphone access. For certificate warnings or connection failures, refer to [Browser Access](docs/06-troubleshooting.md#browser-access).
+7. Select **Connect**.
+8. Allow microphone access if the browser prompts you.
+9. Ask a question after the greeting finishes. The assistant should answer aloud.
+10. Select **Disconnect** to end the session.
+11. Stop the deployment when you finish.
 
-5. Access the application at `https://<machine-ip>:7860`. Keep TLS enabled when testing the browser UI.
-
-    - **TLS:** HTTPS is the default, because browser microphone and WebRTC require a secure context. `PIPELINE_TLS=false` serves plain HTTP for headless/API testing. See [plain-HTTP deployment and usage](docs/06-troubleshooting.md#browser-access) in Troubleshooting.
-    - **Remote access:** clients on a different network may need a TURN server. See [Enable a TURN Server](docs/how-to/enable-turn-server.md).
-    - **Audio:** use a headset (preferably wired) for the best experience.
-
-For detailed setup instructions, see the [Getting Started Guide](docs/01-getting-started.md). For common startup issues, see [Troubleshooting](docs/06-troubleshooting.md).
+    ```bash
+    docker compose --profile generic-assistant down
+    ```
 
 ---
 
 ## 🤖 Agent Skills
 
-This repository includes AI agent skills for deployment assistance. Install them for your coding agent with:
+To install the deployment skills for your coding agent, run the following command from the repository root.
 
 ```bash
 npx skills add .
@@ -213,6 +222,8 @@ npx skills add .
 Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-configuration-guide.md). They cover configuring .env, models, and prompts, enabling opentelemetry tracing, a TURN Server, and the audio recorder for debugging, plus the Realtime integrator gateway, the Live gateway, and connecting an agent harness.
 
 ---
+
+<a id="-roadmap"></a>
 
 ## 🗺️ Roadmap
 

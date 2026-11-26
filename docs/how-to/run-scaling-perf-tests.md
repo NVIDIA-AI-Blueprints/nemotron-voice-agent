@@ -1,4 +1,4 @@
-# Run Scaling & Performance Tests
+# Run Scaling and Performance Tests
 
 Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/) to run latency and scaling tests against a running voice-agent server. This guide applies to the Pipecat examples (`nva-pipecat`).
 
@@ -27,7 +27,7 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
     uv sync --group benchmark
     ```
 
-3. Start the voice-agent server with TLS enabled. The scaling benchmark connects to `wss://<host>:<port>/api/ws` and disables certificate verification for the local self-signed certificate.
+3. Start the voice-agent server with TLS enabled. The benchmark connects to the Pipecat RTVI endpoint at `wss://<host>:<port>/api/ws` and verifies the certificate by default.
 
     ```bash
     uv run nva-pipecat
@@ -46,33 +46,54 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 
 ## Run
 
-From `benchmarking_tools/scaling-perf/`:
+The commands below use `--protocol rtvi` to target the local Pipecat server even when `OPENAI_REALTIME_WS_URL` is set. Use `--insecure` only for the local server's self-signed certificate. For a remote server, use a trusted certificate and omit that flag. To benchmark the OpenAI Realtime gateway, follow [Realtime Endpoint](../../benchmarking_tools/scaling-perf/README.md#realtime-endpoint).
 
-Single client (smoke test):
+### Run Against the Server Performance Recipe
 
-```bash
-uv run python3 benchmark.py
-```
+The `generic-assistant/server-perf` recipe disables the welcome message. Use `--skip-bot-intro` so the client does not wait for audio the server will not send.
 
-Concurrent run (N parallel clients, single concurrency level):
+1. Change to `benchmarking_tools/scaling-perf`.
+2. Run a single-client smoke test.
 
-```bash
-./simulate_concurrency.sh --clients 4
-```
+    ```bash
+    uv run python3 benchmark.py --protocol rtvi --skip-bot-intro --insecure
+    ```
 
-Scaling sweep (one run per concurrency level, with cooldown between levels):
+3. Run a scaling sweep.
 
-```bash
-./simulate_concurrency.sh --clients "1 2 4 8 16"
-```
+    ```bash
+    ./simulate_concurrency.sh --protocol rtvi --clients "1 2 4 8 16" --skip-bot-intro --insecure
+    ```
 
-Useful flags (passed through to `simulate_concurrency.sh`):
+### Run Against a Target That Sends a Welcome Message
 
-```bash
-./simulate_concurrency.sh --host localhost --port 7860 --clients "1 4"
-./simulate_concurrency.sh --clients "1 4" --test-duration 30 --cooldown 5
-./simulate_concurrency.sh --clients "4" --no-save-audio
-```
+Keep the default intro drain for these targets. Each client waits for and discards the greeting before sending test turns. The sweep wrapper sets a shared measurement window in advance, so a slow greeting can leave less time for measured turns.
+
+1. Change to the benchmark directory.
+
+    ```bash
+    cd benchmarking_tools/scaling-perf
+    ```
+
+2. Run a single-client smoke test.
+
+    ```bash
+    uv run python3 benchmark.py --protocol rtvi --insecure
+    ```
+
+3. Choose one of these commands to run a load test:
+
+    **One concurrency level:**
+
+    ```bash
+    ./simulate_concurrency.sh --protocol rtvi --clients 4 --insecure
+    ```
+
+    **Scaling sweep with cooldown between levels:**
+
+    ```bash
+    ./simulate_concurrency.sh --protocol rtvi --clients "1 2 4 8 16" --insecure
+    ```
 
 ## Outputs
 

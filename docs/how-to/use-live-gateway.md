@@ -4,7 +4,10 @@ The [Frontend/Backend Live example](../../src/nemotron_voice_agent/pipecat/examp
 
 ## When the Routes Are Served
 
-Run a `frontend-backend-live` [deployment profile](../01-getting-started.md) with its default `EXAMPLE_SELECTION` and one Uvicorn worker. Set `LIVE_API_TOKEN` in `.env` before starting the server. On a trusted network, you can serve the routes without a token by setting `LIVE_ENABLED=true`. Set `LIVE_ENABLED=false` to disable the routes.
+The Live routes require a single example selection and one Uvicorn worker. `EXAMPLE_SELECTION=all` does not serve these routes. The repository browser UI does not need the Live gateway.
+
+1. Set `LIVE_API_TOKEN` in `.env`. For token-free use on a trusted network only, leave it unset and set `LIVE_ENABLED=true`. `LIVE_ENABLED=false` disables the routes even if a token is set.
+2. Start a `frontend-backend-live` [deployment profile](../01-getting-started.md#docker-based-deployment) with its default `EXAMPLE_SELECTION=frontend-backend-live` and one worker (`UVICORN_WORKERS=1`). If the profile is already running, rerun its `up -d` command to apply environment changes.
 
 ### Authentication
 
@@ -25,7 +28,23 @@ Use the route that matches your transport or app operation.
 
 ## Connect a Client
 
-Use HTTPS and `wss://` with TLS, or HTTP and `ws://` when `PIPELINE_TLS=false`.
+Use HTTPS and `wss://` with TLS, or HTTP and `ws://` when `PIPELINE_TLS=false`. The Live gateway is separate from the [Realtime gateway](use-realtime-gateway.md).
+
+### Verify the Gateway
+
+Check the gateway before opening a session. A successful info request confirms routing and authentication, not model readiness.
+
+1. Request the gateway's capabilities. This example assumes TLS and a token. Set `LIVE_API_TOKEN` in your shell to the same value as on the server.
+
+    ```bash
+    curl --fail-with-body --silent --show-error \
+      -H "Authorization: Bearer ${LIVE_API_TOKEN}" \
+      https://localhost:7860/v1/live/info
+    ```
+
+    With the built-in self-signed certificate on your own local instance, add `--insecure`. For a token-free instance, omit the authorization header. Use `http://` only if you disabled TLS. HTTP 200 returns JSON including `backend_models`.
+
+2. Use a model ID from `backend_models` in the client examples below. For a 404 or a token, host, or origin error, refer to [Frontend/Backend Live Troubleshooting](../06-troubleshooting.md#frontendbackend-live).
 
 ### WebSocket
 

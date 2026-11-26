@@ -26,7 +26,7 @@ Each model is exposed as a **catalog key** in `services.yaml`:
 
 > The active default per slot is the first available key under the example's `services` in [`examples_registry.yaml`](../../examples_registry.yaml).
 
-### Choosing a multilingual ASR model
+### Choosing a Multilingual ASR Model
 
 For multilingual deployments, select the ASR model based on your language requirements and quality expectations:
 
@@ -53,55 +53,87 @@ To use one of these, configure the NIM endpoint to point to the corresponding mo
 
 
 
-## Hardware requirements and deployment configs
+## Hardware Requirements and Deployment Configs
 
-ASR runs one of three ways, and the repo wires the right one per profile:
+The selected recipe determines where speech recognition runs:
 
-- **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. The simplest starting point.
-- **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/sidecars/docker-compose.parakeet-asr.yaml)).
-- **Opt-in local ASR (Transcribe)**: enable the `transcribe-asr` Compose profile with the server recipe of the Generic or Multilingual Assistant. With a single-GPU recipe, enable `transcribe-asr-single-gpu` instead. Both profiles are in [`docker-compose.nemotron-transcribe.yaml`](../../docker/sidecars/docker-compose.nemotron-transcribe.yaml) and publish HTTP port `9002`. The server profile uses GPU `1`. Then select **Nemotron 3.5 Transcribe** in **Services > ASR**.
+- **Cloud (NVCF):** the catalog calls `grpc.nvcf.nvidia.com`. No local GPU is required.
+- **Server:** the [streaming ASR NIM](../../docker/sidecars/docker-compose.nemotron-asr.yaml) runs on GPU `0` by default.
+- **Single-GPU:** [NeMo-Speech.cpp](../../docker/sidecars/docker-compose.nemo-speech-cpp.yaml) serves ASR and TTS in separate containers for the cascaded Pipecat examples. The ASR service is `nemo-speech-asr` for Generic, `nemo-speech-asr-multilingual` for Multilingual, or `nemo-speech-asr-frontend-backend` for Frontend/Backend Live. All use `nemo-speech-asr:50052` on the Compose network. The TTS service is `nemo-speech-tts`, reachable as `nemo-speech:50051`. Omni uses only the TTS sidecar.
 
-    Start Transcribe together with the server recipe of your example. The server recipe also starts the NIM ASR sidecar on GPU `0`, and that sidecar uses GPU memory even when you select Transcribe. Scale the sidecar to `0` so that only Transcribe runs:
+### Run Transcribe With a Server Recipe
 
-    ```bash
-    docker compose --profile generic-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-english=0
-    docker compose --profile multilingual-assistant/server --profile transcribe-asr up -d --scale nemotron-asr-streaming-multilingual=0
-    ```
+The Generic and Multilingual Assistants can use a whole-turn Transcribe NIM on GPU `1` by default. The `transcribe-asr` overlay starts the `nemotron-transcribe` service and publishes HTTP port `9002`. Complete the Server prerequisites in [Getting Started](../01-getting-started.md#prerequisites) first.
 
-    Pass the same profiles to `docker compose down`, without `--scale`.
+1. Choose the recipe and streaming ASR service for your example:
 
-    Before you start `transcribe-asr-single-gpu`, run `bash scripts/download-transcribe-models.sh`. It downloads about 22 GB from the public [NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-GGUF) repository. It picks the NVFP4 decoder on Blackwell GPUs, including DGX Spark and Jetson Thor, and IQ4_NL on other GPUs. The profile runs the public `nvcr.io/nvidia/nemo-speech.cpp:26.10` image.
+    | Recipe | Streaming ASR Service |
+    | --- | --- |
+    | `generic-assistant/server` | `nemotron-asr-streaming-english` |
+    | `multilingual-assistant/server` | `nemotron-asr-streaming-multilingual` |
 
-    Run the single-GPU commands below on a stopped stack. If the recipe is running, stop it first with `docker compose down` and the profiles that you started it with. On a workstation GPU, the Lightning LLM sizes its memory when it starts, so Compose starts it after Transcribe is healthy.
-
-    Start Transcribe together with the single-GPU recipe of your example. The streaming ASR keeps running, and you can select either ASR in **Services > ASR**:
+2. Start the recipe with the `transcribe-asr` overlay. Substitute the recipe from the table.
 
     ```bash
-    docker compose --profile generic-assistant/single-gpu --profile transcribe-asr-single-gpu up -d
-    docker compose --profile multilingual-assistant/single-gpu --profile transcribe-asr-single-gpu up -d
+    docker compose --profile <recipe> --profile transcribe-asr up -d
     ```
 
-    The single-GPU recipes run ASR and TTS in separate containers. To free the GPU memory of the streaming ASR so that only Transcribe runs, scale the ASR container to `0`. The TTS container keeps running:
+    To run Transcribe without keeping streaming ASR loaded on GPU `0`, append `--scale <streaming-asr-service>=0` using the service name from the table.
+
+3. Check that Transcribe is healthy with `docker compose --profile <recipe> --profile transcribe-asr ps`. For startup errors, check `docker compose logs nemotron-transcribe`.
+4. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting.
+5. Stop the stack with `docker compose --profile <recipe> --profile transcribe-asr down` when you finish.
+
+### Run Transcribe With a Single-GPU Recipe
+
+Use `transcribe-asr-single-gpu` with the Generic or Multilingual Assistant. It starts `nemotron-transcribe-single-gpu`, which uses the `nemotron-transcribe` network alias and publishes host port `9002`. Transcribe shares GPU `0` with the LLM and speech services. On a workstation, Lightning sizes its memory after Transcribe loads: at least 28 GiB must remain **after** headroom. With the default 4 GiB headroom, this means 32 GiB free at that point, not 32 GiB total GPU memory.
+
+1. Complete the Single-GPU prerequisites and speech download in [Getting Started](../01-getting-started.md#deployment-steps).
+2. Stop any running stack using its original profiles.
+3. If you want to keep the weights outside `models/transcribe`, set `TRANSCRIBE_MODEL_LOC` in `.env` to an absolute path to a dedicated directory.
+4. Download the Transcribe weights as your user, not with `sudo`. The script fetches about 22 GB and selects the NVFP4 decoder on Blackwell or IQ4_NL on other GPUs.
 
     ```bash
-    docker compose --profile generic-assistant/single-gpu --profile transcribe-asr-single-gpu up -d --scale nemo-speech-asr=0
-    docker compose --profile multilingual-assistant/single-gpu --profile transcribe-asr-single-gpu up -d --scale nemo-speech-asr-multilingual=0
+    bash scripts/download-transcribe-models.sh
     ```
 
-    Pass the same profiles to `docker compose down`, without `--scale`. The cloud recipes do not include Transcribe.
+5. Choose the recipe and streaming ASR service for your example:
 
-    Transcribe writes the transcript in the spoken language. The session language does not change it.
+    | Recipe | Streaming ASR Service |
+    | --- | --- |
+    | `generic-assistant/single-gpu` | `nemo-speech-asr` |
+    | `multilingual-assistant/single-gpu` | `nemo-speech-asr-multilingual` |
 
-    In the Multilingual Assistant, the language list shows only languages that Transcribe, the TTS, and the LLM all support.
+6. Start the recipe with the Transcribe overlay. Substitute the recipe from the table.
 
-    External NIMs must not require an API key because the pipeline does not pass one. Set `server.asr.nemotron-transcribe.server` to the HTTP API URL of the NIM, including `/v1`. Keep `asr_type: transcribe`. Transcribe produces final transcripts without speaker labels. In Generic Assistant, leave `transcription_prompt` unset for audio-only requests, or use an official NIM transcription template.
+    ```bash
+    docker compose --profile <recipe> --profile transcribe-asr-single-gpu up -d
+    ```
 
-    In rare cases, Transcribe can follow an instruction spoken in the audio (for example, "answer in one word") instead of transcribing it.
-- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, two sidecars serve ASR and TTS from local GGUF weights. The ASR sidecar is `nemo-speech-asr` for English or `nemo-speech-asr-multilingual` for the multilingual example, reachable as `nemo-speech-asr:50052`. The TTS sidecar is `nemo-speech-tts`, reachable as `nemo-speech:50051`. All are in `docker-compose.nemo-speech-cpp.yaml`. Refer to [Jetson Thor](../03-jetson-thor.md).
+    This keeps both ASR models available. To free the memory used by streaming ASR, append `--scale <streaming-asr-service>=0` using the service name from the table. `nemo-speech-tts` continues to run.
+
+7. Check that Transcribe is healthy with `docker compose --profile <recipe> --profile transcribe-asr-single-gpu ps`. For startup errors, check `docker compose logs nemotron-transcribe-single-gpu`.
+8. Select **Nemotron 3.5 Transcribe** in **Services > ASR** before connecting.
+9. Stop the stack with `docker compose --profile <recipe> --profile transcribe-asr-single-gpu down` when you finish.
+
+### Transcribe Behavior
+
+Transcribe processes whole turns and returns final transcripts without speaker labels. In the Multilingual Assistant, **Voice Settings** lists languages supported by Transcribe, the selected TTS, and the selected LLM. The assistant sends your selected language with each transcription request. In rare cases, Transcribe can follow an instruction spoken in the audio instead of transcribing it.
+
+To use an external Transcribe NIM, edit the entry for your active recipe in [`services.yaml`](../../services.yaml).
+
+| Recipe | Catalog entry | Stock `health_path` |
+| --- | --- | --- |
+| Server | `server.asr.nemotron-transcribe` | `/v1/health/ready` |
+| Single-GPU | `single-gpu.asr.nemotron-transcribe` | `/ready` |
+
+In that entry, set `server` to the external NIM's HTTP API URL, including `/v1`. Set `health_path` to the NIM's readiness path from the root of the same host. The app accepts a JSON response with `"status": "ready"` or `"ready": true`. Keep `asr_type: transcribe` and use an endpoint that accepts requests without an API key.
+
+In Generic Assistant, leave `transcription_prompt` unset for audio-only requests, or use an official NIM transcription template.
 
 > Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs require compute capability **≥ 8.0** and **≥ 16 GB** VRAM.
 
-### VRAM & hardware support
+### VRAM and Hardware Support
 
 The streaming ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. Standard `*/server` deployments let NIM select the LLM profile automatically, so its memory footprint depends on the detected GPU and selected precision. Confirm the selected profile before assuming ASR (~15 GB), TTS (~14 GB), and the LLM fit on one ~80 GB GPU. If they do not fit, move the speech sidecars separately: update the ASR `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/sidecars/docker-compose.nemotron-asr.yaml) and the selected TTS service's `device_ids` in its Compose file. Refer to the [Server NIM device-placement guidance](../../.agents/skills/nemotron-voice-agent-deploy/references/server.md#precision) and [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the complete multi-GPU layout.
 
