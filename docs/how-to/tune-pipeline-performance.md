@@ -120,6 +120,18 @@ When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows ar
 - use **sticky routing** so a session stays on the same worker
 - move session state into **shared storage**
 
+### Balance sessions across workers
+
+With `UVICORN_WORKERS > 1`, all workers wait on one listening socket and the worker that wakes first takes the next connection, so a few workers can end up with most sessions. `NVA_WORKER_BALANCE=1` makes a worker take a new connection only while it holds the fewest sessions of all live workers, so the first sessions go one per worker and the load then grows evenly.
+
+```bash
+# .env or container env
+UVICORN_WORKERS=<workers>
+NVA_WORKER_BALANCE=1
+```
+
+It is off by default and does nothing with one worker. Turning it on runs the server on the standard asyncio event loop instead of uvloop. Compare it with running several single-worker replicas behind a load balancer before relying on it.
+
 ## ASR Stream Capacity and Input Batching
 
 The Generic and Multilingual Assistants read each session's streaming ASR results on a dedicated `nva-asr-stream` thread pool in every `uvicorn` worker. Each active session holds one of those threads for its whole lifetime. Keeping them off the event loop's default executor stops a worker full of sessions from starving the service readiness checks that run before a WebSocket is accepted. Without that separation, a worker that already held 32 sessions could reject new connections with `Health check timed out` even though every model was healthy.

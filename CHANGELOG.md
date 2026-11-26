@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **LLM time to first answer token (TTFAT).** Shown per LLM in the client Metrics tab and reported in the scaling benchmark.
 - **ASR stream isolation and per-worker limit.** Streaming ASR sessions read results on a dedicated thread pool, so a busy worker no longer fails service readiness checks for new connections. `NVA_ASR_MAX_STREAMS_PER_WORKER` (default 64) makes a full worker refuse a WebSocket with HTTP 503 before accepting it, and the optional `NVA_ASR_INPUT_BATCH_MS` batches input audio before it is sent to the ASR server.
 - **Replica recipe for scaling tests.** `docker compose --profile generic-assistant/server-perf-replicas up` runs the Generic Assistant as `PERF_APP_REPLICAS` single-worker replicas (default 16) behind an HAProxy `leastconn` listener, with the same ASR, TTS and LLM sidecars as `generic-assistant/server-perf`.
+- **Optional session balancing across Uvicorn workers.** `NVA_WORKER_BALANCE=1` makes a worker accept a new connection only while it holds the fewest sessions, so sessions go one per worker first and then grow evenly. Off by default; it runs the server on the standard asyncio loop.
 
 ### Changed
 

@@ -104,6 +104,12 @@ from nemotron_voice_agent.pipecat.shared.prewarm import (
 )
 from nemotron_voice_agent.pipecat.shared.speaker import speaker_diarization_requested
 from nemotron_voice_agent.pipecat.shared.subagents import load_subagent_registry
+from nemotron_voice_agent.pipecat.shared.worker_balance import (
+    BalanceMiddleware,
+    WorkerBalancer,
+    balancing_enabled,
+    start_balancer,
+)
 
 CLIENT_DIST = REPO_ROOT / "clients" / "pipecat" / "dist"
 _session_configs: dict[str, dict] = {}
@@ -174,6 +180,8 @@ def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) 
         port=args.port,
         workers=workers,
         factory=True,
+        # Worker balancing pauses accepting through asyncio's selector, which uvloop does not expose.
+        loop="asyncio" if balancing_enabled(workers) else "auto",
         **ssl_kwargs,
     )
 
@@ -726,12 +734,21 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
     handler = SmallWebRTCRequestHandler(host=host)
 
+    workers = parse_env_int("UVICORN_WORKERS", 1, min_value=1)
+    worker_balancer: dict[str, WorkerBalancer] = {}
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if balancing_enabled(workers):
+            worker_balancer["balancer"] = await start_balancer(workers)
         yield
+        if "balancer" in worker_balancer:
+            await worker_balancer["balancer"].stop()
         await handler.close()
 
     app = FastAPI(lifespan=lifespan)
+    if balancing_enabled(workers):
+        app.add_middleware(BalanceMiddleware, balancer_ref=lambda: worker_balancer.get("balancer"))
 
     app.add_middleware(
         CORSMiddleware,
