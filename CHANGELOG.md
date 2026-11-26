@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pipecat upgraded to 1.15.0.** Updated server and browser client packages, and switched Omni examples to Pipecat's built-in NVIDIA Omni service.
 - **Streaming Input updated to OpenAI Realtime.** Self-hosted vLLM sidecars now serve Streaming Input over `/v1/realtime`, and reasoning text is no longer streamed when Streaming Input is enabled.
 - **Omni vLLM upgraded to 0.33.0.** Updated from 0.20.0.
+- **NeMo-Speech.cpp upgraded to 26.10 on single-GPU hosts.** The streaming ASR and Magpie TTS services of the `*/single-gpu` recipes use `nvcr.io/nvidia/nemo-speech.cpp:26.10`, up from `0.2.0`, so they run the same image as Nemotron 3.5 Transcribe.
 - **Scaling benchmark metric names updated.** Renamed `llm_ttft` to `llm_ttfb` and `vad_smart_turn` to `turn_taking_latency`.
 - **Startup readiness checks cover all self-hosted LLMs.** The server now verifies every self-hosted LLM required by an example before starting a session.
 

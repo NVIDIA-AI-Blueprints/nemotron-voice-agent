@@ -95,7 +95,7 @@ MAGPIE_GGUF="magpie_tts_multilingual_357m.v2607.f16.gguf"
 MAGPIE_GGUF_SHA256="fb8e9297138dcc7b5fc51332f361e3cddfd433d4e0bc1d87e16e6aed21f618fc"
 
 # Magpie TTS text-normalization grammars live on the NeMo-Speech.cpp GitHub
-# release, not Hugging Face. Pin matches nvcr.io/nvidia/nemo-speech.cpp:0.2.0.
+# release, not Hugging Face.
 TN_PINNED_RELEASE="v0.2.0"
 TN_PINNED_SHA256="2ca242c6d29f551eba3663d7e508c0d9dad10440e287628234154c6d1a72c7bc"
 NEMO_SPEECH_CPP_RELEASE="${NEMO_SPEECH_CPP_RELEASE:-${TN_PINNED_RELEASE}}"
