@@ -124,6 +124,21 @@ def test_booked_slots_are_not_offered_again_and_later_slots_show_up():
     assert cancelled["cancelled"] == "APT-4001"
 
 
+def test_a_day_with_no_slots_names_the_open_days():
+    t = tools_by_name("clinic")
+    first_day = t["list_available_slots"]("dermatology")[0]["date"]
+    with pytest.raises(ValueError, match=f"from {first_day} to "):
+        t["list_available_slots"]("dermatology", "2000-01-01")
+
+
+def test_a_fully_booked_specialty_says_no_slots_remain():
+    t = tools_by_name("clinic")
+    with pytest.raises(ValueError, match="No open dermatology slots remain"):
+        while True:
+            for slot in t["list_available_slots"]("dermatology"):
+                t["book_appointment"](slot["slot_id"], "Pat Kim", "rash")
+
+
 def test_bank_requires_pin_and_locks():
     t = tools_by_name("bank")
     with pytest.raises(ValueError, match="not verified"):

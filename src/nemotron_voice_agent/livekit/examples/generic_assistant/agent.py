@@ -132,7 +132,10 @@ def build_tts(cfg: AgentConfig, voice: str | None = None) -> SwitchableTTS:
 
 
 def build_llm(cfg: AgentConfig) -> openai.LLM:
-    """Build the OpenAI-compatible LLM client with the session's settings. Self-hosted servers do not check the key."""
+    """Build the OpenAI-compatible LLM client with the session's settings. Self-hosted servers do not check the key.
+
+    Tool schemas are not strict, so the model can leave optional arguments out instead of filling them with "None".
+    """
     return openai.LLM(
         model=cfg.llm_model,
         base_url=cfg.llm_base_url,
@@ -141,6 +144,7 @@ def build_llm(cfg: AgentConfig) -> openai.LLM:
         top_p=cfg.llm_options.get("top_p", NOT_GIVEN),
         max_completion_tokens=cfg.llm_options.get("max_tokens", NOT_GIVEN),
         extra_body=cfg.llm_extra_body,
+        _strict_tool_schema=False,
     )
 
 
@@ -338,7 +342,13 @@ async def entrypoint(ctx: JobContext):
             )
             return
         tts = build_tts(cfg, chosen)
-        session = AgentSession(vad=silero.VAD.load(), stt=build_stt(cfg), llm=build_llm(cfg), tts=tts)
+        session = AgentSession(
+            vad=silero.VAD.load(),
+            stt=build_stt(cfg),
+            llm=build_llm(cfg),
+            tts=tts,
+            max_tool_steps=5,
+        )
         log.info("%s", describe_session(ctx.room.name, cfg, scenario.name, prompt, chosen))
         # Holds the task that ends the room, so it is not garbage collected.
         ending: set[asyncio.Future] = set()

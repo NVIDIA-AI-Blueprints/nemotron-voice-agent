@@ -170,18 +170,19 @@ def _clinic_tools() -> list[Callable]:
 
         Args:
             specialty: Which kind of doctor the patient needs.
-            date_filter: Optional date as YYYY-MM-DD to show only that day.
+            date_filter: Optional date as YYYY-MM-DD to show only that day. Leave empty unless the patient names a day.
         """
         booked = {booking["slot_id"] for booking in bookings.values()}
-        found = [
-            s
-            for s in slots.values()
-            if s["specialty"] == specialty
-            and s["slot_id"] not in booked
-            and (not date_filter or s["date"] == date_filter)
-        ]
+        open_slots = [s for s in slots.values() if s["specialty"] == specialty and s["slot_id"] not in booked]
+        found = [s for s in open_slots if not date_filter or s["date"] == date_filter]
         if not found:
-            raise ValueError("No open slots match. Try another day or specialty.")
+            if not open_slots:
+                raise ValueError(f"No open {specialty} slots remain.")
+            days = sorted({s["date"] for s in open_slots})
+            raise ValueError(
+                f"No open slots match. Slots are on weekdays from {days[0]} to {days[-1]}. "
+                "Try another day or specialty."
+            )
         return sorted(found, key=lambda s: (s["date"], s["time"]))[:6]
 
     def book_appointment(slot_id: str, patient_name: str, reason: str) -> dict:

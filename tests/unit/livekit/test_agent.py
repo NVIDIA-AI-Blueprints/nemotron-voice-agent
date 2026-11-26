@@ -102,6 +102,11 @@ def test_nvidia_cloud_speech_gets_the_key(agent, monkeypatch):
     assert agent.build_stt(cfg).nvidia_api_key == "nvapi-test"
 
 
+def test_the_llm_sends_tool_schemas_that_leave_optional_arguments_out(agent, monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    assert agent.build_llm(agent.load_config("cloud"))._strict_tool_schema is False
+
+
 def test_recording_is_off_unless_the_audio_dump_flag_is_true(agent, tmp_path):
     assert agent.audio_dump_dir({}) is None
     assert agent.audio_dump_dir({"ENABLE_AUDIO_DUMP": "false"}) is None
