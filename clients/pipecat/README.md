@@ -57,11 +57,10 @@ The client reads its configuration from the backend (`src/nemotron_voice_agent/p
 | Endpoint | Purpose |
 | --- | --- |
 | `/api/deployment` | Active example, available services, and UI capabilities |
-| `/api/session-config` | Prompts and default session settings |
+| `/api/session-config` | Validates a session config and returns a signed ticket for `/api/offer` or `/api/ws` |
 | `/api/tts-config` | Available TTS voices and languages |
 | `/api/ice-servers` | STUN/TURN configuration for WebRTC |
 | `/api/webcam-config` | Webcam capture defaults for multimodal examples |
-| `/api/start` | Start a pipeline session |
 
 ## Learn more
 

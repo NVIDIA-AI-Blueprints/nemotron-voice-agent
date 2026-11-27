@@ -487,14 +487,14 @@ class StreamingInputTests(_CatalogTestCase):
 
         self.assertEqual(base_url, "ws://localhost:18000/v1/realtime")
 
-    def test_stored_session_keeps_streaming_and_settings_until_the_bot_starts(self) -> None:
+    def test_ticketed_session_keeps_streaming_and_settings_until_the_bot_starts(self) -> None:
         import nemotron_voice_agent.pipecat.runtime.server as server
 
         set_service_context({"services": {"llm": ["nemotron"]}, "capabilities": ["streaming_input"]})
         config = filter_session_config(
             {"llm_id": "self-hosted:nemotron", "llm_streaming": "true", "llm_settings": {"enable_thinking": True}}
         )
-        resolved = server._resolve_config(server._store_session_config(config))
+        _, resolved = server._session_from_ticket(server.session_ticket.issue(config)[0])
 
         self.assertEqual(resolved["base_url"], "ws://nvidia-llm-vllm:8000/v1/realtime")
         self.assertEqual(resolved, config)

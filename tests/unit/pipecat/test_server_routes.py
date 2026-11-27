@@ -97,8 +97,7 @@ class ServerRouteTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 400)
                     self.assertEqual(response.json(), {"detail": f"{field} must be a string"})
 
-    def test_multi_worker_offer_is_served_only_when_the_config_travels_with_it(self) -> None:
-        offers: list[dict] = []
+    def test_a_session_ticket_starts_a_webrtc_session_on_any_worker(self) -> None:
         bot_args: list = []
 
         async def bot(runner_args) -> None:
@@ -106,33 +105,55 @@ class ServerRouteTests(unittest.TestCase):
 
         async def handle_web_request(*, request, webrtc_connection_callback):
             await webrtc_connection_callback(MagicMock())
-            offers.append(request.request_data)
             return {"sdp": "answer", "type": "answer", "pc_id": "pc"}
 
-        offer = {
-            "sdp": "v=0",
-            "type": "offer",
-            "request_data": {"session_config": {"pipeline_mode": "generic-assistant"}},
-        }
+        offer = {"sdp": "v=0", "type": "offer"}
         with (
             patch.dict(os.environ, {"UVICORN_WORKERS": "4"}),
             patch.object(server, "_ensure_services_ready_for_connection", return_value=None),
             patch.object(server.SmallWebRTCRequestHandler, "handle_web_request", side_effect=handle_web_request),
             patch.object(examples_registry, "resolve_bot", return_value=bot),
+            TestClient(server.create_app()) as issuer,
+            TestClient(server.create_app()) as other_worker,
+        ):
+            issued = issuer.post("/api/session-config", json={"pipeline_mode": "generic-assistant"}).json()
+            ticket = issued["ticket"]
+
+            bad = other_worker.post("/api/offer", json={**offer, "request_data": {"session_ticket": ticket + "x"}})
+            self.assertEqual(bad.status_code, 400)
+            ok = other_worker.post("/api/offer", json={**offer, "request_data": {"session_ticket": ticket}})
+            self.assertEqual(ok.status_code, 200)
+
+        body = bot_args[0].body
+        self.assertNotIn("session_ticket", body)
+        self.assertEqual(body["pipeline_mode"], "generic-assistant")
+        self.assertEqual(body["session_id"], issued["session_id"])
+
+    def test_websocket_rejects_an_invalid_ticket_and_accepts_a_valid_one(self) -> None:
+        async def bot(runner_args) -> None:
+            await runner_args.websocket.send_text(runner_args.body["session_id"])
+
+        with (
+            patch.object(server, "_ensure_services_ready_for_connection", return_value=None),
+            patch.object(examples_registry, "resolve_bot", return_value=bot),
             TestClient(server.create_app()) as client,
         ):
-            stored = client.post("/api/offer?session_id=abc", json={"sdp": "v=0", "type": "offer"})
-            self.assertEqual(stored.status_code, 503)
-            self.assertEqual(
-                client.post("/api/offer", json={**offer, "request_data": {"session_config": []}}).status_code, 400
-            )
-            self.assertEqual(client.post("/api/offer", json=offer).status_code, 200)
+            issued = client.post("/api/session-config", json={"pipeline_mode": "generic-assistant"}).json()
+            with self.assertRaises(WebSocketDisconnect) as rejected, client.websocket_connect("/api/ws?ticket=garbage"):
+                pass
+            self.assertEqual(rejected.exception.code, 1008)
+            with client.websocket_connect(f"/api/ws?ticket={issued['ticket']}") as ws:
+                self.assertEqual(ws.receive_text(), issued["session_id"])
 
-        self.assertEqual(len(offers), 1)
-        body = bot_args[0].body
-        self.assertNotIn("session_config", body)
-        self.assertEqual(body["pipeline_mode"], "generic-assistant")
-        self.assertEqual(len(body["session_id"]), 12)
+    def test_oversized_session_config_is_rejected_with_a_clear_error(self) -> None:
+        with (
+            patch.object(server, "_ensure_services_ready_for_connection", return_value=None),
+            TestClient(server.create_app()) as client,
+        ):
+            huge = {"pipeline_mode": "generic-assistant", "prompt_content": os.urandom(20_000).hex()}
+            response = client.post("/api/session-config", json=huge)
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("too large", response.json()["detail"])
 
     def test_prompt_layout_and_overrides_are_opt_in(self) -> None:
         selection = examples_registry.Selection("all", False, tuple(examples_registry.EXAMPLES), "generic-assistant")
@@ -153,7 +174,7 @@ class ServerRouteTests(unittest.TestCase):
             patch.object(examples_registry, "_SELECTION", selection),
             patch.object(examples_registry, "resolve_hook", side_effect=resolve),
             patch.object(server, "_ensure_services_ready_for_connection", return_value=None),
-            patch.object(server, "_store_session_config", return_value="test") as store,
+            patch.object(server.session_ticket, "issue", wraps=server.session_ticket.issue) as store,
             TestClient(server.create_app()) as client,
         ):
             live = {"pipeline_mode": "frontend-backend-live", "llm_id": "self-hosted:nemotron-lightning"}
@@ -163,19 +184,22 @@ class ServerRouteTests(unittest.TestCase):
             layout.assert_called_once_with(llm_id=live["llm_id"])
 
             overrides = {"Example.policy": "A new policy."}
-            self.assertEqual(client.post("/api/start", json={**live, "prompt_overrides": overrides}).status_code, 200)
+            self.assertEqual(
+                client.post("/api/session-config", json={**live, "prompt_overrides": overrides}).status_code, 200
+            )
             self.assertEqual(store.call_args.args[0]["prompt_overrides"], overrides)
             self.assertEqual(
                 client.post("/api/session-config", json={**generic, "prompt_overrides": overrides}).status_code, 200
             )
             self.assertNotIn("prompt_overrides", store.call_args.args[0])
-            self.assertEqual(client.post("/api/start", json={**live, "prompt_overrides": [42]}).status_code, 400)
-            for route in ("/api/start", "/api/session-config"):
-                rejected = client.post(route, json={**live, "prompt_overrides": {"Example.readonly": "New text"}})
-                self.assertEqual(rejected.status_code, 400)
-                self.assertEqual(
-                    rejected.json()["detail"], "Prompt 'Example.readonly' is not editable for this session"
-                )
+            self.assertEqual(
+                client.post("/api/session-config", json={**live, "prompt_overrides": [42]}).status_code, 400
+            )
+            rejected = client.post(
+                "/api/session-config", json={**live, "prompt_overrides": {"Example.readonly": "New text"}}
+            )
+            self.assertEqual(rejected.status_code, 400)
+            self.assertEqual(rejected.json()["detail"], "Prompt 'Example.readonly' is not editable for this session")
 
     def test_transcribe_language_endpoint_uses_static_catalog_without_grpc(self) -> None:
         transcribe = {"asr_type": "transcribe", "supported_languages": ["de", "hi", "es"]}

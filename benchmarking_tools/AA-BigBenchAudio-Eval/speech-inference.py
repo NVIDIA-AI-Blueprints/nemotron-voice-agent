@@ -79,7 +79,7 @@ def request_session_id(
     ssl_context: ssl.SSLContext | None,
     timeout_sec: float = 60.0,
 ) -> str:
-    """POST /api/session-config and return session_id."""
+    """POST /api/session-config and return the signed session ticket."""
     url = f"{http_base.rstrip('/')}/api/session-config"
     data = json.dumps(MINIMAL_SESSION_BODY).encode("utf-8")
     req = urllib.request.Request(
@@ -94,16 +94,16 @@ def request_session_id(
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"session-config failed: HTTP {e.code} {err_body}") from e
-    session_id = payload.get("session_id")
-    if not session_id:
-        raise RuntimeError("session-config response missing session_id")
-    return session_id
+    ticket = payload.get("ticket")
+    if not ticket:
+        raise RuntimeError("session-config response missing ticket")
+    return ticket
 
 
 class BenchmarkClient:
     """WebSocket client for streaming WAV to the voice agent and writing ``output.wav`` per sample.
 
-    Each sample uses ``POST /api/session-config`` then ``/api/ws?session_id=...``
+    Each sample uses ``POST /api/session-config`` then ``/api/ws?ticket=...``
     (see Nemotron ``src/nemotron_voice_agent/pipecat/runtime/server.py``).
     """
 
@@ -114,7 +114,7 @@ class BenchmarkClient:
         self._ssl_context = ssl_context
 
     def _websocket_url(self, session_id: str) -> str:
-        q = urllib.parse.urlencode({"session_id": session_id})
+        q = urllib.parse.urlencode({"ticket": session_id})
         return f"{self.ws_origin}/api/ws?{q}"
 
     async def process_conversation(

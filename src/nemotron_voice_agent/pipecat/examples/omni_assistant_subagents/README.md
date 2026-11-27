@@ -80,13 +80,17 @@ To run host-native without Docker, set `pipecat.selection` to `omni-assistant-su
 | `subagents.yaml` | source of truth for worker capabilities, routing rules, reasoning modes and budgets, and UI labels |
 | `prompts.yaml` | example-local prompt catalog (top-level prompt plus `agent_prompts:` per agent) |
 
-The example declares `capabilities: [attachments, webcam]` under `pipecat.examples.omni-assistant-subagents` in `examples_registry.yaml`, which gates these UI surfaces and backend endpoints:
+The example declares `capabilities: [attachments, webcam]` under `pipecat.examples.omni-assistant-subagents` in `examples_registry.yaml`, which gates these UI surfaces and the upload messages the bot accepts.
 
-| Endpoint | Purpose |
+Uploads travel over the session's own RTVI connection (WebRTC data channel or WebSocket), so they reach the bot's process at any `UVICORN_WORKERS` value. The protocol is in `runtime/session_uploads.py`:
+
+| Client message | Purpose |
 | --- | --- |
-| `POST /api/sessions/{session_id}/attachments?kind={image,audio,video}` | Upload a media attachment for the media analyzer |
-| `POST /api/sessions/{session_id}/webcam/frames` | Upload one webcam JPEG frame |
-| `GET /api/webcam-config` | Browser webcam capture defaults |
+| `upload-start` | `{upload_id, target, name, content_type, total_bytes, kind?, request_id?}`; `target` is `attachment`, `webcam-frame` or `webcam-capture` |
+| `upload-chunk` | `{upload_id, seq, data}`; base64 data, chunks in order from 0 |
+| `upload-end` | `{upload_id}`; the bot stores the payload and replies with an `upload-ack` (or `upload-error`) server message |
+
+`GET /api/webcam-config` still returns the browser's webcam capture defaults.
 
 ## Tips & best practices
 

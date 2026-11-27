@@ -393,7 +393,10 @@ export function useVoiceCatalog(
 
 export type SessionConfig = Record<string, string | Record<string, string>>;
 
-export async function createSessionConfig(config: SessionConfig): Promise<string> {
+export type SessionTicket = { ticket: string; sessionId: string };
+
+/** Validates the config server-side and returns a signed ticket that any worker can redeem to start the session. */
+export async function createSessionConfig(config: SessionConfig): Promise<SessionTicket> {
   const res = await fetch("/api/session-config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -404,8 +407,8 @@ export async function createSessionConfig(config: SessionConfig): Promise<string
     const details = body ? `: ${body.slice(0, 200)}` : "";
     throw new Error(`HTTP ${res.status}${details}`);
   }
-  const data = await res.json();
-  return data.session_id;
+  const data = await res.json() as { ticket: string; session_id: string };
+  return { ticket: data.ticket, sessionId: data.session_id };
 }
 
 export async function getWebcamConfig(): Promise<WebcamConfig> {

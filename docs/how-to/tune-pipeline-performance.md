@@ -113,11 +113,9 @@ UVICORN_WORKERS=<workers>
 
 Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the recommended scaling deployment shape and its companion tuning values, see [Reproducing the recommended scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
 
-When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows are disabled** because that state is process-local. For multi-worker deployments, use one of these patterns:
+With `UVICORN_WORKERS > 1` the browser UI works on both transports. `POST /api/session-config` returns a signed, short-lived ticket that carries the session config, and the browser presents it on `POST /api/offer` or `WS /api/ws?ticket=`, so any worker can start the session. Media uploads travel over the session's own connection. No sticky routing or shared storage is needed.
 
-- keep a **single worker** if you depend on per-process session config
-- use **sticky routing** so a session stays on the same worker
-- move session state into **shared storage**
+Across several replicas or hosts, set the same `SESSION_TICKET_SECRET` on every replica so they can verify each other's tickets. With one host, the server generates the key before it starts the workers. A config too large to fit a ticket (about 6 KB compressed) is rejected with HTTP 413.
 
 ## Transport Selection
 

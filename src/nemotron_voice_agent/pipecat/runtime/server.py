@@ -4,7 +4,7 @@
 """FastAPI server: serves the client UI and handles WebRTC/WebSocket signaling.
 
 Routes:
-  POST      /api/start       - WebRTC start (TTS readiness gate + session creation)
+  POST      /api/session-config - Validate a session config, return a signed session ticket
   POST      /api/offer       - WebRTC SDP offer
   PATCH     /api/offer       - WebRTC ICE candidate trickle
   WebSocket /api/ws          - WebSocket transport (RTVI / Pipecat)
@@ -46,15 +46,13 @@ import contextlib
 import inspect
 import os
 import sys
-import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket
+from fastapi import BackgroundTasks, FastAPI, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
@@ -68,7 +66,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 import nemotron_voice_agent.pipecat.runtime.config_store as config_store
 import nemotron_voice_agent.pipecat.runtime.examples_registry as examples_registry
-from nemotron_voice_agent.pipecat.runtime.attachment_store import consume_capture_request, store_attachment
+import nemotron_voice_agent.pipecat.runtime.session_ticket as session_ticket
 from nemotron_voice_agent.pipecat.runtime.utils import (
     _CONNECT_HEALTH_TIMEOUT_SECS,
     SELF_HOSTED_SOURCE,
@@ -87,7 +85,7 @@ from nemotron_voice_agent.pipecat.runtime.utils import (
     set_listed_services,
     set_service_context,
 )
-from nemotron_voice_agent.pipecat.runtime.webcam_frame_store import store_webcam_frame, webcam_client_config
+from nemotron_voice_agent.pipecat.runtime.webcam_frame_store import webcam_client_config
 from nemotron_voice_agent.pipecat.shared.pipeline_utils import (
     PIPELINE_AUDIO_IN_SAMPLE_RATE,
     PIPELINE_AUDIO_OUT_SAMPLE_RATE,
@@ -102,8 +100,6 @@ from nemotron_voice_agent.pipecat.shared.speaker import speaker_diarization_requ
 from nemotron_voice_agent.pipecat.shared.subagents import load_subagent_registry
 
 CLIENT_DIST = REPO_ROOT / "clients" / "pipecat" / "dist"
-_session_configs: dict[str, dict] = {}
-_active_session_configs: dict[str, dict] = {}
 _CONNECT_PREWARM_TIMEOUT_SECS = parse_env_int("CONNECT_PREWARM_TIMEOUT_SECS", 45)
 _STATUS_PROBE_TIMEOUT_SECS = 2
 _seen_service_targets: set[str] = set()
@@ -112,13 +108,6 @@ _TURN_LISTEN_PORT = 3478
 # Each LLM slot: the session field that holds its base URL, and its name in readiness messages.
 _LLM_SLOTS = {"llm": ("base_url", "LLM"), "thinker-llm": ("thinker_base_url", "Thinker LLM")}
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
-_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
-_MULTI_WORKER_SESSION_CONFIG_MESSAGE = (
-    "Session-config based WebRTC and WebSocket flows are disabled when "
-    "UVICORN_WORKERS is greater than 1. Use a single worker, sticky routing, "
-    "or shared session storage."
-)
 
 
 _TRANSPORT_OPTIONS: tuple[dict[str, str], ...] = (
@@ -164,6 +153,7 @@ def _run_single_worker(args: argparse.Namespace, app: FastAPI, ssl_kwargs: dict)
 
 def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) -> None:
     """Run uvicorn in multi-worker mode via the importable app factory."""
+    session_ticket.share_secret_with_workers()  # forked workers must verify each other's tickets
     uvicorn.run(
         "nemotron_voice_agent.pipecat.runtime.server:app_factory",
         host=args.host,
@@ -172,16 +162,6 @@ def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) 
         factory=True,
         **ssl_kwargs,
     )
-
-
-def _multi_worker_mode_enabled() -> bool:
-    """Return whether the server is running with more than one uvicorn worker."""
-    return parse_env_int("UVICORN_WORKERS", 1, min_value=1) > 1
-
-
-def _multi_worker_session_config_response() -> JSONResponse:
-    """Reject routes that rely on process-local session config in multi-worker mode."""
-    return JSONResponse(status_code=503, content={"info": _MULTI_WORKER_SESSION_CONFIG_MESSAGE})
 
 
 def _deployment_response(active: dict, options: list[dict]) -> dict:
@@ -289,26 +269,15 @@ def _activate_example_catalog_by_key(example_key: str = "") -> dict:
     return example
 
 
-def _inline_session_config(request_data: object) -> dict | None:
-    """Return the session config a WebRTC offer carries in ``request_data["session_config"]``, if any.
-
-    Raises:
-        ValueError: the key is present but is not a JSON object.
-    """
-    if not isinstance(request_data, dict) or "session_config" not in request_data:
-        return None
-    config = request_data["session_config"]
-    if not isinstance(config, dict):
-        raise ValueError("session_config must be a JSON object")
-    return config
+def _session_from_ticket(ticket: str) -> tuple[str, dict]:
+    """Redeem a session ticket into ``(session_id, config)`` and bind its example's catalog to this request."""
+    redeemed = session_ticket.redeem(ticket)
+    _bind_example_context_by_key(str(redeemed.config.get("pipeline_mode", "")))
+    return redeemed.session_id, redeemed.config
 
 
-def _resolve_config(session_id: str = "", fallback_example_key: str = "", **query_params: str) -> dict:
-    """Return the stored session config, or sanitize and hydrate the query params when none is stored."""
-    stored = _session_configs.pop(session_id, None) if session_id else None
-    if stored is not None:
-        _bind_example_context_by_key(str(stored.get("pipeline_mode", "")) or fallback_example_key)
-        return stored
+def _resolve_config(fallback_example_key: str = "", **query_params: str) -> dict:
+    """Sanitize and hydrate the query params of a connection that carries no ticket."""
     query_config = {k: v for k, v in query_params.items() if v}
     return _sanitize_session_config(query_config, fallback_example_key=fallback_example_key)
 
@@ -364,40 +333,6 @@ def _get_default_asr_catalog() -> tuple[str, str, str]:
 def _get_default_llm_base_url(slot: str = "llm") -> str:
     """Return the base URL of the default catalog entry of an LLM slot (``llm``, ``thinker-llm``)."""
     return load_service_entry(slot, "").get("base_url", NVCF_LLM_BASE_URL)
-
-
-def _store_session_config(config: dict) -> str:
-    """Store a sanitized session config and return its session id."""
-    session_id = uuid.uuid4().hex[:12]
-    _session_configs[session_id] = config
-    return session_id
-
-
-def _session_capability_error(session_id: str, capability: str) -> JSONResponse | None:
-    """Return an upload rejection when session/capability validation fails."""
-    cleaned_session_id = session_id.strip()
-    config = _active_session_configs.get(cleaned_session_id) or _session_configs.get(cleaned_session_id)
-    if not cleaned_session_id or config is None:
-        return JSONResponse(status_code=404, content={"detail": "session not found"})
-    example = examples_registry.find(config.get("pipeline_mode", ""))
-    if capability not in set(example.get("capabilities") or []):
-        return JSONResponse(status_code=403, content={"detail": f"session does not support {capability}"})
-    return None
-
-
-async def _read_upload_file_with_limit(file: UploadFile, *, max_bytes: int = _MAX_UPLOAD_BYTES) -> bytes:
-    """Read an upload body while enforcing a hard byte limit."""
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = await file.read(_UPLOAD_READ_CHUNK_BYTES)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > max_bytes:
-            raise ValueError(f"Upload exceeds {max_bytes // (1024 * 1024)}MB limit")
-        chunks.append(chunk)
-    return b"".join(chunks)
 
 
 def _build_ice_servers(request: Request) -> list[dict]:
@@ -785,129 +720,31 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         selector_options = examples_registry.visible_options()
         return _deployment_response(deployment, selector_options)
 
-    # ---- Session config (avoids long URLs for prompts / system_prompt) ----
+    # ---- Session ticket (validated once; redeemable by any worker) ----
 
     @app.post("/api/session-config")
     async def create_session_config(request: Request):
-        """Store pipeline config server-side, return a short session_id."""
-        if _multi_worker_mode_enabled():
-            return _multi_worker_session_config_response()
+        """Validate a session config and return a signed ticket carrying it.
+
+        The client presents the ticket on ``POST /api/offer`` (``request_data.session_ticket``) or
+        ``WS /api/ws?ticket=``, so the session can start on any worker.
+        """
         try:
             config = await _read_session_config(request)
         except ValueError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
+        try:
+            token, ticket = session_ticket.issue(config)
+        except session_ticket.TicketError as exc:
+            return JSONResponse(status_code=413, content={"detail": str(exc)})
         if (failure := await _readiness_check_or_503(config, "session config")) is not None:
             return failure
-        return {"session_id": _store_session_config(config)}
-
-    @app.post("/api/start")
-    async def start_bot(request: Request):
-        """Run readiness checks before starting a WebRTC session."""
-        if _multi_worker_mode_enabled():
-            return _multi_worker_session_config_response()
-        try:
-            config = await _read_session_config(request)
-        except ValueError as exc:
-            return JSONResponse(status_code=400, content={"detail": str(exc)})
-        if (failure := await _readiness_check_or_503(config, "WebRTC start")) is not None:
-            return failure
-        session_id = _store_session_config(config)
-        return {"webrtcUrl": f"/api/offer?session_id={session_id}"}
-
-    @app.post("/api/sessions/{session_id}/attachments")
-    async def upload_attachment(
-        session_id: str,
-        file: Annotated[UploadFile, File()],
-        kind: str = Query(default="image"),
-    ):
-        """Store an uploaded media attachment for a live voice session."""
-        if _multi_worker_mode_enabled():
-            return _multi_worker_session_config_response()
-        if (failure := _session_capability_error(session_id, "attachments")) is not None:
-            return failure
-        try:
-            data = await _read_upload_file_with_limit(file)
-            attachment = store_attachment(
-                session_id=session_id,
-                kind=kind,
-                name=file.filename or "attachment",
-                content_type=file.content_type or "",
-                data=data,
-            )
-        except ValueError as exc:
-            status_code = 413 if "limit" in str(exc).lower() else 400
-            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
-        logger.debug(
-            "Stored media attachment "
-            f"(session_id={session_id[:8]}..., kind={attachment.kind}, bytes={len(attachment.data)})"
-        )
-        return attachment.metadata()
+        return {"ticket": token, "session_id": ticket.session_id}
 
     @app.get("/api/webcam-config")
     async def get_webcam_config():
         """Return browser webcam capture defaults for capability-driven UI."""
         return webcam_client_config()
-
-    @app.post("/api/sessions/{session_id}/webcam/frames")
-    async def upload_webcam_frame(
-        session_id: str,
-        file: Annotated[UploadFile, File()],
-    ):
-        """Store the latest browser webcam snapshot for a live voice session."""
-        if _multi_worker_mode_enabled():
-            return _multi_worker_session_config_response()
-        if (failure := _session_capability_error(session_id, "webcam")) is not None:
-            return failure
-        try:
-            data = await _read_upload_file_with_limit(file)
-            frame = store_webcam_frame(
-                session_id=session_id,
-                name=file.filename or "webcam-frame.jpg",
-                content_type=file.content_type or "image/jpeg",
-                data=data,
-            )
-        except ValueError as exc:
-            status_code = 413 if "limit" in str(exc).lower() else 400
-            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
-        logger.debug(
-            "Stored webcam frame "
-            f"(session_id={session_id}, name={frame.name}, bytes={len(frame.data)}, sequence={frame.sequence})"
-        )
-        return frame.metadata()
-
-    @app.post("/api/sessions/{session_id}/webcam/capture")
-    async def upload_webcam_capture(
-        session_id: str,
-        file: Annotated[UploadFile, File()],
-        request_id: Annotated[str, Form()],
-    ):
-        """Store an agent-requested high-resolution webcam snapshot for focused analysis.
-
-        Unlike a streamed webcam frame, this lands in the attachment store (so the media
-        analyzer can read it via get_attachment) tagged source="capture", so it never
-        becomes the Speaker's default visual source.
-        """
-        if _multi_worker_mode_enabled():
-            return _multi_worker_session_config_response()
-        if (failure := _session_capability_error(session_id, "webcam")) is not None:
-            return failure
-        if not consume_capture_request(session_id, request_id):
-            return JSONResponse(status_code=409, content={"detail": "capture request is missing, stale, or invalid"})
-        try:
-            data = await _read_upload_file_with_limit(file)
-            attachment = store_attachment(
-                session_id=session_id,
-                kind="image",
-                name=file.filename or "focused-capture.jpg",
-                content_type=file.content_type or "image/jpeg",
-                data=data,
-                source="capture",
-            )
-        except ValueError as exc:
-            status_code = 413 if "limit" in str(exc).lower() else 400
-            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
-        logger.debug(f"Stored high-res webcam capture (session_id={session_id[:8]}..., bytes={len(attachment.data)})")
-        return attachment.metadata()
 
     # ---- WebRTC signaling ----
 
@@ -915,49 +752,29 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     async def offer(
         request: SmallWebRTCRequest,
         background_tasks: BackgroundTasks,
-        session_id: str = Query(default=""),
         pipeline_mode: str = Query(default=""),
     ):
+        request_data = request.request_data if isinstance(request.request_data, dict) else {}
+        ticket = request_data.get("session_ticket")
         try:
-            inline_config = _inline_session_config(request.request_data)
-        except ValueError as exc:
+            if isinstance(ticket, str) and ticket:
+                session_id, config = _session_from_ticket(ticket)
+            else:
+                session_id, config = "", _resolve_config(fallback_example_key, pipeline_mode=pipeline_mode)
+        except session_ticket.TicketError as exc:
             return JSONResponse(status_code=400, content={"info": str(exc)})
-        if session_id and inline_config is None and _multi_worker_mode_enabled():
-            # A stored config lives in one worker's memory; only the inline path is worker-agnostic.
-            return _multi_worker_session_config_response()
-        if inline_config is not None:
-            # Self-contained offer: the config rides in the request body, so any worker can serve it.
-            try:
-                config = _sanitize_session_config(inline_config, fallback_example_key=fallback_example_key)
-            except ValueError as exc:
-                return JSONResponse(status_code=400, content={"info": str(exc)})
-            if (failure := await _readiness_check_or_503(config, "WebRTC offer")) is not None:
-                return failure
-            session_id = session_id or uuid.uuid4().hex[:12]
-        else:
-            config = _resolve_config(session_id, fallback_example_key=fallback_example_key, pipeline_mode=pipeline_mode)
         example = _resolve_example(config)
         selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
         bot_fn = examples_registry.resolve_bot(selected)
-        if session_id:
-            _active_session_configs[session_id] = dict(config)
-
-        async def run_bot_session(runner_args: SmallWebRTCRunnerArguments) -> None:
-            try:
-                await bot_fn(runner_args)
-            finally:
-                if session_id:
-                    _active_session_configs.pop(session_id, None)
 
         async def on_connection(connection: SmallWebRTCConnection):
-            body = dict(request.request_data) if isinstance(request.request_data, dict) else {}
-            body.pop("session_config", None)
+            body = {k: v for k, v in request_data.items() if k != "session_ticket"}
             body.update(config)
             body["session_id"] = session_id
             _bind_example_context_by_key(example["key"])
             runner_args = SmallWebRTCRunnerArguments(webrtc_connection=connection, body=body)
             runner_args.pipeline_idle_timeout_secs = parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300)
-            background_tasks.add_task(run_bot_session, runner_args)
+            background_tasks.add_task(bot_fn, runner_args)
 
         return await handler.handle_web_request(
             request=request,
@@ -974,15 +791,18 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     @app.websocket("/api/ws")
     async def websocket_endpoint(
         websocket: WebSocket,
-        session_id: str = Query(default=""),
+        ticket: str = Query(default=""),
         pipeline_mode: str = Query(default=""),
     ):
-        if session_id and _multi_worker_mode_enabled():
-            await websocket.close(code=1013, reason=_MULTI_WORKER_SESSION_CONFIG_MESSAGE)
+        try:
+            if ticket:
+                session_id, config = _session_from_ticket(ticket)
+            else:
+                session_id, config = "", _resolve_config(fallback_example_key, pipeline_mode=pipeline_mode)
+        except session_ticket.TicketError as exc:
+            await websocket.close(code=1008, reason=str(exc))
             return
-        stream_id = session_id or "-"
-        with logger.contextualize(stream_id=stream_id):
-            config = _resolve_config(session_id, fallback_example_key=fallback_example_key, pipeline_mode=pipeline_mode)
+        with logger.contextualize(stream_id=session_id or "-"):
             example = _resolve_example(config)
             if not session_id:
                 try:
@@ -996,8 +816,6 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
             bot_fn = examples_registry.resolve_bot(selected)
             _bind_example_context_by_key(example["key"])
-            if session_id:
-                _active_session_configs[session_id] = dict(config)
 
             runner_args = SimpleNamespace(
                 websocket=websocket,
@@ -1010,8 +828,6 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             except Exception as e:
                 logger.error(f"WebSocket session error: {e}")
             finally:
-                if session_id:
-                    _active_session_configs.pop(session_id, None)
                 with contextlib.suppress(Exception):
                     await websocket.close()
 
@@ -1052,8 +868,6 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             bot_fn = examples_registry.resolve_bot(selected)
             _bind_example_context_by_key(selected["key"])
             session_id = str(session_view.get("id") or "")
-            if session_id:
-                _active_session_configs[session_id] = dict(config)
             runner_args = SimpleNamespace(
                 websocket=ws,
                 body={
@@ -1070,8 +884,6 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             except Exception as e:
                 logger.error(f"Realtime pipeline session error: {e}")
             finally:
-                if session_id:
-                    _active_session_configs.pop(session_id, None)
                 with contextlib.suppress(Exception):
                     await ws.close()
 

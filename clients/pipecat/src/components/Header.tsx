@@ -266,21 +266,24 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
           speakerDiarizationEnabled,
         });
 
-        if (selectedTransport === "websocket") {
-          const sessionId = await createSessionConfig(config);
-          if (!mountedRef.current) return;
-          const qs = `session_id=${sessionId}`;
-          const wsProto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
-          setCurrentSessionId(sessionId);
-          await client.connect({ wsUrl: `${wsProto}//${globalThis.location.host}/api/ws?${qs}` });
-        } else {
+        // Ask for mic/camera access first: the ticket below expires within minutes.
+        if (selectedTransport !== "websocket") {
           await client.initDevices();
           if (!mountedRef.current) return;
-          // The config travels in the offer itself, so any worker can serve the session. The server
-          // assigns the real session id; this one only marks the session as active in the UI.
-          setCurrentSessionId(crypto.randomUUID());
+        }
+        // Validate once up front so a service that is not ready fails here with its own message.
+        const { ticket, sessionId } = await createSessionConfig(config);
+        if (!mountedRef.current) return;
+        setCurrentSessionId(sessionId);
+        if (selectedTransport === "websocket") {
+          const wsProto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
+          await client.connect({
+            wsUrl: `${wsProto}//${globalThis.location.host}/api/ws?ticket=${encodeURIComponent(ticket)}`,
+          });
+        } else {
+          // The ticket carries the config, so any worker can answer the offer.
           await withWebRTCConnectTimeout(
-            client.connect({ webrtcRequestParams: { endpoint: "/api/offer", requestData: { session_config: config } } }),
+            client.connect({ webrtcRequestParams: { endpoint: "/api/offer", requestData: { session_ticket: ticket } } }),
           );
         }
       }

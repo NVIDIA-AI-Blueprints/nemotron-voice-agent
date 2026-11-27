@@ -8,8 +8,8 @@ parallel clients (concurrency / scaling test) and produce a sweep across
 multiple concurrency levels.
 
 The default RTVI benchmark connects directly to `WS /api/ws` and does not use
-the server's session-config flow. That keeps it compatible with multi-worker
-deployments such as `generic-assistant/server-perf`.
+the server's session-config flow. The browser UI uses that flow too and also
+works with multi-worker deployments such as `generic-assistant/server-perf`.
 
 **RTVI** (Real-Time Voice/Video Inference) is the Pipecat-standard
 protocol the server uses to push per-turn timing breakdowns (LLM / TTS /

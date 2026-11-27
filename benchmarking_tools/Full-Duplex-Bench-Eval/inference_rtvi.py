@@ -129,7 +129,7 @@ def request_session_id(
     ssl_context: ssl.SSLContext | None,
     timeout_sec: float = 60.0,
 ) -> str:
-    """POST /api/session-config and return session_id."""
+    """POST /api/session-config and return the signed session ticket."""
     url = f"{http_base.rstrip('/')}/api/session-config"
     data = json.dumps(MINIMAL_SESSION_BODY).encode("utf-8")
     req = urllib.request.Request(
@@ -144,10 +144,10 @@ def request_session_id(
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"session-config failed: HTTP {e.code} {err_body}") from e
-    session_id = payload.get("session_id")
-    if not session_id:
-        raise RuntimeError("session-config response missing session_id")
-    return session_id
+    ticket = payload.get("ticket")
+    if not ticket:
+        raise RuntimeError("session-config response missing ticket")
+    return ticket
 
 
 class InferenceClient:
@@ -259,7 +259,7 @@ class InferenceClient:
             duration += len(frame.audio.audio) / bytes_per_sample / max(1, frame.audio.sample_rate)
 
     def _websocket_url(self, session_id: str) -> str:
-        q = urllib.parse.urlencode({"session_id": session_id})
+        q = urllib.parse.urlencode({"ticket": session_id})
         return f"{self.ws_origin}/api/ws?{q}"
 
     def preprocess_audio(self, audio_path: str) -> tuple[np.ndarray, float]:
