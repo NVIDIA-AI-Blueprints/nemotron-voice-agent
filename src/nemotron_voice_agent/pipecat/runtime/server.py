@@ -289,6 +289,20 @@ def _activate_example_catalog_by_key(example_key: str = "") -> dict:
     return example
 
 
+def _inline_session_config(request_data: object) -> dict | None:
+    """Return the session config a WebRTC offer carries in ``request_data["session_config"]``, if any.
+
+    Raises:
+        ValueError: the key is present but is not a JSON object.
+    """
+    if not isinstance(request_data, dict) or "session_config" not in request_data:
+        return None
+    config = request_data["session_config"]
+    if not isinstance(config, dict):
+        raise ValueError("session_config must be a JSON object")
+    return config
+
+
 def _resolve_config(session_id: str = "", fallback_example_key: str = "", **query_params: str) -> dict:
     """Return the stored session config, or sanitize and hydrate the query params when none is stored."""
     stored = _session_configs.pop(session_id, None) if session_id else None
@@ -904,9 +918,24 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         session_id: str = Query(default=""),
         pipeline_mode: str = Query(default=""),
     ):
-        if _multi_worker_mode_enabled():
+        try:
+            inline_config = _inline_session_config(request.request_data)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"info": str(exc)})
+        if session_id and inline_config is None and _multi_worker_mode_enabled():
+            # A stored config lives in one worker's memory; only the inline path is worker-agnostic.
             return _multi_worker_session_config_response()
-        config = _resolve_config(session_id, fallback_example_key=fallback_example_key, pipeline_mode=pipeline_mode)
+        if inline_config is not None:
+            # Self-contained offer: the config rides in the request body, so any worker can serve it.
+            try:
+                config = _sanitize_session_config(inline_config, fallback_example_key=fallback_example_key)
+            except ValueError as exc:
+                return JSONResponse(status_code=400, content={"info": str(exc)})
+            if (failure := await _readiness_check_or_503(config, "WebRTC offer")) is not None:
+                return failure
+            session_id = session_id or uuid.uuid4().hex[:12]
+        else:
+            config = _resolve_config(session_id, fallback_example_key=fallback_example_key, pipeline_mode=pipeline_mode)
         example = _resolve_example(config)
         selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
         bot_fn = examples_registry.resolve_bot(selected)
@@ -922,6 +951,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
         async def on_connection(connection: SmallWebRTCConnection):
             body = dict(request.request_data) if isinstance(request.request_data, dict) else {}
+            body.pop("session_config", None)
             body.update(config)
             body["session_id"] = session_id
             _bind_example_context_by_key(example["key"])

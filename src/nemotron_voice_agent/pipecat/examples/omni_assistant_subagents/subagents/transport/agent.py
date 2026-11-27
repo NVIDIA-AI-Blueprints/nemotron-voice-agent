@@ -54,6 +54,7 @@ from nemotron_voice_agent.pipecat.runtime.attachment_store import (
     latest_attachment,
     register_attachment_listener,
 )
+from nemotron_voice_agent.pipecat.runtime.session_uploads import UploadError, UploadReceiver
 from nemotron_voice_agent.pipecat.runtime.tracing import IS_TRACING_ENABLED
 from nemotron_voice_agent.pipecat.runtime.utils import load_ipa_dictionary, normalize_lang_code, parse_env_float
 from nemotron_voice_agent.pipecat.runtime.webcam_frame_store import clear_session_webcam_frames
@@ -131,6 +132,7 @@ class OmniTransportAgent(PipelineWorker):
         self._tts_synthesis_mode = tts_synthesis_mode
         self._runner_args = runner_args
         self._session_id = session_id
+        self._uploads = UploadReceiver(session_id, {"attachments", "webcam"})
         self._proactive_directives = proactive_directives or {}
         self._unregister_attachment_listener = None
         self._pending_capture_query = ""
@@ -358,6 +360,7 @@ class OmniTransportAgent(PipelineWorker):
             logger.info("Nemotron Omni subagents client disconnected")
             self._webcam_controller.stop_summary_loop()
             self._stop_attachment_state_listener()
+            self._uploads.abort_all()
             clear_session_attachments(self._session_id)
             clear_session_webcam_frames(self._session_id)
             await self.send_bus_message(BusCancelMessage(source=self.name, reason="client disconnected"))
@@ -384,6 +387,21 @@ class OmniTransportAgent(PipelineWorker):
                 await self._webcam_controller.apply_webcam_state(payload)
             elif message.type == "webcam-chunk":
                 await self._webcam_controller.set_window_seconds(payload)
+            elif UploadReceiver.handles(message.type):
+                await self._handle_upload_message(message.type, payload)
+
+    async def _handle_upload_message(self, message_type: str, payload: dict) -> None:
+        """Feed one upload message to the session's receiver and acknowledge it to the client."""
+        upload_id = payload.get("upload_id", "")
+        try:
+            result = self._uploads.handle(message_type, payload)
+            if result["status"] == "chunk":
+                return  # chunks are not acknowledged: the client stream is ordered, and acks would flood the queue
+            ack = {"type": "upload-ack", **result}
+        except UploadError as exc:
+            logger.warning(f"Rejected {message_type} (upload_id={upload_id!r}): {exc}")
+            ack = {"type": "upload-error", "upload_id": upload_id, "error": str(exc)}
+        await self.queue_frame(RTVIServerMessageFrame(data=ack))
 
     async def queue_media_analysis_prompt(
         self,

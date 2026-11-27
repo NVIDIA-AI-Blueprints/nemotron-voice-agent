@@ -10,7 +10,7 @@ import {
   type ConversationMessage,
   type ConversationMessagePart,
 } from "@pipecat-ai/client-react";
-import { uploadAttachment } from "../../api";
+import { useUploader } from "../../hooks/useUploader";
 import { useApp } from "../../context/useApp";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import {
@@ -253,6 +253,7 @@ export function ConversationPanel() {
     setCurrentSessionId,
   } = useApp();
   const { messages } = usePipecatConversation();
+  const upload = useUploader();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const attachmentsRef = useRef<LocalAttachment[]>([]);
@@ -432,7 +433,7 @@ export function ConversationPanel() {
       },
     ]);
     try {
-      const uploaded = await uploadAttachment(currentSessionId, file, kind);
+      const uploaded = await upload(file, { target: "attachment", name: file.name, kind });
       setAttachments((prev) =>
         prev.map((attachment) =>
           attachment.id === localId

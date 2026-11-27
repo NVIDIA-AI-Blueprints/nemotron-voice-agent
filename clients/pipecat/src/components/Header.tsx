@@ -7,7 +7,6 @@ import { useConnectionState } from "../hooks/useConnectionState";
 import { useApp } from "../context/useApp";
 import {
   createSessionConfig,
-  createWebRTCSession,
   serviceSettingsKey,
   useServiceCatalog,
   type DeploymentOption,
@@ -21,7 +20,10 @@ import {
 import { DevicesSection } from "./status-panel/DevicesSection";
 
 type StartBotClient = {
-  connect: (args: { wsUrl?: string; webrtcUrl?: string }) => Promise<void>;
+  connect: (args: {
+    wsUrl?: string;
+    webrtcRequestParams?: { endpoint: string; requestData?: Record<string, unknown> };
+  }) => Promise<void>;
   disconnect: () => Promise<void>;
   initDevices: () => Promise<void>;
 };
@@ -198,11 +200,6 @@ function buildSessionConfig({
   return config;
 }
 
-function sessionIdFromWebRTCUrl(url: string): string {
-  const query = url.split("?", 2)[1] ?? "";
-  return new URLSearchParams(query).get("session_id") ?? "";
-}
-
 export function Header({ onClientReset }: Readonly<HeaderProps>) {
   const client = usePipecatClient() as StartBotClient | undefined;
   const { isConnected, isConnecting } = useConnectionState();
@@ -279,14 +276,12 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
         } else {
           await client.initDevices();
           if (!mountedRef.current) return;
-          const webrtcUrl = await createWebRTCSession(config);
-          if (!mountedRef.current) return;
-          const sessionId = sessionIdFromWebRTCUrl(webrtcUrl);
-          if (!sessionId) {
-            throw new Error("WebRTC session URL did not include session_id.");
-          }
-          setCurrentSessionId(sessionId);
-          await withWebRTCConnectTimeout(client.connect({ webrtcUrl }));
+          // The config travels in the offer itself, so any worker can serve the session. The server
+          // assigns the real session id; this one only marks the session as active in the UI.
+          setCurrentSessionId(crypto.randomUUID());
+          await withWebRTCConnectTimeout(
+            client.connect({ webrtcRequestParams: { endpoint: "/api/offer", requestData: { session_config: config } } }),
+          );
         }
       }
     } catch (err) {

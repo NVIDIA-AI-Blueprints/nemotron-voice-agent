@@ -97,6 +97,43 @@ class ServerRouteTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 400)
                     self.assertEqual(response.json(), {"detail": f"{field} must be a string"})
 
+    def test_multi_worker_offer_is_served_only_when_the_config_travels_with_it(self) -> None:
+        offers: list[dict] = []
+        bot_args: list = []
+
+        async def bot(runner_args) -> None:
+            bot_args.append(runner_args)
+
+        async def handle_web_request(*, request, webrtc_connection_callback):
+            await webrtc_connection_callback(MagicMock())
+            offers.append(request.request_data)
+            return {"sdp": "answer", "type": "answer", "pc_id": "pc"}
+
+        offer = {
+            "sdp": "v=0",
+            "type": "offer",
+            "request_data": {"session_config": {"pipeline_mode": "generic-assistant"}},
+        }
+        with (
+            patch.dict(os.environ, {"UVICORN_WORKERS": "4"}),
+            patch.object(server, "_ensure_services_ready_for_connection", return_value=None),
+            patch.object(server.SmallWebRTCRequestHandler, "handle_web_request", side_effect=handle_web_request),
+            patch.object(examples_registry, "resolve_bot", return_value=bot),
+            TestClient(server.create_app()) as client,
+        ):
+            stored = client.post("/api/offer?session_id=abc", json={"sdp": "v=0", "type": "offer"})
+            self.assertEqual(stored.status_code, 503)
+            self.assertEqual(
+                client.post("/api/offer", json={**offer, "request_data": {"session_config": []}}).status_code, 400
+            )
+            self.assertEqual(client.post("/api/offer", json=offer).status_code, 200)
+
+        self.assertEqual(len(offers), 1)
+        body = bot_args[0].body
+        self.assertNotIn("session_config", body)
+        self.assertEqual(body["pipeline_mode"], "generic-assistant")
+        self.assertEqual(len(body["session_id"]), 12)
+
     def test_prompt_layout_and_overrides_are_opt_in(self) -> None:
         selection = examples_registry.Selection("all", False, tuple(examples_registry.EXAMPLES), "generic-assistant")
         groups = [{"id": "route", "label": "Routing", "parts": [{"key": "Example.policy", "editable": True}]}]

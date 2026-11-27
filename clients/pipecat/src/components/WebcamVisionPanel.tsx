@@ -4,7 +4,8 @@
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { RTVIEvent } from "@pipecat-ai/client-js";
 import { usePipecatClient, useRTVIClientEvent } from "@pipecat-ai/client-react";
-import { getWebcamConfig, uploadWebcamCapture, uploadWebcamFrame, type WebcamConfig } from "../api";
+import { getWebcamConfig, type WebcamConfig } from "../api";
+import { useUploader } from "../hooks/useUploader";
 import { isRecord, numberField, stringField } from "../utils";
 
 type WebcamStatus = "idle" | "starting" | "live" | "uploading" | "error";
@@ -104,6 +105,7 @@ function proactiveActionLabel(update: WebcamControlUpdate): string {
 
 export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>) {
   const client = usePipecatClient();
+  const upload = useUploader();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -214,8 +216,8 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
       try {
         const blob = await canvasToJpegBlob(canvas, highRes ? HIGHRES_JPEG_QUALITY : config.jpeg_quality);
         const uploaded = await (highRes
-          ? uploadWebcamCapture(sessionId, blob, captureRequestId)
-          : uploadWebcamFrame(sessionId, blob));
+          ? upload(blob, { target: "webcam-capture", name: "focused-capture.jpg", requestId: captureRequestId })
+          : upload(blob, { target: "webcam-frame", name: "webcam-frame.jpg" }));
         if (generation !== captureGenerationRef.current) return null;
         setError("");
         return (isRecord(uploaded) ? stringField(uploaded, "id") : "") || null;
@@ -231,7 +233,7 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
         }
       }
     },
-    [sessionId]
+    [sessionId, upload]
   );
 
   const start = useCallback(async () => {

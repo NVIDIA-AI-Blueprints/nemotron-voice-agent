@@ -50,7 +50,7 @@ function ClientSession({
       });
     }
     return new PipecatClient({
-      transport: new SmallWebRTCTransport({ iceServers }),
+      transport: new SmallWebRTCTransport({ iceServers, waitForICEGathering: true }),
       enableMic: true,
     });
   });
