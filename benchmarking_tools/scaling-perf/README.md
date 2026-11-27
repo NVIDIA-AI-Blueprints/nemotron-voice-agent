@@ -28,6 +28,7 @@ events instead of RTVI protobuf frames.
 | `benchmark.py` | Provides the stable command-line interface and dispatches single-client and aggregation modes. |
 | `benchmark_core.py` | Runs the shared turn loop and handles result schema, audio timing, metric windows, and glitch detection. |
 | `benchmark_aggregation.py` | Aggregates client runs and writes the TXT, TSV, and JSON reports. |
+| `benchmark_diagnostics.py` | Collects client-observed timing and protocol events and writes turn, tool follow-up, playback gap, and session reports. |
 | `rtvi_transport.py` | Provides the low-level RTVI WebSocket, readiness handshake, and protobuf framing. |
 | `rtvi_client.py` | Adapts RTVI audio, messages, and server metrics to the shared core. |
 | `realtime_transport.py` | Provides the low-level Realtime WebSocket, authorization, JSON events, and base64 PCM operations. |
@@ -248,7 +249,7 @@ wrapper and `benchmark.py` unless the description states otherwise:
 
 `Ctrl-C` is graceful — workers stop, partial results stay on disk.
 
-## Output layout
+## Output Layout
 
 **Where to look first:** open `results.txt` for `simulate_concurrency.sh` runs
 (single-level or sweeps). For direct `uv run python3 benchmark.py` runs, check
@@ -266,6 +267,12 @@ results_<timestamp>/
 ├── results.txt                  # one-row summary table (human-readable)
 ├── results.tsv                  # one-row summary table (tab-separated)
 ├── results.json                 # one-row summary object list
+├── glitch_events.{json,csv}      # one row per captured buffer deficit, all phases
+├── glitch_summary.txt           # measurement-window counts and durations
+├── turn_timing.{json,csv}        # first audio, LLM rounds, and client timing per turn
+├── tool_followups.{json,csv}     # tool timelines and audio resumption
+├── session_errors.{json,csv}     # reported errors, including completed sessions
+├── session_quality.{json,csv}    # one row per client with status and evidence coverage
 └── client_<i>_<unix_ms>/        # i = 1..N, unix_ms makes the dir unique
     ├── benchmark_<id>.log       # turn-by-turn log
     ├── result_<id>.json         # per-client metrics, parsed back by aggregation
@@ -281,16 +288,131 @@ perf_suite_<timestamp>/
 ├── results.json                 # one object per concurrency level
 └── run_<N>_clients/             # one of these per --clients value
     ├── benchmark_summary.json
+    ├── glitch_events.{json,csv}
+    ├── glitch_summary.txt
+    ├── turn_timing.{json,csv}
+    ├── tool_followups.{json,csv}
+    ├── session_errors.{json,csv}
+    ├── session_quality.{json,csv}
     └── client_<i>_<unix_ms>/...
+```
+
+## Session Diagnostics
+
+The benchmark client captures diagnostics by default. Use the usual run command
+against the existing server. The client timestamps received audio and reads the
+lifecycle events the endpoint already sends.
+
+### Inspect Turn Timing and Tool Follow-Ups
+
+Open `turn_timing.csv` to inspect each attempted turn. `first_audio_latency_ms`
+measures from the end of input to the first received audio packet for the turn.
+The turn's first-audio value stays fixed when later speech segments arrive.
+The tool report tracks follow-up audio separately.
+
+Client timing helps you identify delays in the load generator.
+`max_input_pacing_delay_ms` compares packet sends with the nominal schedule.
+`max_input_send_ms` is the longest send call.
+`max_event_loop_lag_ms` is the largest sampled delay in waking the event loop.
+
+RTVI can supply explicit large language model (LLM) start events
+(`bot-llm-started`), tool lifecycle events, and speaking boundaries.
+`llm_round_trips` counts observed LLM starts in the turn. Realtime endpoints
+can supply response boundaries. The NVIDIA Realtime gateway can also supply
+tool lifecycle events. When the endpoint only exposes the outer response,
+the round-trip count is unavailable.
+
+Open `tool_followups.csv` to trace the events the client received for each call.
+`tool_observed_ms` measures from receipt of the tool start to receipt of its
+result. Compare that interval with tool completion to the next observed LLM
+start and follow-up audio. `previous_to_followup_audio_received_ms` measures
+elapsed time between received packets. `playback_gap_ms` estimates time with an
+empty buffer when matching speaking and audio evidence is available. Use a row
+with no observed resumed audio to investigate cancellation, a timeout, or
+incomplete evidence.
+
+A measured follow-up gap can include tool execution, the next LLM request,
+speech synthesis, transport, and client scheduling. Treat these timings as
+observations at the benchmark client. Use a server trace to isolate execution
+time on the server.
+
+### Inspect Errors and Completion Separately
+
+Run aggregation writes the following artifacts beside `benchmark_summary.json`. In a sweep, inspect each `run_<N>_clients/` directory.
+
+| Artifact | Purpose |
+|---|---|
+| `session_quality.json` and `.csv` | One row per client: status, valid and failed turns, reported error count, raw glitch flag, captured event count, and diagnostic coverage |
+| `session_errors.json` and `.csv` | Errors associated with each client, including errors from sessions that later return valid responses |
+| `turn_timing.json` and `.csv` | Per-turn first audio, observed LLM round trips, and client timing |
+| `tool_followups.json` and `.csv` | Tool events and follow-up audio timing, including incomplete observations |
+| `glitch_events.json` and `.csv` | Each captured deficit with client, phase, audio cursor, classification, confidence, and supporting evidence |
+| `glitch_summary.txt` | Measurement-window event counts, summed deficits, and event/duration shares by classification |
+
+Per-client result JSON retains the underlying `diagnostics` and
+`session_errors` collections. Error records capture the reporting source,
+component, and fatal or nonfatal status when the endpoint supplies that
+information. Error text uses credential redaction and a length limit.
+The reports preserve the phase of warmup, measurement, and reply-drain errors.
+
+The completion categories describe the observed result.
+
+| Status | Meaning |
+|---|---|
+| `successful` | Valid response without recorded session errors, failed turns, or a session deadline |
+| `degraded` | Valid response with recorded errors, failed turns, or a hard deadline |
+| `failed` | A qualifying runtime error, even if earlier responses completed |
+| `no_response` | No valid response and no qualifying runtime failure, including a session that completes with zero valid turns |
+
+`Successful` and `Degraded` are separate columns in `results.txt`. Their sum is the JSON field `completed_clients`. `Errors` counts reported error records, while `Glitches` retains the legacy client flag count. A nonfatal provider error can move a client from `Successful` to `Degraded` even when the client finishes its session.
+
+Inspect errors and gap coverage alongside latency. A client can complete successfully and also experience buffer deficits.
+
+### Interpret Post-Test Gap Classifications
+
+The detector estimates how much received pulse-code modulation (PCM) audio
+remains for playback. When the next packet arrives, the detector records a
+candidate gap if the simulated buffer ran out for more than 20 ms.
+Consult the turn and tool reports when playback never resumes.
+
+A `tool_wait` label requires the received tool result, a later LLM start, and
+the received speaking boundaries around the first follow-up audio. This
+evidence describes the order the client observed. A packet deficit with
+missing or incomplete context remains `unknown`. Use a server trace to
+determine whether a gap falls inside a sentence and identify the cause of a
+pause.
+
+Coverage records available lifecycle events, diagnostic capture loss, and
+known audio discontinuities. If Realtime setup or response cancellation
+discards audio, inspect `audio_discontinuity_after_sequence` before
+interpreting later audio timing.
+
+The JSON and CSV reports preserve `warmup`, `measurement`, `reply_drain`, and
+`unknown` phases when available. `glitch_summary.txt` reports the count and
+summed duration of measurement-window deficits. Review coverage when the
+report has no events or older results have only the Boolean glitch flag.
+
+To regenerate run-level reports from saved client results, run this command from the scaling-perf directory.
+
+```bash
+uv run python3 benchmark.py --aggregate-run-dir /path/to/results --num-clients 4
+```
+
+Use the original configured client count. Aggregation cannot recover missing diagnostic events or client files.
+
+Run the client diagnostics tests from the repository root.
+
+```bash
+uv run pytest benchmarking_tools/scaling-perf/tests
 ```
 
 ## What it measures
 
 Per-client (the core target of this tool):
 
-- end-to-end response latency per turn (avg / p95 / min / max), measured at
-  the simulated user — the wall-clock from "user finished speaking" to
-  "first audio frame of the real response".
+- End-to-end response latency per turn (avg / p95 / min / max) measures elapsed
+  time from the simulated client's input completion to receipt of the first
+  response audio packet.
 - **audio glitch** detection — flagged when the output buffer underruns
   (i.e. the player would have to insert silence to keep up).
 

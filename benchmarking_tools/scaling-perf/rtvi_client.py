@@ -120,20 +120,41 @@ class RTVIClient(ProtocolClient):
             except RTVITransportClosed as exc:
                 raise ProtocolConnectionClosed from exc
             if isinstance(payload, RTVIAudioFrame):
-                return AudioFrame(payload.audio, payload.sample_rate, payload.num_channels)
-            await self.process_server_message(payload)
+                return AudioFrame(
+                    payload.audio,
+                    payload.sample_rate,
+                    payload.num_channels,
+                    received_monotonic_ns=self.transport.received_monotonic_ns,
+                    received_unix_s=self.transport.received_unix_s,
+                )
+            await self.process_server_message(
+                payload,
+                received_monotonic_ns=self.transport.received_monotonic_ns,
+                received_unix_s=self.transport.received_unix_s,
+            )
 
-    async def process_server_message(self, message: dict) -> None:
+    async def process_server_message(
+        self,
+        message: dict,
+        *,
+        received_monotonic_ns: int | None = None,
+        received_unix_s: float | None = None,
+    ) -> None:
         if not isinstance(message, dict):
             return
+        if self.diagnostics is not None:
+            self.diagnostics.ingest(
+                message,
+                received_monotonic_ns=received_monotonic_ns,
+                received_unix_s=received_unix_s,
+            )
         message_type = str(message.get("type", "unknown"))
+        nested = message.get("data") if message_type == "server-message" else None
         self.rtvi_messages.append({"timestamp": dt.datetime.now().isoformat(), "type": message_type, "data": message})
         await self.logger.log(f"{self.stream_id} RTVI message: {json.dumps(message, sort_keys=True)}")
-        if message_type == "server-message" and isinstance(message.get("data"), dict):
-            nested = message["data"]
-            if isinstance(nested.get("type"), str):
-                message = nested
-                message_type = nested["type"]
+        if isinstance(nested, dict) and isinstance(nested.get("type"), str):
+            message = nested
+            message_type = nested["type"]
         if message_type == "user-bot-latency":
             value = _positive_number(message.get("latency"))
             if self.collecting_metrics and value is not None and not message.get("first", False):

@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import ssl
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -52,6 +53,8 @@ class RTVITransport:
         self.connect_timeout = connect_timeout
         self.verify_tls = verify_tls
         self.websocket: Any = None
+        self.received_monotonic_ns: int | None = None
+        self.received_unix_s: float | None = None
 
     async def __aenter__(self) -> RTVITransport:
         """Connect and send the RTVI readiness handshake."""
@@ -120,6 +123,8 @@ class RTVITransport:
                 )
             except ConnectionClosed as exc:
                 raise RTVITransportClosed from exc
+            self.received_monotonic_ns = time.monotonic_ns()
+            self.received_unix_s = time.time()
             try:
                 frame = frames_pb2.Frame.FromString(data)
             except Exception as exc:

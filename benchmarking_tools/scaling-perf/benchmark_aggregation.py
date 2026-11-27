@@ -16,10 +16,18 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_core import SERVER_METRIC_KEYS, average_or_none, round3
+from benchmark_diagnostics import (
+    has_valid_response,
+    is_hard_deadline,
+    quality_status,
+    session_errors,
+    write_diagnostic_reports,
+)
 
 SUITE_HEADERS = (
     "Parallel Streams",
     "Successful",
+    "Degraded",
     "Failures",
     "No Response",
     "Avg Latency",
@@ -39,8 +47,9 @@ SUITE_HEADERS = (
     "LLM Proc Time",
     "LLM Tok/s",
     "Glitches",
+    "Errors",
 )
-assert len(SUITE_HEADERS) == 9 + len(SERVER_METRIC_KEYS), "SUITE_HEADERS must cover every server metric key"
+assert len(SUITE_HEADERS) == 11 + len(SERVER_METRIC_KEYS), "SUITE_HEADERS must cover every server metric key"
 CLIENT_HEADERS = ("Client", *SUITE_HEADERS[1:])
 _LEGACY_METRIC_KEYS = {"llm_ttfb": "llm_ttft"}
 
@@ -68,14 +77,6 @@ def _client_valid_turns(client: dict) -> int:
     return _client_int(client, "num_valid_turns")
 
 
-def _has_valid_response(client: dict) -> bool:
-    return client.get("average_latency") is not None and _client_valid_turns(client) > 0
-
-
-def _is_hard_deadline(client: dict) -> bool:
-    return str(client.get("error") or "").startswith("Hard deadline reached")
-
-
 def _has_core_server_metric(client: dict) -> bool:
     counts = (client.get("server_metrics") or {}).get("sample_counts") or {}
     for key in ("asr_ttfb", "llm_ttfb", "tts_ttfb", "tts_ttfa", "llm_ttfat"):
@@ -85,22 +86,6 @@ def _has_core_server_metric(client: dict) -> bool:
         except (TypeError, ValueError):
             continue
     return False
-
-
-def _has_runtime_error(client: dict) -> bool:
-    return bool(client.get("error")) and not _is_hard_deadline(client)
-
-
-def _is_failed(client: dict) -> bool:
-    return _has_runtime_error(client)
-
-
-def _is_no_response(client: dict) -> bool:
-    return not _is_failed(client) and not _has_valid_response(client)
-
-
-def _is_successful(client: dict) -> bool:
-    return not _is_failed(client) and _has_valid_response(client)
 
 
 def _valid_latencies(client: dict) -> list[float]:
@@ -176,26 +161,32 @@ def _weighted_average(clients: list[dict], key: str) -> tuple[float | None, int]
 def aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
     """Collapse client result JSON files into ``benchmark_summary.json``."""
     clients = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(run_dir.glob("client_*/result_*.json"))]
+    for client in clients:
+        client["session_errors"] = session_errors(client)
     if num_clients is None:
         num_clients = len(clients)
 
-    hard_deadline = [client for client in clients if _is_hard_deadline(client)]
-    latency_clients = [client for client in clients if _has_valid_response(client)]
+    by_status = {status: [] for status in ("failed", "no_response", "successful", "degraded")}
+    for client in clients:
+        by_status[quality_status(client, client["session_errors"])].append(client)
+    hard_deadline = [client for client in clients if is_hard_deadline(client)]
+    latency_clients = [client for client in clients if has_valid_response(client)]
     latency_columns = _average_latency_columns(latency_clients)
     barge_only = [
         client for client in clients if _client_valid_turns(client) == 0 and _client_int(client, "num_turns") > 0
     ]
-    hard_with_valid = [client for client in hard_deadline if _has_valid_response(client)]
-    hard_without_valid = [client for client in hard_deadline if not _has_valid_response(client)]
-    runtime_errors = [client for client in clients if _has_runtime_error(client)]
-    no_response = [client for client in clients if _is_no_response(client)]
-    metric_only_no_response = [
-        client for client in no_response if not _has_valid_response(client) and _has_core_server_metric(client)
-    ]
+    hard_with_valid = [client for client in hard_deadline if has_valid_response(client)]
+    hard_without_valid = [client for client in hard_deadline if not has_valid_response(client)]
+    runtime_errors = by_status["failed"]
+    no_response = by_status["no_response"]
+    metric_only_no_response = [client for client in no_response if _has_core_server_metric(client)]
     failed_ids = {_client_id(client) for client in runtime_errors}
     missing = max(0, num_clients - len(clients))
     failed = len(runtime_errors) + missing
-    successful = max(0, num_clients - failed - len(no_response))
+    completed = max(0, num_clients - failed - len(no_response))
+    successful = len(by_status["successful"])
+    degraded = len(by_status["degraded"])
+    diagnostic_summary = write_diagnostic_reports(run_dir, clients)
 
     server_average: dict[str, float | None] = {}
     server_counts: dict[str, int] = {}
@@ -220,6 +211,10 @@ def aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
         "results": {
             "configured_clients": num_clients,
             "successful_clients": successful,
+            "completed_clients": completed,
+            "degraded_clients": degraded,
+            "degraded_client_ids": [_client_id(c) for c in by_status["degraded"]],
+            "diagnostics": diagnostic_summary,
             "failed_clients": failed,
             "failed_client_ids": sorted(failed_ids),
             "runtime_error_clients": len(runtime_errors),
@@ -234,7 +229,8 @@ def aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
             "hard_deadline_clients": len(hard_deadline),
             "hard_deadline_with_valid_response_clients": len(hard_with_valid),
             "hard_deadline_with_success_signal_clients": len(hard_with_valid),
-            "hard_deadline_successful_clients": len(hard_with_valid),
+            "hard_deadline_successful_clients": 0,
+            "hard_deadline_completed_clients": len(hard_with_valid),
             "hard_deadline_no_success_signal_clients": len(hard_without_valid),
             "hard_deadline_no_valid_response_clients": len(hard_without_valid),
             "hard_deadline_client_ids": hard_ids,
@@ -257,16 +253,19 @@ def aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
             },
             "error_detection": {
                 "total_clients": len(clients),
-                "clients_with_errors": len(runtime_errors),
+                "clients_with_errors": sum(bool(session_errors(c)) for c in clients),
+                "reported_error_messages": sum(len(session_errors(c)) for c in clients),
                 "runtime_error_clients": len(runtime_errors),
                 "runtime_error_client_ids": runtime_ids,
                 "hard_deadline_clients": len(hard_deadline),
-                "hard_deadline_successful_clients": len(hard_with_valid),
+                "hard_deadline_successful_clients": 0,
+                "hard_deadline_completed_clients": len(hard_with_valid),
                 "hard_deadline_with_success_signal_clients": len(hard_with_valid),
                 "hard_deadline_no_success_signal_clients": len(hard_without_valid),
                 "hard_deadline_no_valid_response_clients": len(hard_without_valid),
                 "hard_deadline_client_ids": hard_ids,
                 "client_error_counts": {_client_id(client): 1 for client in clients if client.get("error")},
+                "reported_error_counts": {_client_id(c): len(session_errors(c)) for c in clients},
             },
         },
         "clients": clients,
@@ -282,6 +281,8 @@ def _summary_row(summary: dict[str, Any], num_clients: int) -> dict[str, Any]:
     return {
         "parallel_streams": num_clients,
         "successful_streams": results["successful_clients"],
+        "degraded_streams": results.get("degraded_clients", 0),
+        "reported_errors": results.get("error_detection", {}).get("reported_error_messages", 0),
         "configured_streams": results["configured_clients"],
         "failed_streams": results.get("failed_clients", 0),
         "no_response_streams": results.get("no_response_clients", 0),
@@ -295,12 +296,16 @@ def _summary_row(summary: dict[str, Any], num_clients: int) -> dict[str, Any]:
 
 
 def _client_row(client: dict[str, Any]) -> dict[str, Any]:
+    errors = session_errors(client)
+    status = quality_status(client, errors)
     return {
         "client": _client_id(client),
-        "successful_streams": 1 if _is_successful(client) else 0,
+        "successful_streams": int(status == "successful"),
+        "degraded_streams": int(status == "degraded"),
+        "reported_errors": len(errors),
         "configured_streams": 1,
-        "failed_streams": 1 if _is_failed(client) else 0,
-        "no_response_streams": 1 if _is_no_response(client) else 0,
+        "failed_streams": int(status == "failed"),
+        "no_response_streams": int(status == "no_response"),
         **_latency_summary(client),
         **{key: _server_average(client, key) for key in SERVER_METRIC_KEYS},
         "audio_glitches": 1 if client.get("glitch_detected") else 0,
@@ -320,11 +325,13 @@ def _row_strings(row: dict[str, Any], label: str) -> list[str]:
     return [
         str(row[label]),
         f"{row['successful_streams']}/{row['configured_streams']}",
+        str(row["degraded_streams"]),
         str(row["failed_streams"]),
         str(row["no_response_streams"]),
         *(round3(row[key]) for key in ("avg_latency", "p95_latency", "min_latency", "max_latency")),
         *(round3(row[key]) for key in SERVER_METRIC_KEYS),
         str(row["audio_glitches"]),
+        str(row["reported_errors"]),
     ]
 
 
@@ -358,7 +365,7 @@ def _format_table(headers: Iterable[str], rows: list[list[str]]) -> list[str]:
 
 
 def aggregate_suite_dir(suite_dir: Path) -> tuple[Path, Path, Path]:
-    """Emit unchanged ``results.tsv``, ``results.txt``, and ``results.json``."""
+    """Emit suite tables with separate success, degradation, and error counts."""
     run_dirs = sorted(
         (path for path in suite_dir.iterdir() if path.is_dir() and path.name.startswith("run_")),
         key=lambda path: int(path.name.split("_")[1]) if path.name.split("_")[1].isdigit() else 0,
