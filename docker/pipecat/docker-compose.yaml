@@ -112,6 +112,45 @@ services:
       AUDIO_OUT_10MS_CHUNKS: "40"
       ENABLE_WELCOME_MESSAGE: "false"
 
+  # Many single-worker replicas behind one HAProxy listener. Replaces the 200 Uvicorn workers of
+  # generic-assistant/server-perf, whose WebSocket connections concentrate on a few workers.
+  # Scale with PERF_APP_REPLICAS. Session-config flows need sticky routing, so use this recipe
+  # for the scaling benchmark, not the browser UI.
+  generic-assistant-server-perf-replica:
+    <<: *app-base
+    profiles:
+      - generic-assistant/server-perf-replicas
+    ports: !override []
+    deploy:
+      replicas: ${PERF_APP_REPLICAS:-16}
+    environment:
+      <<: *app-env
+      SERVICE_RECIPE: server
+      EXAMPLE_SELECTION: generic-assistant
+      UVICORN_WORKERS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      PROMPT_FILE_PATH: ${PROMPT_FILE_PATH:-}
+      PROMPT_SELECTOR: ${PROMPT_SELECTOR:-}
+      USE_SILERO_VAD_TURN_DETECTION: "true"
+      SILERO_VAD_STOP_SECS: "0.5"
+      AUDIO_OUT_10MS_CHUNKS: "40"
+      ENABLE_WELCOME_MESSAGE: "false"
+      NVA_ASR_INPUT_BATCH_MS: ${NVA_ASR_INPUT_BATCH_MS:-0}
+
+  generic-assistant-server-perf-proxy:
+    image: haproxy:3.0-alpine
+    profiles:
+      - generic-assistant/server-perf-replicas
+    depends_on:
+      - generic-assistant-server-perf-replica
+    ports:
+      - "${PIPELINE_APP_PORT:-7860}:7860"
+    volumes:
+      - ./haproxy-replicas.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    restart: unless-stopped
+
   multilingual-assistant:
     <<: *app-base
     profiles:

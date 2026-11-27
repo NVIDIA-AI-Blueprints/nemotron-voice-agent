@@ -6,6 +6,7 @@ This section covers pipeline configurations for optimizing the performance and u
 - [Chat History Limit](#chat-history-limit)
 - [Audio Output Buffering](#audio-output-buffering)
 - [Uvicorn Worker Scaling](#uvicorn-worker-scaling)
+- [ASR Stream Capacity and Input Batching](#asr-stream-capacity-and-input-batching)
 - [Transport Selection](#transport-selection)
 
 ## Smart Turn Detection
@@ -118,6 +119,33 @@ When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows ar
 - keep a **single worker** if you depend on per-process session config
 - use **sticky routing** so a session stays on the same worker
 - move session state into **shared storage**
+
+### Balance sessions across workers
+
+With `UVICORN_WORKERS > 1`, all workers wait on one listening socket and the worker that wakes first takes the next connection, so a few workers can end up with most sessions. `NVA_WORKER_BALANCE=1` makes a worker take a new connection only while it holds the fewest sessions of all live workers, so the first sessions go one per worker and the load then grows evenly.
+
+```bash
+# .env or container env
+UVICORN_WORKERS=<workers>
+NVA_WORKER_BALANCE=1
+```
+
+It is off by default and does nothing with one worker. Turning it on runs the server on the standard asyncio event loop instead of uvloop. Compare it with running several single-worker replicas behind a load balancer before relying on it.
+
+## ASR Stream Capacity and Input Batching
+
+The Generic and Multilingual Assistants read each session's streaming ASR results on a dedicated `nva-asr-stream` thread pool in every `uvicorn` worker. Each active session holds one of those threads for its whole lifetime. Keeping them off the event loop's default executor stops a worker full of sessions from starving the service readiness checks that run before a WebSocket is accepted. Without that separation, a worker that already held 32 sessions could reject new connections with `Health check timed out` even though every model was healthy.
+
+Two settings control the pool:
+
+```bash
+# .env or container env
+NVA_ASR_MAX_STREAMS_PER_WORKER=64   # default 64
+NVA_ASR_INPUT_BATCH_MS=0            # default 0 (off)
+```
+
+- `NVA_ASR_MAX_STREAMS_PER_WORKER` is the most `/api/ws` sessions that one worker process admits for an example that uses ASR. A worker at the limit refuses the connection before it is accepted, with HTTP 503 (or WebSocket close code `1013` where the server cannot send an HTTP response), so a load balancer can retry another replica. The limit is per `uvicorn` worker process; with `UVICORN_WORKERS=N`, the container admits up to `N` times this value. WebRTC sessions do not use this check.
+- `NVA_ASR_INPUT_BATCH_MS` groups the 16 kHz input audio into messages of this length before it is sent to the streaming ASR server. The default of `0` forwards each input frame as it arrives, which is about 32 ms of audio per message. The ASR model processes audio in 160 ms chunks, so `160` sends one message instead of five and reduces per-message CPU cost in the Pipecat worker. A trailing partial batch is sent after one batch period, so batching adds at most that much delay to the end of an utterance. Measure ASR time to first byte and end-to-end latency on your own hardware before enabling it.
 
 ## Transport Selection
 

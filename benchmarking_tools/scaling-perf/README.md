@@ -198,6 +198,18 @@ After the stack is healthy, run the sweep from this directory:
 ./simulate_concurrency.sh --clients "1 2 4 8 16" --insecure
 ```
 
+### Run the app as single-worker replicas
+
+At a few hundred clients, the 200 Uvicorn workers of `generic-assistant/server-perf` do not share the connections evenly: a handful of workers take most sessions, and their event loops fall behind. The `generic-assistant/server-perf-replicas` recipe runs the same models with many Pipecat replicas of one worker each, behind an HAProxy `leastconn` listener on the usual port:
+
+```bash
+PERF_APP_REPLICAS=16 docker compose --profile generic-assistant/server-perf-replicas up -d
+```
+
+`PERF_APP_REPLICAS` defaults to 16, which handled 250 concurrent clients on a 256-thread host in our runs. Each replica runs with `UVICORN_WORKERS=1` and one thread per math library. Set `NVA_ASR_INPUT_BATCH_MS=160` in the environment to batch ASR input (see [Tune Pipeline Performance](../../docs/how-to/tune-pipeline-performance.md#asr-stream-capacity-and-input-batching)). The recipe starts the same ASR, TTS and LLM sidecars as `generic-assistant/server-perf`, so the hardware note above applies.
+
+Session-config flows keep state inside one process, so use this recipe for the benchmark and not for the browser UI. The best replica count and ASR batch size for other CPU counts have not been established yet.
+
 ## Run
 
 From this directory:
@@ -353,3 +365,9 @@ If the server does not send a speech-stop event, speech-relative values are
 `null`. Failed records can also contain other `null` lifecycle fields. These
 metrics use client-observed event arrival times, not server processing
 timestamps, so they do not replace server-side RTVI metrics.
+
+## Glitch diagnostics (opt-in)
+
+Set `NVA_PERF_DIAGNOSTICS=1` and `NVA_PERF_DIAGNOSTICS_DIR=<dir>` on **both** the Pipecat server and the load generator to record timing events (`events-<pid>.jsonl`; no audio or text). The server records event-loop lag, TTS text/PCM arrival, output queue and socket send timing; the client records every audio chunk with its playback-buffer level. Off by default.
+
+Analyze with the scripts in `diagnostics/`: `summarize_glitches.py` (counts per client), `audio_supply_audit.py` and `attribute_glitches.py` (classify each gap by sentence boundary and by cause: TTS supply, event loop, send path), `worker_report.py` (per-worker event-loop lag).

@@ -15,6 +15,7 @@ user's words while they are still speaking.
 NVIDIA ASR speaker diarization is optional.
 """
 
+import os
 import asyncio
 
 from dotenv import load_dotenv
@@ -32,7 +33,7 @@ from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.processors.frameworks.rtvi.observer import RTVIObserverParams
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy
 from pipecat.workers.runner import WorkerRunner
@@ -62,6 +63,7 @@ from nemotron_voice_agent.pipecat.shared.nvidia_streaming_llm import (
     NvidiaStreamingLLMService,
     StreamingLLMUserAggregator,
 )
+from nemotron_voice_agent.pipecat.shared.nvidia_stt_isolated import IsolatedNvidiaSTTService
 from nemotron_voice_agent.pipecat.shared.nvidia_transcribe_stt import NvidiaTranscribeSTTService
 from nemotron_voice_agent.pipecat.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
@@ -171,7 +173,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             ),
         )
     else:
-        stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
+        stt = IsolatedNvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
@@ -286,6 +288,11 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"text_transforms=[nemotron_speech_text_transform]"
     )
+
+    if os.getenv("NVA_PERF_DIAGNOSTICS") == "1":
+        from nemotron_voice_agent.pipecat.shared.perf_diagnostics import attach as attach_perf_diagnostics
+
+        attach_perf_diagnostics(tts, transport.output(), getattr(runner_args, "websocket", None), llm=llm)
 
     messages = build_context_messages(base_system_content, system_prompt)
 

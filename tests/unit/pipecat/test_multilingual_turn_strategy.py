@@ -305,7 +305,7 @@ class MultilingualASRSelectionTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 patch.object(multilingual_pipeline, "load_service_entry_by_id", return_value={}),
                 patch.object(multilingual_pipeline, "nvidia_api_key", return_value=""),
-                patch.object(multilingual_pipeline, "NvidiaSTTService") as streaming,
+                patch.object(multilingual_pipeline, "IsolatedNvidiaSTTService") as streaming,
                 patch.object(multilingual_pipeline, "NvidiaTranscribeSTTService") as transcribe,
                 patch.object(
                     multilingual_pipeline,
@@ -353,7 +353,7 @@ class MultilingualASRSelectionTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(multilingual_pipeline, "load_service_entry", return_value={}),
                     patch.object(multilingual_pipeline, "load_service_entry_by_id", return_value=selected),
                     patch.object(multilingual_pipeline, "nvidia_api_key", return_value=""),
-                    patch.object(multilingual_pipeline, "NvidiaSTTService") as streaming,
+                    patch.object(multilingual_pipeline, "IsolatedNvidiaSTTService") as streaming,
                     patch.object(multilingual_pipeline, "NvidiaTranscribeSTTService") as http,
                     patch.object(
                         multilingual_pipeline,

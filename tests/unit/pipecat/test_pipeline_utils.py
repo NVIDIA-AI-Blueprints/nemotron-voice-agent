@@ -64,7 +64,7 @@ class GenericASRSelectionTest(unittest.IsolatedAsyncioTestCase):
                 ),
                 patch.object(generic_pipeline, "load_service_entry_by_id", return_value=selected) as lookup,
                 patch.object(generic_pipeline, "nvidia_api_key", return_value=""),
-                patch.object(generic_pipeline, "NvidiaSTTService") as streaming_stt,
+                patch.object(generic_pipeline, "IsolatedNvidiaSTTService") as streaming_stt,
                 patch.object(generic_pipeline, "NvidiaTranscribeSTTService") as transcribe_stt,
                 patch.object(generic_pipeline, "NvidiaLLMService"),
                 patch.object(generic_pipeline, "NvidiaTTSService"),

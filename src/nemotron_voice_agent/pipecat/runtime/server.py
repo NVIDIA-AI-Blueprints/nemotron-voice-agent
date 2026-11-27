@@ -88,6 +88,10 @@ from nemotron_voice_agent.pipecat.runtime.utils import (
     set_service_context,
 )
 from nemotron_voice_agent.pipecat.runtime.webcam_frame_store import store_webcam_frame, webcam_client_config
+from nemotron_voice_agent.pipecat.shared.nvidia_stt_isolated import (
+    get_asr_stream_slots,
+    reject_at_capacity,
+)
 from nemotron_voice_agent.pipecat.shared.pipeline_utils import (
     PIPELINE_AUDIO_IN_SAMPLE_RATE,
     PIPELINE_AUDIO_OUT_SAMPLE_RATE,
@@ -100,6 +104,12 @@ from nemotron_voice_agent.pipecat.shared.prewarm import (
 )
 from nemotron_voice_agent.pipecat.shared.speaker import speaker_diarization_requested
 from nemotron_voice_agent.pipecat.shared.subagents import load_subagent_registry
+from nemotron_voice_agent.pipecat.shared.worker_balance import (
+    BalanceMiddleware,
+    WorkerBalancer,
+    balancing_enabled,
+    start_balancer,
+)
 
 CLIENT_DIST = REPO_ROOT / "clients" / "pipecat" / "dist"
 _session_configs: dict[str, dict] = {}
@@ -170,6 +180,8 @@ def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) 
         port=args.port,
         workers=workers,
         factory=True,
+        # Worker balancing pauses accepting through asyncio's selector, which uvloop does not expose.
+        loop="asyncio" if balancing_enabled(workers) else "auto",
         **ssl_kwargs,
     )
 
@@ -722,12 +734,21 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
     handler = SmallWebRTCRequestHandler(host=host)
 
+    workers = parse_env_int("UVICORN_WORKERS", 1, min_value=1)
+    worker_balancer: dict[str, WorkerBalancer] = {}
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if balancing_enabled(workers):
+            worker_balancer["balancer"] = await start_balancer(workers)
         yield
+        if "balancer" in worker_balancer:
+            await worker_balancer["balancer"].stop()
         await handler.close()
 
     app = FastAPI(lifespan=lifespan)
+    if balancing_enabled(workers):
+        app.add_middleware(BalanceMiddleware, balancer_ref=lambda: worker_balancer.get("balancer"))
 
     app.add_middleware(
         CORSMiddleware,
@@ -954,36 +975,47 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         with logger.contextualize(stream_id=stream_id):
             config = _resolve_config(session_id, fallback_example_key=fallback_example_key, pipeline_mode=pipeline_mode)
             example = _resolve_example(config)
-            if not session_id:
-                try:
-                    await _ensure_services_ready_for_connection(config, example)
-                except RuntimeError as exc:
-                    logger.warning(f"Rejecting WebSocket start during service readiness check: {exc}")
-                    await websocket.close(code=1011, reason=str(exc))
-                    return
-
-            await websocket.accept()
-            selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
-            bot_fn = examples_registry.resolve_bot(selected)
-            _bind_example_context_by_key(example["key"])
-            if session_id:
-                _active_session_configs[session_id] = dict(config)
-
-            runner_args = SimpleNamespace(
-                websocket=websocket,
-                body={**config, "session_id": session_id},
-                handle_sigint=False,
-                pipeline_idle_timeout_secs=parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300),
-            )
+            asr_slots = get_asr_stream_slots() if "asr" in example.get("services", {}) else None
+            if asr_slots is not None and not asr_slots.try_acquire():
+                await reject_at_capacity(websocket, asr_slots)
+                return
             try:
-                await bot_fn(runner_args)
-            except Exception as e:
-                logger.error(f"WebSocket session error: {e}")
+                await _serve_websocket(websocket, session_id, config, example)
             finally:
-                if session_id:
-                    _active_session_configs.pop(session_id, None)
-                with contextlib.suppress(Exception):
-                    await websocket.close()
+                if asr_slots is not None:
+                    asr_slots.release()
+
+    async def _serve_websocket(websocket: WebSocket, session_id: str, config: dict, example: dict) -> None:
+        if not session_id:
+            try:
+                await _ensure_services_ready_for_connection(config, example)
+            except RuntimeError as exc:
+                logger.warning(f"Rejecting WebSocket start during service readiness check: {exc}")
+                await websocket.close(code=1011, reason=str(exc))
+                return
+
+        await websocket.accept()
+        selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
+        bot_fn = examples_registry.resolve_bot(selected)
+        _bind_example_context_by_key(example["key"])
+        if session_id:
+            _active_session_configs[session_id] = dict(config)
+
+        runner_args = SimpleNamespace(
+            websocket=websocket,
+            body={**config, "session_id": session_id},
+            handle_sigint=False,
+            pipeline_idle_timeout_secs=parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300),
+        )
+        try:
+            await bot_fn(runner_args)
+        except Exception as e:
+            logger.error(f"WebSocket session error: {e}")
+        finally:
+            if session_id:
+                _active_session_configs.pop(session_id, None)
+            with contextlib.suppress(Exception):
+                await websocket.close()
 
     # ---- OpenAI Realtime–shaped JSON WebSocket ----
 

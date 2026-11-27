@@ -18,6 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+try:  # Opt-in timing hook: only active with NVA_PERF_DIAGNOSTICS=1 (see shared/perf_diagnostics.py).
+    from nemotron_voice_agent.pipecat.shared.perf_diagnostics import client_audio as _CLIENT_AUDIO_HOOK
+    import os as _os
+
+    if _os.getenv("NVA_PERF_DIAGNOSTICS") != "1":
+        _CLIENT_AUDIO_HOOK = None
+except ImportError:
+    _CLIENT_AUDIO_HOOK = None
+
+
 CHUNK_DURATION_MS = 32
 BOT_INTRO_TIMEOUT = 5
 END_OF_RESPONSE_TIMEOUT = 3.0
@@ -327,6 +337,8 @@ class PerfClient:
             if audio_data and sample_rate and channels:
                 current_time = time.time()
                 chunk_count += 1
+                if _CLIENT_AUDIO_HOOK is not None:
+                    _CLIENT_AUDIO_HOOK(self.stream_id, frame, playback_buffer_duration, last_update_time)
                 chunk_duration = (len(audio_data) // (channels * 2)) / sample_rate
                 if detect_glitches:
                     if last_update_time is not None:
