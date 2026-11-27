@@ -15,6 +15,7 @@ user's words while they are still speaking.
 NVIDIA ASR speaker diarization is optional.
 """
 
+import os
 import asyncio
 
 from dotenv import load_dotenv
@@ -287,6 +288,11 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"text_transforms=[nemotron_speech_text_transform]"
     )
+
+    if os.getenv("NVA_PERF_DIAGNOSTICS") == "1":
+        from nemotron_voice_agent.pipecat.shared.perf_diagnostics import attach as attach_perf_diagnostics
+
+        attach_perf_diagnostics(tts, transport.output(), getattr(runner_args, "websocket", None), llm=llm)
 
     messages = build_context_messages(base_system_content, system_prompt)
 

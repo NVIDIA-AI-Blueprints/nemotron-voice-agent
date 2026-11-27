@@ -365,3 +365,9 @@ If the server does not send a speech-stop event, speech-relative values are
 `null`. Failed records can also contain other `null` lifecycle fields. These
 metrics use client-observed event arrival times, not server processing
 timestamps, so they do not replace server-side RTVI metrics.
+
+## Glitch diagnostics (opt-in)
+
+Set `NVA_PERF_DIAGNOSTICS=1` and `NVA_PERF_DIAGNOSTICS_DIR=<dir>` on **both** the Pipecat server and the load generator to record timing events (`events-<pid>.jsonl`; no audio or text). The server records event-loop lag, TTS text/PCM arrival, output queue and socket send timing; the client records every audio chunk with its playback-buffer level. Off by default.
+
+Analyze with the scripts in `diagnostics/`: `summarize_glitches.py` (counts per client), `audio_supply_audit.py` and `attribute_glitches.py` (classify each gap by sentence boundary and by cause: TTS supply, event loop, send path), `worker_report.py` (per-worker event-loop lag).
